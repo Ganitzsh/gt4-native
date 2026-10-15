@@ -34,6 +34,16 @@ ctest --test-dir build --output-on-failure
 
 The bootstrap executable currently prints a status message. `include/gt4/guest_abi.hpp` provides **data-only**, compile-time checked guest layouts; it is not a functioning guest/host ABI bridge.
 
+## Implemented host-side components
+
+- Checked guest memory access (`MemoryView`) and multi-region address space (`AddressSpace`).
+- Legacy ee-gcc virtual-call resolution and a limited native callback registry.
+- Read-only copy-on-write guest string header inspection.
+- ELF32 little-endian MIPS PT_LOAD parser and `gt4_elf_inspect` command.
+- Eight CTest targets (bootstrap, ABI, memory, virtual dispatch, strings, callbacks, address space, ELF parser).
+
+**These are foundational compatibility tools, not playable game code.** Individual address-space and ELF parser tests have been compiled and run locally; full multi-platform CI and testing against real game binaries remain pending.
+
 ## Upstream source inventory
 
 Clone [gt4-decomp](https://github.com/gustavocanepa/gt4-decomp) next to this repository, then:
