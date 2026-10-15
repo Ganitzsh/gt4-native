@@ -64,10 +64,13 @@ if(BUILD_TESTING)
   target_link_libraries(gt4_upstream_mboolreader_test PRIVATE gt4_guest_abi)
   add_test(NAME upstream_mboolreader COMMAND gt4_upstream_mboolreader_test)
   set_source_files_properties(upstream/gt4/src/runtime/hArrayCompare/func_005C9970.c PROPERTIES LANGUAGE CXX)
+  set_source_files_properties(upstream/gt4/src/gamedata/unit_0013B5F8/func_001465D8.cpp
+    PROPERTIES COMPILE_DEFINITIONS "func_001465D8=gt4_original_func_001465D8")
   add_executable(gt4_upstream_harraycompare_test
     tests/upstream_harraycompare.cpp
     upstream/gt4/src/runtime/hArrayCompare/func_005C9930.cpp
-    upstream/gt4/src/runtime/hArrayCompare/func_005C9970.c)
+    upstream/gt4/src/runtime/hArrayCompare/func_005C9970.c
+    upstream/gt4/src/gamedata/unit_0013B5F8/func_001465D8.cpp)
   target_link_libraries(gt4_upstream_harraycompare_test PRIVATE gt4_guest_abi)
   target_include_directories(gt4_upstream_harraycompare_test PRIVATE include/gt4/upstream_compat)
   add_test(NAME upstream_harraycompare COMMAND gt4_upstream_harraycompare_test)
