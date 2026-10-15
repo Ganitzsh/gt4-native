@@ -33,6 +33,8 @@ class QueueTests(unittest.TestCase):
             (root / 'CMakeLists.txt').write_text(
                 'add_executable(test tests/a.cpp upstream/gt4/src/runtime/foo.cpp)\\n')
             self.assertEqual(mod.discover_integrated_paths(root), {'src/runtime/foo.cpp'})
+            (root / 'CMakeLists.txt').write_text('upstream/gt4/src/runtime/a.c upstream/gt4/src/runtime/b.cc upstream/gt4/src/runtime/c.cxx upstream/gt4/src/runtime/d.cpp')
+            self.assertEqual(mod.discover_integrated_paths(root), {'src/runtime/a.c', 'src/runtime/b.cc', 'src/runtime/c.cxx', 'src/runtime/d.cpp'})
 
     def test_missing_symbols_are_not_review_ready(self):
         with tempfile.TemporaryDirectory() as tmp:
