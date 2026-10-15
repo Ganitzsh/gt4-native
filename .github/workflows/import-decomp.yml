@@ -88,7 +88,8 @@ jobs:
             --triage bulk-import/native-triage.json \
             --link-report bulk-import/native-link-report.json \
             --source-root bulk-import/gt4 \
-            --output bulk-import/integration-queue.json
+            --output bulk-import/integration-queue.json \
+            --native-repo .
       - name: Package all imported sources and dependency manifest
         uses: actions/upload-artifact@v4
         with:
