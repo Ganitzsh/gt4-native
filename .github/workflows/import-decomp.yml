@@ -5,11 +5,15 @@ on:
     paths:
       - 'tools/import_decomp.py'
       - 'tests/test_import_decomp.py'
+      - 'tools/triage_native.py'
+      - 'tests/test_triage_native.py'
       - '.github/workflows/import-decomp.yml'
   pull_request:
     paths:
       - 'tools/import_decomp.py'
       - 'tests/test_import_decomp.py'
+      - 'tools/triage_native.py'
+      - 'tests/test_triage_native.py'
       - '.github/workflows/import-decomp.yml'
 
 permissions:
@@ -23,6 +27,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Verify importer unit tests
         run: python3 -m unittest discover -s tests -p test_import_decomp.py -v
+      - name: Verify native triage tests
+        run: python3 -m unittest discover -s tests -p test_triage_native.py -v
       - name: Checkout pinned GT4 decomp sources
         uses: actions/checkout@v4
         with:
@@ -49,6 +55,13 @@ jobs:
               assert hashlib.sha256(path.read_bytes()).hexdigest() == rec['sha256'], rec['path']
           print(f"Verified {manifest['translation_units']} translation units, {manifest['files']} files")
           PY
+      - name: Rank native integration candidates and probe syntax
+        run: |
+          python3 tools/triage_native.py \
+            --manifest bulk-import/manifest.json \
+            --source-root bulk-import/gt4 \
+            --output bulk-import/native-triage.json \
+            --top 250 --probe 30 --compiler clang++
       - name: Package all imported sources and dependency manifest
         uses: actions/upload-artifact@v4
         with:
