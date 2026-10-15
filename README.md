@@ -40,9 +40,9 @@ The bootstrap executable currently prints a status message. `include/gt4/guest_a
 - Legacy ee-gcc virtual-call resolution and a limited native callback registry.
 - Read-only copy-on-write guest string header inspection.
 - ELF32 little-endian MIPS PT_LOAD parser and `gt4_elf_inspect` command.
-- Eleven CTest targets (bootstrap, ABI, memory, virtual dispatch, strings, callbacks, address space, ELF parser, portable primitives, robustness, ELF mutation stress).
+- Twelve CTest targets (bootstrap, ABI, memory, virtual dispatch, strings, callbacks, address space, ELF parser, portable primitives, robustness, ELF mutation stress, original GT4 function).
 
-**These are foundational compatibility tools, not playable game code.** Cross-platform builds and tests are automated for Linux (GCC/Clang), Windows (MSVC) and macOS (AppleClang), in Debug and Release, plus Linux ASan/UBSan. See [Milestone 1 validation](docs/MILESTONE_1.md) and the [GitHub Actions results](https://github.com/gustavocanepa/gt4-native/actions). Real GT4 binaries and native runtime integration remain untested.
+**These are foundational compatibility tools, not playable game code.** Cross-platform builds and tests are automated for Linux (GCC/Clang), Windows (MSVC) and macOS (AppleClang), in Debug and Release, plus Linux ASan/UBSan. See [Milestone 1 validation](docs/MILESTONE_1.md) and the [GitHub Actions results](https://github.com/gustavocanepa/gt4-native/actions). The first original GT4 decomp function is now compiled directly as host C++ and exercised using test shims; see [Milestone 2](docs/MILESTONE_2.md). Real GT4 binaries and native runtime integration remain untested.
 
 ## Upstream source inventory
 
