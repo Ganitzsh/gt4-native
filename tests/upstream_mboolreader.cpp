@@ -1,6 +1,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 
 extern "C" void MboolReader__structor_19(void* object, int flags);
@@ -31,7 +32,9 @@ int main() {
     CHECK(release_calls == 0);
     CHECK(base_object == object.data());
     CHECK(base_second_argument == nullptr);
-    CHECK(*reinterpret_cast<void**>(object.data()) == &MboolReader__vtable);
+    void* stored_vtable = nullptr;
+    std::memcpy(&stored_vtable, object.data(), sizeof(stored_vtable));
+    CHECK(stored_vtable == &MboolReader__vtable);
 
     MboolReader__structor_19(object.data(), 1);
     CHECK(base_calls == 2);
