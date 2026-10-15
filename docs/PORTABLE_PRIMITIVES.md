@@ -5,7 +5,7 @@ This directory contains **30 small, dependency-light host C++20 modules** for th
 | Group | Modules |
 |---|---|
 | Addressing and integers (9) | `align`, `range`, `bits`, `sign_extend`, `rotate`, `byteswap`, `saturate`, `clamp`, `fixed16` |
-| Math and colors (5) | `lerp`, `vec2`, `vec3`, `vec4`, `mat4`, `color` |
+| Math and colors (6) | `lerp`, `vec2`, `vec3`, `vec4`, `mat4`, `color` |
 | Checksums and deterministic state (4) | `lcg`, `crc32`, `fnv1a`, `adler32` |
 | Binary data (6) | `cursor`, `u16reader`, `u32reader`, `u64reader`, `u32writer`, `cstring` |
 | PS2-facing helpers (5) | `eucjp_digits`, `mips_jump`, `mips_branch`, `mips_fields`, `pad_buttons` |
