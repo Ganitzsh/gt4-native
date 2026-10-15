@@ -1,0 +1,12 @@
+/build/
+/out/
+/.cache/
+/.idea/
+/.vscode/
+.DS_Store
+*.iso
+*.bin
+*.elf
+*.vol
+*.VOL
+orig/
