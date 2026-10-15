@@ -1,0 +1,58 @@
+name: GT4 bulk source inventory
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'tools/import_decomp.py'
+      - 'tests/test_import_decomp.py'
+      - '.github/workflows/import-decomp.yml'
+  pull_request:
+    paths:
+      - 'tools/import_decomp.py'
+      - 'tests/test_import_decomp.py'
+      - '.github/workflows/import-decomp.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify importer unit tests
+        run: python3 -m unittest discover -s tests -p test_import_decomp.py -v
+      - name: Checkout pinned GT4 decomp sources
+        uses: actions/checkout@v4
+        with:
+          repository: gustavocanepa/gt4-decomp
+          ref: de3d7edbead9e8a6e473b1e68b8ddf3b1f639fd1
+          path: upstream-checkout
+          persist-credentials: false
+      - name: Import every available source translation unit and header
+        run: |
+          python3 tools/import_decomp.py \
+            --upstream upstream-checkout \
+            --dest bulk-import/gt4 \
+            --manifest bulk-import/manifest.json \
+            --commit de3d7edbead9e8a6e473b1e68b8ddf3b1f639fd1
+      - name: Verify import file count and hashes
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, pathlib
+          manifest = json.loads(pathlib.Path('bulk-import/manifest.json').read_text())
+          assert manifest['translation_units'] > 10000, manifest['translation_units']
+          assert manifest['files'] == len(manifest['records'])
+          for rec in manifest['records']:
+              path = pathlib.Path('bulk-import/gt4') / rec['path']
+              assert hashlib.sha256(path.read_bytes()).hexdigest() == rec['sha256'], rec['path']
+          print(f"Verified {manifest['translation_units']} translation units, {manifest['files']} files")
+          PY
+      - name: Package all imported sources and dependency manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: gt4-decomp-bulk-import
+          path: bulk-import/
+          retention-days: 14
+          compression-level: 6
