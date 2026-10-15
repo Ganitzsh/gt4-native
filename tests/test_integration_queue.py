@@ -27,6 +27,13 @@ class QueueTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 mod.queue_candidates(manifest, triage, link, root)
 
+    def test_detects_cmake_integrated_sources(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'CMakeLists.txt').write_text(
+                'add_executable(test tests/a.cpp upstream/gt4/src/runtime/foo.cpp)\\n')
+            self.assertEqual(mod.discover_integrated_paths(root), {'src/runtime/foo.cpp'})
+
     def test_missing_symbols_are_not_review_ready(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
