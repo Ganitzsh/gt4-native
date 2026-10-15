@@ -25,4 +25,18 @@ if(BUILD_TESTING)
   add_executable(gt4_native_callbacks_test tests/native_callbacks.cpp)
   target_link_libraries(gt4_native_callbacks_test PRIVATE gt4_guest_abi)
   add_test(NAME native_callbacks COMMAND gt4_native_callbacks_test)
+  add_executable(gt4_guest_address_space_test tests/guest_address_space.cpp)
+  target_link_libraries(gt4_guest_address_space_test PRIVATE gt4_guest_abi)
+  add_test(NAME guest_address_space COMMAND gt4_guest_address_space_test)
+
+  # Tests use assert(); keep checks active even under Release builds.
+  foreach(test_target IN ITEMS gt4_guest_abi_test gt4_guest_memory_test
+      gt4_guest_dispatch_test gt4_guest_string_test gt4_native_callbacks_test
+      gt4_guest_address_space_test)
+    if(MSVC)
+      target_compile_options(${test_target} PRIVATE /UNDEBUG)
+    else()
+      target_compile_options(${test_target} PRIVATE -UNDEBUG)
+    endif()
+  endforeach()
 endif()
