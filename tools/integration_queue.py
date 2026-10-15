@@ -9,7 +9,7 @@ import re
 def discover_integrated_paths(repository_root):
     """Only recognize exact upstream source paths explicitly wired into CMake."""
     cmake = (repository_root / 'CMakeLists.txt').read_text(encoding='utf-8')
-    return set(re.findall(r'upstream/gt4/(src/[^\\s)]+\\.(?:c|cc|cpp|cxx))', cmake))
+    return set(re.findall(r'upstream/gt4/(src/[^\s)]+\.(?:c|cc|cpp|cxx))', cmake))
 
 def queue_candidates(manifest, triage, link_report, root, already_integrated=()):
     inventory = {r['path']: r for r in manifest['records'] if r.get('source')}
