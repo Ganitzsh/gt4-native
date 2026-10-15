@@ -102,7 +102,7 @@ jobs:
           lines = [
               '## GT4 native integration review',
               '',
-              f"Upstream revision: \`{report['upstream_commit']}\`",
+              f"Upstream revision: `{report['upstream_commit']}`",
               f"Imported translation units: **{report['total_imported_translation_units']}**",
               f"Candidates evaluated by the compile/link gate: **{report['evaluated_candidates']}**",
               '',
@@ -116,9 +116,9 @@ jobs:
                         '| --- | --- | --- | --- |'])
           for item in report['queue'][:15]:
               path = item['path'].replace('|', '\\|').replace('\\n', ' ')
-              lines.append(f"| \`{path}\` | {item['status']} | {item['compile']} | {item['executable_link']} |")
+              lines.append(f"| `{path}` | {item['status']} | {item['compile']} | {item['executable_link']} |")
           lines.extend(['', '**Important:** An isolated link does not establish correct ABI, behavior, or runtime integration. No game code is automatically integrated by this workflow.'])
-          summary = '\\n'.join(lines) + '\\n'
+          summary = '\n'.join(lines) + '\n'
           print(summary)
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as f:
               f.write(summary)
