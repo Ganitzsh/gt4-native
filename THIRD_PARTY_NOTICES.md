@@ -1,5 +1,5 @@
 # Third-party notices
 
-No third-party source is currently vendored in this bootstrap.
+The repository contains a small, explicitly attributed subset of source from `gustavocanepa/gt4-decomp` under `upstream/gt4/`. Each copied source retains its upstream path and commit in a file comment. The upstream repository's MIT license applies to these files unless an individual file says otherwise; see its [license](https://github.com/gustavocanepa/gt4-decomp/blob/69c3585cff2a48f98c6cc9c2c495012d28c022cd/LICENSE) and [third-party inventory](https://github.com/gustavocanepa/gt4-decomp/blob/69c3585cff2a48f98c6cc9c2c495012d28c022cd/THIRD_PARTY.md).
 
-Future imports from [gt4-decomp](https://github.com/gustavocanepa/gt4-decomp) must preserve their existing per-file notices and applicable licenses. Inspect upstream THIRD_PARTY.md before importing any source. This repository's MIT license applies only to original work unless otherwise stated.
+The currently integrated source subset comes from `de3d7edbead9e8a6e473b1e68b8ddf3b1f639fd1` and `69c3585cff2a48f98c6cc9c2c495012d28c022cd`. Bulk inventory artifacts are temporary and are not committed. Future imports must preserve per-file notices and applicable licenses. This repository's MIT license applies only to original work unless otherwise stated. No game assets, executable, BIOS, or proprietary SDK files are distributed here.
