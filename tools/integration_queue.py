@@ -15,6 +15,7 @@ def queue_candidates(manifest, triage, link_report, root, already_integrated=())
     inventory = {r['path']: r for r in manifest['records'] if r.get('source')}
     triaged = {r['path']: r for r in triage['candidates']}
     existing = set(already_integrated)
+    # Preserve the full audit trail, including already integrated units.
     queue = []
     for result in link_report['results']:
         path = result['path']
@@ -47,6 +48,7 @@ def queue_candidates(manifest, triage, link_report, root, already_integrated=())
     priority = {'review_ready': 0, 'needs_link_dependencies': 1, 'needs_compile_fixes': 2, 'already_integrated': 3}
     queue.sort(key=lambda x: (priority[x['status']], -x['score'], x['path']))
     counts = {status: sum(item['status'] == status for item in queue) for status in priority}
+    # A candidate passing the host linker still needs ABI and behavior validation.
     return {'schema_version': 1, 'upstream_commit': manifest.get('upstream_commit'),
             'scope': 'review queue only; zero automatically integrated functions',
             'total_imported_translation_units': manifest['translation_units'],
