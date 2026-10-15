@@ -10,3 +10,6 @@
 *.vol
 *.VOL
 orig/
+# Bulk imported source bundle is reproducible from pinned upstream revision.
+/bulk-import/
+/upstream-checkout/
