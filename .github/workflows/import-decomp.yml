@@ -7,6 +7,8 @@ on:
       - 'tests/test_import_decomp.py'
       - 'tools/triage_native.py'
       - 'tests/test_triage_native.py'
+      - 'tools/native_link_gate.py'
+      - 'tests/test_native_link_gate.py'
       - '.github/workflows/import-decomp.yml'
   pull_request:
     paths:
@@ -14,6 +16,8 @@ on:
       - 'tests/test_import_decomp.py'
       - 'tools/triage_native.py'
       - 'tests/test_triage_native.py'
+      - 'tools/native_link_gate.py'
+      - 'tests/test_native_link_gate.py'
       - '.github/workflows/import-decomp.yml'
 
 permissions:
@@ -29,6 +33,8 @@ jobs:
         run: python3 -m unittest discover -s tests -p test_import_decomp.py -v
       - name: Verify native triage tests
         run: python3 -m unittest discover -s tests -p test_triage_native.py -v
+      - name: Verify compile and link gate tests
+        run: python3 -m unittest discover -s tests -p test_native_link_gate.py -v
       - name: Checkout pinned GT4 decomp sources
         uses: actions/checkout@v4
         with:
@@ -62,6 +68,13 @@ jobs:
             --source-root bulk-import/gt4 \
             --output bulk-import/native-triage.json \
             --top 250 --probe 30 --compiler clang++
+      - name: Compile and link isolated candidates
+        run: |
+          python3 tools/native_link_gate.py \
+            --triage bulk-import/native-triage.json \
+            --source-root bulk-import/gt4 \
+            --output bulk-import/native-link-report.json \
+            --max-units 20
       - name: Package all imported sources and dependency manifest
         uses: actions/upload-artifact@v4
         with:
