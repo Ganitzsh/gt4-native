@@ -36,13 +36,13 @@ The bootstrap executable currently prints a status message. `include/gt4/guest_a
 
 ## Implemented host-side components
 
-- Checked guest memory access (`MemoryView`) and multi-region address space (`AddressSpace`).
+- Checked guest memory access (`MemoryView`), multi-region address space (`AddressSpace`), and typed scalar `guest_ptr<T>` access.
 - Legacy ee-gcc virtual-call resolution and a limited native callback registry.
 - Read-only copy-on-write guest string header inspection.
 - ELF32 little-endian MIPS PT_LOAD parser and `gt4_elf_inspect` command.
-- Thirteen CTest targets (bootstrap, ABI, memory, virtual dispatch, strings, callbacks, address space, ELF parser, portable primitives, robustness, ELF mutation stress, and two original-GT4 integration tests).
+- Fifteen CTest targets (bootstrap, ABI, memory, virtual dispatch, strings, callbacks, address space, typed guest pointers, ELF parser, portable primitives, robustness, ELF mutation stress, and three original-GT4 integration tests).
 
-**These are foundational compatibility tools, not playable game code.** Cross-platform builds and tests are automated for Linux (GCC/Clang), Windows (MSVC) and macOS (AppleClang), in Debug and Release, plus Linux ASan/UBSan. See [Milestone 1 validation](docs/MILESTONE_1.md) and the [GitHub Actions results](https://github.com/gustavocanepa/gt4-native/actions). Four original GT4 decomp functions are now compiled as host C++; the normalized-value reader calls the original divisor calculation through an explicit host-only ABI bridge, because the decompiled declarations disagree. Other external dependencies still use test shims; see [Milestone 2](docs/MILESTONE_2.md). Real GT4 binaries and native runtime integration remain untested.
+**These are foundational compatibility tools, not playable game code.** Cross-platform builds and tests are automated for Linux (GCC/Clang), Windows (MSVC) and macOS (AppleClang), in Debug and Release, plus Linux ASan/UBSan. See [Milestone 1 validation](docs/MILESTONE_1.md), [Milestone 2](docs/MILESTONE_2.md), [Milestone 3](docs/MILESTONE_3.md), and the [GitHub Actions results](https://github.com/gustavocanepa/gt4-native/actions). Five original GT4 decomp functions are now compiled as host C++; one scalar accessor is exercised through an explicit checked guest-pointer bridge. The normalized-value reader still calls the original divisor calculation through a host-only ABI bridge because the decompiled declarations disagree. These tests do not establish full caller ABI, real asset loading, or runtime integration. Real GT4 binaries remain untested and no playable build exists.
 
 ## Automated upstream integration pipeline
 

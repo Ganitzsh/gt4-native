@@ -46,6 +46,9 @@ if(BUILD_TESTING)
   add_executable(gt4_guest_address_space_test tests/guest_address_space.cpp)
   target_link_libraries(gt4_guest_address_space_test PRIVATE gt4_guest_abi)
   add_test(NAME guest_address_space COMMAND gt4_guest_address_space_test)
+  add_executable(gt4_guest_ptr_test tests/guest_ptr.cpp)
+  target_link_libraries(gt4_guest_ptr_test PRIVATE gt4_guest_abi)
+  add_test(NAME guest_ptr COMMAND gt4_guest_ptr_test)
   add_executable(gt4_elf32_test tests/elf32.cpp)
   target_link_libraries(gt4_elf32_test PRIVATE gt4_guest_abi)
   add_test(NAME elf32 COMMAND gt4_elf32_test)
@@ -63,6 +66,11 @@ if(BUILD_TESTING)
     upstream/gt4/src/runtime/MboolReader/MboolReader__structor_19.cpp)
   target_link_libraries(gt4_upstream_mboolreader_test PRIVATE gt4_guest_abi)
   add_test(NAME upstream_mboolreader COMMAND gt4_upstream_mboolreader_test)
+  add_executable(gt4_upstream_guest_ptr_test
+    tests/upstream_guest_ptr.cpp
+    upstream/gt4/src/race/unit_00378778/func_00385B28.cpp)
+  target_link_libraries(gt4_upstream_guest_ptr_test PRIVATE gt4_guest_abi)
+  add_test(NAME upstream_guest_ptr COMMAND gt4_upstream_guest_ptr_test)
   set_source_files_properties(upstream/gt4/src/runtime/hArrayCompare/func_005C9970.c PROPERTIES LANGUAGE CXX)
   set_source_files_properties(upstream/gt4/src/gamedata/unit_0013B5F8/func_001465D8.cpp
     PROPERTIES COMPILE_DEFINITIONS "func_001465D8=gt4_original_func_001465D8")
@@ -78,7 +86,7 @@ if(BUILD_TESTING)
   # Tests use assert(); keep checks active even under Release builds.
   foreach(test_target IN ITEMS gt4_guest_abi_test gt4_guest_memory_test
       gt4_guest_dispatch_test gt4_guest_string_test gt4_native_callbacks_test
-      gt4_guest_address_space_test gt4_elf32_test gt4_portable_primitives_test gt4_robustness_test gt4_elf_mutation_test gt4_upstream_mboolreader_test gt4_upstream_harraycompare_test)
+      gt4_guest_address_space_test gt4_guest_ptr_test gt4_elf32_test gt4_portable_primitives_test gt4_robustness_test gt4_elf_mutation_test gt4_upstream_mboolreader_test gt4_upstream_guest_ptr_test gt4_upstream_harraycompare_test)
     if(MSVC)
       target_compile_options(${test_target} PRIVATE /UNDEBUG)
     else()

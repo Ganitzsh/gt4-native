@@ -45,7 +45,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: gustavocanepa/gt4-decomp
-          ref: de3d7edbead9e8a6e473b1e68b8ddf3b1f639fd1
+          ref: 69c3585cff2a48f98c6cc9c2c495012d28c022cd
           path: upstream-checkout
           persist-credentials: false
       - name: Import every available source translation unit and header
@@ -54,7 +54,7 @@ jobs:
             --upstream upstream-checkout \
             --dest bulk-import/gt4 \
             --manifest bulk-import/manifest.json \
-            --commit de3d7edbead9e8a6e473b1e68b8ddf3b1f639fd1
+            --commit 69c3585cff2a48f98c6cc9c2c495012d28c022cd
       - name: Verify import file count and hashes
         run: |
           python3 - <<'PY'
