@@ -21,13 +21,16 @@ float func_001465D8() { ++divisor_calls; return divisor; }
 int main() {
     alignas(std::int32_t) std::array<std::byte, 0x178> storage{};
     auto* writer = reinterpret_cast<func_005C9930_a0*>(storage.data());
-    auto* reader = reinterpret_cast<func_005C9970_arg0*>(storage.data());
+    func_005C9970_arg0 reader{};
+    auto transfer = [&] { std::memcpy(&reader, storage.data(), storage.size()); };
     func_005C9930(writer, 120);
-    CHECK(func_005C9970(reader) == 30.0f);
+    transfer();
+    CHECK(func_005C9970(&reader) == 30.0f);
     CHECK(divisor_calls == 1);
     func_005C9930(writer, -18);
     divisor = 3.0f;
-    CHECK(func_005C9970(reader) == -6.0f);
+    transfer();
+    CHECK(func_005C9970(&reader) == -6.0f);
     CHECK(divisor_calls == 2);
     std::int32_t stored = 0;
     std::memcpy(&stored, storage.data() + 0x174, sizeof(stored));
