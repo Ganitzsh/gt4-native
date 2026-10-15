@@ -58,11 +58,16 @@ if(BUILD_TESTING)
   add_executable(gt4_elf_mutation_test tests/elf_mutation.cpp)
   target_link_libraries(gt4_elf_mutation_test PRIVATE gt4_guest_abi)
   add_test(NAME elf_mutation COMMAND gt4_elf_mutation_test)
+  add_executable(gt4_upstream_mboolreader_test
+    tests/upstream_mboolreader.cpp
+    upstream/gt4/src/runtime/MboolReader/MboolReader__structor_19.cpp)
+  target_link_libraries(gt4_upstream_mboolreader_test PRIVATE gt4_guest_abi)
+  add_test(NAME upstream_mboolreader COMMAND gt4_upstream_mboolreader_test)
 
   # Tests use assert(); keep checks active even under Release builds.
   foreach(test_target IN ITEMS gt4_guest_abi_test gt4_guest_memory_test
       gt4_guest_dispatch_test gt4_guest_string_test gt4_native_callbacks_test
-      gt4_guest_address_space_test gt4_elf32_test gt4_portable_primitives_test gt4_robustness_test gt4_elf_mutation_test)
+      gt4_guest_address_space_test gt4_elf32_test gt4_portable_primitives_test gt4_robustness_test gt4_elf_mutation_test gt4_upstream_mboolreader_test)
     if(MSVC)
       target_compile_options(${test_target} PRIVATE /UNDEBUG)
     else()
