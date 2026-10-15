@@ -4,6 +4,12 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
+
+def discover_integrated_paths(repository_root):
+    """Only recognize exact upstream source paths explicitly wired into CMake."""
+    cmake = (repository_root / 'CMakeLists.txt').read_text(encoding='utf-8')
+    return set(re.findall(r'upstream/gt4/(src/[^\\s)]+\\.(?:c|cc|cpp|cxx))', cmake))
 
 def queue_candidates(manifest, triage, link_report, root, already_integrated=()):
     inventory = {r['path']: r for r in manifest['records'] if r.get('source')}
@@ -53,11 +59,12 @@ def main():
     p.add_argument('--link-report', type=Path, required=True)
     p.add_argument('--source-root', type=Path, required=True)
     p.add_argument('--output', type=Path, required=True)
+    p.add_argument('--native-repo', type=Path, help='Check CMake for previously integrated sources')
     a = p.parse_args()
     manifest = json.loads(a.manifest.read_text())
     triage = json.loads(a.triage.read_text())
     links = json.loads(a.link_report.read_text())
-    report = queue_candidates(manifest, triage, links, a.source_root)
+    report = queue_candidates(manifest, triage, links, a.source_root, discover_integrated_paths(a.native_repo) if a.native_repo else ())
     a.output.parent.mkdir(parents=True, exist_ok=True)
     a.output.write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps({k: v for k, v in report.items() if k != 'queue'}))
