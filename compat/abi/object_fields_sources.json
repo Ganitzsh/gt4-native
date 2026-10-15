@@ -1,0 +1,114 @@
+{
+  "upstream_commit": "ba5ebe778a786d92b108926b8f89843ea1a9b5cf",
+  "translation_unit": "compat/abi/object_fields.cpp",
+  "generated_include": "compat/abi/object_fields_functions.inc",
+  "generated_sha256": "ceae912d9af220cc942aa6d1ab84bc8619a4e3d3f1779349c52d4279d7f7e83d",
+  "sources": [
+    {
+      "path": "src/gamedata/unit_0013B5F8/func_001465D8.cpp",
+      "symbol": "func_001465D8",
+      "sha256": "5d586d171c505573b542ed179fe0d5c8aed3cc0406fb83a5d171546d693bdd8b",
+      "original_body_sha256": "5c67b56e82ae0618c61a498412723765b1d0521085b4a149c73c256c48e41c1a",
+      "native_body_sha256": "5c67b56e82ae0618c61a498412723765b1d0521085b4a149c73c256c48e41c1a",
+      "body_changes": []
+    },
+    {
+      "path": "src/runtime/hArrayCompare/func_005C9930.cpp",
+      "symbol": "func_005C9930",
+      "sha256": "f9325cbf08355334c9799737c34b479547dfda0062c018ff5de800664d6fe8ed",
+      "original_body_sha256": "8117db31ced475479ec7757e3ed3529d1111c0bc2b2309f5ba05d348b882f18e",
+      "native_body_sha256": "8117db31ced475479ec7757e3ed3529d1111c0bc2b2309f5ba05d348b882f18e",
+      "body_changes": []
+    },
+    {
+      "path": "src/runtime/hArrayCompare/func_005C9938.cpp",
+      "symbol": "func_005C9938",
+      "sha256": "c2220ee3035a8caf1e70dde3e14e82b51856e09b3ff7a0dbc4189cf1b02b037e",
+      "original_body_sha256": "5a616f044379e071dbb55b29af02f97d3ee208a4a966f90170ce4ffd5c5980a5",
+      "native_body_sha256": "5a616f044379e071dbb55b29af02f97d3ee208a4a966f90170ce4ffd5c5980a5",
+      "body_changes": []
+    },
+    {
+      "path": "src/runtime/hArrayCompare/func_005C9940.cpp",
+      "symbol": "func_005C9940",
+      "sha256": "e35326e46c2b399cce7c7383688f4312753d8c80da6f6da1306d254289a63dc0",
+      "original_body_sha256": "72c70c8975175181ca12d64dd8fd46dec414046ed6c7166070e213e1e87334d8",
+      "native_body_sha256": "72c70c8975175181ca12d64dd8fd46dec414046ed6c7166070e213e1e87334d8",
+      "body_changes": []
+    },
+    {
+      "path": "src/runtime/hArrayCompare/func_005C9948.cpp",
+      "symbol": "func_005C9948",
+      "sha256": "9c6ccf958422191a0aa094ed4ebbf1e36d62139c6eeee41b2c8a7dea244098a2",
+      "original_body_sha256": "171a0b7640df136179d67ecaa5a0141a51da5a482cea67c9240deeb1194b47ef",
+      "native_body_sha256": "171a0b7640df136179d67ecaa5a0141a51da5a482cea67c9240deeb1194b47ef",
+      "body_changes": []
+    },
+    {
+      "path": "src/runtime/hArrayCompare/func_005C9950.cpp",
+      "symbol": "func_005C9950",
+      "sha256": "1fe2eb1eb7482c93a8653b93dcfd95308755b80fa2591c8d4a3f3e97f585923a",
+      "original_body_sha256": "8f3f597a1a8d4fdf8ee3b194b0b3902dbf5e974e5b1cb910e1132f899775ee76",
+      "native_body_sha256": "8f3f597a1a8d4fdf8ee3b194b0b3902dbf5e974e5b1cb910e1132f899775ee76",
+      "body_changes": []
+    },
+    {
+      "path": "src/runtime/hArrayCompare/func_005C9958.cpp",
+      "symbol": "func_005C9958",
+      "sha256": "df92c4e4b6d93f43c1ba7f2657e89b64491f98053d413e42a248905033967ea3",
+      "original_body_sha256": "ff9c98b0f293617d2b5aa34a19eda2344038386cb2ddd77ff06723cc66cdae8a",
+      "native_body_sha256": "ff9c98b0f293617d2b5aa34a19eda2344038386cb2ddd77ff06723cc66cdae8a",
+      "body_changes": []
+    },
+    {
+      "path": "src/runtime/hArrayCompare/func_005C9960.cpp",
+      "symbol": "func_005C9960",
+      "sha256": "f39dfd28717a4728319712b838323115d36b1049edb5c1cc5cc8424d8fd9c448",
+      "original_body_sha256": "9795a8a5a2b0f9d3e24ab1dcc1913eceb706beb88f511d57b5bd683a3c7c0e30",
+      "native_body_sha256": "9795a8a5a2b0f9d3e24ab1dcc1913eceb706beb88f511d57b5bd683a3c7c0e30",
+      "body_changes": []
+    },
+    {
+      "path": "src/runtime/hArrayCompare/func_005C9968.cpp",
+      "symbol": "func_005C9968",
+      "sha256": "2c920d758798e01c36175517b78310bd3035091c21b39597d749847c2031d978",
+      "original_body_sha256": "37fbe8cbb11ed941ce97ccd9c95bd9e6fae2cf562471ebd355323f19c25e27a5",
+      "native_body_sha256": "37fbe8cbb11ed941ce97ccd9c95bd9e6fae2cf562471ebd355323f19c25e27a5",
+      "body_changes": []
+    },
+    {
+      "path": "src/runtime/hArrayCompare/func_005C99A8.cpp",
+      "symbol": "func_005C99A8",
+      "sha256": "2154d650c07519687d918ca36f1069c94552f23e113f7ae76bb2fa4569778389",
+      "original_body_sha256": "e41135b53e6eb6e4161ff46715e1e740c6690e7ef776332f0f302d631392415d",
+      "native_body_sha256": "e41135b53e6eb6e4161ff46715e1e740c6690e7ef776332f0f302d631392415d",
+      "body_changes": []
+    },
+    {
+      "path": "src/runtime/hArrayCompare/func_005C99B0.cpp",
+      "symbol": "func_005C99B0",
+      "sha256": "9c50afda2052f41f026dce42acbb72abc5b0596c7cde02664c7cbce0b25da996",
+      "original_body_sha256": "3d2ea9e1c7d9baf62b1ca75845bbcf4ab3d58f504a3bcd7f0757914760cdcacf",
+      "native_body_sha256": "3d2ea9e1c7d9baf62b1ca75845bbcf4ab3d58f504a3bcd7f0757914760cdcacf",
+      "body_changes": []
+    },
+    {
+      "path": "src/runtime/hArrayCompare/func_005C99B8.cpp",
+      "symbol": "func_005C99B8",
+      "sha256": "1da09c2d8609dba10b6eae036d8561d31cdd3ef0743cbd37aaab70801e0ff6d3",
+      "original_body_sha256": "e8dbcd426ea8e0c4bfc814b831e412f817d2a85cb85ed674aae6bc55647a215b",
+      "native_body_sha256": "e8dbcd426ea8e0c4bfc814b831e412f817d2a85cb85ed674aae6bc55647a215b",
+      "body_changes": []
+    },
+    {
+      "path": "src/runtime/hArrayCompare/func_005C9970.c",
+      "symbol": "func_005C9970",
+      "sha256": "0d167d54be6da23627938b39445b2be857bcab27eeea59faedec9a3bc8a8ad61",
+      "original_body_sha256": "7bf25535575304ce75cb7fff9c46d2de361e0c2a7dba5b407d5e5f606cd10ce6",
+      "native_body_sha256": "93207fd76c28a889d6fe05dc8cd0adfb277beaf6af17f5f37978ebcadc575631",
+      "body_changes": [
+        "Pass unchanged PS2 a0 explicitly to func_001465D8"
+      ]
+    }
+  ]
+}

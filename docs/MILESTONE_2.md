@@ -1,5 +1,7 @@
 # Milestone 2 — linked GT4 source functions
 
+> Historical milestone. [Milestone 4](MILESTONE_4.md) supersedes the earlier guest-pointer limitations and the separate divisor-context bridge.
+
 The native build now compiles **four authentic GT4-decomp functions** from the pinned upstream revision `de3d7edbead9e8a6e473b1e68b8ddf3b1f639fd1`:
 
 | Original source | Native test | Host dependencies |

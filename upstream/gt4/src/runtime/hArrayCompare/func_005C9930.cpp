@@ -1,4 +1,4 @@
-// Imported from gustavocanepa/gt4-decomp @ de3d7edbead9e8a6e473b1e68b8ddf3b1f639fd1
+// Imported from gustavocanepa/gt4-decomp @ ba5ebe778a786d92b108926b8f89843ea1a9b5cf
 // Original path: src/runtime/hArrayCompare/func_005C9930.cpp
 #include "types.h"
 struct func_005C9930_a0 {

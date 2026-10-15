@@ -1,7 +1,5 @@
-// Imported unchanged from gustavocanepa/gt4-decomp
-// Upstream commit: de3d7edbead9e8a6e473b1e68b8ddf3b1f639fd1
-// Upstream path: src/runtime/MboolReader/MboolReader__structor_19.cpp
-// Attribution and licensing: see THIRD_PARTY_NOTICES.md
+// Imported from gustavocanepa/gt4-decomp @ ba5ebe778a786d92b108926b8f89843ea1a9b5cf
+// Original path: src/runtime/MboolReader/MboolReader__structor_19.cpp
 extern "C" void MReaderBase__structor_0(void *arg0, void *arg1);
 extern "C" void func_005C1628(void *arg0);
 

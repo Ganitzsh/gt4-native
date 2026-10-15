@@ -32,17 +32,19 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-The bootstrap executable currently prints a status message. `include/gt4/guest_abi.hpp` provides **data-only**, compile-time checked guest layouts; it is not a functioning guest/host ABI bridge.
+The bootstrap executable prints a status message; `--object-demo` runs the guest-backed accessor chain. `include/gt4/guest_abi.hpp` provides **data-only**, compile-time checked guest layouts; it is not a functioning guest/host ABI bridge.
 
 ## Implemented host-side components
 
-- Checked guest memory access (`MemoryView`), multi-region address space (`AddressSpace`), and typed scalar `guest_ptr<T>` access.
+- Checked guest memory access (`MemoryView`), multi-region address space (`AddressSpace`), and typed scalar/structure `guest_ptr<T>` access, checked guest arrays and field proxies.
 - Legacy ee-gcc virtual-call resolution and a limited native callback registry.
 - Read-only copy-on-write guest string header inspection.
 - ELF32 little-endian MIPS PT_LOAD parser and `gt4_elf_inspect` command.
-- Fifteen CTest targets (bootstrap, ABI, memory, virtual dispatch, strings, callbacks, address space, typed guest pointers, ELF parser, portable primitives, robustness, ELF mutation stress, and three original-GT4 integration tests).
+- Sixteen CTest targets (bootstrap, ABI, memory, virtual dispatch, strings, callbacks, address space, typed guest pointers/objects, ELF parser, portable primitives, robustness, ELF mutation stress, and three original-GT4 integration tests).
 
-**These are foundational compatibility tools, not playable game code.** Cross-platform builds and tests are automated for Linux (GCC/Clang), Windows (MSVC) and macOS (AppleClang), in Debug and Release, plus Linux ASan/UBSan. See [Milestone 1 validation](docs/MILESTONE_1.md), [Milestone 2](docs/MILESTONE_2.md), [Milestone 3](docs/MILESTONE_3.md), and the [GitHub Actions results](https://github.com/gustavocanepa/gt4-native/actions). Five original GT4 decomp functions are now compiled as host C++; one scalar accessor is exercised through an explicit checked guest-pointer bridge. The normalized-value reader still calls the original divisor calculation through a host-only ABI bridge because the decompiled declarations disagree. These tests do not establish full caller ABI, real asset loading, or runtime integration. Real GT4 binaries remain untested and no playable build exists.
+**These are foundational compatibility tools, not playable game code.** Cross-platform builds and tests are automated for Linux (GCC/Clang), Windows (MSVC) and macOS (AppleClang), in Debug and Release, plus Linux ASan/UBSan. See [Milestone 1 validation](docs/MILESTONE_1.md), [Milestone 2](docs/MILESTONE_2.md), [Milestone 3](docs/MILESTONE_3.md), and the [GitHub Actions results](https://github.com/gustavocanepa/gt4-native/actions). Fifteen original GT4 source functions are selected in the native build. Thirteen accessor/calculation bodies run over checked PS2-format memory through reviewed native adaptations and are linked into the production executable. The normalized reader now explicitly passes the same object to the original divisor calculation, based on inspection of the PS2 call site; the previous global-context bridge is removed. See [Milestone 4](docs/MILESTONE_4.md).
+
+Run `gt4_native --object-demo` to demonstrate the original chain on a synthetic object without game assets. This establishes a narrow guest-memory integration slice, not full PS2 ABI compatibility, real asset loading, or playability.
 
 ## Automated upstream integration pipeline
 
