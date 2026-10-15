@@ -90,6 +90,39 @@ jobs:
             --source-root bulk-import/gt4 \
             --output bulk-import/integration-queue.json \
             --native-repo .
+      - name: Publish integration queue summary
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report = json.loads(Path('bulk-import/integration-queue.json').read_text())
+          counts = report['counts']
+          lines = [
+              '## GT4 native integration review',
+              '',
+              f"Upstream revision: \`{report['upstream_commit']}\`",
+              f"Imported translation units: **{report['total_imported_translation_units']}**",
+              f"Candidates evaluated by the compile/link gate: **{report['evaluated_candidates']}**",
+              '',
+              '| Classification | Count |',
+              '| --- | ---: |',
+          ]
+          for status in ('review_ready', 'needs_link_dependencies', 'needs_compile_fixes', 'already_integrated'):
+              lines.append(f"| {status.replace('_', ' ')} | {counts.get(status, 0)} |")
+          lines.extend(['', '### First candidates for manual review', '',
+                        '| Source path | Classification | Compile | Executable link |',
+                        '| --- | --- | --- | --- |'])
+          for item in report['queue'][:15]:
+              path = item['path'].replace('|', '\\|').replace('\\n', ' ')
+              lines.append(f"| \`{path}\` | {item['status']} | {item['compile']} | {item['executable_link']} |")
+          lines.extend(['', '**Important:** An isolated link does not establish correct ABI, behavior, or runtime integration. No game code is automatically integrated by this workflow.'])
+          summary = '\\n'.join(lines) + '\\n'
+          print(summary)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as f:
+              f.write(summary)
+          PY
       - name: Package all imported sources and dependency manifest
         uses: actions/upload-artifact@v4
         with:
