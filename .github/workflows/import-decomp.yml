@@ -9,6 +9,8 @@ on:
       - 'tests/test_triage_native.py'
       - 'tools/native_link_gate.py'
       - 'tests/test_native_link_gate.py'
+      - 'tools/integration_queue.py'
+      - 'tests/test_integration_queue.py'
       - '.github/workflows/import-decomp.yml'
   pull_request:
     paths:
@@ -18,6 +20,8 @@ on:
       - 'tests/test_triage_native.py'
       - 'tools/native_link_gate.py'
       - 'tests/test_native_link_gate.py'
+      - 'tools/integration_queue.py'
+      - 'tests/test_integration_queue.py'
       - '.github/workflows/import-decomp.yml'
 
 permissions:
@@ -35,6 +39,8 @@ jobs:
         run: python3 -m unittest discover -s tests -p test_triage_native.py -v
       - name: Verify compile and link gate tests
         run: python3 -m unittest discover -s tests -p test_native_link_gate.py -v
+      - name: Verify integration review queue tests
+        run: python3 -m unittest discover -s tests -p test_integration_queue.py -v
       - name: Checkout pinned GT4 decomp sources
         uses: actions/checkout@v4
         with:
@@ -75,6 +81,14 @@ jobs:
             --source-root bulk-import/gt4 \
             --output bulk-import/native-link-report.json \
             --max-units 20
+      - name: Generate hash-verified integration review queue
+        run: |
+          python3 tools/integration_queue.py \
+            --manifest bulk-import/manifest.json \
+            --triage bulk-import/native-triage.json \
+            --link-report bulk-import/native-link-report.json \
+            --source-root bulk-import/gt4 \
+            --output bulk-import/integration-queue.json
       - name: Package all imported sources and dependency manifest
         uses: actions/upload-artifact@v4
         with:
