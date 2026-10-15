@@ -1,5 +1,6 @@
 #pragma once
 #include "gt4/guest_abi.hpp"
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -19,7 +20,8 @@ struct ElfImage {
 
 // Parse a little-endian 32-bit MIPS ELF. This loads PT_LOAD data only; it does
 // not execute instructions, relocate symbols, or emulate PS2 hardware.
-[[nodiscard]] inline ElfImage parse_mips_elf32(std::span<const std::byte> input) {
+[[nodiscard]] inline ElfImage parse_mips_elf32(std::span<const std::byte> input,
+                                                 std::uint64_t max_loaded_bytes = 256ull * 1024 * 1024) {
     auto u8 = [&](std::uint64_t p) -> std::uint8_t {
         if (p >= input.size()) throw std::out_of_range("truncated ELF");
         return std::to_integer<std::uint8_t>(input[static_cast<std::size_t>(p)]);
@@ -43,6 +45,7 @@ struct ElfImage {
     if (phentsize < 32 || std::uint64_t(phoff) + std::uint64_t(phentsize)*phnum > input.size())
         throw std::out_of_range("invalid ELF program header table");
     ElfImage result{entry, {}};
+    std::uint64_t total_loaded = 0;
     for (std::uint32_t i=0; i<phnum; ++i) {
         const auto p = std::uint64_t(phoff) + std::uint64_t(i)*phentsize;
         if (u32(p) != 1) continue;
@@ -55,6 +58,9 @@ struct ElfImage {
             std::uint64_t(address)+memsz > (std::uint64_t{1} << 32))
             throw std::out_of_range("invalid ELF loadable segment");
         if (memsz == 0) continue;
+        if (std::uint64_t(memsz) > max_loaded_bytes - std::min(total_loaded, max_loaded_bytes))
+            throw std::length_error("ELF segments exceed configured memory budget");
+        total_loaded += memsz;
         ElfSegment segment{address, flags, std::vector<std::byte>(memsz)};
         for (std::size_t j=0; j<filesz; ++j)
             segment.bytes[j] = input[std::size_t(offset)+j];
