@@ -39,7 +39,7 @@ UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
 - macOS AppleClang Debug + Release
 - Linux Clang Debug with AddressSanitizer + UndefinedBehaviorSanitizer
 
-All matrix jobs build with additional warnings and run the CTest suite. Tests based on `assert` keep assertions enabled in Release via `/UNDEBUG` or `-UNDEBUG`. The independent robustness test uses a `CHECK` macro and exercises invalid address mappings, read-only memory, vtable offsets, string headers, and malformed ELF input.
+All matrix jobs build with additional warnings and run the CTest suite. Tests based on `assert` keep assertions enabled in Release via `/UNDEBUG` or `-UNDEBUG`. The independent robustness test uses a `CHECK` macro and exercises invalid address mappings, read-only memory, vtable offsets, string headers, and malformed ELF input. The deterministic ELF mutation test processes 10,000 one-byte variations with a 64 KiB allocation budget under every CI configuration.
 
 ## Input hardening
 
