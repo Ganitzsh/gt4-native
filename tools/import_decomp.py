@@ -10,8 +10,8 @@ import subprocess
 
 EXT = {'.c', '.cc', '.cpp', '.cxx', '.h', '.hpp'}
 SRC = {'.c', '.cc', '.cpp', '.cxx'}
-INCLUDE = re.compile(r'^\\s*#\\s*include\\s*[<"]([^>"]+)[>"]', re.M)
-SYMBOL = re.compile(r'\\b(?:func_[0-9A-Fa-f]{8}|[A-Za-z_]\\w*__(?:structor|tf|filter|less|vtable)[A-Za-z_0-9]*)\\b')
+INCLUDE = re.compile(r'^\s*#\s*include\s*[<"]([^>"]+)[>"]', re.M)
+SYMBOL = re.compile(r'\b(?:func_[0-9A-Fa-f]{8}|[A-Za-z_]\w*__(?:structor|tf|filter|less|vtable)[A-Za-z_0-9]*)\b')
 
 def digest(path):
     h = hashlib.sha256()
@@ -68,7 +68,7 @@ def import_tree(source, dest, manifest_path, expected_commit=None, dry_run=False
               'total_bytes': sum(r['bytes'] for r in records), 'records': records}
     if not dry_run:
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
-        manifest_path.write_text(json.dumps(report, indent=2, sort_keys=True) + '\\n', encoding='utf-8')
+        manifest_path.write_text(json.dumps(report, indent=2, sort_keys=True) + '\n', encoding='utf-8')
     return report
 
 def main():
