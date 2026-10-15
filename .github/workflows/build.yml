@@ -1,18 +1,53 @@
-name: Native bootstrap CI
+name: Native C++ validation
 on:
   push:
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
 jobs:
   build:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+    name: ${{ matrix.os }} / ${{ matrix.compiler }} / ${{ matrix.config }}
     runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, compiler: gcc, config: Debug, cc: gcc, cxx: g++ }
+          - { os: ubuntu-latest, compiler: gcc, config: Release, cc: gcc, cxx: g++ }
+          - { os: ubuntu-latest, compiler: clang, config: Debug, cc: clang, cxx: clang++ }
+          - { os: ubuntu-latest, compiler: clang, config: Release, cc: clang, cxx: clang++ }
+          - { os: windows-latest, compiler: msvc, config: Debug }
+          - { os: windows-latest, compiler: msvc, config: Release }
+          - { os: macos-latest, compiler: appleclang, config: Debug }
+          - { os: macos-latest, compiler: appleclang, config: Release }
     steps:
       - uses: actions/checkout@v4
       - name: Configure
-        run: cmake -S . -B build -DBUILD_TESTING=ON
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DBUILD_TESTING=ON -DGT4_STRICT_WARNINGS=ON
       - name: Build
-        run: cmake --build build --config Release
+        run: cmake --build build --config ${{ matrix.config }} --parallel 2
       - name: Test
-        run: ctest --test-dir build -C Release --output-on-failure
+        run: ctest --test-dir build -C ${{ matrix.config }} --output-on-failure --timeout 30
+
+  sanitizers:
+    name: Linux Clang ASan + UBSan
+    runs-on: ubuntu-latest
+    env:
+      CC: clang
+      CXX: clang++
+      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build-sanitized -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON -DGT4_ENABLE_SANITIZERS=ON -DGT4_STRICT_WARNINGS=ON
+      - name: Build
+        run: cmake --build build-sanitized --parallel 2
+      - name: Test
+        run: ctest --test-dir build-sanitized --output-on-failure --timeout 30
