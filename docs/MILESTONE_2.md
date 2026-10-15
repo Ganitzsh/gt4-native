@@ -1,43 +1,36 @@
-# Milestone 2 — first real GT4 function on a native host
+# Milestone 2 — linked GT4 source functions
 
-## Provenance
+The native build now compiles **three authentic GT4-decomp functions** from the pinned upstream revision `de3d7edbead9e8a6e473b1e68b8ddf3b1f639fd1`:
 
-The first imported unit is **not a reimplementation or synthetic example**. It is the C++ source from the matching decompilation repository:
+| Original source | Native test | Host dependencies |
+|---|---|---|
+| `src/runtime/MboolReader/MboolReader__structor_19.cpp` | `upstream_mboolreader` | Base constructor, release function, vtable test shims |
+| `src/runtime/hArrayCompare/func_005C9930.cpp` | `upstream_harraycompare` | None |
+| `src/runtime/hArrayCompare/func_005C9970.c` | `upstream_harraycompare` | `func_001465D8` divisor shim |
 
-- Upstream: https://github.com/gustavocanepa/gt4-decomp
-- Pinned upstream revision: `de3d7edbead9e8a6e473b1e68b8ddf3b1f639fd1`
-- Source: `src/runtime/MboolReader/MboolReader__structor_19.cpp`
-- Imported source: `upstream/gt4/src/runtime/MboolReader/MboolReader__structor_19.cpp`
-- Native test: `tests/upstream_mboolreader.cpp`
+## Real shared-state chain
 
-The imported function body and declarations are **identical to the upstream source**; only provenance comments were prepended.
+The second test compiles the **original setter** `func_005C9930` and **original normalized-value reader** `func_005C9970` together. Both operate on the same original 0x174-byte object field:
 
-## What the test proves
+1. Setter writes 120 to field at offset 0x174.
+2. The object representation is copied into the reader's matching layout using `memcpy`, avoiding C++ cross-type aliasing.
+3. Reader returns 120 / 4 = 30.
+4. Setter changes field to -18; reader returns -18 / 3 = -6.
 
-CMake compiles the imported original C++ function directly with the **host C++20 compiler** and links it into a native executable. The test invokes `MboolReader__structor_19` on host memory and verifies:
+The divisor comes from an **explicit stub** for `func_001465D8`. There is no synthetic reimplementation of either original function's logic. The imported source bodies are unchanged except for prepended provenance comments.
 
-1. It writes the address of the imported vtable symbol into the object.
-2. It calls `MReaderBase__structor_0` with the expected object and null second argument.
-3. It calls `func_005C1628` only when the low bit of `flags` is set (tested with flags 0, 1, 2, 3).
+This proves a **two-function original GT4 dataflow on the host**, but **not** a direct call from one original function into another. They are called in sequence by the integration test. The external divisor dependency remains a stub, and guest-pointer ABI integration is still pending. The test uses host-native memory, not actual game assets or a PS2 emulator.
 
-Two external function dependencies and the vtable symbol are supplied as **explicit test shims**. This is a meaningful first host execution of original GT4 decomp source, **not** a fully integrated game subsystem. It does not prove PS2 binary matching (that is the upstream project's job), correct guest 32-bit pointer layout on 64-bit hosts, or compatibility with real runtime objects.
-
-## Reproduce
+## Reproduction
 
 ```sh
 cmake -S . -B build -DBUILD_TESTING=ON -DGT4_STRICT_WARNINGS=ON
-cmake --build build --target gt4_upstream_mboolreader_test
-ctest --test-dir build -R upstream_mboolreader --output-on-failure
+cmake --build build --parallel
+ctest --test-dir build -R 'upstream_' --output-on-failure
 ```
 
-## Next milestone-2 gates
+Both tests are part of the cross-platform CI matrix and the sanitizer job. See the [GitHub Actions runs](https://github.com/gustavocanepa/gt4-native/actions) for results of the latest commit.
 
-- [x] Select an actual upstream GT4 source and pin its commit.
-- [x] Import original C++ and compile it with a host compiler.
-- [x] Test both constructor branches with host-side dependency shims.
-- [ ] Obtain passing GitHub CI results for the final commit.
-- [ ] Replace shims with correctly ported runtime dependencies.
-- [ ] Exercise a real guest-layout object, rather than a host-pointer object.
-- [ ] Execute a second function connected to the first in the same dependency chain.
+## Next steps
 
-The repository contains no game assets, BIOS or original executable.
+Replace `func_001465D8` with its real matched source once located and ported; then bring in original code that **calls** another imported function, and test guest 32-bit memory layout rather than host pointer layouts.
