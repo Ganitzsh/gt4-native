@@ -22,6 +22,10 @@ int main() {
     assert(image.segments[0].bytes.size()==8);
     assert(image.segments[0].bytes[0]==std::byte(1));
     assert(image.segments[0].bytes[4]==std::byte(0));
+    bool capped=false;
+    try { (void)gt4::guest::parse_mips_elf32(elf, 7); }
+    catch (const std::length_error&) { capped=true; }
+    assert(capped);
     w32(72,3);
     bool rejected=false;
     try { (void)gt4::guest::parse_mips_elf32(elf); }
