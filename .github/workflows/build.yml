@@ -8,6 +8,16 @@ permissions:
   contents: read
 
 jobs:
+  adapters:
+    name: Source provenance and generated adapters
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python tools/adapt_object_fields.py --check
+      - run: python -m unittest discover -s tests -p 'test_*.py' -v
   build:
     name: ${{ matrix.os }} / ${{ matrix.compiler }} / ${{ matrix.config }}
     runs-on: ${{ matrix.os }}
@@ -34,6 +44,13 @@ jobs:
         run: cmake --build build --config ${{ matrix.config }} --parallel 2
       - name: Test
         run: ctest --test-dir build -C ${{ matrix.config }} --output-on-failure --timeout 30
+      - name: Package Windows demo executable
+        if: matrix.os == 'windows-latest' && matrix.config == 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: gt4-native-windows-object-demo
+          path: build/Release/gt4_native.exe
+          if-no-files-found: error
 
   sanitizers:
     name: Linux Clang ASan + UBSan

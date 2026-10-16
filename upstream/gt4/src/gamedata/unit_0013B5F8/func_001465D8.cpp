@@ -1,4 +1,4 @@
-// Imported from gustavocanepa/gt4-decomp @ de3d7edbead9e8a6e473b1e68b8ddf3b1f639fd1
+// Imported from gustavocanepa/gt4-decomp @ ba5ebe778a786d92b108926b8f89843ea1a9b5cf
 // Original path: src/gamedata/unit_0013B5F8/func_001465D8.cpp
 typedef int s32;
 typedef float f32;

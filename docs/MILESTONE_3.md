@@ -1,5 +1,7 @@
 # Milestone 3 — first checked guest-pointer call
 
+> Historical milestone. [Milestone 4](MILESTONE_4.md) supersedes the earlier guest-pointer limitations and the separate divisor-context bridge.
+
 The upstream inventory and review queue were refreshed against GT4 decomp commit
 `69c3585cff2a48f98c6cc9c2c495012d28c022cd`. The pipeline imported 28,434 translation units;
 all 30 syntax probes passed, and the isolated link gate compiled and linked all 20 candidates it

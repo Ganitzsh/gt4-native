@@ -22,7 +22,9 @@ if(GT4_ENABLE_SANITIZERS)
 endif()
 target_include_directories(gt4_guest_abi INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/include")
 add_executable(gt4_native platform/pc/main.cpp)
-target_link_libraries(gt4_native PRIVATE gt4_guest_abi)
+add_library(gt4_native_runtime STATIC compat/abi/object_fields.cpp)
+target_link_libraries(gt4_native_runtime PUBLIC gt4_guest_abi)
+target_link_libraries(gt4_native PRIVATE gt4_native_runtime)
 add_executable(gt4_elf_inspect tools/elf_inspect.cpp)
 target_link_libraries(gt4_elf_inspect PRIVATE gt4_guest_abi)
 include(CTest)
@@ -49,6 +51,9 @@ if(BUILD_TESTING)
   add_executable(gt4_guest_ptr_test tests/guest_ptr.cpp)
   target_link_libraries(gt4_guest_ptr_test PRIVATE gt4_guest_abi)
   add_test(NAME guest_ptr COMMAND gt4_guest_ptr_test)
+  add_executable(gt4_guest_objects_test tests/guest_objects.cpp)
+  target_link_libraries(gt4_guest_objects_test PRIVATE gt4_guest_abi)
+  add_test(NAME guest_objects COMMAND gt4_guest_objects_test)
   add_executable(gt4_elf32_test tests/elf32.cpp)
   target_link_libraries(gt4_elf32_test PRIVATE gt4_guest_abi)
   add_test(NAME elf32 COMMAND gt4_elf32_test)
@@ -71,22 +76,15 @@ if(BUILD_TESTING)
     upstream/gt4/src/race/unit_00378778/func_00385B28.cpp)
   target_link_libraries(gt4_upstream_guest_ptr_test PRIVATE gt4_guest_abi)
   add_test(NAME upstream_guest_ptr COMMAND gt4_upstream_guest_ptr_test)
-  set_source_files_properties(upstream/gt4/src/runtime/hArrayCompare/func_005C9970.c PROPERTIES LANGUAGE CXX)
-  set_source_files_properties(upstream/gt4/src/gamedata/unit_0013B5F8/func_001465D8.cpp
-    PROPERTIES COMPILE_DEFINITIONS "func_001465D8=gt4_original_func_001465D8")
   add_executable(gt4_upstream_harraycompare_test
-    tests/upstream_harraycompare.cpp
-    upstream/gt4/src/runtime/hArrayCompare/func_005C9930.cpp
-    upstream/gt4/src/runtime/hArrayCompare/func_005C9970.c
-    upstream/gt4/src/gamedata/unit_0013B5F8/func_001465D8.cpp)
-  target_link_libraries(gt4_upstream_harraycompare_test PRIVATE gt4_guest_abi)
-  target_include_directories(gt4_upstream_harraycompare_test PRIVATE include/gt4/upstream_compat)
+    tests/upstream_harraycompare.cpp)
+  target_link_libraries(gt4_upstream_harraycompare_test PRIVATE gt4_native_runtime)
   add_test(NAME upstream_harraycompare COMMAND gt4_upstream_harraycompare_test)
 
   # Tests use assert(); keep checks active even under Release builds.
   foreach(test_target IN ITEMS gt4_guest_abi_test gt4_guest_memory_test
       gt4_guest_dispatch_test gt4_guest_string_test gt4_native_callbacks_test
-      gt4_guest_address_space_test gt4_guest_ptr_test gt4_elf32_test gt4_portable_primitives_test gt4_robustness_test gt4_elf_mutation_test gt4_upstream_mboolreader_test gt4_upstream_guest_ptr_test gt4_upstream_harraycompare_test)
+      gt4_guest_address_space_test gt4_guest_ptr_test gt4_guest_objects_test gt4_elf32_test gt4_portable_primitives_test gt4_robustness_test gt4_elf_mutation_test gt4_upstream_mboolreader_test gt4_upstream_guest_ptr_test gt4_upstream_harraycompare_test)
     if(MSVC)
       target_compile_options(${test_target} PRIVATE /UNDEBUG)
     else()

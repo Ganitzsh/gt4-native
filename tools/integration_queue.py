@@ -7,9 +7,47 @@ from pathlib import Path
 import re
 
 def discover_integrated_paths(repository_root):
-    """Only recognize exact upstream source paths explicitly wired into CMake."""
+    """Recognize direct CMake sources and hash-verified generated adaptations."""
     cmake = (repository_root / 'CMakeLists.txt').read_text(encoding='utf-8')
-    return set(re.findall(r'upstream/gt4/(src/[^\s)]+\.(?:cxx|cpp|cc|c))', cmake))
+    integrated = set(re.findall(r'upstream/gt4/(src/[^\s)]+\.(?:cxx|cpp|cc|c))', cmake))
+    for path in (repository_root / 'compat/abi').glob('*_sources.json'):
+        adapter = json.loads(path.read_text(encoding='utf-8'))
+        unit = adapter['translation_unit']
+        if unit not in re.findall(r'[\w/.-]+\.cpp', cmake):
+            continue
+        generated = repository_root / adapter['generated_include']
+        if hashlib.sha256(generated.read_bytes()).hexdigest() != adapter['generated_sha256']:
+            raise ValueError(f'generated adapter changed since review: {generated}')
+        for source in adapter['sources']:
+            relative = Path(source['path'])
+            if relative.is_absolute() or '..' in relative.parts:
+                raise ValueError(f'unsafe adapter source: {relative}')
+            imported = (repository_root / 'upstream/gt4' / relative).read_bytes()
+            prefix = (f"// Imported from gustavocanepa/gt4-decomp @ {adapter['upstream_commit']}\n"
+                      f"// Original path: {source['path']}\n").encode()
+            if not imported.startswith(prefix) or hashlib.sha256(imported[len(prefix):]).hexdigest() != source['sha256']:
+                raise ValueError(f'original adapter source changed: {relative}')
+            integrated.add(source['path'])
+    return integrated
+
+
+def verify_integrated_revision(repository_root, manifest):
+    """Every selected original must agree with the pinned bulk-import snapshot."""
+    path = repository_root / 'upstream/gt4/integration.json'
+    if not path.exists():
+        return
+    selected = json.loads(path.read_text(encoding='utf-8'))
+    if selected['upstream_commit'] != manifest.get('upstream_commit'):
+        raise ValueError('selected originals and bulk import use different upstream revisions')
+    inventory = {r['path']: r['sha256'] for r in manifest['records']}
+    for record in selected['sources']:
+        if inventory.get(record['path']) != record['sha256']:
+            raise ValueError(f"selected original does not match pinned import: {record['path']}")
+        prefix = (f"// Imported from gustavocanepa/gt4-decomp @ {selected['upstream_commit']}\n"
+                  f"// Original path: {record['path']}\n").encode()
+        imported = (repository_root / 'upstream/gt4' / record['path']).read_bytes()
+        if not imported.startswith(prefix) or hashlib.sha256(imported[len(prefix):]).hexdigest() != record['sha256']:
+            raise ValueError(f"selected original modified: {record['path']}")
 
 def queue_candidates(manifest, triage, link_report, root, already_integrated=()):
     inventory = {r['path']: r for r in manifest['records'] if r.get('source')}
@@ -66,6 +104,8 @@ def main():
     manifest = json.loads(a.manifest.read_text())
     triage = json.loads(a.triage.read_text())
     links = json.loads(a.link_report.read_text())
+    if a.native_repo:
+        verify_integrated_revision(a.native_repo, manifest)
     report = queue_candidates(manifest, triage, links, a.source_root, discover_integrated_paths(a.native_repo) if a.native_repo else ())
     a.output.parent.mkdir(parents=True, exist_ok=True)
     a.output.write_text(json.dumps(report, indent=2) + '\n')
