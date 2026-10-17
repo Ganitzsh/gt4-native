@@ -1,10 +1,7 @@
 name: Deploy project website
+# Manual only: GitHub Pages is not enabled for this repository. Enable it under
+# Settings > Pages > Source: GitHub Actions, then restore the push trigger.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'docs/**'
-      - '.github/workflows/deploy-site.yml'
   workflow_dispatch:
 permissions:
   contents: read
