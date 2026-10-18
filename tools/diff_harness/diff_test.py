@@ -249,7 +249,8 @@ def compile_one(src, addr, work, tag):
     obj = os.path.join(work, f"{tag}.o")
     cc = "g++" if ext == ".cpp" else "gcc"
     r = subprocess.run([cc, "-m32", "-malign-double", "-msse2", "-mfpmath=sse", "-O1", "-w", "-fpermissive",
-                        "-fno-strict-aliasing", "-c", srcf, "-o", obj] + inc, capture_output=True, text=True)
+                        "-fno-strict-aliasing", "-c", srcf, "-o", obj] + inc, capture_output=True, text=True,
+                       timeout=180)
     if r.returncode:
         return None, "compile: " + next((l for l in r.stderr.splitlines() if "error" in l), r.stderr[:160])
     return obj, None
@@ -361,6 +362,7 @@ def main():
     ap.add_argument("--args")
     ap.add_argument("--source", help="test this file instead of the decomp's own source (a negative control)")
     ap.add_argument("--sample", type=int, default=0, help="with `all`: a random sample of that many sources")
+    ap.add_argument("--from", dest="from_addr", help="with `all`: start at this address (resume)")
     ap.add_argument("--shard", help="with `all`: I/N, the I-th of N interleaved parts (run N processes in parallel)")
     a = ap.parse_args()
     a.decomp = os.path.abspath(a.decomp)
