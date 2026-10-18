@@ -56,6 +56,24 @@ harness gaps or host differences, none a logic bug in a decomp source: denormal 
 missing from the default Unicorn MIPS CPU, 64-bit members aligned to 4 on a 32-bit host (fixed
 with `-malign-double`), NaN payloads.
 
+## What it found in the decomp itself (2026-10-18)
+
+Triage of the first 16 mismatches on the 400-function sample: 8 were real problems in the decomp
+sources, 5 harness gaps, 2 float edge cases, 1 harmless.
+
+The real ones share one cause: a wrapper or tail call that drops the arguments the register ABI passed
+through. On the PS2 a caller's `a0`/`a1`/`f12` reach the callee untouched, so a source such as
+`void *f(void *self) { g(); }` generates the same code as `g(self)`, but on x86 `g` reads garbage.
+The sources match byte for byte and are wrong as C. Twelve were fixed in gt4-decomp (commit
+`037c64b3`), each re-judged (`match.py check` still prints MATCH) and re-tested (AGREE). One
+function, `00398968`, is declared `s32` and has no `return`; declaring it `void` costs two
+instructions, so it stays as it is. Its only caller ignores the value.
+
+Float results are compared within 4 ulp and two NaNs count as equal: the PS2 FPU rounds toward zero,
+flushes denormals and has no NaN, an x86 does none of that.
+
+A full run over every source is the worklist for the same kind of fix; its output is not committed.
+
 ## Known gaps
 
 - 57% of the sample calls other functions or globals and is skipped. Next: link the callees from the
