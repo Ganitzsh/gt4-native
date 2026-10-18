@@ -74,7 +74,9 @@ The [project landing page source](docs/index.html) is maintained in this reposit
 
 Independent, unofficial project, not affiliated with or endorsed by Sony Interactive Entertainment or Polyphony Digital. No game data, original executable, BIOS or proprietary SDK files are distributed here. Users must supply their own legally obtained game data where required.
 
-The repository's existing [MIT license](LICENSE) applies to original code unless noted otherwise. Imported sources retain their own licenses and copyright notices; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and [docs/RELEASE_POLICY.md](docs/RELEASE_POLICY.md).
+This repository's original code is licensed under the [GNU General Public License, version 3](LICENSE) (GPL-3.0). Copyright (c) 2026 Gustavo Canepa. Anyone who distributes this port or a work based on it must make the corresponding source available under the same license.
+
+Sources imported from [gt4-decomp](https://github.com/gustavocanepa/gt4-decomp) under `upstream/gt4/` keep their own MIT license and notices; MIT code may be combined with GPL code. Revisions of this repository up to and including commit `5799594b1fa25218f1d1c0b87602036d508aaf53` were published under the MIT license and remain available under it. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and [docs/RELEASE_POLICY.md](docs/RELEASE_POLICY.md).
 
 ## Contributing
 
