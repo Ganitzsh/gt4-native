@@ -379,6 +379,8 @@ def main():
         if a.shard:
             i, n = (int(x) for x in a.shard.split("/"))
             found = found[i::n]
+        if a.from_addr:
+            found = [f for f in found if int(f, 16) >= int(a.from_addr, 16)]
         if a.sample:
             random.Random(7).shuffle(found)
             found = found[:a.sample]
@@ -403,7 +405,10 @@ def main():
             print(f"{addr:08X}: skipped (64-bit or double return)", flush=True)
             tally("skipped: wide return")
             continue
-        exe, work = build_native(addr, src, ret[2])
+        try:
+            exe, work = build_native(addr, src, ret[2])
+        except subprocess.TimeoutExpired:
+            exe, work = None, "compile: timed out"
         if not exe:
             print(f"{addr:08X}: skipped ({work})", flush=True)
             tally("skipped: " + work.split(":")[0])
