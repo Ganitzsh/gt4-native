@@ -76,10 +76,12 @@ A full run over every source is the worklist for the same kind of fix; its outpu
 
 ## Known gaps
 
-- 57% of the sample calls other functions or globals and is skipped. Next: link the callees from the
-  decomp and map the whole original text and data into the emulator.
+- Callees are linked from the decomp, the whole game image is mapped, and `.rodata` and jump tables
+  work. What is still skipped: functions that call something without a decomp source, a library
+  group source (expat and others, whose functions are `static` in a multi-function file), and
+  sources that do not compile for a 32-bit host (about 4%).
 - 64-bit arguments and returns (`__ashldi3`) need a 64-bit argument kind.
-- Jump tables and other `.rodata` are not mapped in the emulator.
+- A pointer or vtable in data points at original-address code the native process cannot run.
 - The emulator is a generic MIPS64 CPU, not an R5900: MMI, VU0 and the three-operand `mult` are
   unsupported, so those functions report `ORACLE-UNSUPPORTED`.
 - The 32-bit host is a test device. The port itself still needs the guest pointer model
