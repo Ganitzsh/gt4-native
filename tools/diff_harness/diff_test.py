@@ -35,6 +35,7 @@ BASE, SIZE = 0x10000000, 0x4000          # the shared memory block
 STACK, STACK_SIZE = 0x7F000000, 0x10000
 SENTINEL = 0x7E000000
 ERRORS = {}
+NARGS = 8         # EABI: ints in a0-a3 then t0-t3, floats in f12-f19; on the host everything is on the stack in order
 WORK = []        # scratch directories of the function being tested, removed before the next one
 MAX_CALLEES = 60
 HOST_LIBC = {"strlen", "strcmp", "strncmp", "strcpy", "strncpy", "strcat", "strchr", "strrchr", "strstr",
@@ -80,7 +81,7 @@ def arg_kinds(path, addr):
     text = open(path, encoding="utf-8", errors="replace").read()
     m = re.search(rf"\bfunc_{addr:08X}\s*\(([^)]*)\)", text)
     if not m:
-        return ["i"] * 4
+        return ["i"] * NARGS
     params = [p for p in m.group(1).split(",") if p.strip() and p.strip() != "void"]
 
     def used_as_address(p):
@@ -89,7 +90,7 @@ def arg_kinds(path, addr):
 
     kinds = ["p" if "*" in p or used_as_address(p) else ("f" if re.search(r"\b(f32|float)\b", p) else
                                    "c" if re.search(r"\b(char|s8|u8)\b", p) else "i") for p in params]
-    return (kinds + ["i"] * 4)[:4]
+    return (kinds + ["i"] * NARGS)[:NARGS]
 
 
 def return_kind(path, addr):
@@ -195,7 +196,7 @@ def changed_words(now, was, lo):
 def run_original(addr, kinds, ret, trials):
     from unicorn import Uc, UC_ARCH_MIPS, UC_MODE_MIPS64, UC_MODE_LITTLE_ENDIAN, UcError
     from unicorn.mips_const import (UC_CPU_MIPS64_5KF, UC_MIPS_REG_A0, UC_MIPS_REG_V0, UC_MIPS_REG_RA,
-                                    UC_MIPS_REG_SP, UC_MIPS_REG_F0, UC_MIPS_REG_F12)
+                                    UC_MIPS_REG_SP, UC_MIPS_REG_F0, UC_MIPS_REG_F12, UC_MIPS_REG_T0)
     code_addr, code = IMAGE["code"]
     lo, data = IMAGE["data_lo"], IMAGE["data"]
     results = []
@@ -216,7 +217,8 @@ def run_original(addr, kinds, ret, trials):
                 mu.reg_write(UC_MIPS_REG_F12 + floats, a)
                 floats += 1
             else:
-                mu.reg_write(UC_MIPS_REG_A0 + ints, a if a < 0x80000000 else a - (1 << 32) + (1 << 64))
+                reg = UC_MIPS_REG_A0 + ints if ints < 4 else UC_MIPS_REG_T0 + (ints - 4)
+                mu.reg_write(reg, a if a < 0x80000000 else a - (1 << 32) + (1 << 64))
                 ints += 1
         mu.reg_write(UC_MIPS_REG_SP, STACK + STACK_SIZE - 0x100)
         mu.reg_write(UC_MIPS_REG_RA, SENTINEL)
@@ -334,7 +336,7 @@ def run_native(exe, work, trials):
     with open(inp, "wb") as f:
         f.write(struct.pack("<3I", BASE, SIZE, len(trials)))
         for args, mem in trials:
-            f.write(struct.pack("<4I", *args) + mem)
+            f.write(struct.pack("<%dI" % NARGS, *args) + mem)
     r = subprocess.run([exe, inp, out, os.path.join(work, "image.bin")], capture_output=True, text=True, timeout=240)
     if r.returncode:
         raise RuntimeError("native runner: " + r.stderr[:200])
@@ -413,7 +415,7 @@ def main():
             print(f"{addr:08X}: skipped ({work})", flush=True)
             tally("skipped: " + work.split(":")[0])
             continue
-        kinds = (a.args.split(",") + ["i"] * 4)[:4] if a.args else arg_kinds(src, addr)
+        kinds = (a.args.split(",") + ["i"] * NARGS)[:NARGS] if a.args else arg_kinds(src, addr)
         rng = random.Random(a.seed)
         src_text = open(src, encoding="utf-8", errors="replace").read()
         floaty = ret[0] == "f32" or "f" in kinds or bool(re.search(r"\b(f32|float)\b", src_text))
