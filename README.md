@@ -1,26 +1,21 @@
 # GT4 Native
 
-**Experimental native PC port of Gran Turismo 4**, built on the [GT4 matching decompilation](https://github.com/gustavocanepa/gt4-decomp).
+**A native PC port of Gran Turismo 4, in early planning.** Goal: the game's own code (the [GT4 matching decompilation](https://github.com/gustavocanepa/gt4-decomp)) running on a modern 64-bit PC with a native renderer, native sound and native platform services, **with no PS2 hardware emulation and no translated game code in the product.**
 
-> **Status: early bootstrap. No playable build exists yet.** The current executable is a portability test harness, not the game.
+> **Status: no playable build exists yet.** The code in this repository is the bootstrap and the tools that prepare the port (guest memory model, ELF inspection, source import and triage, differential testing against the original machine code). It is not the game.
+
+## What this project is, and is not
+
+- It **is** the plan and the code for a native port: game code adapted from the decompilation, a native renderer (R1), native sound (A1) and native platform services (P1). See [docs/ROADMAP.md](docs/ROADMAP.md).
+- It **is not** an emulator, a static recompilation or a hybrid build: the product contains no PS2 hardware emulation and no translated game code. Correctness is checked against recorded reference behaviour of the original game, and results are published here as numbers and documents.
+- Matching improvements to the decompiled sources belong in [gt4-decomp](https://github.com/gustavocanepa/gt4-decomp), which is the source of truth for the game code.
 
 ## Projects and attribution
 
-- **[gt4-decomp](https://github.com/gustavocanepa/gt4-decomp)** is the source of truth for matching PS2 code; all matching improvements belong upstream.
-- **GT4 Native** develops host-platform adaptations, ABI translation, modern compiler builds, and eventual game runtime integration.
+- **[gt4-decomp](https://github.com/gustavocanepa/gt4-decomp)** is the source of truth for matching PS2 code (MIT).
+- **GT4 Native** develops host-platform adaptations, ABI handling, modern compiler builds, the native renderer, sound and platform layers.
 - Initiated by [Gustavo Canepa](https://github.com/gustavocanepa). See [CREDITS.md](CREDITS.md) for contributors and upstream attribution.
 - Do not manually fork thousands of source files: import a pinned upstream revision with provenance and license checks.
-
-## Roadmap
-
-1. **Bootstrap and CI** — build and test on Windows, Linux and macOS.
-2. **Guest ABI model** — represent PS2 32-bit pointers and object/vtable layouts without confusing them with host pointers.
-3. **Upstream integration** — inventory, pin and selectively compile real matching-decomp sources.
-4. **Platform services** — memory, file system, timers, input, audio, rendering.
-5. **Runtime** — asset loading, Adhoc VM, native callbacks and menus.
-6. **Race engine** — physics, graphics and gameplay systems.
-
-The upstream project reproduces the PS2 executable byte-for-byte using matched C/C++ plus remaining MIPS assembly. That **does not** make the result directly portable to x86-64.
 
 ## Build and test
 
@@ -42,7 +37,7 @@ The bootstrap executable prints a status message; `--object-demo` runs the guest
 - ELF32 little-endian MIPS PT_LOAD parser and `gt4_elf_inspect` command.
 - Sixteen CTest targets (bootstrap, ABI, memory, virtual dispatch, strings, callbacks, address space, typed guest pointers/objects, ELF parser, portable primitives, robustness, ELF mutation stress, and three original-GT4 integration tests).
 
-**These are foundational compatibility tools, not playable game code.** Cross-platform builds and tests are automated for Linux (GCC/Clang), Windows (MSVC) and macOS (AppleClang), in Debug and Release, plus Linux ASan/UBSan. See [Milestone 1 validation](docs/MILESTONE_1.md), [Milestone 2](docs/MILESTONE_2.md), [Milestone 3](docs/MILESTONE_3.md), and the [GitHub Actions results](https://github.com/gustavocanepa/gt4-native/actions). Fifteen original GT4 source functions are selected in the native build. Thirteen accessor/calculation bodies run over checked PS2-format memory through reviewed native adaptations and are linked into the production executable. The normalized reader now explicitly passes the same object to the original divisor calculation, based on inspection of the PS2 call site; the previous global-context bridge is removed. See [Milestone 4](docs/MILESTONE_4.md).
+**These are foundational compatibility tools, not playable game code.** Cross-platform builds and tests are automated for Linux (GCC/Clang), Windows (MSVC) and macOS (AppleClang), in Debug and Release, plus Linux ASan/UBSan. See [Milestone 1 validation](docs/history/MILESTONE_1.md), [Milestone 2](docs/history/MILESTONE_2.md), [Milestone 3](docs/history/MILESTONE_3.md), and the [GitHub Actions results](https://github.com/gustavocanepa/gt4-native/actions). Fifteen original GT4 source functions are selected in the native build. Thirteen accessor/calculation bodies run over checked PS2-format memory through reviewed native adaptations and are linked into the production executable. The normalized reader now explicitly passes the same object to the original divisor calculation, based on inspection of the PS2 call site; the previous global-context bridge is removed. See [Milestone 4](docs/history/MILESTONE_4.md).
 
 Run `gt4_native --object-demo` to demonstrate the original chain on a synthetic object without game assets. This establishes a narrow guest-memory integration slice, not full PS2 ABI compatibility, real asset loading, or playability.
 
@@ -65,10 +60,6 @@ This writes `build/upstream-inventory.json` with the upstream commit and source 
 ## Support
 
 [GitHub Sponsors is active](https://github.com/sponsors/gustavocanepa). Sponsorship is voluntary; it does not purchase game content, grant access to copyrighted assets, or promise a playable release.
-
-## Project website
-
-The [project landing page source](docs/index.html) is maintained in this repository, with an automated GitHub Pages deployment workflow. [GitHub Pages](https://gustavocanepa.github.io/gt4-native/) may require repository Pages configuration; check the [deployment workflow](https://github.com/gustavocanepa/gt4-native/actions/workflows/deploy-site.yml) for its actual status rather than assuming the site is live.
 
 ## Legal
 

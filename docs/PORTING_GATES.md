@@ -15,7 +15,7 @@
 - Fifteen original source functions selected; thirteen adapted bodies linked into the production executable, with guest-backed accessor-chain demonstration.
 - Pin the upstream git revision; record file path and license.
 - Compile with a modern host compiler, compare outputs with the original where possible.
-- `gt4_native --object-demo` calls original setters and the normalized reader, which calls the original divisor body on the same guest-backed view. See MILESTONE_4.md for scope and limitations.
+- `gt4_native --object-demo` calls original setters and the normalized reader, which calls the original divisor body on the same guest-backed view. See history/MILESTONE_4.md for scope and limitations.
 
 ## Gate 4: platform services (pending)
 - Filesystem and VOL, allocators, timing/input, renderer, sound, scripting VM.

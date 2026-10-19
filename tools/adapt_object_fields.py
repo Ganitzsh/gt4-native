@@ -2,7 +2,7 @@
 """Reproduce the reviewed native adaptation of the 0x174..0x188 accessor family.
 
 Original files remain unmodified. Bodies are extracted verbatim except for the
-one explicit same-object argument documented in docs/MILESTONE_4.md.
+one explicit same-object argument documented in docs/history/MILESTONE_4.md.
 """
 import argparse
 import hashlib
