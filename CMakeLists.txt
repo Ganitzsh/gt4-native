@@ -83,6 +83,9 @@ if(BUILD_TESTING)
   add_executable(gt4_platform_net_test tests/platform_net.cpp)
   target_link_libraries(gt4_platform_net_test PRIVATE gt4_guest_abi)
   add_test(NAME platform_net COMMAND gt4_platform_net_test)
+  add_executable(gt4_gs_gif_test tests/gs_gif.cpp)
+  target_link_libraries(gt4_gs_gif_test PRIVATE gt4_guest_abi)
+  add_test(NAME gs_gif COMMAND gt4_gs_gif_test)
 
   # Tests use assert(); keep checks active even under Release builds.
   foreach(test_target IN ITEMS gt4_guest_abi_test gt4_guest_memory_test
