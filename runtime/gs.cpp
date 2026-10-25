@@ -148,9 +148,11 @@ void finish_transfer(int channel, std::vector<uint8_t> &out) {
         } else if (channel == 2) {
             const uint32_t path = 3;
             link_send(GT4_REC_GIF, &path, 4, out.data(), static_cast<uint32_t>(out.size()));
-            bool finish = false, signal = false;
-            scan_gif(out, finish, signal);
-            raise_gs_events(finish, signal);
+            if (!link_connected()) {  // a live host reports the events of every path (GS_EVENT)
+                bool finish = false, signal = false;
+                scan_gif(out, finish, signal);
+                raise_gs_events(finish, signal);
+            }
         }
     }
     // the channel stops (STR clear) and interrupts at the end of the transfer

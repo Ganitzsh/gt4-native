@@ -2,6 +2,8 @@
 
 #include "guest.h"
 #include "image.h"
+#include "link.h"
+#include "gt4/link/protocol.h"
 #include "log.h"
 
 #include <windows.h>
@@ -1057,8 +1059,14 @@ SYSCALL int gt4_sys_ReleaseAlarm(int id) {
 SYSCALL int gt4_sys_FlushCache(int) { return 0; }
 SYSCALL int gt4_sys_SetGsCrt(int interlace, int mode, int field) {
     log_info("kernel: SetGsCrt(interlace %d, mode %d, field %d)", interlace, mode, field);
+    // the host keeps NTSC interlaced defaults; tell it SMODE1 as the BIOS sets it for NTSC
+    if (mode == 2 && interlace) {
+        struct { uint32_t reg, pad; uint64_t value; } smode1{0x10, 0, 0x740834504ull};
+        link_send(GT4_REC_GS_PRIV, &smode1, sizeof smode1);
+    }
     return 0;
 }
+uint32_t kernel_gs_imr() { return g_gs_imr; }
 SYSCALL uint32_t gt4_sys_GsGetIMR() { return g_gs_imr; }
 SYSCALL uint32_t gt4_sys_GsPutIMR(uint32_t imr) {
     const uint32_t old = g_gs_imr;

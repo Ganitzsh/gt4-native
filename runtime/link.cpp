@@ -1,6 +1,8 @@
 #include "link.h"
 
 #include "gt4/link/protocol.h"
+#include "guest.h"
+#include "kernel.h"
 #include "log.h"
 
 #include <windows.h>
@@ -8,6 +10,7 @@
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include <vector>
 
 namespace gt4::rt {
 namespace {
@@ -33,6 +36,33 @@ void ring_read(const uint8_t *data, uint32_t size, uint64_t pos, void *dst, uint
     const uint32_t first = n < size - off ? n : size - off;
     std::memcpy(dst, data + off, first);
     if (n > first) std::memcpy(static_cast<uint8_t *>(dst) + first, data, n - first);
+}
+
+// GS_EVENT {u32 kind (0 FINISH, 1 SIGNAL, 2 LABEL), u32 id, u64 value}: what the GS does when a
+// packet of any path writes those registers. SIGNAL and LABEL update SIGLBLID under the mask in
+// the value's upper half; SIGNAL and FINISH set their CSR bit and interrupt (INTC 0) unless IMR
+// masks them (bit 8 SIGMSK, bit 9 FINISHMSK).
+void gs_event(const uint8_t *p) {
+    uint32_t kind, id;
+    uint64_t value;
+    std::memcpy(&kind, p, 4);
+    std::memcpy(&id, p + 4, 4);
+    std::memcpy(&value, p + 8, 8);
+    auto &csr = guest_ref<uint32_t>(0x12001000);
+    auto &sig = guest_ref<uint32_t>(0x12001080);  // SIGLBLID: SIGID low, LBLID high
+    auto &lbl = guest_ref<uint32_t>(0x12001084);
+    const uint32_t mask = static_cast<uint32_t>(value >> 32);
+    const uint32_t imr = kernel_gs_imr();
+    if (kind == 1) {
+        sig = (sig & ~mask) | (id & mask);
+        csr |= 1;
+        if (!(imr & 0x100)) kernel_raise_intc(0);
+    } else if (kind == 0) {
+        csr |= 2;
+        if (!(imr & 0x200)) kernel_raise_intc(0);
+    } else if (kind == 2) {
+        lbl = (lbl & ~mask) | (id & mask);
+    }
 }
 
 }  // namespace
@@ -72,6 +102,7 @@ bool link_capture(const char *path) {
 }
 
 bool link_active() { return g_hdr || g_capture; }
+bool link_connected() { return g_hdr != nullptr; }
 
 void link_send(uint32_t type, const void *payload, uint32_t size, const void *extra, uint32_t extra_size) {
     if (!g_hdr && !g_capture) return;
@@ -116,8 +147,11 @@ void link_poll() {
     while (tail + sizeof(Gt4LinkRecord) <= head) {
         Gt4LinkRecord rec;
         ring_read(g_h2g, ring, tail, &rec, sizeof rec);
-        uint8_t payload[256];
-        const uint32_t n = rec.size < sizeof payload ? rec.size : sizeof payload;
+        if (tail + sizeof rec + rec.size > head) break;  // not all written yet
+        static std::vector<uint8_t> buf;  // records of any size (GS_IMAGE carries image data)
+        buf.resize(rec.size ? rec.size : 1);
+        uint8_t *payload = buf.data();
+        const uint32_t n = rec.size;
         ring_read(g_h2g, ring, tail + sizeof rec, payload, n);
         if (rec.type == GT4_REC_PAD && n >= 26) {
             uint32_t port, connected;
@@ -128,6 +162,8 @@ void link_poll() {
                 std::memcpy(g_pad[port], payload + 8, 18);
                 g_pad_valid[port] = connected != 0;
             }
+        } else if (rec.type == GT4_REC_GS_EVENT && n >= 16) {
+            gs_event(payload);
         } else if (rec.type == GT4_REC_HOST_CMD && n >= 4) {
             uint32_t cmd;
             std::memcpy(&cmd, payload, 4);
