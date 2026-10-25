@@ -8,14 +8,27 @@
 
 #include <cstdio>
 
+extern "C" {
+extern const unsigned gt4_unresolved_base, gt4_unresolved_count;
+extern const char *const gt4_unresolved_names[];
+}
+
 namespace {
+
+const char *unresolved_name(uintptr_t a) {
+    if (a < gt4_unresolved_base || a >= gt4_unresolved_base + 16 * gt4_unresolved_count) return nullptr;
+    return gt4_unresolved_names[(a - gt4_unresolved_base) / 16];
+}
 
 void describe(uintptr_t pc, char *out, size_t n) {
     uint32_t guest = 0;
+    if (const char *u = unresolved_name(pc)) {
+        snprintf(out, n, "%08x (call of UNRESOLVED symbol %s)", static_cast<unsigned>(pc), u);
+        return;
+    }
     const char *name = gt4::rt::native_name_for(pc, &guest);
     if (*name)
-        snprintf(out, n, "%08x (%s+0x%x, PS2 %08x)", static_cast<unsigned>(pc), name,
-                 static_cast<unsigned>(pc - reinterpret_cast<uintptr_t>(nullptr)), guest);
+        snprintf(out, n, "%08x (in %s, PS2 %08x)", static_cast<unsigned>(pc), name, guest);
     else
         snprintf(out, n, "%08x", static_cast<unsigned>(pc));
 }
@@ -32,9 +45,12 @@ LONG WINAPI on_crash(EXCEPTION_POINTERS *ep) {
     char where[256];
     describe(c->Eip, where, sizeof where);
     fprintf(stderr, "CRASH: exception %08lx at %s", code, where);
-    if (code == EXCEPTION_ACCESS_VIOLATION)
+    if (code == EXCEPTION_ACCESS_VIOLATION) {
+        const uintptr_t fault = ep->ExceptionRecord->ExceptionInformation[1];
         fprintf(stderr, ", %s address %08lx", ep->ExceptionRecord->ExceptionInformation[0] ? "writing" : "reading",
-                static_cast<unsigned long>(ep->ExceptionRecord->ExceptionInformation[1]));
+                static_cast<unsigned long>(fault));
+        if (const char *u = unresolved_name(fault)) fprintf(stderr, " = UNRESOLVED data symbol %s", u);
+    }
     fprintf(stderr, "\n  eax %08lx ebx %08lx ecx %08lx edx %08lx esi %08lx edi %08lx ebp %08lx esp %08lx\n", c->Eax,
             c->Ebx, c->Ecx, c->Edx, c->Esi, c->Edi, c->Ebp, c->Esp);
     // return addresses on the stack that point into the program's code

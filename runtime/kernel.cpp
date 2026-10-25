@@ -396,6 +396,11 @@ int kernel_ei() {
 
 bool kernel_in_interrupt() { return g_in_interrupt; }
 
+bool kernel_interrupts_enabled() {
+    Thread *t = self();
+    return t && !t->di && !g_in_interrupt;
+}
+
 void kernel_raise_intc(int cause) {
     {
         Lock lock;

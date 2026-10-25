@@ -32,6 +32,7 @@ struct KernelScope {
 int kernel_di();
 int kernel_ei();
 bool kernel_in_interrupt();
+bool kernel_interrupts_enabled();    // for the calling guest thread (Status.EIE)
 
 // INTC causes (EE): GS 0, SBUS 1, VBLANK_START 2, VBLANK_END 3, VIF0 4, VIF1 5, VU0 6, VU1 7,
 // IPU 8, TIMER0..3 9-12, SFIFO 13, VU0WD 14. DMAC causes are the channel numbers 0-9 (plus 15).
