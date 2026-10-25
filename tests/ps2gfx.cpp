@@ -89,6 +89,45 @@ void testArithmetic() {
     expect(cycles > 16 && cycles < 60, "cycle count includes the pipeline stalls");
 }
 
+void testMoreInstructions() {
+    using namespace vu;
+    Vu1 unit;
+    setQword(unit, 0, 1, 0, 0, 0);
+    setQword(unit, 1, 0, 1, 0, 0);
+    setQword(unit, 2, -3, 5, 2, 7);
+    const uint32_t ints[4] = {3, static_cast<uint32_t>(-2), 0, 1};
+    std::memcpy(unit.data + 3 * 16, ints, 16);
+    Program p;
+    p.lower(LQ(XYZW, 1, 0, 0)).lower(LQ(XYZW, 2, 1, 0)).lower(LQ(XYZW, 3, 2, 0)).lower(LQ(XYZW, 9, 3, 0));
+    p.up(OPMULA(1, 2));                                    // ACC.xyz = vf1.yzx * vf2.zxy
+    p.up(OPMSUB(4, 2, 1));                                 // vf4.xyz = ACC - vf2.yzx * vf1.zxy = vf1 x vf2
+    p.op(MAX(XYZW, 5, 3, 0) | kIbit, floatBits(4.0f));     // MAX vf5 = max(vf3, vf0 = (0,0,0,1)); the I bit sets I = 4
+    p.up(MINIi(XYZW, 6, 3));                               // min(vf3, I = 4)
+    p.up(MULi(XYZW, 7, 3));                                // vf3 * 4
+    p.up(ITOF0(XYZW, 8, 9));                               // (3, -2, 0, 1)
+    p.lower(MR32(XYZW, 10, 3));                            // (5, 2, 7, -3)
+    p.lower(ESADD(3)).lower(WAITP()).lower(MFP(X, 11));    // 9 + 25 + 4 = 38
+    p.lower(IADDIU(5, 0, 20)).lower(SQD(XYZW, 4, 5));      // pre-decrement: store at 19
+    p.lower(IADDIU(6, 0, 20)).lower(LQD(XYZW, 12, 6));     // reload from 19
+    p.lower(BAL(15, 6)).lower(kNopLower);                  // call the subroutine after the end (link: after the delay slot)
+    p.lower(SQ(XYZW, 5, 20, 0)).lower(SQ(XYZW, 6, 21, 0)).lower(SQ(XYZW, 7, 22, 0));
+    p.end(kNopUpper, SQ(XYZW, 8, 23, 0));
+    // subroutine: store, return
+    p.lower(SQ(XYZW, 10, 24, 0)).lower(SQ(X, 11, 25, 0)).lower(SQ(XYZW, 12, 26, 0));
+    p.lower(JR(15)).lower(kNopLower);
+    load(unit, p);
+    unit.run(0);
+    expect(!unit.runaway(), "program with a call ends");
+    expect(vecEquals(unit, 19, 0, 0, 1, 0), "OPMULA + OPMSUB give the cross product");
+    expect(vecEquals(unit, 20, 0, 5, 2, 7), "MAX against vf0");
+    expect(vecEquals(unit, 21, -3, 4, 2, 4), "MINIi with the I-bit immediate");
+    expect(vecEquals(unit, 22, -12, 20, 8, 28), "MULi");
+    expect(vecEquals(unit, 23, 3, -2, 0, 1), "ITOF0");
+    expect(vecEquals(unit, 24, 5, 2, 7, -3), "MR32 rotates");
+    expect(dataFloat(unit, 25, 0) == 38.0f, "ESADD + WAITP + MFP");
+    expect(vecEquals(unit, 26, 0, 0, 1, 0), "SQD / LQD pre-decrement");
+}
+
 // A counted loop; with `quirk` the branch directly follows the ISUBIU and reads the previous VI value
 // (the VU's integer-branch timing, as PCSX2 models it), so the loop runs once more.
 uint32_t loopSum(bool quirk) {
@@ -384,6 +423,7 @@ void reportThroughput() {
 int main() {
     reportThroughput();
     testArithmetic();
+    testMoreInstructions();
     testBranches();
     testFlags();
     testXgkick();

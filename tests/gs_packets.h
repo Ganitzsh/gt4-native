@@ -146,6 +146,20 @@ constexpr uint32_t DIV(uint32_t fs, uint32_t fsf, uint32_t ft, uint32_t ftf) {
     return (0x40u << 25) | (ftf << 23) | (fsf << 21) | (ft << 16) | (fs << 11) | (14u << 6) | 0x3C;
 }
 constexpr uint32_t WAITQ() { return lowerExt(0x3B, 0, 0, 0); }
+constexpr uint32_t WAITP() { return lowerExt(0x7B, 0, 0, 0); }
+constexpr uint32_t ESADD(uint32_t fs) { return lowerExt(0x70, 0, 0, fs); }
+constexpr uint32_t MFP(uint32_t dest, uint32_t ft) { return lowerExt(0x64, dest, ft, 0); }
+constexpr uint32_t MR32(uint32_t dest, uint32_t ft, uint32_t fs) { return lowerExt(0x31, dest, ft, fs); }
+constexpr uint32_t LQD(uint32_t dest, uint32_t ft, uint32_t is) { return lowerExt(0x36, dest, ft, is); }
+constexpr uint32_t SQD(uint32_t dest, uint32_t fs, uint32_t it) { return lowerExt(0x37, dest, it, fs); }
+constexpr uint32_t BAL(uint32_t it, int32_t offset) { return (0x21u << 25) | (it << 16) | imm11(offset); }
+constexpr uint32_t JR(uint32_t is) { return (0x24u << 25) | (is << 11); }
+constexpr uint32_t OPMULA(uint32_t fs, uint32_t ft) { return upperExt(0x2E, 0xE, ft, fs); }
+constexpr uint32_t OPMSUB(uint32_t fd, uint32_t fs, uint32_t ft) { return upper(0x2E, 0xE, ft, fs, fd); }
+constexpr uint32_t MAX(uint32_t dest, uint32_t fd, uint32_t fs, uint32_t ft) { return upper(0x2B, dest, ft, fs, fd); }
+constexpr uint32_t MINIi(uint32_t dest, uint32_t fd, uint32_t fs) { return upper(0x1F, dest, 0, fs, fd); }
+constexpr uint32_t MULi(uint32_t dest, uint32_t fd, uint32_t fs) { return upper(0x1E, dest, 0, fs, fd); }
+constexpr uint32_t kIbit = 0x80000000;
 constexpr uint32_t XGKICK(uint32_t is) { return lowerExt(0x6C, 0, 0, is); }
 constexpr uint32_t XTOP(uint32_t it) { return lowerExt(0x68, 0, it, 0); }
 
