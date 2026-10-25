@@ -3,6 +3,8 @@
 
 namespace gt4::rt {
 
-void services_init() { log_info("host services: none yet"); }
+void iop_init();
+
+void services_init() { iop_init(); }
 
 }  // namespace gt4::rt

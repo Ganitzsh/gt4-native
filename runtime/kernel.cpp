@@ -98,6 +98,11 @@ LARGE_INTEGER g_qpc_freq, g_qpc_start;
 std::atomic<uint32_t> g_vblanks{0};
 HANDLE g_irq_wake = nullptr;
 uint32_t g_gs_imr = 0xFF00;
+struct Callback {
+    void (*fn)(uint32_t);
+    uint32_t arg;
+};
+std::vector<Callback> g_callbacks;  // run in interrupt context (SIF completions...)
 
 struct Lock {
     Lock() { EnterCriticalSection(&g_lock); }
@@ -216,6 +221,9 @@ void deliver_pending() {
         g_pending_dmac &= g_dmac_mask;
         if (!intc && !dmac) break;
     }
+    std::vector<Callback> callbacks;
+    callbacks.swap(g_callbacks);
+    for (const Callback &c : callbacks) c.fn(c.arg);
     const uint64_t now = kernel_bus_cycles();
     for (int i = 0; i < 64; ++i) {
         Alarm &a = g_alarms[i];
@@ -255,6 +263,7 @@ void interrupt_now() {
 }
 
 bool g_alarms_due() {
+    if (!g_callbacks.empty()) return true;
     const uint64_t now = kernel_bus_cycles();
     for (const Alarm &a : g_alarms)
         if (a.used && a.due_cycles <= now) return true;
@@ -313,7 +322,7 @@ DWORD WINAPI interrupt_thread(void *) {
                 next_end = ~0ull;
             }
         }
-        interrupt_now();
+        if (g_pending_intc || g_pending_dmac || g_alarms_due()) interrupt_now();
     }
 }
 
@@ -391,6 +400,14 @@ void kernel_raise_intc(int cause) {
     {
         Lock lock;
         g_pending_intc |= 1u << cause;
+    }
+    SetEvent(g_irq_wake);
+}
+
+void kernel_post_callback(void (*fn)(uint32_t), uint32_t arg) {
+    {
+        Lock lock;
+        g_callbacks.push_back({fn, arg});
     }
     SetEvent(g_irq_wake);
 }
@@ -971,6 +988,8 @@ const SyscallImpl kSyscalls[] = {
     S(0x61, EnableCache), S(0x62, DisableCache), S(0x64, FlushCache), S(-0x68, FlushCache),
     S(0x70, GsGetIMR), S(-0x70, GsGetIMR), S(0x71, GsPutIMR), S(-0x71, GsPutIMR),
     S(0x73, SetVSyncFlag), S(0x7D, PSMode), S(0x7E, MachineType), S(0x7F, GetMemorySize),
+    // installed by the SDK's InitAlarm (SetSyscall) on the PS2
+    S(0xFC, SetAlarm), S(0xFD, ReleaseAlarm), S(-0xFE, SetAlarm), S(-0xFF, ReleaseAlarm),
 };
 #undef S
 

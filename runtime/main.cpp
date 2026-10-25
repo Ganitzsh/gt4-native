@@ -70,7 +70,15 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; ++i)
         if (std::strcmp(argv[i], "--self-test") == 0) g_self_test = true;
     g_config.elf_path = arg_value(argc, argv, "--elf", "GT4_ELF", "orig/SCUS-97328/CORE.GT4.elf");
-    g_config.iso_path = arg_value(argc, argv, "--iso", "GT4_ISO", "");
+    static std::string default_iso;
+    {
+        // next to the executable as gt4-decomp keeps it: orig/SCUS-97328/<name>.iso beside CORE.GT4.elf
+        std::string elf = g_config.elf_path;
+        const size_t slash = elf.find_last_of("/\\");
+        default_iso = (slash == std::string::npos ? std::string() : elf.substr(0, slash + 1)) +
+                      "Gran Turismo 4 (USA) (v1.01).iso";
+    }
+    g_config.iso_path = arg_value(argc, argv, "--iso", "GT4_ISO", default_iso.c_str());
     log_open(arg_value(argc, argv, "--log", "GT4_LOG", "build/game/run.log"));
     log_info("gt4_game: %u native functions linked", native_count());
     if (!guest_memory_init()) return 2;
