@@ -79,6 +79,8 @@ int main(int argc, char **argv) {
                       "Gran Turismo 4 (USA) (v1.01).iso";
     }
     g_config.iso_path = arg_value(argc, argv, "--iso", "GT4_ISO", default_iso.c_str());
+    g_config.link_name = arg_value(argc, argv, "--link", "GT4_LINK", "");
+    g_config.capture_path = arg_value(argc, argv, "--capture", "GT4_CAPTURE", "");
     log_open(arg_value(argc, argv, "--log", "GT4_LOG", "build/game/run.log"));
     log_info("gt4_game: %u native functions linked", native_count());
     if (!guest_memory_init()) return 2;

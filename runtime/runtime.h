@@ -7,6 +7,8 @@ namespace gt4::rt {
 struct RuntimeConfig {
     const char *elf_path = "";
     const char *iso_path = "";
+    const char *link_name = "";     // --link: the shared section gt4_host created
+    const char *capture_path = "";  // --capture: write the graphics stream to a file
 };
 extern RuntimeConfig g_config;
 

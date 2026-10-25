@@ -103,6 +103,7 @@ struct Callback {
     uint32_t arg;
 };
 std::vector<Callback> g_callbacks;  // run in interrupt context (SIF completions...)
+void (*g_vblank_hook)(uint32_t) = nullptr;
 
 struct Lock {
     Lock() { EnterCriticalSection(&g_lock); }
@@ -313,6 +314,7 @@ DWORD WINAPI interrupt_thread(void *) {
             if (now >= next_start) {
                 g_pending_intc |= 1u << 2;  // VBLANK_START
                 ++g_vblanks;
+                if (g_vblank_hook) g_vblank_hook(g_vblanks);
                 next_start += vblank_cycles;
                 if (next_start < now) next_start = now + vblank_cycles;  // fell behind: skip
                 next_end = now + vblank_len;
@@ -408,6 +410,8 @@ void kernel_raise_intc(int cause) {
     }
     SetEvent(g_irq_wake);
 }
+
+void kernel_set_vblank_hook(void (*fn)(uint32_t)) { g_vblank_hook = fn; }
 
 void kernel_post_callback(void (*fn)(uint32_t), uint32_t arg) {
     {

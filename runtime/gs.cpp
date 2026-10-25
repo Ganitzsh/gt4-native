@@ -1,0 +1,223 @@
+// The graphics boundary on the game side (docs/HW_ACCESS.md, docs/IOP_SERVICES.md section 4).
+//
+// The game's graphics library starts every VIF0/VIF1/GIF transfer through two functions:
+// 004A1140(channel, address, qwc) (normal mode) and 004ABA50(channel, tag address) (source chain).
+// Their replacements do the transfer at once: walk the DMA chain in guest memory, send what the
+// channel would have delivered to gt4_host (VIF1 stream, VIF0 stream, GIF PATH3), clear the
+// channel's STR bit and raise its DMA-end interrupt so the game's handler (004AB6D8) advances.
+// At every VBlank the GS privileged registers the game wrote are sent with a frame marker, and
+// CSR.FIELD toggles as on an interlaced NTSC display.
+#include "guest.h"
+#include "gt4/link/protocol.h"
+#include "kernel.h"
+#include "link.h"
+#include "log.h"
+
+#include <windows.h>
+
+#include <cstring>
+#include <vector>
+
+using namespace gt4::rt;
+
+namespace {
+
+constexpr uint32_t kGsPriv = 0x12000000;
+constexpr uint32_t kGsCsr = 0x12001000;
+constexpr uint32_t kDmaChanTable = 0x00629DC8;  // D_00629DC8: DMA channel register blocks, by channel
+constexpr uint32_t kSprState = 0x70000000;      // the library's state is at scratchpad + 0x50
+
+struct ChannelOut {
+    std::vector<uint8_t> data;
+};
+
+uint8_t *mem(uint32_t addr, bool spr) {
+    if (spr || (addr & 0x70000000) == 0x70000000) return static_cast<uint8_t *>(guest_ptr(kScratchpad + (addr & 0x3FF0)));
+    return static_cast<uint8_t *>(guest_ptr(addr & 0x01FFFFF0));
+}
+
+void append(std::vector<uint8_t> &out, const uint8_t *p, uint32_t qwc) { out.insert(out.end(), p, p + qwc * 16); }
+
+// Source-chain DMA (EE DMAC tag IDs): returns false on a malformed chain.
+bool walk_chain(uint32_t tadr, bool tte, std::vector<uint8_t> &out, bool &irq_stop) {
+    uint32_t asr[2];
+    int sp = 0;
+    bool spr_tag = (tadr & 0x80000000) != 0;
+    tadr &= 0x7FFFFFFF;
+    for (int guard = 0; guard < 1 << 20; ++guard) {
+        const uint8_t *tag = mem(tadr, spr_tag);
+        uint64_t lo;
+        std::memcpy(&lo, tag, 8);
+        const uint32_t qwc = static_cast<uint32_t>(lo & 0xFFFF);
+        const uint32_t id = static_cast<uint32_t>(lo >> 28) & 7;
+        const bool irq = (lo >> 31) & 1;
+        const uint32_t addr = static_cast<uint32_t>(lo >> 32) & 0x7FFFFFF0;
+        const bool spr = (lo >> 63) & 1;
+        if (tte) out.insert(out.end(), tag + 8, tag + 16);  // the tag's upper half (VIF codes) goes first
+        uint32_t next = 0;
+        bool end = false;
+        switch (id) {
+        case 0:  // refe: QWC from ADDR, then end
+            append(out, mem(addr, spr), qwc);
+            end = true;
+            break;
+        case 1:  // cnt: QWC after the tag, next tag after the data
+            append(out, tag + 16, qwc);
+            next = tadr + 16 + qwc * 16;
+            break;
+        case 2:  // next: QWC after the tag, next tag at ADDR
+            append(out, tag + 16, qwc);
+            next = addr;
+            spr_tag = spr;
+            break;
+        case 3:  // ref
+        case 4:  // refs: QWC from ADDR, next tag after this one
+            append(out, mem(addr, spr), qwc);
+            next = tadr + 16;
+            break;
+        case 5:  // call: QWC after the tag, push the address after the data, next tag at ADDR
+            append(out, tag + 16, qwc);
+            if (sp >= 2) return false;
+            asr[sp++] = tadr + 16 + qwc * 16;
+            next = addr;
+            break;
+        case 6:  // ret: QWC after the tag, pop
+            append(out, tag + 16, qwc);
+            if (sp == 0) end = true;
+            else next = asr[--sp];
+            break;
+        case 7:  // end
+            append(out, tag + 16, qwc);
+            end = true;
+            break;
+        }
+        (void)irq;  // tag interrupts: the library sets TIE but its chains are not expected to use them
+        (void)irq_stop;
+        if (end) return true;
+        tadr = next;
+    }
+    log_warn("gs: DMA chain did not end (1M tags)");
+    return false;
+}
+
+// GS events written by PATH3 packets: FINISH (0x61), SIGNAL (0x60), LABEL (0x62) through A+D.
+void scan_gif(const std::vector<uint8_t> &data, bool &finish, bool &signal) {
+    size_t q = 0;
+    const size_t nq = data.size() / 16;
+    while (q < nq) {
+        uint64_t lo, hi;
+        std::memcpy(&lo, &data[q * 16], 8);
+        std::memcpy(&hi, &data[q * 16 + 8], 8);
+        ++q;
+        const uint32_t nloop = lo & 0x7FFF;
+        const uint32_t flg = (lo >> 58) & 3;
+        uint32_t nreg = (lo >> 60) & 0xF;
+        if (nreg == 0) nreg = 16;
+        if (flg == 0) {  // PACKED
+            for (uint32_t l = 0; l < nloop && q < nq; ++l)
+                for (uint32_t r = 0; r < nreg && q < nq; ++r, ++q) {
+                    if (((hi >> (4 * r)) & 0xF) != 0xE) continue;  // A+D
+                    const uint32_t reg = data[q * 16 + 8];
+                    if (reg == 0x61) finish = true;
+                    if (reg == 0x60) signal = true;
+                }
+        } else if (flg == 1) {  // REGLIST: 64-bit entries, padded to a qword
+            q += (nloop * nreg + 1) / 2;
+        } else {  // IMAGE (and the disabled format): NLOOP qwords
+            q += nloop;
+        }
+    }
+}
+
+void raise_gs_events(bool finish, bool signal) {
+    if (!finish && !signal) return;
+    auto &csr = guest_ref<uint32_t>(kGsCsr);
+    if (finish) csr |= 2;
+    if (signal) csr |= 1;
+    kernel_raise_intc(0);
+}
+
+using WaitFn = int (*)(int);
+
+void finish_transfer(int channel, std::vector<uint8_t> &out) {
+    if (!out.empty()) {
+        if (channel == 1) {
+            link_send(GT4_REC_VIF1, out.data(), static_cast<uint32_t>(out.size()));
+        } else if (channel == 0) {
+            link_send(GT4_REC_VIF0, out.data(), static_cast<uint32_t>(out.size()));
+        } else if (channel == 2) {
+            const uint32_t path = 3;
+            link_send(GT4_REC_GIF, &path, 4, out.data(), static_cast<uint32_t>(out.size()));
+            bool finish = false, signal = false;
+            scan_gif(out, finish, signal);
+            raise_gs_events(finish, signal);
+        }
+    }
+    // the channel stops (STR clear) and interrupts at the end of the transfer
+    const uint32_t regs = guest_ref<uint32_t>(kDmaChanTable + 4 * channel);
+    guest_ref<uint32_t>(regs) &= ~0x100u;
+    kernel_raise_dmac(channel);
+}
+
+void start_flag(int channel) {
+    // the library's "transfer in flight" flag (scratchpad + 0x60 + 12n + 0xD), as the original sets it
+    *static_cast<volatile uint8_t *>(guest_ptr(kSprState + 0x60 + 12 * channel + 0xD)) = 1;
+}
+
+uint32_t g_field = 0;
+uint64_t g_priv_sent[16];
+bool g_priv_valid[16];
+
+void on_vblank(uint32_t count) {
+    // CSR.FIELD (bit 13) alternates every VBlank on an interlaced display
+    g_field ^= 1;
+    auto &csr = guest_ref<uint32_t>(kGsCsr);
+    csr = (csr & ~(1u << 13)) | (g_field << 13);
+    if (!link_active()) return;
+    for (uint32_t i = 0; i < 15; ++i) {  // PMODE .. BGCOLOR
+        const uint64_t v = guest_ref<uint64_t>(kGsPriv + i * 0x10);
+        if (g_priv_valid[i] && v == g_priv_sent[i]) continue;
+        g_priv_valid[i] = true;
+        g_priv_sent[i] = v;
+        struct {
+            uint32_t reg, pad;
+            uint64_t value;
+        } rec{i * 0x10, 0, v};
+        link_send(GT4_REC_GS_PRIV, &rec, sizeof rec);
+    }
+    const uint32_t rec[2] = {g_field, count};
+    link_send(GT4_REC_VSYNC, rec, sizeof rec);
+    link_poll();
+}
+
+}  // namespace
+
+extern "C" void gt4_replace_func_004A1140(int channel, uint32_t address, int qwc) {
+    reinterpret_cast<WaitFn>(guest_ptr(0x004A0F68))(channel);  // waits until the channel is free
+    KernelScope ks;  // the DMA-end interrupt is delivered when this returns
+    start_flag(channel);
+    std::vector<uint8_t> out;
+    append(out, mem(address, false), static_cast<uint32_t>(qwc));
+    finish_transfer(channel, out);
+}
+
+extern "C" void gt4_replace_func_004ABA50(int channel, uint32_t address) {
+    reinterpret_cast<WaitFn>(guest_ptr(0x004A0F68))(channel);
+    KernelScope ks;
+    start_flag(channel);
+    const uint32_t regs = guest_ref<uint32_t>(kDmaChanTable + 4 * channel);
+    const uint32_t chcr = guest_ref<uint32_t>(regs);
+    std::vector<uint8_t> out;
+    bool irq = false;
+    walk_chain(address, (chcr & 0x40) != 0, out, irq);
+    finish_transfer(channel, out);
+}
+
+namespace gt4::rt {
+
+void gs_init() {
+    kernel_set_vblank_hook(on_vblank);
+    guest_ref<uint32_t>(kGsCsr) = 0;
+}
+
+}  // namespace gt4::rt

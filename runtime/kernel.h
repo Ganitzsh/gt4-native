@@ -38,6 +38,8 @@ bool kernel_interrupts_enabled();    // for the calling guest thread (Status.EIE
 // IPU 8, TIMER0..3 9-12, SFIFO 13, VU0WD 14. DMAC causes are the channel numbers 0-9 (plus 15).
 void kernel_raise_intc(int cause);   // from host services (e.g. GS FINISH, timer)
 void kernel_post_callback(void (*fn)(uint32_t), uint32_t arg);  // runs fn(arg) in interrupt context
+// Called on the interrupt thread at each VBlank start, before the INTC 2 handlers run.
+void kernel_set_vblank_hook(void (*fn)(uint32_t vblank_count));
 void kernel_raise_dmac(int channel);
 
 // Ticks of the PS2 bus clock (147.456 MHz) since boot, from the host's monotonic clock.

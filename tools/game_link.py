@@ -60,10 +60,10 @@ def compile_runtime(out):
         obj = os.path.join(objdir, os.path.splitext(name)[0] + (".s.o" if name.endswith(".s") else ".o"))
         if name.endswith(".cpp"):
             cmd = [tool("g++"), "-c", "-std=c++20", "-O2", "-g", "-msse2", "-mfpmath=sse", "-Wall", "-Wextra",
-                   "-I", rt, src, "-o", obj]
+                   "-I", rt, "-I", os.path.join(ROOT, "include"), src, "-o", obj]
         elif name.endswith(".c"):
-            cmd = [tool("gcc"), "-c", "-std=gnu11", "-O2", "-g", "-msse2", "-mfpmath=sse", "-Wall", "-I", rt, src,
-                   "-o", obj]
+            cmd = [tool("gcc"), "-c", "-std=gnu11", "-O2", "-g", "-msse2", "-mfpmath=sse", "-Wall", "-I", rt,
+                   "-I", os.path.join(ROOT, "include"), src, "-o", obj]
         elif name.endswith(".s"):
             cmd = [tool("as"), "--32", src, "-o", obj]
         else:

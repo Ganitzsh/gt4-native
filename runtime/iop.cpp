@@ -4,6 +4,7 @@
 // memory card (libmc), and the SDK's DelayThread / GetTimerSystemTime / iWakeupThread.
 #include "guest.h"
 #include "kernel.h"
+#include "link.h"
 #include "log.h"
 #include "runtime.h"
 
@@ -436,7 +437,7 @@ extern "C" int gt4_replace_scePad2CreateSocket(const uint8_t *param, uint32_t) {
 extern "C" int gt4_replace_scePad2DeleteSocket(int) { return 1; }
 extern "C" int gt4_replace_scePad2GetState(int) { return 1; }  // stable
 extern "C" int gt4_replace_scePad2Read(int id, uint8_t *data) {
-    std::memcpy(data, g_pad[id & 1], 18);
+    if (!link_pad(id & 1, data)) std::memcpy(data, g_pad[id & 1], 18);
     return 18;
 }
 extern "C" int gt4_replace_scePad2GetButtonProfile(int, uint8_t *profile) {
