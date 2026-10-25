@@ -15,8 +15,8 @@ struct Angle { float x; Angle(float a) : x(a) {} Angle(const Angle &a) : x(a.x) 
 struct S;
 struct Obj { int mode; char pad[0xC]; V a; V b; V c; float d, e, f; char pad4c[4]; V off; char pad60[0x10]; float scale; };
 struct SinCos { float s, c; SinCos(const Angle &a); } __attribute__((aligned(8)));
-extern "C" void func_0057D8A0(float, float *, float *);
-inline SinCos::SinCos(const Angle &a) { func_0057D8A0(a.x, &s, &c); }
+extern "C" void func_0057D8A0(float *, float *, float);
+inline SinCos::SinCos(const Angle &a) { func_0057D8A0(&s, &c, a.x); }
 extern "C" V func_00414E78(S *) throw();
 extern "C" void func_00415E90(Obj *, V *, Angle, Angle, S *, float) throw();
 extern "C" void func_00416040(Obj *, V *, V *, Angle, S *) throw();
@@ -98,4 +98,4 @@ extern "C" int func_00416390(Obj *o, float *pa, float *pb, S *path, float t, flo
     }
     return limit(o->mode, Angle(blend));
 }
-/* native correction of src/race/unit_00415E90/func_00416390.cpp (gt4-decomp tools/argcheck.py fix --kind classes --native): classes func_004150A0 */
+/* native correction of src/race/unit_00415E90/func_00416390.cpp (gt4-decomp tools/argcheck.py fix --kind classes --native): classes func_004150A0; argument order (argcheck.py orders): func_0057D8A0 takes (sine, cosine, x) */
