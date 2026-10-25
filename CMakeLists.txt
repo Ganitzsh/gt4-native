@@ -80,6 +80,9 @@ if(BUILD_TESTING)
     tests/upstream_harraycompare.cpp)
   target_link_libraries(gt4_upstream_harraycompare_test PRIVATE gt4_native_runtime)
   add_test(NAME upstream_harraycompare COMMAND gt4_upstream_harraycompare_test)
+  add_executable(gt4_platform_net_test tests/platform_net.cpp)
+  target_link_libraries(gt4_platform_net_test PRIVATE gt4_guest_abi)
+  add_test(NAME platform_net COMMAND gt4_platform_net_test)
 
   # Tests use assert(); keep checks active even under Release builds.
   foreach(test_target IN ITEMS gt4_guest_abi_test gt4_guest_memory_test
@@ -91,4 +94,34 @@ if(BUILD_TESTING)
       target_compile_options(${test_target} PRIVATE -UNDEBUG)
     endif()
   endforeach()
+endif()
+
+# gt4_host: the SDL3 + Vulkan platform host (window, presentation, input, audio, capture). It links no
+# game code yet. Off by default: it fetches SDL3 and Vulkan-Headers at pinned commits.
+option(GT4_BUILD_HOST "Build gt4_host, the SDL3 + Vulkan platform host" OFF)
+if(GT4_BUILD_HOST)
+  include(FetchContent)
+  set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+  set(SDL_STATIC ON CACHE BOOL "" FORCE)
+  set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
+  set(SDL_TESTS OFF CACHE BOOL "" FORCE)
+  set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
+  FetchContent_Declare(SDL3
+      GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
+      GIT_TAG 7f3ae3d57459e59943a4ecfefc8f6277ec6bf540)
+  FetchContent_Declare(VulkanHeaders
+      GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
+      GIT_TAG 4c8aa84a61c12cab9780fa44298617666b491d71)
+  FetchContent_MakeAvailable(SDL3 VulkanHeaders)
+  add_executable(gt4_host platform/sdl/main.cpp platform/sdl/renderer.cpp platform/sdl/session.cpp)
+  target_compile_definitions(gt4_host PRIVATE VK_NO_PROTOTYPES)
+  target_link_libraries(gt4_host PRIVATE SDL3::SDL3 Vulkan::Headers gt4_guest_abi)
+  if(MSVC)
+    target_compile_options(gt4_host PRIVATE /W4)
+  else()
+    target_compile_options(gt4_host PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  if(MINGW)
+    target_link_options(gt4_host PRIVATE -static -static-libgcc -static-libstdc++)
+  endif()
 endif()

@@ -1,0 +1,14 @@
+[
+  {"at": 0.1, "command": "capture neutral"},
+  {"at": 0.3, "command": "axis leftx -24000"},
+  {"at": 0.5, "command": "capture left"},
+  {"at": 0.7, "command": "button cross 1"},
+  {"at": 0.7, "command": "tone 440 0.5"},
+  {"at": 0.9, "command": "capture action"},
+  {"at": 1.2, "command": "reset"},
+  {"at": 1.4, "command": "resize 800 450"},
+  {"at": 1.8, "command": "capture resized"},
+  {"at": 2.1, "command": "resize 1280 720"},
+  {"at": 2.5, "command": "capture restored"},
+  {"at": 2.8, "command": "quit"}
+]
