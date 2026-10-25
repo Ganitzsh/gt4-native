@@ -141,8 +141,20 @@ float, varargs: **3016 checks, 0 failures**.
 
 Notes for code that calls into game code (the native runtime, built by modern gcc):
 the game's `long` is `long long` there (mingw's `long` is 32-bit); 64-bit arguments take two stack
-slots; small structs are returned in `eax:edx` (`DEFAULT_PCC_STRUCT_RETURN` 0, the mingw rule,
-not verified against modern gcc); C++ exceptions differ (below).
+slots; structs are returned as the EE returns them (build_gcc29.sh patches `RETURN_IN_MEMORY`):
+1-, 2- and 4-byte structs in `eax`, 8-aligned 8-byte structs in `edx:eax`, everything else through a
+hidden first-argument pointer that the caller pops (so an 8-byte struct of two ints goes through
+memory here but in registers under modern mingw); C++ exceptions differ (below).
+
+The EE returns any struct with a scalar mode in `$v0`, so the decomp declares one function both
+ways (a one-pointer iterator by value in one source, a plain `int` in another) and both match;
+with the EE's rule the native calls agree too. `-fpcc-struct-return` (all structs through memory)
+broke those pairs.
+
+Calls through a pointer to member function always include the virtual case (index > 0: the
+function is in the vtable at `this + delta2`), as gcc 2.96 does; 2.9 dropped it when the class
+has no virtual functions, and the decomp often declares the class as a plain struct (the script
+engine's operators: `mUnaryOperator::execute` jumped to the PMF's `delta2` word, 4).
 
 ## The driver: `tools/game_cc.py`
 
@@ -233,11 +245,21 @@ compiler emits that is not the source's own (its file name or `func_<its address
 local (`.globl` dropped, COFF `.scl 2` turned to 3). The address of each source comes from the
 decomp's own `tools/project.py` (run read-only).
 
+Every `.linkonce` directive is dropped too. gcc puts inline functions and template instances in
+COMDAT sections named after the function (`.text$_$_6String`), and the PE linker keeps one section
+per name program-wide. With the symbols local, each object's calls go to its own copy; when the
+linker dropped that copy for another object's, the call was left pointing at the next instruction
+(969 calls in 2026-10-25's image, in `String` destructors, `assign` and map inserts). Sources do not
+even agree on these helpers: each declares its own `String`.
+
 Each object also exports **`_gt4fn_<ADDR>`** (uppercase hex), an alias of the function at the
 source's address: the function named after the source if there is one, else the first function of
 the primary `.text` (the decomp's build places that section at the address). A source that only
-instantiates a template has its function in a link-once `.text$...` section: that copy is aliased
-and its section made an ordinary one, so the linker cannot discard it for another object's copy.
+instantiates a template has its function in a `.text$...` section (no longer link-once). gcc 2.9
+inlines less than the EE compiler, so the helpers the EE code had inlined (allocator, base-class
+destructors) come out next to it, sometimes first: the alias names the `.text$` function nothing
+else in the object calls (the instance itself), the largest if several. Taking the first one
+pointed `vector<HSymID>`'s copy constructor (0030F740) at `GameAlloc`'s destructor.
 All 30,189 objects have their alias; a symbol scan finds no duplicate global definition.
 
 ## Census

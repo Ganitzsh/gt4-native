@@ -193,7 +193,7 @@ def rename_collisions(out, game_objs):
 def read_symbol_addrs(decomp):
     syms = {}
     pat = re.compile(r"^\s*([^\s=;/]+)\s*=\s*(0x[0-9A-Fa-f]+)\s*;\s*(?://\s*(.*))?$")
-    files = [os.path.join(decomp, "config", f) for f in ("symbol_addrs.txt", "stl_symbols.txt")]
+    files = [os.path.join(decomp, "config", f) for f in ("symbol_addrs.txt", "stl_symbols.txt", "resolved_symbols.txt")]
     libs = os.path.join(decomp, "config", "libs")
     if os.path.isdir(libs):  # per-library lists (libgcc, libio, newlib...)
         files += [os.path.join(libs, f) for f in sorted(os.listdir(libs)) if f.endswith("_symbols.txt")]
@@ -339,6 +339,13 @@ def resolve(name, syms):
     for candidate in (bare, name, MANGLED_PARAMS.sub("", bare)):
         if candidate in syms:
             return syms[candidate]
+    # names that contain "__F" themselves (GT4MC__FileGT4GameData__loadInstance__FiPv...): try every
+    # "__F" as the start of the parameter suffix, the last first
+    i = bare.rfind("__F")
+    while i > 0:
+        if bare[:i] in syms:
+            return syms[bare[:i]]
+        i = bare.rfind("__F", 0, i)
     m = DTOR_OF_ADDR.match(name) or CTOR_OF_ADDR.match(name)
     if m:
         return int(m.group(1), 16), "func"

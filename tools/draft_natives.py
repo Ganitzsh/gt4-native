@@ -90,6 +90,11 @@ def main():
     drafted = set()
     if os.path.exists(manifest):
         drafted = {l.split()[0].upper() for l in open(manifest) if l.strip() and not l.startswith("#")}
+    # the last run's curated sources count as provided by this tool too (one removed from game_src/
+    # since then falls back to a draft)
+    last_curated = os.path.join(a.game, "curated_list.txt")
+    if os.path.exists(last_curated):
+        drafted |= set(re.findall(r"func_([0-9A-F]{8})\.", open(last_curated).read().upper()))
     missing = [x.lower() for x in image if x not in natives or x in drafted]
     store = os.path.join(a.decomp, "drafts")
     swarm = os.path.join(a.decomp, "build", "swarm")

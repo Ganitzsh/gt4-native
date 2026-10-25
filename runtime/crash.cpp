@@ -72,6 +72,25 @@ LONG WINAPI on_crash(EXCEPTION_POINTERS *ep) {
             }
         }
     }
+    // the frame-pointer chain ([ebp] = caller's ebp, [ebp+4] = return address): game code keeps
+    // frame pointers, so this is the call chain as far as it goes through such frames
+    {
+        MEMORY_BASIC_INFORMATION mi;
+        uint32_t bp = c->Ebp;
+        for (int depth = 0; depth < 32; ++depth) {
+            const auto *f = reinterpret_cast<const uint32_t *>(static_cast<uintptr_t>(bp));
+            if (bp < 0x10000 || (bp & 3) || !VirtualQuery(f, &mi, sizeof mi) || mi.State != MEM_COMMIT ||
+                reinterpret_cast<uintptr_t>(f + 6) > reinterpret_cast<uintptr_t>(mi.BaseAddress) + mi.RegionSize)
+                break;
+            const uint32_t ret = f[1];
+            uint32_t g = 0;
+            const char *name = gt4::rt::native_name_for(ret, &g);
+            fprintf(stderr, "  frame %2d: ebp %08x ret %08x in %s (PS2 %08x) args %08x %08x %08x %08x\n", depth, bp, ret,
+                    name, g, f[2], f[3], f[4], f[5]);
+            if (f[0] <= bp) break;  // frames go up the stack
+            bp = f[0];
+        }
+    }
     // return addresses on the stack that point into the program's code
     const auto *sp = reinterpret_cast<const uint32_t *>(c->Esp);
     int shown = 0;
@@ -104,6 +123,35 @@ LONG WINAPI on_crash(EXCEPTION_POINTERS *ep) {
             }
             p = *end == ',' ? end + 1 : end;
             if (end == p && *p) break;
+        }
+    }
+    // GT4_SYMDUMP: the script engine's symbol table (MADHOC::SymbolMap, a map<String, int> at
+    // 0x0061A100 + 0x30), as "id name" lines, to name the symbol IDs a script lookup used
+    if (getenv("GT4_SYMDUMP")) {
+        const auto rd = [](uint32_t a) { return *reinterpret_cast<const uint32_t *>(static_cast<uintptr_t>(a)); };
+        uint32_t header = 0;
+        for (uint32_t off = 0x30; off < 0x40 && !header; off += 4) {  // the tree's header node
+            const uint32_t h = rd(0x0061A100 + off);
+            if (h > 0x10000 && h < 0x02000000 && rd(h + 4) > 0x10000 && rd(h + 4) < 0x02000000 && rd(rd(h + 4) + 4) == h)
+                header = rd(h) == 1 ? rd(h + 4) : h;  // the header is red (0); a black node is the root
+        }
+        fprintf(stderr, "symbol map header %08x\n", header);
+        // in order from the leftmost node (header->left), as the tree's iterator steps
+        uint32_t n = header ? rd(header + 8) : 0;
+        for (int count = 0; n && n != header && count < 20000; ++count) {
+            const uint32_t text = rd(n + 0x10);
+            fprintf(stderr, "  sym %5d %s\n", static_cast<int>(rd(n + 0x14)), reinterpret_cast<const char *>(static_cast<uintptr_t>(text)));
+            if (rd(n + 12)) {
+                n = rd(n + 12);
+                while (rd(n + 8)) n = rd(n + 8);
+            } else {
+                uint32_t up = rd(n + 4);
+                while (n == rd(up + 12)) {
+                    n = up;
+                    up = rd(up + 4);
+                }
+                if (rd(n + 12) != up) n = up;
+            }
         }
     }
     fflush(stderr);

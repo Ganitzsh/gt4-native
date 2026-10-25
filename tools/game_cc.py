@@ -63,9 +63,9 @@ MARKER = re.compile(rb"^/\* compiler: ([\w.+-]+) \*/\s*$")
 DROP_PREFIX = ("-G", "-m", "-B", "-g")
 DROP = {"-c", "-fno-optimize-sibling-calls", "-foptimize-sibling-calls"}
 # Always on: the decompiled code reads one object through several types all the time.
-# -fpcc-struct-return: every struct is returned through memory, so a function the decomp declares
-# returning a struct and a caller passing an explicit result pointer agree (as on the EE).
-ALWAYS = ["-fno-strict-aliasing", "-fpcc-struct-return"] + os.environ.get("GT4_CC_EXTRA", "").split()  # GT4_CC_EXTRA: debugging flags
+# Struct returns follow the EE (tools/game_toolchain/build_gcc29.sh: in registers when the EE uses
+# $v0), so the decomp's two declarations of one function (struct by value or scalar) agree.
+ALWAYS = ["-fno-strict-aliasing"] + os.environ.get("GT4_CC_EXTRA", "").split()  # GT4_CC_EXTRA: debugging flags
 
 # mode(TI) typedefs: `typedef [unsigned|signed] int NAME __attribute__((mode(TI)));`
 TI_TYPEDEF = re.compile(
@@ -608,6 +608,7 @@ def stem_address(rel):
 
 GLOBL = re.compile(rb"^\.globl[ \t]+(\S+)[ \t]*\r?\n", re.M)
 DEF_EXT = re.compile(rb"(\.def[ \t]+([^;\s]+);[ \t]*\.scl[ \t]+)2(?=;)")
+LINKONCE = re.compile(rb"^[ \t]*\.linkonce\b[^\n]*\n", re.M)
 
 
 def localize(asm, rel, addr):
@@ -630,13 +631,13 @@ def localize(asm, rel, addr):
     if dropped:
         # A COFF function's `.def NAME; .scl 2` (external class) would make it global again.
         asm = DEF_EXT.sub(lambda m: m.group(1) + b"3" if m.group(2) in dropped else m.group(0), asm)
+    # No section stays a COMDAT: the linker keeps one `.text$NAME` per name program-wide and drops
+    # the others, and since every copy is local (each source declares its own String, iterator...
+    # helpers, not always alike), calls in the objects whose copy was dropped would land on
+    # nothing (a call to the next instruction: 969 of them before this).
+    asm = LINKONCE.sub(b"", asm)
     if addr is not None:
-        main, once_section = main_function(asm, own)
-        if once_section is not None:
-            # The aliased copy must stay: no longer a COMDAT the linker may discard for another
-            # object's copy (every copy is local anyway).
-            asm = re.sub(re.escape(once_section) + rb"(\r?\n)[ \t]*\.linkonce[^\n]*\n",
-                         lambda m: once_section + m.group(1), asm, count=1)
+        main, _ = main_function(asm, own)
         if main is not None:
             alias = b"_gt4fn_%08X" % addr
             asm = asm.rstrip(b"\r\n") + b"\n.globl %s\n%s = %s\n" % (alias, alias, main)
@@ -675,29 +676,45 @@ def main_function(asm, own):
     after the source (its file name or func_ADDR) is preferred, in case this compiler emitted a
     helper the EE compiler inlined before it."""
     functions = set(FN_DEF.findall(asm))
-    section, first, first_once = None, None, None
+    section, first, current = None, None, None
+    once = []  # [name, section, instructions] of the functions in .text$ sections, in order
     for line in asm.splitlines():
         s = line.strip()
         if s == b".text":
-            section = b".text"
+            section, current = b".text", None
         elif s in (b".data", b".bss") or s.startswith(b".section"):
-            section = s
+            section, current = s, None
         elif s.endswith(b":") and s[:-1] in functions:
             name = s[:-1]
+            current = None
             if section == b".text":
                 if any(name.startswith(o) for o in own):
                     return name, None
                 if first is None:
                     first = name
             elif section.startswith(b".section\t.text$") or section.startswith(b".section .text$"):
-                if first_once is None or (any(name.startswith(o) for o in own)
-                                          and not any(first_once[0].startswith(o) for o in own)):
-                    first_once = (name, section)
+                current = [name, section, 0]
+                once.append(current)
+        elif current is not None and s and not s.startswith(b".") and not s.endswith(b":"):
+            current[2] += 1
     if first is not None:
         return first, None
-    # A source that only instantiates a template: its function is in a link-once section (the
-    # decomp's build takes the object's first .gnu.linkonce.t section as its code).
-    return first_once if first_once else (None, None)
+    # A source that only instantiates a template: its function is in a `.text$` section (the
+    # decomp's build takes the object's first .gnu.linkonce.t section as its code). This compiler
+    # inlines less, so the helpers the EE compiler inlined (allocator, base destructors...) come
+    # out too, sometimes first: take a function nothing else in the object uses (the instance
+    # itself), named after the source if one is, else the largest.
+    if not once:
+        return None, None
+    named = [f for f in once if any(f[0].startswith(o) for o in own)]
+    if named:
+        return named[0][0], named[0][1]
+    body = asm
+    for f in once:  # remove each function's own label, .def and .globl lines before counting uses
+        body = re.sub(rb"^[ \t]*(\.globl[ \t]+|\.def[ \t]+)?" + re.escape(f[0]) + rb"\b[^\n]*\n", b"", body, flags=re.M)
+    roots = [f for f in once if not re.search(rb"(?<![A-Za-z0-9_$.])" + re.escape(f[0]) + rb"(?![A-Za-z0-9_$.])", body)]
+    pick = max(roots or once, key=lambda f: f[2])
+    return pick[0], pick[1]
 
 
 def main():

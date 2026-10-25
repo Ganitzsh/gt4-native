@@ -34,6 +34,34 @@ old = "  /* Lose any fake structure return argument.  */\n  if (aggregate_value_
 assert old in s, "i386_return_pops_args changed"
 open(p, "w").write(s.replace(old, "  /* gt4: the caller pops the struct-return pointer (see build_gcc29.sh).  */\n"))
 PYEOF
+# Structs come back in registers exactly when the EE returns them in $v0 (mips.h: any type with a
+# scalar mode; MIPS's strict alignment gives a struct DImode only when it is 8-aligned): 1, 2 and 4
+# bytes in %eax, 8-aligned 8 bytes in %edx:%eax, everything else through memory. The decomp
+# declares one function both ways (a one-pointer iterator by value, or a plain int), which agree
+# on the EE and must agree here.
+python3 - src/gcc/config/i386/i386.h <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = "#define RETURN_IN_MEMORY(TYPE) \\\n  ((TYPE_MODE (TYPE) == BLKmode) || int_size_in_bytes (TYPE) > 12)\n"
+assert old in s, "i386.h RETURN_IN_MEMORY changed"
+new = ("#define RETURN_IN_MEMORY(TYPE) \\\n  ((TYPE_MODE (TYPE) == BLKmode) || int_size_in_bytes (TYPE) > 12 \\\n"
+       "   || (AGGREGATE_TYPE_P (TYPE) && (int_size_in_bytes (TYPE) > 8 \\\n"
+       "       || TYPE_ALIGN (TYPE) < GET_MODE_ALIGNMENT (TYPE_MODE (TYPE)))))\n")
+open(p, "w").write(s.replace(old, new))
+PYEOF
+# A call through a pointer to member function always handles the virtual case (index > 0: the
+# function is in the vtable found at this + delta2), as gcc 2.96 does. 2.9 left it out when the
+# class has no virtual functions, and the decomp declares the script engine's operator classes as
+# plain structs (mUnaryOperator::execute calls `(Thing::*pmf)` on a `struct Thing { int x; }`).
+python3 - src/gcc/cp/typeck.c <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = "      if (TYPE_SIZE (basetype) != NULL_TREE\n\t  && ! TYPE_VIRTUAL_P (basetype))\n"
+assert old in s, "typeck.c get_member_function_from_ptrfunc changed"
+open(p, "w").write(s.replace(old, "      if (0) /* gt4: always handle virtual members (build_gcc29.sh) */\n"))
+PYEOF
 
 export CC="gcc -m32"
 # gcc 2.9 is K&R/C89 code: old defaults for a modern host compiler; large-file stat for /mnt/c.

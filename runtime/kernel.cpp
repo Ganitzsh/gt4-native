@@ -276,7 +276,11 @@ bool g_alarms_due() {
 void deliver_on_self(Thread *me) {
     EnterCriticalSection(&g_lock);
     if ((g_pending_intc & g_intc_mask) || (g_pending_dmac & g_dmac_mask) || g_alarms_due()) {
+        // the handlers run on this thread: a syscall or EI they make must not deliver again (it
+        // would take g_lock a second time, and switch_away below releases it only once)
+        ++me->kernel_depth;
         deliver_pending();
+        --me->kernel_depth;
         Thread *best = best_ready();
         if (best && me == g_running && best->prio < me->prio) {
             make_ready(me, true);
@@ -375,7 +379,7 @@ KernelScope::KernelScope() {
 KernelScope::~KernelScope() {
     Thread *t = self();
     if (!t) return;
-    if (--t->kernel_depth == 0 && !t->di && t == g_running) {
+    if (--t->kernel_depth == 0 && !t->di && t == g_running && !g_in_interrupt) {
         if (g_pending_intc || g_pending_dmac || g_alarms_due()) deliver_on_self(t);
     }
 }
@@ -393,7 +397,8 @@ int kernel_ei() {
     if (!t) return 1;
     const bool was = !t->di;
     t->di = false;
-    if (t->kernel_depth == 0 && (g_pending_intc || g_pending_dmac || g_alarms_due())) deliver_on_self(t);
+    if (t->kernel_depth == 0 && !g_in_interrupt && (g_pending_intc || g_pending_dmac || g_alarms_due()))
+        deliver_on_self(t);
     return was;
 }
 
@@ -467,6 +472,46 @@ DWORD WINAPI watchdog_thread(void *p) {
         int n = snprintf(line, sizeof line, "watch: vblank %u, threads:", g_vblanks.load());
         uint32_t pc = 0;
         int running = 0;
+        char chain[600] = "";
+        int chain_len = 0;
+        // a kernel lock held for 2 s is a deadlock: name its owner and where it is (stderr only,
+        // since the log itself may be what is blocked)
+        bool locked = false;
+        for (int tries = 0; tries < 200 && !(locked = TryEnterCriticalSection(&g_lock)); ++tries) Sleep(10);
+        if (!locked) {
+            const DWORD owner = static_cast<DWORD>(reinterpret_cast<uintptr_t>(g_lock.OwningThread));
+            fprintf(stderr, "watch: kernel lock held for 2 s by host thread %lu", owner);
+            if (HANDLE h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT, FALSE, owner)) {
+                if (SuspendThread(h) != static_cast<DWORD>(-1)) {
+                    CONTEXT ctx;
+                    ctx.ContextFlags = CONTEXT_CONTROL;
+                    if (GetThreadContext(h, &ctx)) {
+                        uint32_t g = 0;
+                        const char *nm = native_name_for(ctx.Eip, &g);
+                        fprintf(stderr, " at %08lx (%s, PS2 %08x); stack:", ctx.Eip, nm, g);
+                        const auto *sp = reinterpret_cast<const uint32_t *>(ctx.Esp);
+                        MEMORY_BASIC_INFORMATION mi;
+                        for (int k = 0, shown = 0; k < 4096 && shown < 16; ++k) {
+                            if ((k == 0 || (reinterpret_cast<uintptr_t>(sp + k) & 0xFFF) == 0) &&
+                                (!VirtualQuery(sp + k, &mi, sizeof mi) || mi.State != MEM_COMMIT))
+                                break;
+                            if (sp[k] < 0x02000000 || sp[k] >= 0x04000000) continue;
+                            const char *n2 = native_name_for(sp[k], &g);
+                            if (*n2) {
+                                fprintf(stderr, " %08x(%s)", sp[k], g ? n2 + (std::strncmp(n2, "gt4fn_", 6) ? 0 : 6) : n2);
+                                ++shown;
+                            }
+                        }
+                    }
+                    ResumeThread(h);
+                }
+                CloseHandle(h);
+            }
+            fprintf(stderr, "\n");
+            fflush(stderr);
+            continue;
+        }
+        LeaveCriticalSection(&g_lock);
         {
             Lock lock;
             for (int i = 1; i < kMaxThreads && n < 900; ++i) {
@@ -483,14 +528,30 @@ DWORD WINAPI watchdog_thread(void *p) {
                 if (!r->host_frozen && SuspendThread(r->host) != static_cast<DWORD>(-1)) {
                     CONTEXT ctx;
                     ctx.ContextFlags = CONTEXT_CONTROL;
-                    if (GetThreadContext(r->host, &ctx)) pc = ctx.Eip;
+                    if (GetThreadContext(r->host, &ctx)) {
+                        pc = ctx.Eip;
+                        // its call chain through frame pointers ([ebp] = caller's ebp, [ebp+4] = return)
+                        uint32_t bp = ctx.Ebp;
+                        MEMORY_BASIC_INFORMATION mi;
+                        for (int d = 0; d < 24 && chain_len < 560; ++d) {
+                            const auto *f = reinterpret_cast<const uint32_t *>(static_cast<uintptr_t>(bp));
+                            if (bp < 0x10000 || (bp & 3) || !VirtualQuery(f, &mi, sizeof mi) || mi.State != MEM_COMMIT ||
+                                reinterpret_cast<uintptr_t>(f + 2) > reinterpret_cast<uintptr_t>(mi.BaseAddress) + mi.RegionSize)
+                                break;
+                            uint32_t g = 0;
+                            native_name_for(f[1], &g);
+                            chain_len += snprintf(chain + chain_len, sizeof chain - chain_len, " %08x", g);
+                            if (f[0] <= bp) break;
+                            bp = f[0];
+                        }
+                    }
                     ResumeThread(r->host);
                 }
             }
         }
         uint32_t guest = 0;
         const char *name = native_name_for(pc, &guest);
-        log_info("%s; running %d at %08x (%s, PS2 %08x)", line, running, pc, *name ? name : "?", guest);
+        log_info("%s; running %d at %08x (%s, PS2 %08x); callers%s", line, running, pc, *name ? name : "?", guest, chain);
         // where each waiting thread is: the game functions on its stack (newest first)
         for (int i = 1; i < kMaxThreads; ++i) {
             Thread &t = g_threads[i];
