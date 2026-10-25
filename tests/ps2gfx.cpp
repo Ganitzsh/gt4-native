@@ -388,7 +388,9 @@ int main() {
     testFlags();
     testXgkick();
     testVifUnpack();
-    testTransformMicroprogram();
+#if GT4_VU1_INTERPRETER
+    testTransformMicroprogram();   // needs MSCAL to run the program
+#endif
     testDirectAndRecords();
     testPath3Mask();
     testReplay();

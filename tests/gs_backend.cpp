@@ -111,7 +111,11 @@ void writeReplay(const std::string& path) {
 struct Expected { uint32_t x, y, rgb; const char* what; };
 const Expected kReplayPixels[] = {
     {20, 20, rgb(64, 64, 64), "replay background"},
+#if GT4_VU1_INTERPRETER
     {150, 100, rgb(255, 0, 255), "replay VU1 triangle"},
+#else
+    {150, 100, rgb(64, 64, 64), "no VU1 triangle without the interpreter"},
+#endif
     {500, 350, rgb(0, 0, 255), "replay PATH3 sprite"},
     {330, 290, rgb(64, 64, 64), "outside the triangle"},
 };
@@ -251,7 +255,7 @@ int main(int argc, char** argv) {
 
     // 5. A VU1 microprogram: VIF1 uploads it (MPG) and its data (UNPACK), MSCAL runs it; it transforms
     // three vertices and XGKICKs a triangle (PATH1).
-    {
+    if (GT4_VU1_INTERPRETER) {
         Target target(*gs);
         gt4::ps2::GraphicsStream stream(target);
         Gif g = setup();
