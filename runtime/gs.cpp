@@ -217,6 +217,32 @@ extern "C" void gt4_replace_func_004ABA50(int channel, uint32_t address) {
 
 // 0049FF38: resets VIF0, VIF1 (FBRST), both VUs (FBRST through vi28) and the GIF, and sets the
 // VIFs' error masks. Nothing to reset natively; the register values are kept for readers.
+// 004AB930: starts the next GS -> EE download of the list its DMA channel 1 TADR points at
+// ({qwc, madr, id} entries; id 1 = last): VIF1_STAT.FDR and BUSDIR = 1, channel 1 towards memory.
+// Here the transfer is done at once (the host's GS_IMAGE, or zeros headless) and the channel ends
+// with its interrupt, whose handler (004AB6D8) goes on with the list or finishes (004AB9C0).
+extern "C" void gt4_replace_func_004AB930(uint32_t state) {
+    const uint32_t chcr = guest_ref<uint32_t>(0x10009000);
+    const uint32_t tadr = guest_ref<uint32_t>(0x10009030);
+    const uint32_t tag = (tadr & 0x0FFFFFFF) | 0x20000000;
+    const uint32_t qwc = guest_ref<uint32_t>(tag), madr = guest_ref<uint32_t>(tag + 4), id = guest_ref<uint32_t>(tag + 8);
+    guest_ref<uint32_t>(state + 0x44) = tag;
+    guest_ref<uint32_t>(0x10003C00) = 0x800000;  // VIF1_STAT.FDR
+    guest_ref<uint64_t>(0x12001040) = 1;         // BUSDIR: GS -> EE
+    guest_ref<uint32_t>(0x10009010) = madr;
+    guest_ref<uint32_t>(0x10009020) = qwc;
+    guest_ref<uint32_t>(0x10009030) = tadr + 16;
+    guest_ref<uint32_t>(0x10009000) = (chcr & ~0x10Fu) | 0x100;
+    if (id != 1) guest_ref<uint8_t>(state + 0x15) = 0;
+    std::vector<uint8_t> image(static_cast<size_t>(qwc) * 16);
+    link_read_image(qwc, image.data());
+    for (uint32_t q = 0; q < qwc; ++q) std::memcpy(mem(madr + q * 16, (madr & 0x80000000) != 0), &image[q * 16], 16);
+    guest_ref<uint32_t>(0x10009010) = madr + qwc * 16;
+    guest_ref<uint32_t>(0x10009020) = 0;
+    guest_ref<uint32_t>(0x10009000) &= ~0x100u;
+    kernel_raise_dmac(1);
+}
+
 extern "C" void gt4_replace_func_0049FF38() {
     guest_ref<uint32_t>(0x10003810) = 1;  // VIF0_FBRST
     guest_ref<uint32_t>(0x10003C10) = 1;  // VIF1_FBRST

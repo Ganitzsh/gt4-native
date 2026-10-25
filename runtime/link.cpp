@@ -23,6 +23,11 @@ uint64_t g_seq = 0;
 uint8_t g_pad[2][18];
 bool g_pad_valid[2];
 std::mutex g_pad_mutex;
+std::recursive_mutex g_poll_mutex;  // the interrupt thread's VBlank poll and link_read_image
+uint32_t g_image_id = 0;           // the download waiting for its GS_IMAGE (0: none)
+uint8_t *g_image_dst = nullptr;
+uint32_t g_image_qwc = 0;
+bool g_image_done = false;
 
 void ring_write(uint8_t *data, uint32_t size, uint64_t pos, const void *src, uint32_t n) {
     const uint32_t off = static_cast<uint32_t>(pos % size);
@@ -140,6 +145,7 @@ void link_send(uint32_t type, const void *payload, uint32_t size, const void *ex
 
 void link_poll() {
     if (!g_hdr) return;
+    std::lock_guard<std::recursive_mutex> poll_lock(g_poll_mutex);
     const uint32_t ring = g_hdr->h2g_size;
     uint64_t tail = g_hdr->h2g.tail;
     const uint64_t head = g_hdr->h2g.head;
@@ -162,6 +168,17 @@ void link_poll() {
                 std::memcpy(g_pad[port], payload + 8, 18);
                 g_pad_valid[port] = connected != 0;
             }
+        } else if (rec.type == GT4_REC_GS_IMAGE && n >= 8) {
+            uint32_t id, qwc;
+            std::memcpy(&id, payload, 4);
+            std::memcpy(&qwc, payload + 4, 4);
+            if (id == g_image_id && g_image_dst) {
+                const uint32_t have = (n - 8) / 16;
+                const uint32_t copy = (qwc < g_image_qwc ? qwc : g_image_qwc);
+                const uint32_t got = copy < have ? copy : have;
+                std::memcpy(g_image_dst, payload + 8, got * 16);
+                g_image_done = true;
+            }
         } else if (rec.type == GT4_REC_GS_EVENT && n >= 16) {
             gs_event(payload);
         } else if (rec.type == GT4_REC_HOST_CMD && n >= 4) {
@@ -176,6 +193,35 @@ void link_poll() {
         tail += (sizeof rec + rec.size + 15) & ~15ull;
     }
     g_hdr->h2g.tail = tail;
+}
+
+bool link_read_image(uint32_t qwc, void *dst) {
+    std::memset(dst, 0, static_cast<size_t>(qwc) * 16);
+    if (!g_hdr) return false;
+    static uint32_t next_id = 0;
+    {
+        std::lock_guard<std::recursive_mutex> poll_lock(g_poll_mutex);
+        g_image_id = ++next_id ? next_id : ++next_id;
+        g_image_dst = static_cast<uint8_t *>(dst);
+        g_image_qwc = qwc;
+        g_image_done = false;
+    }
+    const uint32_t req[2] = {g_image_id, qwc};
+    link_send(GT4_REC_GS_READ, req, sizeof req);
+    bool done = false;
+    for (int waited = 0; waited < 2000 && !done; ++waited) {
+        link_poll();
+        {
+            std::lock_guard<std::recursive_mutex> poll_lock(g_poll_mutex);
+            done = g_image_done;
+        }
+        if (!done) Sleep(1);
+    }
+    std::lock_guard<std::recursive_mutex> poll_lock(g_poll_mutex);
+    g_image_id = 0;
+    g_image_dst = nullptr;
+    if (!done) log_warn("link: no GS_IMAGE for a %u-qword download", qwc);
+    return done;
 }
 
 bool link_pad(int port, uint8_t out[18]) {

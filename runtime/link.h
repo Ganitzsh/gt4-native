@@ -18,6 +18,11 @@ void link_send(uint32_t type, const void *payload, uint32_t size, const void *ex
 // Host -> game records, polled at each VBlank by the kernel's interrupt thread.
 void link_poll();
 
+// A GS -> EE download (BUSDIR): sends GS_READ {id, qwc} and waits (2 s at most) for the host's
+// GS_IMAGE, copied to dst (qwc x 16 bytes). Without a host, or on timeout, dst is zero-filled and
+// false is returned.
+bool link_read_image(uint32_t qwc, void *dst);
+
 // The pad state the host sent (18 bytes, libpad2 layout); false if none yet.
 bool link_pad(int port, uint8_t out[18]);
 
