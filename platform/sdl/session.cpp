@@ -58,6 +58,7 @@ struct Session::Impl {
     Uint64 resizeDeadline = 0;
     Uint64 toneUntil = 0;
     std::vector<fs::path> captures;
+    uint32_t waitFrames = 0;   // "wait N": frames to render before the next command
     std::function<std::string(const std::string&, const std::string&)> setting;
     explicit Impl(const std::string& path) : directory(path) {}
     ~Impl() {
@@ -225,6 +226,10 @@ struct Session::Impl {
             if (const std::string error = setting(key, value); !error.empty()) throw std::runtime_error(error);
             event("setting", "\"key\":" + quote(key) + ",\"value\":" + quote(value) +
                   ",\"pipeline\":" + quote(renderer.pipelineDescription()));
+        } else if (op == "wait") {
+            int count = 0;
+            if (!(input >> count) || count < 1 || count > 100000) throw std::runtime_error("wait FRAMES requires 1..100000");
+            waitFrames = static_cast<uint32_t>(count);
         } else if (op == "quit") quit = true;
         else throw std::runtime_error("Unknown command");
         std::string extra;
@@ -246,11 +251,14 @@ bool Session::tick(Renderer& renderer, SDL_Window* window, uint32_t frame) {
         else { if (impl->diagnostics) impl->diagnosticAudio(); return true; }
     }
     std::vector<fs::path> pending;
-    for (const auto& entry : fs::directory_iterator(impl->directory / "commands"))
-        if (entry.is_regular_file() && entry.path().extension() == ".cmd") pending.push_back(entry.path());
+    if (impl->waitFrames) --impl->waitFrames;   // "wait N": render N frames before the next command
+    else
+        for (const auto& entry : fs::directory_iterator(impl->directory / "commands"))
+            if (entry.is_regular_file() && entry.path().extension() == ".cmd") pending.push_back(entry.path());
     std::sort(pending.begin(), pending.end());
     bool quit = false;
     for (const auto& path : pending) {
+        if (impl->waitFrames) break;
         std::ifstream input(path); std::string text; std::getline(input, text); input.close();
         try { quit |= impl->command(text, renderer, window, path.filename().string()); }
         catch (const std::exception& error) {

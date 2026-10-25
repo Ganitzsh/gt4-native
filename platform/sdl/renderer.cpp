@@ -559,7 +559,7 @@ struct Renderer::Impl {
         const float scale = std::max(1.0f, std::floor(static_cast<float>(content.extent.height) / 540.0f));
         std::ostringstream text;
         text << "[F1] help  preset " << gt4::name(settings.preset) << "\n" << pipeline->describe() << "\n"
-             << "display " << gt4::name(settings.windowMode) << " " << extent.width << "x" << extent.height
+             << "display " << (headless ? "headless" : gt4::name(settings.windowMode)) << " " << extent.width << "x" << extent.height
              << " vsync " << gt4::name(settings.vsync) << " aspect " << gt4::name(settings.aspect) << " hud " << gt4::name(settings.hud)
              << "\ntex " << gt4::name(settings.textureFilter) << " af " << settings.anisotropy << "x  tonemap "
              << gt4::name(settings.tonemapper) << "  bloom " << gt4::name(settings.bloom) << " dof " << gt4::name(settings.dof)
@@ -581,7 +581,7 @@ struct Renderer::Impl {
         if (!supported) throw std::runtime_error("Capture does not support the output format " + std::to_string(static_cast<int>(target.format)));
         gt4::vk::destroy(device, readback);
         readback = gt4::vk::createBuffer(device, static_cast<VkDeviceSize>(target.extent.width) * target.extent.height * 4,
-                                         VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
+                                         VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, true);
         gt4::vk::Barriers b;
         b.image(target, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, gt4::vk::kTransfer, VK_ACCESS_2_TRANSFER_READ_BIT);
         b.flush(command);

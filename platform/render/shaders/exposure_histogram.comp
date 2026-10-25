@@ -15,9 +15,11 @@ void main() {
     ivec2 p = ivec2(gl_GlobalInvocationID.xy) * 2;
     if (all(lessThan(p, push.size))) {
         float lum = luminance(texelFetch(source, p, 0).rgb);
-        // Centre-weighted metering: the middle of the screen counts more.
+        // Centre-weighted metering, biased below the horizon line: in a driving view the road and the cars
+        // matter, the sky above them should not darken the picture.
         vec2 uv = (vec2(p) + 0.5) / vec2(push.size) - 0.5;
-        uint weight = uint(mix(4.0, 1.0, clamp(length(uv) * 2.0, 0.0, 1.0)));
+        float centre = mix(4.0, 1.0, clamp(length(uv * vec2(1.0, 1.4) - vec2(0.0, 0.1)) * 2.0, 0.0, 1.0));
+        uint weight = uint(centre * (uv.y > -0.15 ? 2.0 : 1.0) + 0.5);
         if (lum > 1e-5) {
             float t = clamp((log2(lum) - push.minLog2) / push.rangeLog2, 0.0, 1.0);
             atomicAdd(local[uint(t * 254.0) + 1u], weight);

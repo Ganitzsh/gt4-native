@@ -254,6 +254,9 @@ const std::vector<Option>& options() {
             "Triangular-noise dither before quantising to the display format (removes banding)."));
         o.push_back(floatOption("post.shutter", &Settings::shutter, 0.0f, 1.0f,
             "Motion blur exposure time as a fraction of the frame (0.5 = a 180-degree shutter)."));
+        o.push_back(floatOption("post.aperture", &Settings::aperture, 0.5f, 22.0f,
+            "Depth of field f-number. The focal length follows from the field of view on a 24 mm tall sensor, so "
+            "wide views have little blur and narrow (replay, telephoto) views a lot; smaller numbers blur more."));
         o.push_back(floatOption("post.focus_distance", &Settings::focusDistance, 0.0f, 10000.0f,
             "Depth of field focus distance in metres; 0 = autofocus on the centre of the screen."));
         o.push_back(enumOption("graphics.preset", &Settings::preset, kPresets,
@@ -292,25 +295,25 @@ const PresetTable& presetValues(Preset preset) {
         {"render.aa", "fxaa"}, {"render.msaa", "1"}, {"texture.filter", "trilinear"}, {"texture.anisotropy", "4"},
         {"effects.shadows", "low"}, {"effects.reflections", "low"}, {"effects.bloom", "low"},
         {"effects.heat_haze", "low"}, {"effects.particles", "low"}, {"effects.sky_fog", "low"},
-        {"effects.ambient_occlusion", "off"}, {"post.tonemapper", "agx"}, {"post.auto_exposure", "on"}};
+        {"effects.ambient_occlusion", "off"}, {"post.tonemapper", "agx_punchy"}, {"post.auto_exposure", "on"}};
     static const PresetTable medium{
         {"render.quality", "quality"}, {"render.upscaler", "fsr2"}, {"render.sharpness", "0.25"},
         {"render.aa", "taa"}, {"render.msaa", "1"}, {"texture.filter", "trilinear"}, {"texture.anisotropy", "8"},
         {"effects.shadows", "medium"}, {"effects.reflections", "medium"}, {"effects.bloom", "medium"},
         {"effects.heat_haze", "medium"}, {"effects.particles", "medium"}, {"effects.sky_fog", "medium"},
-        {"effects.ambient_occlusion", "low"}, {"post.tonemapper", "agx"}, {"post.auto_exposure", "on"}};
+        {"effects.ambient_occlusion", "low"}, {"post.tonemapper", "agx_punchy"}, {"post.auto_exposure", "on"}};
     static const PresetTable high{
         {"render.quality", "native"}, {"render.upscaler", "fsr1"}, {"render.sharpness", "0.2"},
         {"render.aa", "taa"}, {"render.msaa", "1"}, {"texture.filter", "trilinear"}, {"texture.anisotropy", "16"},
         {"effects.shadows", "high"}, {"effects.reflections", "high"}, {"effects.bloom", "high"},
         {"effects.heat_haze", "high"}, {"effects.particles", "high"}, {"effects.sky_fog", "high"},
-        {"effects.ambient_occlusion", "medium"}, {"post.tonemapper", "agx"}, {"post.auto_exposure", "on"}};
+        {"effects.ambient_occlusion", "medium"}, {"post.tonemapper", "agx_punchy"}, {"post.auto_exposure", "on"}};
     static const PresetTable ultra{
         {"render.quality", "native"}, {"render.upscaler", "fsr2"}, {"render.sharpness", "0.15"},
         {"render.aa", "taa"}, {"render.msaa", "1"}, {"texture.filter", "trilinear"}, {"texture.anisotropy", "16"},
         {"effects.shadows", "ultra"}, {"effects.reflections", "ultra"}, {"effects.bloom", "ultra"},
         {"effects.heat_haze", "ultra"}, {"effects.particles", "ultra"}, {"effects.sky_fog", "ultra"},
-        {"effects.ambient_occlusion", "high"}, {"post.tonemapper", "agx"}, {"post.auto_exposure", "on"}};
+        {"effects.ambient_occlusion", "high"}, {"post.tonemapper", "agx_punchy"}, {"post.auto_exposure", "on"}};
     static const PresetTable none;
     switch (preset) {
     case Preset::Original: return original;

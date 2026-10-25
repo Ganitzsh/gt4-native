@@ -1,0 +1,690 @@
+[
+ {
+  "at": 0.0,
+  "command": "set graphics.preset high"
+ },
+ {
+  "at": 0.005,
+  "command": "set scene.animate off"
+ },
+ {
+  "at": 0.01,
+  "command": "set debug.overlay off"
+ },
+ {
+  "at": 0.015,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.02,
+  "command": "capture 00_high_default"
+ },
+ {
+  "at": 0.025,
+  "command": "set graphics.preset original"
+ },
+ {
+  "at": 0.03,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.035,
+  "command": "capture 01_original_ps2"
+ },
+ {
+  "at": 0.04,
+  "command": "set graphics.preset high"
+ },
+ {
+  "at": 0.045,
+  "command": "set render.aa off"
+ },
+ {
+  "at": 0.05,
+  "command": "set render.sharpness 0"
+ },
+ {
+  "at": 0.055,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.06,
+  "command": "capture 02_aa_off"
+ },
+ {
+  "at": 0.065,
+  "command": "set render.aa fxaa"
+ },
+ {
+  "at": 0.07,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.075,
+  "command": "capture 03_aa_fxaa"
+ },
+ {
+  "at": 0.08,
+  "command": "set render.aa smaa"
+ },
+ {
+  "at": 0.085,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.09,
+  "command": "capture 04_aa_smaa"
+ },
+ {
+  "at": 0.095,
+  "command": "set render.aa smaa_t2x"
+ },
+ {
+  "at": 0.1,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.105,
+  "command": "capture 05_aa_smaa_t2x"
+ },
+ {
+  "at": 0.11,
+  "command": "set render.aa taa"
+ },
+ {
+  "at": 0.115,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.12,
+  "command": "capture 06_aa_taa"
+ },
+ {
+  "at": 0.125,
+  "command": "set render.upscaler fsr2"
+ },
+ {
+  "at": 0.13,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.135,
+  "command": "capture 07_aa_fsr2_native"
+ },
+ {
+  "at": 0.14,
+  "command": "set render.upscaler fsr1"
+ },
+ {
+  "at": 0.145,
+  "command": "set render.aa off"
+ },
+ {
+  "at": 0.15,
+  "command": "set render.msaa 4"
+ },
+ {
+  "at": 0.155,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.16,
+  "command": "capture 08_msaa4"
+ },
+ {
+  "at": 0.165,
+  "command": "set render.msaa 1"
+ },
+ {
+  "at": 0.17,
+  "command": "set render.quality custom"
+ },
+ {
+  "at": 0.175,
+  "command": "set render.scale 200"
+ },
+ {
+  "at": 0.18,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.185,
+  "command": "capture 09_ssaa200"
+ },
+ {
+  "at": 0.19,
+  "command": "set render.quality performance"
+ },
+ {
+  "at": 0.195,
+  "command": "set render.upscaler bilinear"
+ },
+ {
+  "at": 0.2,
+  "command": "set render.aa smaa"
+ },
+ {
+  "at": 0.205,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.21,
+  "command": "capture 10_perf_bilinear"
+ },
+ {
+  "at": 0.215,
+  "command": "set render.upscaler bicubic"
+ },
+ {
+  "at": 0.22,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.225,
+  "command": "capture 11_perf_bicubic"
+ },
+ {
+  "at": 0.23,
+  "command": "set render.upscaler lanczos"
+ },
+ {
+  "at": 0.235,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.24,
+  "command": "capture 12_perf_lanczos"
+ },
+ {
+  "at": 0.245,
+  "command": "set render.upscaler fsr1"
+ },
+ {
+  "at": 0.25,
+  "command": "set render.sharpness 0.25"
+ },
+ {
+  "at": 0.255,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.26,
+  "command": "capture 13_perf_fsr1"
+ },
+ {
+  "at": 0.265,
+  "command": "set render.aa taa"
+ },
+ {
+  "at": 0.27,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.275,
+  "command": "capture 14_perf_taau"
+ },
+ {
+  "at": 0.28,
+  "command": "set render.upscaler fsr2"
+ },
+ {
+  "at": 0.285,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.29,
+  "command": "capture 15_perf_fsr2"
+ },
+ {
+  "at": 0.295,
+  "command": "set graphics.preset high"
+ },
+ {
+  "at": 0.3,
+  "command": "set scene.animate off"
+ },
+ {
+  "at": 0.305,
+  "command": "set texture.filter point"
+ },
+ {
+  "at": 0.31,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.315,
+  "command": "capture 16_tex_point"
+ },
+ {
+  "at": 0.32,
+  "command": "set texture.filter bilinear"
+ },
+ {
+  "at": 0.325,
+  "command": "set texture.anisotropy 1"
+ },
+ {
+  "at": 0.33,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.335,
+  "command": "capture 17_tex_bilinear_af1"
+ },
+ {
+  "at": 0.34,
+  "command": "set texture.filter trilinear"
+ },
+ {
+  "at": 0.345,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.35,
+  "command": "capture 18_tex_trilinear_af1"
+ },
+ {
+  "at": 0.355,
+  "command": "set texture.anisotropy 16"
+ },
+ {
+  "at": 0.36,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.365,
+  "command": "capture 19_tex_trilinear_af16"
+ },
+ {
+  "at": 0.37,
+  "command": "set effects.bloom off"
+ },
+ {
+  "at": 0.375,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.38,
+  "command": "capture 20_bloom_off"
+ },
+ {
+  "at": 0.385,
+  "command": "set effects.bloom original"
+ },
+ {
+  "at": 0.39,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.395,
+  "command": "capture 21_bloom_original"
+ },
+ {
+  "at": 0.4,
+  "command": "set effects.bloom ultra"
+ },
+ {
+  "at": 0.405,
+  "command": "set post.bloom_intensity 0.15"
+ },
+ {
+  "at": 0.41,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.415,
+  "command": "capture 22_bloom_ultra"
+ },
+ {
+  "at": 0.42,
+  "command": "set post.bloom_intensity 0.05"
+ },
+ {
+  "at": 0.425,
+  "command": "set effects.bloom high"
+ },
+ {
+  "at": 0.43,
+  "command": "set effects.dof ultra"
+ },
+ {
+  "at": 0.435,
+  "command": "set scene.fov 22"
+ },
+ {
+  "at": 0.44,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.445,
+  "command": "capture 23_dof_ultra"
+ },
+ {
+  "at": 0.45,
+  "command": "set effects.dof off"
+ },
+ {
+  "at": 0.455,
+  "command": "set scene.fov 50"
+ },
+ {
+  "at": 0.46,
+  "command": "set post.tonemapper original"
+ },
+ {
+  "at": 0.465,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.47,
+  "command": "capture 24_tonemap_original"
+ },
+ {
+  "at": 0.475,
+  "command": "set post.tonemapper reinhard"
+ },
+ {
+  "at": 0.48,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.485,
+  "command": "capture 25_tonemap_reinhard"
+ },
+ {
+  "at": 0.49,
+  "command": "set post.tonemapper aces"
+ },
+ {
+  "at": 0.495,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.5,
+  "command": "capture 26_tonemap_aces"
+ },
+ {
+  "at": 0.505,
+  "command": "set post.tonemapper agx"
+ },
+ {
+  "at": 0.51,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.515,
+  "command": "capture 27_tonemap_agx"
+ },
+ {
+  "at": 0.52,
+  "command": "set post.tonemapper agx_punchy"
+ },
+ {
+  "at": 0.525,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.53,
+  "command": "capture 28_tonemap_agx_punchy"
+ },
+ {
+  "at": 0.535,
+  "command": "set post.tonemapper pbr_neutral"
+ },
+ {
+  "at": 0.54,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.545,
+  "command": "capture 29_tonemap_pbr_neutral"
+ },
+ {
+  "at": 0.55,
+  "command": "set post.tonemapper agx_punchy"
+ },
+ {
+  "at": 0.555,
+  "command": "set effects.shadows original"
+ },
+ {
+  "at": 0.56,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.565,
+  "command": "capture 30_shadows_original"
+ },
+ {
+  "at": 0.57,
+  "command": "set effects.shadows low"
+ },
+ {
+  "at": 0.575,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.58,
+  "command": "capture 31_shadows_low"
+ },
+ {
+  "at": 0.585,
+  "command": "set effects.shadows ultra"
+ },
+ {
+  "at": 0.59,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.595,
+  "command": "capture 32_shadows_ultra"
+ },
+ {
+  "at": 0.6,
+  "command": "set effects.shadows high"
+ },
+ {
+  "at": 0.605,
+  "command": "set effects.reflections original"
+ },
+ {
+  "at": 0.61,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.615,
+  "command": "capture 33_reflections_original"
+ },
+ {
+  "at": 0.62,
+  "command": "set effects.reflections ultra"
+ },
+ {
+  "at": 0.625,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.63,
+  "command": "capture 34_reflections_ultra"
+ },
+ {
+  "at": 0.635,
+  "command": "set effects.reflections high"
+ },
+ {
+  "at": 0.64,
+  "command": "set effects.sky_fog original"
+ },
+ {
+  "at": 0.645,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.65,
+  "command": "capture 35_fog_original"
+ },
+ {
+  "at": 0.655,
+  "command": "set effects.sky_fog off"
+ },
+ {
+  "at": 0.66,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.665,
+  "command": "capture 36_fog_off"
+ },
+ {
+  "at": 0.67,
+  "command": "set effects.sky_fog high"
+ },
+ {
+  "at": 0.675,
+  "command": "set post.film_grain 0.4"
+ },
+ {
+  "at": 0.68,
+  "command": "set post.vignette 0.5"
+ },
+ {
+  "at": 0.685,
+  "command": "set post.chromatic_aberration 0.5"
+ },
+ {
+  "at": 0.69,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.695,
+  "command": "capture 37_lens_fx"
+ },
+ {
+  "at": 0.7,
+  "command": "set post.film_grain 0"
+ },
+ {
+  "at": 0.705,
+  "command": "set post.vignette 0"
+ },
+ {
+  "at": 0.71,
+  "command": "set post.chromatic_aberration 0"
+ },
+ {
+  "at": 0.715,
+  "command": "set aspect.ratio 4:3"
+ },
+ {
+  "at": 0.72,
+  "command": "set debug.overlay on"
+ },
+ {
+  "at": 0.725,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.73,
+  "command": "capture 38_aspect_4_3"
+ },
+ {
+  "at": 0.735,
+  "command": "set aspect.ratio 21:9"
+ },
+ {
+  "at": 0.74,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.745,
+  "command": "capture 39_aspect_21_9"
+ },
+ {
+  "at": 0.75,
+  "command": "set aspect.ratio 16:10"
+ },
+ {
+  "at": 0.755,
+  "command": "set aspect.hud centered"
+ },
+ {
+  "at": 0.76,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.765,
+  "command": "capture 40_aspect_16_10_centered"
+ },
+ {
+  "at": 0.77,
+  "command": "set aspect.ratio window"
+ },
+ {
+  "at": 0.775,
+  "command": "set aspect.hud stretched"
+ },
+ {
+  "at": 0.78,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.785,
+  "command": "capture 41_hud_stretched"
+ },
+ {
+  "at": 0.79,
+  "command": "set aspect.hud anchored"
+ },
+ {
+  "at": 0.795,
+  "command": "set debug.overlay off"
+ },
+ {
+  "at": 0.8,
+  "command": "set scene.animate on"
+ },
+ {
+  "at": 0.805,
+  "command": "set effects.motion_blur ultra"
+ },
+ {
+  "at": 0.81,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.815,
+  "command": "capture 42_motion_blur_ultra"
+ },
+ {
+  "at": 0.82,
+  "command": "set effects.motion_blur off"
+ },
+ {
+  "at": 0.825,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.83,
+  "command": "capture 43_motion_taa"
+ },
+ {
+  "at": 0.835,
+  "command": "set render.upscaler fsr2"
+ },
+ {
+  "at": 0.84,
+  "command": "set render.quality performance"
+ },
+ {
+  "at": 0.845,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.85,
+  "command": "capture 44_motion_fsr2_perf"
+ },
+ {
+  "at": 0.905,
+  "command": "quit"
+ }
+]

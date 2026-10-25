@@ -71,7 +71,7 @@ struct Settings {
     EffectQuality ambientOcclusion = EffectQuality::Medium;
 
     // [post]
-    Tonemapper tonemapper = Tonemapper::AgX;
+    Tonemapper tonemapper = Tonemapper::AgXPunchy;
     float exposure = 0.0f;            // EV offset
     bool autoExposure = true;
     float bloomIntensity = 0.05f;
@@ -81,6 +81,7 @@ struct Settings {
     bool dither = true;
     float shutter = 0.5f;             // motion blur exposure, fraction of a frame (0.5 = 180 degrees)
     float focusDistance = 0.0f;       // depth of field focus in metres; 0 = autofocus on the centre
+    float aperture = 1.4f;            // depth of field f-number (lens focal length comes from the field of view)
 
     // [graphics]
     Preset preset = Preset::High;

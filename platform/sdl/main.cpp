@@ -172,7 +172,21 @@ struct Instance {
         info.pApplicationInfo = &app;
         info.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
         info.ppEnabledExtensionNames = extensions.data();
-        const VkResult result = vkCreateInstance(&info, nullptr, &instance);
+        uint32_t layerCount = 0;
+        vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
+        std::vector<VkLayerProperties> layers(layerCount);
+        vkEnumerateInstanceLayerProperties(&layerCount, layers.data());
+        std::string names;
+        for (const auto& layer : layers) names += std::string(names.empty() ? "" : ", ") + layer.layerName;
+        std::printf("Vulkan layers available: %s\n", names.empty() ? "none" : names.c_str());
+        VkResult result = vkCreateInstance(&info, nullptr, &instance);
+        if (result != VK_SUCCESS && result != VK_ERROR_EXTENSION_NOT_PRESENT && result != VK_ERROR_INCOMPATIBLE_DRIVER) {
+            // Implicit layers (overlays of launchers, recorders, remote-play tools) are loaded into every Vulkan
+            // application; a broken one makes instance creation fail. Retry without them (Vulkan loader 1.3.234+).
+            std::fprintf(stderr, "vkCreateInstance failed (%d); retrying with implicit layers disabled\n", static_cast<int>(result));
+            SDL_setenv_unsafe("VK_LOADER_LAYERS_DISABLE", "~implicit~", 1);
+            result = vkCreateInstance(&info, nullptr, &instance);
+        }
         if (result != VK_SUCCESS) throw std::runtime_error("vkCreateInstance: Vulkan result " + std::to_string(static_cast<int>(result)));
         volkLoadInstanceOnly(instance);
         if (debugUtils && vkCreateDebugUtilsMessengerEXT) {

@@ -1,14 +1,18 @@
 // Forced include for the vendored AMD FidelityFX FSR 2.2.1 sources (third_party/fidelityfx-fsr2), so they
 // build unmodified on every compiler of this project:
 //  - Vulkan entry points come from volk (VK_NO_PROTOTYPES), loaded by the host at start-up;
-//  - the few MSVC-only CRT helpers they use get portable definitions elsewhere.
+//  - the few MSVC-only CRT helpers they use get portable definitions below, and the standard headers that
+//    MSVC includes transitively are included here.
 #pragma once
 #include <volk.h>
 #ifdef __cplusplus
+#include <codecvt>   // std::wstring_convert (ffx_fsr2_vk.cpp; MSVC's headers include it transitively)
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cwchar>
+#include <locale>
+#include <string>
 #if !defined(_MSC_VER)
 #ifndef _countof
 #define _countof(array) (sizeof(array) / sizeof((array)[0]))

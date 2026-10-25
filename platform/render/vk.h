@@ -66,7 +66,8 @@ struct Buffer {
 
 Image createImage(const Device& device, const ImageDesc& desc);
 void destroy(const Device& device, Image& image);
-Buffer createBuffer(const Device& device, VkDeviceSize size, VkBufferUsageFlags usage, bool hostVisible);
+// hostVisible: mapped, coherent; hostCached: also CPU-cached (for buffers the CPU reads back).
+Buffer createBuffer(const Device& device, VkDeviceSize size, VkBufferUsageFlags usage, bool hostVisible, bool hostCached = false);
 void destroy(const Device& device, Buffer& buffer);
 bool hasStencil(VkFormat format);
 bool isDepth(VkFormat format);

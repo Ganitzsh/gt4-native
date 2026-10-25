@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <vector>
 
@@ -458,6 +459,7 @@ struct TestScene::Impl {
         desc.name = "shadow map";
         shadowMap = vk::createImage(device, desc);
         shadowSize = size;
+        std::printf("Test scene: shadow map %ux%u\n", size, size);
     }
 
     void ensureEnvironment() {
@@ -489,6 +491,7 @@ struct TestScene::Impl {
         environmentSize = size;
         builtReflections = reflections;
         environmentDirty = true;
+        std::printf("Test scene: environment cube map %ux%u\n", size, size);
     }
 
     Vec3 sunDirection() const { return normalize(Vec3{0.45f, 0.55f, -0.7f}); }

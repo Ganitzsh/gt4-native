@@ -263,6 +263,8 @@ struct FramePipeline::Impl {
         vkDeviceWaitIdle(device.device);
         releaseTargets();
         const auto& c = config;
+        std::printf("Pipeline: targets for render %ux%u, output %ux%u%s%s, MSAA %u\n", c.render.width, c.render.height,
+                    c.output.width, c.output.height, c.fsr2 ? ", FSR 2" : "", c.taa ? ", TAA" : "", c.msaa);
         const VkImageUsageFlags rw = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         const VkImageUsageFlags attachment = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         sceneColor = image(kHdr, c.render, attachment | VK_IMAGE_USAGE_STORAGE_BIT, "scene colour");
@@ -349,6 +351,8 @@ struct FramePipeline::Impl {
         const VkSamplerMipmapMode mip = settings.textureFilter == TextureFilter::Trilinear ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST;
         const float anisotropy = settings.textureFilter == TextureFilter::Point ? 1.0f : static_cast<float>(settings.anisotropy);
         material = vk::createSampler(device, filter, mip, VK_SAMPLER_ADDRESS_MODE_REPEAT, anisotropy, bias);
+        std::printf("Pipeline: material sampler %s, anisotropy %gx, LOD bias %+.2f\n", name(settings.textureFilter),
+                    static_cast<double>(anisotropy), static_cast<double>(bias));
         materialBias = bias;
         materialFilter = settings.textureFilter;
         materialAnisotropy = settings.anisotropy;
@@ -554,7 +558,7 @@ struct FramePipeline::Impl {
         const int q = level(settings.dof);
         const float maxCoc[4] = {8.0f, 12.0f, 16.0f, 24.0f};
         const float radiusScale[4] = {1.4f, 1.0f, 0.7f, 0.5f};
-        // Lens from the field of view: a 24 mm tall sensor, f/2.0.
+        // Lens from the field of view: a 24 mm tall sensor at the post.aperture f-number.
         const float sensor = 0.024f;
         const float focal = 0.5f * sensor / std::tan(0.5f * camera.verticalFov);
         struct { int32_t w, h; float near, focus, focal, aperture, sensor, maxCoc, autofocus; } push{};
@@ -564,7 +568,7 @@ struct FramePipeline::Impl {
         push.near = camera.near;
         push.focus = std::max(settings.focusDistance, 0.5f);
         push.focal = focal;
-        push.aperture = focal / 2.0f;
+        push.aperture = focal / std::max(settings.aperture, 0.5f);
         push.sensor = sensor;
         push.maxCoc = maxCoc[q] * static_cast<float>(half.height) / 540.0f;
         push.autofocus = settings.focusDistance <= 0.0f ? 1.0f : 0.0f;

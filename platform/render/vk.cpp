@@ -116,7 +116,7 @@ void destroy(const Device& device, Image& image) {
     image = Image{};
 }
 
-Buffer createBuffer(const Device& device, VkDeviceSize size, VkBufferUsageFlags usage, bool hostVisible) {
+Buffer createBuffer(const Device& device, VkDeviceSize size, VkBufferUsageFlags usage, bool hostVisible, bool hostCached) {
     Buffer buffer;
     buffer.size = size;
     VkBufferCreateInfo info{};
@@ -130,8 +130,19 @@ Buffer createBuffer(const Device& device, VkDeviceSize size, VkBufferUsageFlags 
     VkMemoryAllocateInfo allocation{};
     allocation.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     allocation.allocationSize = requirements.size;
-    allocation.memoryTypeIndex = device.memoryType(requirements.memoryTypeBits, hostVisible ?
-        (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) : VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    const VkMemoryPropertyFlags visible = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    if (!hostVisible) {
+        allocation.memoryTypeIndex = device.memoryType(requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    } else if (hostCached) {
+        // Read back by the CPU: cached memory (reading write-combined memory is two orders of magnitude slower).
+        try {
+            allocation.memoryTypeIndex = device.memoryType(requirements.memoryTypeBits, visible | VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
+        } catch (const std::runtime_error&) {
+            allocation.memoryTypeIndex = device.memoryType(requirements.memoryTypeBits, visible);
+        }
+    } else {
+        allocation.memoryTypeIndex = device.memoryType(requirements.memoryTypeBits, visible);
+    }
     check(vkAllocateMemory(device.device, &allocation, nullptr, &buffer.memory), "vkAllocateMemory(buffer)");
     check(vkBindBufferMemory(device.device, buffer.buffer, buffer.memory, 0), "vkBindBufferMemory");
     if (hostVisible) check(vkMapMemory(device.device, buffer.memory, 0, VK_WHOLE_SIZE, 0, &buffer.mapped), "vkMapMemory");
