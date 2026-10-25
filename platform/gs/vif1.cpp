@@ -81,7 +81,13 @@ bool Vif1::step() {
         case 0x03: base = imm & 0x3FF; break;                                // BASE
         case 0x04: itops = imm & 0x3FF; break;                               // ITOP
         case 0x05: mode = imm & 3; break;                                    // STMOD
-        case 0x06: path3Masked = (imm >> 15) & 1; break;                     // MSKPATH3
+        case 0x06: {                                                         // MSKPATH3
+            const bool masked = (imm >> 15) & 1;
+            const bool changed = masked != path3Masked;
+            path3Masked = masked;
+            if (changed && onPath3Mask) onPath3Mask(masked);
+            break;
+        }
         case 0x07: mark = imm; break;                                        // MARK
         case 0x10: case 0x11: case 0x13: break;                              // FLUSHE FLUSH FLUSHA
         case 0x14: case 0x15: execute(imm); break;                           // MSCAL MSCALF

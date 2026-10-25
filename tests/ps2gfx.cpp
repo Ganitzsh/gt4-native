@@ -296,6 +296,31 @@ void testDirectAndRecords() {
     }
 }
 
+// MSKPATH3: PATH3 data that arrives while VIF1 masks PATH3 waits for the unmask (or the VBlank).
+void testPath3Mask() {
+    Recorder gs;
+    gt4::ps2::GraphicsStream stream(gs);
+    auto vifRecord = [&](uint32_t code) {
+        const uint32_t words[4] = {0, 0, 0, code};
+        stream.record({GT4_REC_VIF1, 16, 1}, reinterpret_cast<const uint8_t*>(words));
+    };
+    std::vector<uint8_t> gif(4 + 16);
+    const uint32_t three = 3;
+    const uint64_t tag[2] = {1ull << 15, 0};
+    std::memcpy(gif.data(), &three, 4);
+    std::memcpy(gif.data() + 4, tag, 16);
+    vifRecord(vif::code(0x06, 0, 0x8000));   // mask
+    stream.record({GT4_REC_GIF, static_cast<uint32_t>(gif.size()), 2}, gif.data());
+    expect(gs.packets.empty(), "PATH3 held while MSKPATH3 masks it");
+    vifRecord(vif::code(0x06, 0, 0));        // unmask
+    expect(gs.packets.size() == 1 && gs.packets[0].path == 3, "PATH3 released at the unmask");
+    vifRecord(vif::code(0x06, 0, 0x8000));
+    stream.record({GT4_REC_GIF, static_cast<uint32_t>(gif.size()), 3}, gif.data());
+    const uint32_t vs[2] = {0, 1};
+    stream.record({GT4_REC_VSYNC, 8, 4}, reinterpret_cast<const uint8_t*>(vs));
+    expect(gs.packets.size() == 2 && stream.stats().path3ForcedAtVsync == 1, "PATH3 still masked is released at the VBlank");
+}
+
 void testReplay() {
     const std::string path = (std::filesystem::temp_directory_path() / "gt4_ps2gfx_test.cap").string();
     {
@@ -365,6 +390,7 @@ int main() {
     testVifUnpack();
     testTransformMicroprogram();
     testDirectAndRecords();
+    testPath3Mask();
     testReplay();
     testPad();
     if (failures) {

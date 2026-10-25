@@ -12,6 +12,7 @@
 #include "vu1.h"
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -21,6 +22,8 @@ class Vif1 {
 public:
     explicit Vif1(Vu1& vu);
     void setGifSink(GifSink* sink) { gifSink = sink; }
+    // Called when MSKPATH3 changes the PATH3 mask (the stream holds PATH3 packets while it is set).
+    std::function<void(bool masked)> onPath3Mask;
     // Feeds stream words (the byte count is rounded down to whole words).
     void feed(const uint8_t* bytes, size_t size);
     void reset();

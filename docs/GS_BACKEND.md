@@ -155,7 +155,8 @@ translated to native code, the host interprets them. With the option OFF the VIF
 DIRECT data, but `MSCAL`/`MSCNT` do not run anything (no 3D).
 
 - **VIF1** (`platform/gs/vif1.*`): NOP, STCYCL, OFFSET, BASE, ITOP, STMOD (offset, difference, mode 3),
-  MSKPATH3 (recorded; PATH3 is not held back: records are processed in stream order), MARK, FLUSHE/FLUSH/
+  MSKPATH3 (GT4 emits it, `004A1950`: PATH3 records that arrive while it is set are held and sent at the
+  unmask, or at the VBlank if it is never lifted), MARK, FLUSHE/FLUSH/
   FLUSHA (nothing to wait for: VU1 runs synchronously), MSCAL/MSCALF/MSCNT (with the TOPS/ITOPS double-buffer
   swap), STMASK, STROW, STCOL, MPG, DIRECT/DIRECTHL (-> PATH2), and UNPACK in every format (S/V2/V3/V4 x
   32/16/8, V4-5) with sign/zero extension, masking (data/row/column/protect), skipping and filling writes,
@@ -183,7 +184,7 @@ All in `ctest` (`tools\build_windows.cmd` runs them):
 
 | Test | What | GPU |
 |---|---|---|
-| `ps2gfx` | VU1 arithmetic (ADD, broadcast MUL, MULA+MADD, DIV+WAITQ+MULq, FTOI4), branch delay slot and the VI read quirk, clip-flag latency, overflow saturation and flags, XGKICK packet bytes; VIF1 UNPACK formats, row/column/protect masking, offset mode, skipping and filling writes, FLG/TOPS double buffering, a command split across records, DIRECT -> PATH2; the transform microprogram (MPG + UNPACK + MSCAL) kicking the expected PATH1 packet; record decoding (GIF, PRIV, VSYNC, GS_READ -> GS_IMAGE); capture write/replay; pad encoding. Prints the interpreter's speed. | no |
+| `ps2gfx` | VU1 arithmetic (ADD, broadcast MUL, MULA+MADD, DIV+WAITQ+MULq, FTOI4), branch delay slot and the VI read quirk, clip-flag latency, overflow saturation and flags, XGKICK packet bytes; VIF1 UNPACK formats, row/column/protect masking, offset mode, skipping and filling writes, FLG/TOPS double buffering, a command split across records, DIRECT -> PATH2; the transform microprogram (MPG + UNPACK + MSCAL) kicking the expected PATH1 packet; record decoding (GIF, PRIV, VSYNC, GS_READ -> GS_IMAGE); MSKPATH3 holding PATH3; capture write/replay; pad encoding. Prints the interpreter's speed. | no |
 | `gs_backend` | paraLLEl-GS by pixel: sprites and their exclusive edges, alpha blending, a textured triangle (PSMCT32, nearest), a CLUT texture (PSMT8 + PSMCT32 palette), a GS -> EE download, FINISH/SIGNAL events; a VU1 microprogram transforming a triangle and drawing it through XGKICK; a capture replayed through `GsHost` (the host's worker thread, lockstep). Writes the capture for the next test. | yes (77 = skipped) |
 | `host_replay` | `gt4_host --headless --replay ... --preset original --capture` at 640 x 448, then the PPM checked by pixel (`tests/host_replay.cmake`). | yes (skipped without the capture) |
 
@@ -199,9 +200,10 @@ a missing ELF the game's exit code 2 is logged and the host returns 3.
 
 RX 7900 XTX, Release, Windows:
 
-- **VU1 interpreter**: about 24 million instruction pairs per second (about 58 million VU cycles per second
-  counting stalls) on the transform loop. The real VU1 runs at about 300 MHz, so a frame that keeps VU1 busy
-  would take several times its real duration: acceptable for development, a reason for native translation.
+- **VU1 interpreter**: about 30 million instruction pairs per second (about 75 million VU cycles per second
+  counting stalls) on the transform loop (`ps2gfx` prints it). The real VU1 runs at about 300 MHz, so a
+  frame that keeps VU1 busy would take about four times its real duration: acceptable for development, a
+  reason for native translation.
 - **GS + scanout + CPU copy**: the replay test scene (two sprites, a VU1 triangle) runs at about 1.7 ms per
   VBlank including the fence wait and the 640 x 448 readback (1200 lockstep frames in 2.1 s); 3.2 ms with
   4x SSAA. The display pipeline adds 0.18 ms GPU per frame with the original preset at 1440 x 1080.
@@ -210,7 +212,10 @@ RX 7900 XTX, Release, Windows:
 ## Next steps
 
 1. Run real GT4 streams as soon as the game draws (captures under `build/`), and fix what they reveal in
-   VIF/VU timing (XGKICK concurrency, MSKPATH3 ordering) and the interlace mode (see request 5).
+   VIF/VU timing (XGKICK concurrency) and the interlace mode (see request 5). One ordering question needs
+   real data: records are processed whole and in arrival order, so a PATH3 transfer kicked after a VIF1
+   chain that unmasks PATH3 in its middle lands after the whole chain, not at the unmask point. If GT4's
+   frames show late textures, the VIF1 decoder can pause at an unmask until the next record is known.
 2. Share the scanout image with the renderer's device (Vulkan external memory, both devices are on the
    same GPU) instead of the CPU copy.
 3. Motion vectors and depth for the temporal upscalers: with super-sampling, scan out high-resolution; for

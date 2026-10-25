@@ -11,6 +11,14 @@ GraphicsStream::GraphicsStream(GsTarget& target) : gs(target), vif1(unit) {
     sink.owner = this;
     unit.setGifSink(&sink);
     vif1.setGifSink(&sink);
+    vif1.onPath3Mask = [this](bool masked) { if (!masked) releasePath3(); };
+}
+
+void GraphicsStream::releasePath3() {
+    if (heldPath3.empty()) return;
+    std::vector<uint8_t> data;
+    data.swap(heldPath3);
+    gs.gif(3, data.data(), data.size());
 }
 
 void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload) {
@@ -25,6 +33,11 @@ void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload)
         if (path < 1 || path > 3) path = 3;
         ++counters.gifPackets[path];
         counters.gifBytes += bytes;
+        if (path == 3 && vif1.path3Masked) {
+            heldPath3.insert(heldPath3.end(), payload + 4, payload + 4 + bytes);
+            ++counters.path3Held;
+            break;
+        }
         gs.gif(path, payload + 4, bytes);
         break;
     }
@@ -50,6 +63,10 @@ void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload)
         if (size >= 4) std::memcpy(&field, payload, 4);
         if (size >= 8) std::memcpy(&count, payload + 4, 4);
         ++counters.vsyncs;
+        if (!heldPath3.empty()) {   // still masked at the end of the frame: do not lose the data
+            ++counters.path3ForcedAtVsync;
+            releasePath3();
+        }
         gs.vsync(field, count);
         break;
     }
@@ -93,7 +110,8 @@ std::string GraphicsStream::describe() const {
         << " unpacks, " << v.microprograms << " VU1 programs (" << v.vuCycles << " cycles, " << v.runaways
         << " runaways), " << v.directQwords << " DIRECT qwords, " << v.mpgInstructions << " MPG instructions, "
         << v.unknownCodes << " unknown codes; " << counters.privWrites << " privileged writes, " << counters.reads
-        << " GS reads";
+        << " GS reads, " << counters.path3Held << " PATH3 records held by MSKPATH3 (" << counters.path3ForcedAtVsync
+        << " released at VSYNC)";
     if (!vif1.lastWarning.empty()) out << "; last VIF warning: " << vif1.lastWarning;
     return out.str();
 }

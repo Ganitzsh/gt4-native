@@ -40,6 +40,7 @@ public:
     struct Stats {
         uint64_t records = 0, gifPackets[4] = {}, gifBytes = 0, vif1Bytes = 0, vif0Records = 0, privWrites = 0;
         uint64_t vsyncs = 0, reads = 0, logs = 0, audio = 0, unknown = 0;
+        uint64_t path3Held = 0, path3ForcedAtVsync = 0;   // PATH3 records held by MSKPATH3
     };
     const Stats& stats() const { return counters; }
     const Vif1::Stats& vifStats() const { return vif1.stats; }
@@ -63,6 +64,10 @@ private:
     HostRecordWriter hostWriter;
     Stats counters;
     std::vector<uint8_t> scratch;
+    // PATH3 data that arrived while VIF1 had PATH3 masked (MSKPATH3): sent when it is unmasked, as the
+    // GIF arbiter would, or at the next VSYNC if the mask is never lifted.
+    std::vector<uint8_t> heldPath3;
+    void releasePath3();
 };
 
 // Splits a byte buffer of concatenated records (a capture file, or bytes copied out of the ring).
