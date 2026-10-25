@@ -1,0 +1,36 @@
+#version 460
+// Average luminance between the 50th and 95th percentile of the histogram (ignores the dark half and
+// the brightest highlights), then exponential eye adaptation in log space. Writes the exposure scale.
+layout(local_size_x = 1) in;
+layout(set = 0, binding = 0, std430) buffer Histogram { uint bins[256]; };
+layout(set = 0, binding = 1, std430) buffer State { float adaptedLog2; float initialised; };
+layout(set = 0, binding = 2, r32f) uniform writeonly image2D exposureImage;
+layout(push_constant) uniform Push { float minLog2; float rangeLog2; float deltaSeconds; float compensation;
+                                     float automatic; float reset; } push;
+
+void main() {
+    float total = 0.0;
+    for (int i = 0; i < 256; ++i) total += float(bins[i]);
+    float low = total * 0.5, high = total * 0.95;
+    float accumulated = 0.0, sum = 0.0, count = 0.0;
+    for (int i = 0; i < 256; ++i) {
+        float n = float(bins[i]);
+        float lo = max(accumulated, low), hi = min(accumulated + n, high);
+        accumulated += n;
+        if (hi <= lo) continue;
+        float log2Lum = push.minLog2 + (float(max(i, 1)) - 0.5) / 254.0 * push.rangeLog2;
+        sum += log2Lum * (hi - lo);
+        count += hi - lo;
+    }
+    float target = count > 0.0 ? sum / count : -2.0;
+    float state = (push.reset > 0.5 || initialised < 0.5) ? target : adaptedLog2;
+    // Faster towards bright (pupil closing) than towards dark.
+    float speed = target > state ? 3.0 : 1.2;
+    state += (target - state) * (1.0 - exp(-push.deltaSeconds * speed));
+    adaptedLog2 = state;
+    initialised = 1.0;
+    // Key value 0.18 (middle grey) for the average scene luminance.
+    float exposure = push.automatic > 0.5 ? 0.18 / exp2(state) : 1.0;
+    exposure *= exp2(push.compensation);
+    imageStore(exposureImage, ivec2(0), vec4(exposure));
+}

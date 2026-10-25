@@ -1,26 +1,66 @@
 #pragma once
-#include <vulkan/vulkan.h>
+// The host renderer: Vulkan device, presentation (a swapchain, or an offscreen image in headless mode),
+// frames in flight, captures, and the display pipeline (platform/render/pipeline.h) fed by the test scene.
+// The PS2 graphics translation (R1) will replace the test scene behind the same SceneSource interface.
+#include "settings.h"
+
+#include <volk.h>
+
 #include <memory>
+#include <stdexcept>
 #include <string>
+#include <vector>
 
 struct SDL_Window;
 
-// Owns only host rendering resources. The PS2 graphics translation belongs above this layer.
+namespace gt4 { class TestScene; }
+
+struct GpuInfo {
+    uint32_t index = 0;
+    std::string name, type, driver, api;
+};
+
 class Renderer {
 public:
-    Renderer(SDL_Window* window, VkInstance instance, VkSurfaceKHR surface,
-             VkPhysicalDevice physical, uint32_t family, PFN_vkGetInstanceProcAddr get);
+    // Windowed: presents to the window. The GPU must be able to present to the window's display.
+    Renderer(SDL_Window* window, VkInstance instance, const std::string& gpuRequest, const gt4::Settings& settings);
+    // Headless: renders into an offscreen image of the given size (no window, surface or swapchain).
+    Renderer(VkInstance instance, VkExtent2D size, const std::string& gpuRequest, const gt4::Settings& settings);
     ~Renderer();
     Renderer(const Renderer&) = delete;
     Renderer& operator=(const Renderer&) = delete;
-    void resize();
+
+    void resize();                           // window size changed
+    void displayChanged();                   // the window moved to another display: re-check presentation
+    void resizeHeadless(VkExtent2D size);    // headless output size
+    bool headless() const;
     void suspend(bool paused);
-    // Returns false when minimized, out of date, or waiting for a drawable window.
-    bool draw();
+    void apply(const gt4::Settings& settings);
+    // Renders and presents one frame. Returns false when nothing was presented (minimized, out of date).
+    // Throws PresentationLost when the window's display cannot be presented to by this GPU any more.
+    bool draw(float deltaSeconds);
     VkExtent2D drawableExtent() const;
     void setControls(float horizontal, bool action);
     void capture(const std::string& path);
+    void setStatus(const std::string& text);  // extra lines for the on-screen readout
+    gt4::TestScene& scene();
+    const GpuInfo& gpu() const;
+    double gpuMilliseconds() const;          // GPU time of the last finished frame (0 if unknown)
+    double averageGpuMilliseconds() const;   // mean GPU time over every timed frame so far
+    std::string pipelineDescription() const;
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl;
+};
+
+// Every Vulkan device, whether it can run the host, and why not (gt4_host --list-gpus). With a window, also
+// whether each device can present to the display the window is on.
+std::vector<std::string> describeGpus(VkInstance instance, SDL_Window* window);
+
+// The window moved to a display that the current GPU cannot present to. The caller may create a new
+// Renderer, which chooses a device again.
+class PresentationLost : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
 };

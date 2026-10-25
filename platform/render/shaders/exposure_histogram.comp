@@ -1,0 +1,32 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+// Luminance histogram for automatic exposure (256 log2 bins), built in shared memory per group.
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0) uniform sampler2D source;
+layout(set = 0, binding = 1, std430) buffer Histogram { uint bins[256]; };
+layout(push_constant) uniform Push { ivec2 size; float minLog2; float rangeLog2; } push;
+shared uint local[256];
+
+void main() {
+    local[gl_LocalInvocationIndex] = 0u;
+    barrier();
+    // Every other pixel in each direction is plenty for a histogram.
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy) * 2;
+    if (all(lessThan(p, push.size))) {
+        float lum = luminance(texelFetch(source, p, 0).rgb);
+        // Centre-weighted metering, biased below the horizon line: in a driving view the road and the cars
+        // matter, the sky above them should not darken the picture.
+        vec2 uv = (vec2(p) + 0.5) / vec2(push.size) - 0.5;
+        float centre = mix(4.0, 1.0, clamp(length(uv * vec2(1.0, 1.4) - vec2(0.0, 0.1)) * 2.0, 0.0, 1.0));
+        uint weight = uint(centre * (uv.y > -0.15 ? 2.0 : 1.0) + 0.5);
+        if (lum > 1e-5) {
+            float t = clamp((log2(lum) - push.minLog2) / push.rangeLog2, 0.0, 1.0);
+            atomicAdd(local[uint(t * 254.0) + 1u], weight);
+        } else {
+            atomicAdd(local[0], weight);
+        }
+    }
+    barrier();
+    atomicAdd(bins[gl_LocalInvocationIndex], local[gl_LocalInvocationIndex]);
+}

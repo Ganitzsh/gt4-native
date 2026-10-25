@@ -1,0 +1,22 @@
+#version 460
+// Bloom upsample: 3x3 tent filter of the smaller level added to the current downsampled level
+// (Jimenez 2014). The chain accumulates a wide, energy-conserving glow without a threshold.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D smaller;      // upsampled chain, level i + 1
+layout(set = 0, binding = 1) uniform sampler2D current;      // downsampled chain, level i
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D target;
+layout(push_constant) uniform Push { vec2 smallerTexel; ivec2 targetSize; float radius; } push;
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, push.targetSize))) return;
+    vec2 uv = (vec2(p) + 0.5) / vec2(push.targetSize);
+    vec2 t = push.smallerTexel * push.radius;
+    vec3 sum = textureLod(smaller, uv + t * vec2(-1, -1), 0.0).rgb + textureLod(smaller, uv + t * vec2(1, -1), 0.0).rgb
+             + textureLod(smaller, uv + t * vec2(-1, 1), 0.0).rgb + textureLod(smaller, uv + t * vec2(1, 1), 0.0).rgb;
+    sum += 2.0 * (textureLod(smaller, uv + t * vec2(0, -1), 0.0).rgb + textureLod(smaller, uv + t * vec2(-1, 0), 0.0).rgb
+                + textureLod(smaller, uv + t * vec2(1, 0), 0.0).rgb + textureLod(smaller, uv + t * vec2(0, 1), 0.0).rgb);
+    sum += 4.0 * textureLod(smaller, uv, 0.0).rgb;
+    vec3 result = textureLod(current, uv, 0.0).rgb + sum / 16.0;
+    imageStore(target, p, vec4(result, 1.0));
+}

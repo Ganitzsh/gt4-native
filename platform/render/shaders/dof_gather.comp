@@ -1,0 +1,41 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+// Scatter-as-gather bokeh (Gustafsson 2018, "Bokeh depth of field in a single pass") on a Vogel disc:
+// a fixed number of golden-angle samples spread over the maximum circle of confusion, so the cost does not
+// grow with the output resolution. Every sample whose own CoC reaches this pixel contributes; samples
+// behind the centre are limited to twice the centre CoC so a sharp foreground does not bleed into a
+// blurred background. A per-pixel rotation of the disc (interleaved gradient noise) turns the remaining
+// undersampling into fine noise that the half-resolution upsample and TAA smooth out.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D source;   // half resolution, rgb + signed CoC (pixels)
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D target;
+layout(push_constant) uniform Push { ivec2 size; float samples; float maxCoc; } push;
+const float GOLDEN_ANGLE = 2.39996323;
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, push.size))) return;
+    vec2 texel = 1.0 / vec2(push.size);
+    vec2 uv = (vec2(p) + 0.5) * texel;
+    vec4 center = textureLod(source, uv, 0.0);
+    float centerSize = abs(center.a);
+    vec3 color = center.rgb;
+    float total = 1.0;
+    int count = int(push.samples);
+    // Sample spacing: the band over which a sample fades in, so neighbouring rings blend smoothly.
+    float spacing = push.maxCoc / sqrt(float(count));
+    float rotation = interleavedGradientNoise(vec2(p)) * 2.0 * PI;
+    for (int i = 0; i < count; ++i) {
+        float radius = push.maxCoc * sqrt((float(i) + 0.5) / float(count));
+        float angle = float(i) * GOLDEN_ANGLE + rotation;
+        vec4 s = textureLod(source, uv + vec2(cos(angle), sin(angle)) * texel * radius, 0.0);
+        float sampleSize = abs(s.a);
+        // A sample behind the centre (larger depth, positive CoC beyond it) cannot cover a sharper foreground.
+        if (s.a > center.a) sampleSize = clamp(sampleSize, 0.0, centerSize * 2.0);
+        float m = smoothstep(radius - spacing * 0.5, radius + spacing * 0.5, sampleSize);
+        color += mix(color / total, s.rgb, m);
+        total += 1.0;
+    }
+    imageStore(target, p, vec4(color / total, centerSize));
+}

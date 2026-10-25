@@ -1,0 +1,59 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+// Motion blur, pass 3: the reconstruction filter (McGuire et al. 2012) with the jittered sample
+// positions and soft depth comparison of Jimenez 2014. Samples along the neighbourhood velocity are
+// weighted by whether they are in front (their blur covers us), behind (our blur covers them) or both.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D color;          // post resolution
+layout(set = 0, binding = 1) uniform sampler2D motionVectors;  // render resolution
+layout(set = 0, binding = 2) uniform sampler2D depth;          // render resolution
+layout(set = 0, binding = 3) uniform sampler2D neighbourMax;   // tiles
+layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D target;
+layout(push_constant) uniform Push {
+    ivec2 postSize; int tileSize; int samples; float shutter; float near; float frame;
+} push;
+
+float cone(float distance, float velocity) { return clamp(1.0 - distance / max(velocity, 1e-4), 0.0, 1.0); }
+float cylinder(float distance, float velocity) { return 1.0 - smoothstep(0.95 * velocity, 1.05 * velocity, distance); }
+float softDepthCompare(float a, float b) { return clamp(1.0 - (a - b) / max(min(a, b) * 0.05, 1e-3), 0.0, 1.0); }
+
+vec2 velocityAt(vec2 uv) {
+    vec2 v = -textureLod(motionVectors, uv, 0.0).rg * vec2(push.postSize) * push.shutter;
+    float len = length(v);
+    return len > float(push.tileSize) ? v * float(push.tileSize) / len : v;
+}
+float depthAt(vec2 uv) { return push.near / max(textureLod(depth, uv, 0.0).r, 1e-7); }
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, push.postSize))) return;
+    vec2 size = vec2(push.postSize);
+    vec2 uv = (vec2(p) + 0.5) / size;
+    vec3 center = texelFetch(color, p, 0).rgb;
+    vec2 vn = texelFetch(neighbourMax, p / push.tileSize, 0).rg;
+    float vnLength = length(vn);
+    if (vnLength < 0.5) { imageStore(target, p, vec4(center, 1.0)); return; }
+    vec2 vc = velocityAt(uv);
+    float vcLength = max(length(vc), 0.5);
+    float zc = depthAt(uv);
+    float weight = 1.0 / vcLength;
+    vec3 sum = center * weight;
+    float jitter = interleavedGradientNoise(vec2(p) + push.frame * 5.588238) - 0.5;
+    for (int i = 0; i < push.samples; ++i) {
+        float t = mix(-1.0, 1.0, (float(i) + jitter + 1.0) / float(push.samples + 1));
+        vec2 offset = vn * t * 0.5;
+        vec2 suv = uv + offset / size;
+        if (any(lessThan(suv, vec2(0.0))) || any(greaterThan(suv, vec2(1.0)))) continue;
+        float distance = length(offset);
+        float zs = depthAt(suv);
+        float vsLength = max(length(velocityAt(suv)), 0.5);
+        float front = softDepthCompare(zc, zs);   // sample in front of the centre
+        float back = softDepthCompare(zs, zc);    // sample behind the centre
+        float a = front * cone(distance, vsLength) + back * cone(distance, vcLength) +
+                  cylinder(distance, vsLength) * cylinder(distance, vcLength) * 2.0;
+        sum += textureLod(color, suv, 0.0).rgb * a;
+        weight += a;
+    }
+    imageStore(target, p, vec4(sum / weight, 1.0));
+}
