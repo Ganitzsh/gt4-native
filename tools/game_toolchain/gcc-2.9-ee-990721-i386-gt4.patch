@@ -1,0 +1,475 @@
+--- a/include/obstack.h
++++ b/include/obstack.h
+@@ -417,7 +417,7 @@
+ ({ struct obstack *__o = (OBSTACK);					\
+    if (__o->next_free + sizeof (void *) > __o->chunk_limit)		\
+      _obstack_newchunk (__o, sizeof (void *));				\
+-   *((void **)__o->next_free)++ = ((void *)datum);			\
++   *((void **)__o->next_free) = ((void *)datum); __o->next_free += sizeof (void *);			\
+    (void) 0; })
+ 
+ # define obstack_int_grow(OBSTACK,datum)				\
+@@ -425,11 +425,11 @@
+ ({ struct obstack *__o = (OBSTACK);					\
+    if (__o->next_free + sizeof (int) > __o->chunk_limit)		\
+      _obstack_newchunk (__o, sizeof (int));				\
+-   *((int *)__o->next_free)++ = ((int)datum);				\
++   *((int *)__o->next_free) = ((int)datum); __o->next_free += sizeof (int);				\
+    (void) 0; })
+ 
+-# define obstack_ptr_grow_fast(h,aptr) (*((void **) (h)->next_free)++ = (void *)aptr)
+-# define obstack_int_grow_fast(h,aint) (*((int *) (h)->next_free)++ = (int) aint)
++# define obstack_ptr_grow_fast(h,aptr) (*((void **) (h)->next_free) = (void *)aptr, (h)->next_free += sizeof (void *))
++# define obstack_int_grow_fast(h,aint) (*((int *) (h)->next_free) = (int) aint, (h)->next_free += sizeof (int))
+ 
+ # define obstack_blank(OBSTACK,length)					\
+ __extension__								\
+@@ -536,8 +536,8 @@
+    ? (_obstack_newchunk ((h), sizeof (int)), 0) : 0),			\
+   (*((int *) (((h)->next_free+=sizeof(int))-sizeof(int))) = ((int) datum)))
+ 
+-# define obstack_ptr_grow_fast(h,aptr) (*((char **) (h)->next_free)++ = (char *) aptr)
+-# define obstack_int_grow_fast(h,aint) (*((int *) (h)->next_free)++ = (int) aint)
++# define obstack_ptr_grow_fast(h,aptr) (*((char **) (h)->next_free) = (char *) aptr, (h)->next_free += sizeof (char *))
++# define obstack_int_grow_fast(h,aint) (*((int *) (h)->next_free) = (int) aint, (h)->next_free += sizeof (int))
+ 
+ # define obstack_blank(h,length)					\
+ ( (h)->temp = (length),							\
+diff --git a/gcc/c-decl.c b/gcc/c-decl.c
+index 2a352dc..7ae29a2 100644
+--- a/gcc/c-decl.c
++++ b/gcc/c-decl.c
+@@ -2670,7 +2670,9 @@ redeclaration_error_message (newdecl, olddecl)
+ {
+   if (TREE_CODE (newdecl) == TYPE_DECL)
+     {
+-      if (flag_traditional && TREE_TYPE (newdecl) == TREE_TYPE (olddecl))
++      /* GT4: ee-gcc 2.96 accepts a typedef repeated with the same type (C11 does too); the
++	 decomp's sources repeat types.h's typedefs.  */
++      if (TREE_TYPE (newdecl) == TREE_TYPE (olddecl))
+ 	return 0;
+       /* pushdecl creates distinct types for TYPE_DECLs by calling
+ 	 build_type_copy, so the above comparison generally fails.  We do
+@@ -2678,8 +2680,8 @@ redeclaration_error_message (newdecl, olddecl)
+ 	 is equivalent to what this code used to do before the build_type_copy
+ 	 call.  The variant type distinction should not matter for traditional
+ 	 code, because it doesn't have type qualifiers.  */
+-      if (flag_traditional 
+-	  && TYPE_MAIN_VARIANT (TREE_TYPE (olddecl)) == TREE_TYPE (newdecl))
++      if (TYPE_MAIN_VARIANT (TREE_TYPE (olddecl)) == TYPE_MAIN_VARIANT (TREE_TYPE (newdecl))
++	  && TYPE_QUALS (TREE_TYPE (olddecl)) == TYPE_QUALS (TREE_TYPE (newdecl)))
+ 	return 0;
+       if (DECL_IN_SYSTEM_HEADER (olddecl) || DECL_IN_SYSTEM_HEADER (newdecl))
+ 	return 0;
+diff --git a/gcc/c-parse.in b/gcc/c-parse.in
+index 9aac256..c4f3367 100644
+--- a/gcc/c-parse.in
++++ b/gcc/c-parse.in
+@@ -1585,10 +1585,24 @@ component_decl:
+ 		  declspec_stack = TREE_CHAIN (declspec_stack);
+ 		  resume_momentary ($2); }
+ 	| typed_typespecs
+-		{ if (pedantic)
+-		    pedwarn ("ANSI C forbids member declarations with no members");
+-		  shadow_tag($1);
+-		  $$ = NULL_TREE; }
++		{ /* GT4: a struct or union specifier with no declarator is an
++		     unnamed member whose fields are reached directly, as in
++		     gcc 2.96 (lookup_field already searches unnamed members).  */
++		  tree t = NULL_TREE, s;
++		  for (s = $1; s; s = TREE_CHAIN (s))
++		    if (TREE_VALUE (s)
++		        && (TREE_CODE (TREE_VALUE (s)) == RECORD_TYPE
++			    || TREE_CODE (TREE_VALUE (s)) == UNION_TYPE))
++		      t = TREE_VALUE (s);
++		  if (t)
++		    $$ = grokfield (input_filename, lineno, NULL_TREE, $1, NULL_TREE);
++		  else
++		    {
++		      if (pedantic)
++			pedwarn ("ANSI C forbids member declarations with no members");
++		      shadow_tag($1);
++		      $$ = NULL_TREE;
++		    } }
+ 	| nonempty_type_quals setspecs components
+ 		{ $$ = $3;
+ 		  current_declspecs = TREE_VALUE (declspec_stack);
+diff --git a/gcc/c-typeck.c b/gcc/c-typeck.c
+index 2d0783d..df81442 100644
+--- a/gcc/c-typeck.c
++++ b/gcc/c-typeck.c
+@@ -1161,6 +1161,26 @@ lookup_field (type, component, indirect)
+       field = TYPE_FIELDS (type);
+       bot = 0;
+       top = TYPE_LANG_SPECIFIC (type)->len;
++
++      /* GT4: the unnamed members sort first (field_decl_cmp); search them
++	 before the binary search, which would only meet them by chance.  */
++      while (bot < top && DECL_NAME (field_array[bot]) == NULL_TREE)
++	{
++	  tree anon = 0, junk;
++
++	  field = field_array[bot++];
++	  if (TREE_CODE (TREE_TYPE (field)) == RECORD_TYPE
++	      || TREE_CODE (TREE_TYPE (field)) == UNION_TYPE)
++	    anon = lookup_field (TREE_TYPE (field), component, &junk);
++	  if (anon != NULL_TREE)
++	    {
++	      *indirect = field;
++	      return anon;
++	    }
++	}
++      if (bot >= top)
++	return NULL_TREE;
++
+       while (top - bot > 1)
+ 	{
+ 	  half = (top - bot + 1) >> 1;
+diff --git a/gcc/config/i386/gt4-native.h b/gcc/config/i386/gt4-native.h
+new file mode 100755
+index 0000000..7f1983c
+--- /dev/null
++++ b/gcc/config/i386/gt4-native.h
+@@ -0,0 +1,69 @@
++/* GT4 native port: the i386 PE-COFF (mingw32) target with the PS2 Emotion Engine's data model.
++
++   The game's decompiled sources were written for Sony's ee-gcc 2.96 (MIPS R5900, EABI, 32-bit
++   pointers, 64-bit long).  The native program maps the original game image at its original
++   addresses, so code compiled here must see every object with the EE's sizes, offsets and
++   alignments.  This header is included last (after mingw32.h and crtdll.h) and changes only the
++   data model and the predefined macros; code generation stays the stock i386 back end (x87
++   floating point, cdecl, 32-bit pointers).  */
++
++/* long is 64-bit on the EE (ee-gcc: sizeof (long) == 8, __alignof__ (long) == 8).  It is a
++   DImode integer here, handled like long long.  int, size_t, ptrdiff_t and pointers stay 32-bit.  */
++#undef LONG_TYPE_SIZE
++#define LONG_TYPE_SIZE 64
++#undef MAX_LONG_TYPE_SIZE
++#define MAX_LONG_TYPE_SIZE 64
++
++/* long double is the EE's 64-bit double, not the x87 96-bit extended type.  */
++#undef LONG_DOUBLE_TYPE_SIZE
++#define LONG_DOUBLE_TYPE_SIZE 64
++
++/* i386.h ties the x87 registers' XFmode to LONG_DOUBLE_TYPE_SIZE == 96; the back end still uses
++   XFmode internally, so keep the registers able to hold it.  */
++#undef HARD_REGNO_MODE_OK
++#define HARD_REGNO_MODE_OK(REGNO, MODE) \
++  ((REGNO) < 4 ? 1						\
++   : FP_REGNO_P (REGNO)						\
++   ? (((int) GET_MODE_CLASS (MODE) == (int) MODE_FLOAT		\
++       || (int) GET_MODE_CLASS (MODE) == (int) MODE_COMPLEX_FLOAT)	\
++      && GET_MODE_UNIT_SIZE (MODE) <= 12)			\
++   : (int) (MODE) != (int) QImode ? 1				\
++   : (reload_in_progress | reload_completed) == 1)
++
++/* bool is a 32-bit int as on the EE (cp/decl.c sizes it by SLOW_BYTE_ACCESS, which MIPS sets and
++   i386 does not): sizeof (bool) == 4, and so are the classes that hold one.  */
++#undef BOOL_TYPE_SIZE
++#define BOOL_TYPE_SIZE 32
++
++/* wchar_t is the EE's: a signed 32-bit int (mingw: unsigned short).  */
++#undef WCHAR_TYPE
++#define WCHAR_TYPE "int"
++#undef WCHAR_TYPE_SIZE
++#define WCHAR_TYPE_SIZE 32
++#undef WCHAR_UNSIGNED
++#define WCHAR_UNSIGNED 0
++
++/* 64-bit types (long, long long, double) are 8-aligned in structures as on the EE: cygwin.h's
++   BIGGEST_ALIGNMENT of 128 already gives DImode and DFmode their natural 64-bit alignment (the
++   stock i386 targets cap it at 32).  Stated here so the dependency is explicit.  */
++#undef BIGGEST_ALIGNMENT
++#define BIGGEST_ALIGNMENT 128
++
++/* No Windows macros: the game's sources (expat, newlib, libio) would take their Win32 paths.
++   __GT4_NATIVE__ marks this compiler; __LONG_MAX__ is what ee-gcc's driver defines.  */
++#undef CPP_PREDEFINES
++#define CPP_PREDEFINES "-Di386 -D__GT4_NATIVE__ -D__LONG_MAX__=9223372036854775807L \
++  -D__stdcall=__attribute__((__stdcall__)) \
++  -D__cdecl=__attribute__((__cdecl__)) \
++  -Asystem(gt4) -Acpu(i386) -Amachine(i386)"
++
++/* No cygwin/mingw include remapping: the game code is freestanding.  */
++#undef CPP_SPEC
++/* __GNUC_MINOR__ is ee-gcc 2.96's (the sources and the SGI STL test it), not this 2.9 snapshot's
++   9: the driver's -D__GNUC_MINOR__=9 comes first and cpp applies -U/-D in order.  */
++#define CPP_SPEC "%(cpp_cpu) -U__GNUC_MINOR__ -D__GNUC_MINOR__=96"
++
++/* Asm labels (`int f () __asm__ ("func_00330900");`) get the `_' user label prefix like any C
++   name (varasm.c make_decl_rtl, patched): the decomp names one game function by asm label in one
++   source and by its C name in another, which on the EE (no prefix) is one symbol.  */
++#define ASMSPEC_USER_LABEL_PREFIX 1
+diff --git a/gcc/configure b/gcc/configure
+index 1da1509..00e0da1 100755
+--- a/gcc/configure
++++ b/gcc/configure
+@@ -3837,6 +3837,7 @@ for machine in $build $host $target; do
+ 				tm_file="${tm_file} i386/crtdll.h"
+ 				;;
+ 		esac
++		tm_file="${tm_file} i386/gt4-native.h"
+ 		;;
+ 	i[34567]86-*-winnt3*)
+ 		tm_file=i386/win-nt.h
+diff --git a/gcc/configure.in b/gcc/configure.in
+index 2adfe13..0042533 100644
+--- a/gcc/configure.in
++++ b/gcc/configure.in
+@@ -1590,6 +1590,7 @@ changequote([,])dnl
+ 				tm_file="${tm_file} i386/crtdll.h"
+ 				;;
+ 		esac
++		tm_file="${tm_file} i386/gt4-native.h"
+ 		;;
+ changequote(,)dnl
+ 	i[34567]86-*-winnt3*)
+diff --git a/gcc/cp/class.c b/gcc/cp/class.c
+index 6d8a4d6..cee8b00 100644
+--- a/gcc/cp/class.c
++++ b/gcc/cp/class.c
+@@ -1331,7 +1331,7 @@ delete_duplicate_fields_1 (field, fields)
+   tree prev = 0;
+   if (DECL_NAME (field) == 0)
+     {
+-      if (TREE_CODE (TREE_TYPE (field)) != UNION_TYPE)
++      if (! ANON_AGGR_TYPE_P (TREE_TYPE (field)))
+ 	return fields;
+ 
+       for (x = TYPE_FIELDS (TREE_TYPE (field)); x; x = TREE_CHAIN (x))
+@@ -1344,7 +1344,7 @@ delete_duplicate_fields_1 (field, fields)
+ 	{
+ 	  if (DECL_NAME (x) == 0)
+ 	    {
+-	      if (TREE_CODE (TREE_TYPE (x)) != UNION_TYPE)
++	      if (! ANON_AGGR_TYPE_P (TREE_TYPE (x)))
+ 		continue;
+ 	      TYPE_FIELDS (TREE_TYPE (x))
+ 		= delete_duplicate_fields_1 (field, TYPE_FIELDS (TREE_TYPE (x)));
+@@ -3131,7 +3131,7 @@ finish_struct_anon (t)
+ 	continue;
+ 
+       if (DECL_NAME (field) == NULL_TREE
+-	  && TREE_CODE (TREE_TYPE (field)) == UNION_TYPE)
++	  && ANON_AGGR_TYPE_P (TREE_TYPE (field)))
+ 	{
+ 	  tree* uelt = &TYPE_FIELDS (TREE_TYPE (field));
+ 	  for (; *uelt; uelt = &TREE_CHAIN (*uelt))
+@@ -3313,7 +3313,8 @@ finish_struct_1 (t, warn_anon)
+   int has_pointers = 0;
+ 
+   if (warn_anon && code != UNION_TYPE && ANON_AGGRNAME_P (TYPE_IDENTIFIER (t)))
+-    pedwarn ("anonymous class type not used to declare any objects");
++    /* GT4: a warning, as anonymous structs are accepted (cp/decl.c).  */
++    warning ("anonymous class type not used to declare any objects");
+ 
+   if (TYPE_SIZE (t))
+     {
+diff --git a/gcc/cp/cp-tree.h b/gcc/cp/cp-tree.h
+index cde1aff..4691fd1 100644
+--- a/gcc/cp/cp-tree.h
++++ b/gcc/cp/cp-tree.h
+@@ -1740,6 +1740,12 @@ extern int flag_new_for_scope;
+ #define SET_ANON_UNION_TYPE_P(NODE)				\
+   (TYPE_LANG_SPECIFIC (NODE)->type_flags.anon_union = 1)
+ 
++/* GT4: the type of an unnamed member whose fields belong to the enclosing class: any union
++   (as before) or an anonymous struct (accepted as in gcc 2.96).  */
++#define ANON_AGGR_TYPE_P(NODE)					\
++  (TREE_CODE (NODE) == UNION_TYPE					\
++   || (TREE_CODE (NODE) == RECORD_TYPE && ANON_UNION_TYPE_P (NODE)))
++
+ #define UNKNOWN_TYPE LANG_TYPE
+ 
+ /* Define fields and accessors for nodes representing declared names.  */
+diff --git a/gcc/cp/decl.c b/gcc/cp/decl.c
+index 2be8e86..39ba5c5 100644
+--- a/gcc/cp/decl.c
++++ b/gcc/cp/decl.c
+@@ -6771,7 +6771,10 @@ check_tag_decl (declspecs)
+   /* Check for an anonymous union.  We're careful
+      accessing TYPE_IDENTIFIER because some built-in types, like
+      pointer-to-member types, do not have TYPE_NAME.  */
+-  else if (t && TREE_CODE (t) == UNION_TYPE
++  else if (t && (TREE_CODE (t) == UNION_TYPE
++		 /* GT4: anonymous structs too, as gcc 2.96 accepts them.  */
++		 || (TREE_CODE (t) == RECORD_TYPE && TYPE_LANG_SPECIFIC (t)
++		     && ! TYPE_VIRTUAL_P (t)))
+ 	   && TYPE_NAME (t)
+ 	   && ANON_AGGRNAME_P (TYPE_IDENTIFIER (t)))
+     {
+diff --git a/gcc/cp/decl2.c b/gcc/cp/decl2.c
+index 7e551e4..1f39b01 100644
+--- a/gcc/cp/decl2.c
++++ b/gcc/cp/decl2.c
+@@ -446,6 +446,12 @@ int flag_vtable_gc;
+ 
+ int flag_permissive;
+ 
++/* GT4: never define a class's vtable, type-info function or type-info object here: refer to
++   them as external symbols, which the native link resolves to the game image's own (whose
++   entries point at the original code).  -fno-gt4-extern-class-data emits them as usual.  */
++
++int flag_gt4_extern_class_data = 1;
++
+ /* Table of language-dependent -f options.
+    STRING is the option name.  VARIABLE is the address of the variable.
+    ON_VALUE is the value to store in VARIABLE
+@@ -493,6 +499,7 @@ static struct { char *string; int *variable; int on_value;} lang_f_options[] =
+   {"operator-names", &flag_operator_names, 1},
+   {"optional-diags", &flag_optional_diags, 1},
+   {"permissive", &flag_permissive, 1},
++  {"gt4-extern-class-data", &flag_gt4_extern_class_data, 1},
+   {"repo", &flag_use_repository, 1},
+   {"rtti", &flag_rtti, 1},
+   {"squangle", &flag_do_squangling, 1},
+@@ -1721,7 +1728,11 @@ grokfield (declarator, declspecs, init, asmspec_tree, attrlist)
+ 	  /* This must override the asm specifier which was placed
+ 	     by grokclassfn.  Lay this out fresh.  */
+ 	  DECL_RTL (value) = NULL_RTX;
+-	  DECL_ASSEMBLER_NAME (value) = get_identifier (asmspec);
++	  /* GT4: a destructor keeps its mangled name, by which the frontend
++	     knows it (DESTRUCTOR_NAME_P); make_decl_rtl names its symbol
++	     after the label.  */
++	  if (! DESTRUCTOR_NAME_P (DECL_ASSEMBLER_NAME (value)))
++	    DECL_ASSEMBLER_NAME (value) = get_identifier (asmspec);
+ 	}
+       cp_finish_decl (value, init, asmspec_tree, 1, flags);
+ 
+@@ -2467,6 +2478,14 @@ import_export_vtable (decl, type, final)
+   if (DECL_INTERFACE_KNOWN (decl))
+     return;
+ 
++  if (flag_gt4_extern_class_data)
++    {
++      TREE_PUBLIC (decl) = 1;
++      DECL_EXTERNAL (decl) = 1;
++      DECL_INTERFACE_KNOWN (decl) = 1;
++      return;
++    }
++
+   if (TYPE_FOR_JAVA (type))
+     {
+       TREE_PUBLIC (decl) = 1;
+@@ -2818,7 +2837,15 @@ import_export_decl (decl)
+       if (IS_AGGR_TYPE (ctype))
+ 	import_export_class (ctype);
+ 
+-      if (IS_AGGR_TYPE (ctype) && CLASSTYPE_INTERFACE_KNOWN (ctype)
++      if (flag_gt4_extern_class_data)
++	{
++	  /* GT4: an external reference (the type-info object it would
++	     define comes with it).  */
++	  TREE_PUBLIC (decl) = 1;
++	  DECL_EXTERNAL (decl) = 1;
++	  DECL_NOT_REALLY_EXTERN (decl) = 0;
++	}
++      else if (IS_AGGR_TYPE (ctype) && CLASSTYPE_INTERFACE_KNOWN (ctype)
+ 	  && TYPE_VIRTUAL_P (ctype)
+ 	  /* If the type is a cv-qualified variant of a type, then we
+ 	     must emit the tinfo function in this translation unit
+@@ -3484,6 +3511,12 @@ finish_file ()
+ 	      p = &TREE_CHAIN (*p);
+ 	    else if ((TREE_PUBLIC (decl) && ! DECL_COMDAT (decl))
+ 		     || TREE_SYMBOL_REFERENCED (DECL_ASSEMBLER_NAME (decl))
++		     /* GT4: referenced by its asm label (a destructor's
++			assembler name stays the mangled one).  */
++		     || (DECL_RTL (decl) && GET_CODE (DECL_RTL (decl)) == MEM
++			 && GET_CODE (XEXP (DECL_RTL (decl), 0)) == SYMBOL_REF
++			 && TREE_SYMBOL_REFERENCED (get_identifier
++			      (XSTR (XEXP (DECL_RTL (decl), 0), 0))))
+ 		     || flag_keep_inline_functions)
+ 	      {
+ 		if (DECL_NOT_REALLY_EXTERN (decl))
+diff --git a/gcc/cp/lang-options.h b/gcc/cp/lang-options.h
+index 2ae409b..2ffc916 100644
+--- a/gcc/cp/lang-options.h
++++ b/gcc/cp/lang-options.h
+@@ -88,6 +88,8 @@ DEFINE_LANG_NAME ("C++")
+   { "-fno-optional-diags", "Disable optional diagnostics" },
+   { "-fpermissive", "Downgrade conformance errors to warnings" },
+   { "-fno-permissive", "" },
++  { "-fgt4-extern-class-data", "Refer to class vtables and type info, never define them (GT4, default)" },
++  { "-fno-gt4-extern-class-data", "" },
+   { "-frepo", "Enable automatic template instantiation" },
+   { "-fno-repo", "" },
+   { "-fsave-memoized", "" },
+diff --git a/gcc/cp/search.c b/gcc/cp/search.c
+index 0218b56..a1d7b4a 100644
+--- a/gcc/cp/search.c
++++ b/gcc/cp/search.c
+@@ -530,7 +530,7 @@ lookup_field_1 (type, name)
+ #endif /* GATHER_STATISTICS */
+       my_friendly_assert (TREE_CODE_CLASS (TREE_CODE (field)) == 'd', 0);
+       if (DECL_NAME (field) == NULL_TREE
+-	  && TREE_CODE (TREE_TYPE (field)) == UNION_TYPE)
++	  && ANON_AGGR_TYPE_P (TREE_TYPE (field)))
+ 	{
+ 	  tree temp = lookup_field_1 (TREE_TYPE (field), name);
+ 	  if (temp)
+@@ -2970,7 +2970,7 @@ dfs_pushdecls (binfo, data)
+ 
+       /* Recurse into anonymous unions.  */
+       if (DECL_NAME (fields) == NULL_TREE
+-	  && TREE_CODE (TREE_TYPE (fields)) == UNION_TYPE)
++	  && ANON_AGGR_TYPE_P (TREE_TYPE (fields)))
+ 	{
+ 	  dfs_pushdecls (TYPE_BINFO (TREE_TYPE (fields)), data);
+ 	  continue;
+@@ -3216,7 +3216,7 @@ dfs_unuse_fields (binfo, data)
+ 
+       TREE_USED (fields) = 0;
+       if (DECL_NAME (fields) == NULL_TREE
+-	  && TREE_CODE (TREE_TYPE (fields)) == UNION_TYPE)
++	  && ANON_AGGR_TYPE_P (TREE_TYPE (fields)))
+ 	unuse_fields (TREE_TYPE (fields));
+     }
+ 
+diff --git a/gcc/cp/typeck.c b/gcc/cp/typeck.c
+index a127bfb..4a94a0c 100644
+--- a/gcc/cp/typeck.c
++++ b/gcc/cp/typeck.c
+@@ -1999,7 +1999,7 @@ lookup_anon_field (t, type)
+ 
+       /* Otherwise, it could be nested, search harder.  */
+       if (DECL_NAME (field) == NULL_TREE
+-	  && TREE_CODE (TREE_TYPE (field)) == UNION_TYPE)
++	  && ANON_AGGR_TYPE_P (TREE_TYPE (field)))
+ 	{
+ 	  tree subfield = lookup_anon_field (TREE_TYPE (field), type);
+ 	  if (subfield)
+diff --git a/gcc/varasm.c b/gcc/varasm.c
+index e3a576e..429568d 100644
+--- a/gcc/varasm.c
++++ b/gcc/varasm.c
+@@ -653,10 +653,30 @@ make_decl_rtl (decl, asmspec, top_level)
+   if (reg_number == -2)
+     {
+       /* ASMSPEC is given, and not the name of a register.  */
++#ifdef ASMSPEC_USER_LABEL_PREFIX
++      /* GT4: an asm label names the symbol as a C identifier would, so it gets the
++	 target's user label prefix (`_') like every other C name: the decomp's sources
++	 name the same game function by asm label in one file and by C name in another,
++	 which on the EE (no prefix) is the same symbol.  */
++      name = obstack_alloc (saveable_obstack, strlen (asmspec) + 1);
++      strcpy (name, asmspec);
++      /* GT4: the asm label is also the decl's assembler name (as in gcc 2.96), so a
++	 deferred inline function named by one is emitted when referenced (the checks test
++	 TREE_SYMBOL_REFERENCED of DECL_ASSEMBLER_NAME) and its link-once section is
++	 named after it.  */
++      if ((TREE_CODE (decl) == FUNCTION_DECL || TREE_CODE (decl) == VAR_DECL)
++	  /* ...except a C++ destructor's (_$_NAME), which the C++ frontend
++	     needs to know it by.  */
++	  && ! (DECL_ASSEMBLER_NAME (decl)
++		&& ! strncmp (IDENTIFIER_POINTER (DECL_ASSEMBLER_NAME (decl)),
++			      "_$_", 3)))
++	DECL_ASSEMBLER_NAME (decl) = get_identifier (asmspec);
++#else
+       name = (char *) obstack_alloc (saveable_obstack,
+ 				     strlen (asmspec) + 2);
+       name[0] = '*';
+       strcpy (&name[1], asmspec);
++#endif
+     }
+ 
+   /* For a duplicate declaration, we can be called twice on the

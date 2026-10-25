@@ -1,0 +1,14 @@
+int s_wchar = sizeof(__WCHAR_TYPE__);
+int s_ldouble = sizeof(long double);
+int a_ldouble = __alignof__(long double);
+int s_long = sizeof(long);
+int a_long = __alignof__(long);
+int a_double = __alignof__(double);
+int a_ll = __alignof__(long long);
+int char_signed = (char)-1 < 0;
+int s_size = sizeof(__SIZE_TYPE__);
+int s_ptrdiff = sizeof(__PTRDIFF_TYPE__);
+int wchar_signed = (__WCHAR_TYPE__)-1 < 0;
+struct S1 { char c; long l; }; int s_S1 = sizeof(struct S1);
+struct S2 { char c; double d; }; int s_S2 = sizeof(struct S2);
+struct S3 { char c; float f; short s; }; int s_S3 = sizeof(struct S3);
