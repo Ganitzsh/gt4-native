@@ -13,7 +13,7 @@
 
 struct SDL_Window;
 
-namespace gt4 { class TestScene; }
+namespace gt4 { class TestScene; class GsScene; }
 
 struct GpuInfo {
     uint32_t index = 0;
@@ -44,6 +44,12 @@ public:
     void capture(const std::string& path);
     void setStatus(const std::string& text);  // extra lines for the on-screen readout
     gt4::TestScene& scene();
+    // The PS2's displayed frame (GS back end) replaces the test scene and its HUD (docs/GS_BACKEND.md).
+    void useGameFrame(bool enabled);
+    void setGameFrame(uint32_t width, uint32_t height, const uint32_t* rgba);
+    // Reloads volk's global Vulkan functions for this renderer's instance and device (after another
+    // component, such as the GS back end's own device, loaded its own).
+    void reloadVulkanFunctions();
     const GpuInfo& gpu() const;
     double gpuMilliseconds() const;          // GPU time of the last finished frame (0 if unknown)
     double averageGpuMilliseconds() const;   // mean GPU time over every timed frame so far

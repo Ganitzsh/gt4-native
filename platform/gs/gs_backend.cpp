@@ -5,6 +5,7 @@
 #include "context.hpp"
 #include "device.hpp"
 #include "gs_interface.hpp"
+#include "thread_id.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -67,6 +68,7 @@ std::unique_ptr<Backend> Backend::create(const BackendOptions& options, std::str
         error = "the Vulkan loader is not installed";
         return nullptr;
     }
+    Util::register_thread_index(0);
     std::unique_ptr<Backend> backend(new Backend());
     Impl& b = *backend->impl;
     b.context.set_num_thread_indices(1);
@@ -263,6 +265,8 @@ void Backend::readVram(uint32_t offset, void* data, size_t bytes) {
 }
 
 void Backend::setEventSink(EventSink sink) { impl->signals.sink = std::move(sink); }
+
+void Backend::bindToCurrentThread() { Util::register_thread_index(0); }
 
 void Backend::setSuperSampling(uint32_t rate, bool highResolutionScanout) {
     impl->superSampling = rate;

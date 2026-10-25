@@ -43,6 +43,8 @@ gt4_shader(shadow_vert ${S}/shadow.vert vert)
 gt4_shader(envmap_comp ${S}/envmap.comp comp)
 gt4_shader(envfilter_comp ${S}/envfilter.comp comp)
 gt4_shader(fullscreen_vert ${S}/fullscreen.vert vert)
+# The PS2's displayed frame (GS back end) as the scene.
+gt4_shader(gs_frame_frag ${S}/gs_frame.frag frag)
 # Post-processing and output.
 gt4_shader(msaa_resolve_comp ${S}/msaa_resolve.comp comp)
 gt4_shader(exposure_histogram_comp ${S}/exposure_histogram.comp comp)
@@ -148,12 +150,29 @@ else()
   target_compile_options(gt4_fsr2 PRIVATE -w -include ${CMAKE_CURRENT_SOURCE_DIR}/platform/render/ffx_compat.h)
 endif()
 
-# The GS back end: paraLLEl-GS on its own Vulkan device (docs/GS_BACKEND.md).
-add_library(gt4_gs STATIC platform/gs/gs_backend.cpp)
+# PS2 graphics (docs/GS_BACKEND.md). gt4_ps2gfx is plain C++ (no GPU): the game link and capture
+# replay, the graphics stream, and VIF1 + VU1. gt4_gs adds the GS back end, paraLLEl-GS on its own
+# Vulkan device, and the host that runs them on a worker thread.
+option(GT4_VU1_INTERPRETER
+  "Development scaffold, not for releases: run the game's VU1 microprograms in a CPU interpreter" ON)
+find_package(Threads REQUIRED)
+add_library(gt4_ps2gfx STATIC
+    platform/gs/vu1.cpp
+    platform/gs/vif1.cpp
+    platform/gs/stream.cpp
+    platform/gs/link_host.cpp)
+target_include_directories(gt4_ps2gfx PUBLIC platform/gs)
+target_link_libraries(gt4_ps2gfx PUBLIC gt4_guest_abi Threads::Threads)
+target_compile_definitions(gt4_ps2gfx PUBLIC GT4_VU1_INTERPRETER=$<BOOL:${GT4_VU1_INTERPRETER}>
+    $<$<BOOL:${WIN32}>:_CRT_SECURE_NO_WARNINGS>)
+add_library(gt4_gs STATIC platform/gs/gs_backend.cpp platform/gs/gs_host.cpp)
 target_include_directories(gt4_gs PUBLIC platform/gs)
-target_link_libraries(gt4_gs PRIVATE parallel-gs)
+target_link_libraries(gt4_gs PUBLIC gt4_ps2gfx PRIVATE parallel-gs)
 if(MSVC)
+  target_compile_options(gt4_ps2gfx PRIVATE /W4)
   target_compile_options(gt4_gs PRIVATE /W3 /wd4267 /wd4244)
+else()
+  target_compile_options(gt4_ps2gfx PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 add_executable(gt4_host
@@ -165,6 +184,7 @@ add_executable(gt4_host
     platform/render/vk.cpp
     platform/render/pipeline.cpp
     platform/render/test_scene.cpp
+    platform/render/gs_scene.cpp
     platform/render/overlay.cpp
     platform/render/fsr2.cpp
     platform/render/smaa_textures.cpp
@@ -203,15 +223,27 @@ if(BUILD_TESTING)
   endif()
   add_test(NAME host_settings COMMAND gt4_host_settings_test)
 
-  # The GS back end checked by pixel: needs a Vulkan GPU that meets paraLLEl-GS's requirements; skipped
-  # (exit code 77) where there is none, as on CI.
+  # PS2 graphics on the CPU: VU1, VIF1, stream records, replay, pad (no GPU needed).
+  add_executable(gt4_ps2gfx_test tests/ps2gfx.cpp)
+  target_link_libraries(gt4_ps2gfx_test PRIVATE gt4_ps2gfx)
+  add_test(NAME ps2gfx COMMAND gt4_ps2gfx_test)
+  # The GS back end checked by pixel, and a capture replayed through gt4_host (headless, "original"
+  # preset, compared by pixel): need a Vulkan GPU that meets paraLLEl-GS's requirements; skipped (exit
+  # code 77) where there is none, as on CI. Outputs go to the build directory.
   add_executable(gt4_gs_backend_test tests/gs_backend.cpp)
   target_link_libraries(gt4_gs_backend_test PRIVATE gt4_gs)
-  add_test(NAME gs_backend COMMAND gt4_gs_backend_test)
-  set_tests_properties(gs_backend PROPERTIES SKIP_RETURN_CODE 77)
-  if(MSVC)
-    target_compile_options(gt4_gs_backend_test PRIVATE /UNDEBUG /W4)
-  else()
-    target_compile_options(gt4_gs_backend_test PRIVATE -UNDEBUG -Wall -Wextra)
-  endif()
+  set(GT4_GS_TEST_OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/gs_test_output)
+  add_test(NAME gs_backend COMMAND gt4_gs_backend_test ${GT4_GS_TEST_OUTPUT})
+  set_tests_properties(gs_backend PROPERTIES SKIP_RETURN_CODE 77 FIXTURES_SETUP gs_replay_capture)
+  add_test(NAME host_replay COMMAND ${CMAKE_COMMAND} -DHOST=$<TARGET_FILE:gt4_host>
+      -DCHECKER=$<TARGET_FILE:gt4_gs_backend_test> -DOUTPUT=${GT4_GS_TEST_OUTPUT}
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/host_replay.cmake)
+  set_tests_properties(host_replay PROPERTIES SKIP_RETURN_CODE 77 FIXTURES_REQUIRED gs_replay_capture)
+  foreach(test_target IN ITEMS gt4_ps2gfx_test gt4_gs_backend_test)
+    if(MSVC)
+      target_compile_options(${test_target} PRIVATE /UNDEBUG /W4)
+    else()
+      target_compile_options(${test_target} PRIVATE -UNDEBUG -Wall -Wextra)
+    endif()
+  endforeach()
 endif()

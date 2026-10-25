@@ -104,4 +104,149 @@ struct Gif {
     const void* data() const { return q.data(); }
 };
 
+// --- VU1 microcode (encodings from the public VU instruction set) ---------------------------------------
+namespace vu {
+constexpr uint32_t X = 8, Y = 4, Z = 2, W = 1, XYZW = 15;
+constexpr uint32_t kNopUpper = 0x000002FF;   // NOP
+constexpr uint32_t kNopLower = 0x8000033C;   // MOVE vf0, vf0 with an empty field mask
+constexpr uint32_t kEbit = 0x40000000;
+constexpr uint32_t upper(uint32_t op, uint32_t dest, uint32_t ft, uint32_t fs, uint32_t fd) {
+    return (dest << 21) | (ft << 16) | (fs << 11) | (fd << 6) | op;
+}
+constexpr uint32_t upperExt(uint32_t ext, uint32_t dest, uint32_t ft, uint32_t fs) {
+    return (dest << 21) | (ft << 16) | (fs << 11) | ((ext >> 2) << 6) | 0x3C | (ext & 3);
+}
+constexpr uint32_t ADD(uint32_t dest, uint32_t fd, uint32_t fs, uint32_t ft) { return upper(0x28, dest, ft, fs, fd); }
+constexpr uint32_t MULbc(uint32_t bc, uint32_t dest, uint32_t fd, uint32_t fs, uint32_t ft) { return upper(0x18 | bc, dest, ft, fs, fd); }
+constexpr uint32_t MADDbc(uint32_t bc, uint32_t dest, uint32_t fd, uint32_t fs, uint32_t ft) { return upper(0x08 | bc, dest, ft, fs, fd); }
+constexpr uint32_t MULq(uint32_t dest, uint32_t fd, uint32_t fs) { return upper(0x1C, dest, 0, fs, fd); }
+constexpr uint32_t MULAbc(uint32_t bc, uint32_t dest, uint32_t fs, uint32_t ft) { return upperExt(0x18 | bc, dest, ft, fs); }
+constexpr uint32_t MADDAbc(uint32_t bc, uint32_t dest, uint32_t fs, uint32_t ft) { return upperExt(0x08 | bc, dest, ft, fs); }
+constexpr uint32_t FTOI4(uint32_t dest, uint32_t ft, uint32_t fs) { return upperExt(0x15, dest, ft, fs); }
+constexpr uint32_t ITOF0(uint32_t dest, uint32_t ft, uint32_t fs) { return upperExt(0x10, dest, ft, fs); }
+constexpr uint32_t CLIPw(uint32_t fs, uint32_t ft) { return upperExt(0x1F, 0xE, ft, fs); }
+constexpr uint32_t imm11(int32_t v) { return static_cast<uint32_t>(v) & 0x7FF; }
+constexpr uint32_t LQ(uint32_t dest, uint32_t ft, int32_t offset, uint32_t is) { return (dest << 21) | (ft << 16) | (is << 11) | imm11(offset); }
+constexpr uint32_t SQ(uint32_t dest, uint32_t fs, int32_t offset, uint32_t it) { return (1u << 25) | (dest << 21) | (it << 16) | (fs << 11) | imm11(offset); }
+constexpr uint32_t ISW(uint32_t dest, uint32_t it, int32_t offset, uint32_t is) { return (5u << 25) | (dest << 21) | (it << 16) | (is << 11) | imm11(offset); }
+constexpr uint32_t IADDIU(uint32_t it, uint32_t is, uint32_t imm) {
+    return (8u << 25) | (((imm >> 11) & 0xF) << 21) | (it << 16) | (is << 11) | (imm & 0x7FF);
+}
+constexpr uint32_t ISUBIU(uint32_t it, uint32_t is, uint32_t imm) {
+    return (9u << 25) | (((imm >> 11) & 0xF) << 21) | (it << 16) | (is << 11) | (imm & 0x7FF);
+}
+constexpr uint32_t FCAND(uint32_t imm24) { return (0x12u << 25) | (imm24 & 0xFFFFFF); }
+constexpr uint32_t IBNE(uint32_t it, uint32_t is, int32_t offset) { return (0x29u << 25) | (it << 16) | (is << 11) | imm11(offset); }
+constexpr uint32_t lowerExt(uint32_t ext, uint32_t dest, uint32_t ft, uint32_t fs) {
+    return (0x40u << 25) | (dest << 21) | (ft << 16) | (fs << 11) | ((ext >> 2) << 6) | 0x3C | (ext & 3);
+}
+constexpr uint32_t LQI(uint32_t dest, uint32_t ft, uint32_t is) { return lowerExt(0x34, dest, ft, is); }
+constexpr uint32_t SQI(uint32_t dest, uint32_t fs, uint32_t it) { return lowerExt(0x35, dest, it, fs); }
+constexpr uint32_t DIV(uint32_t fs, uint32_t fsf, uint32_t ft, uint32_t ftf) {
+    return (0x40u << 25) | (ftf << 23) | (fsf << 21) | (ft << 16) | (fs << 11) | (14u << 6) | 0x3C;
+}
+constexpr uint32_t WAITQ() { return lowerExt(0x3B, 0, 0, 0); }
+constexpr uint32_t XGKICK(uint32_t is) { return lowerExt(0x6C, 0, 0, is); }
+constexpr uint32_t XTOP(uint32_t it) { return lowerExt(0x68, 0, it, 0); }
+
+// A microprogram: (upper, lower) pairs.
+struct Program {
+    std::vector<uint32_t> words;   // lower, upper, lower, upper ...
+    Program& op(uint32_t upperWord, uint32_t lowerWord) { words.push_back(lowerWord); words.push_back(upperWord); return *this; }
+    Program& lower(uint32_t lowerWord) { return op(kNopUpper, lowerWord); }
+    Program& up(uint32_t upperWord) { return op(upperWord, kNopLower); }
+    // The last instruction: the E bit, then the delay slot.
+    Program& end(uint32_t upperWord = kNopUpper, uint32_t lowerWord = kNopLower) {
+        op(upperWord | kEbit, lowerWord);
+        return op(kNopUpper, kNopLower);
+    }
+    uint32_t size() const { return static_cast<uint32_t>(words.size() / 2); }
+};
+
+// Transforms N vertices (VU data qwords 0..N-1: x, y, z, 1 floats in pixels) by the matrix in qwords
+// 4..7 (columns; column 3 is the translation), converts them to 12.4 fixed point and XGKICKs one
+// PACKED GIF packet: the GIFtag template in qword 9, then RGBAQ (qword 8) and XYZ2 per vertex, built at 16.
+inline Program transformProgram(uint32_t vertices) {
+    Program p;
+    p.lower(LQ(XYZW, 4, 4, 0)).lower(LQ(XYZW, 5, 5, 0)).lower(LQ(XYZW, 6, 6, 0)).lower(LQ(XYZW, 7, 7, 0));
+    p.lower(LQ(XYZW, 8, 8, 0)).lower(LQ(XYZW, 9, 9, 0)).lower(SQ(XYZW, 9, 16, 0));
+    p.lower(IADDIU(1, 0, 0)).lower(IADDIU(2, 0, 17)).lower(IADDIU(3, 0, vertices));
+    const int32_t loop = static_cast<int32_t>(p.size());
+    p.lower(LQI(XYZW, 1, 1));
+    p.up(MULAbc(0, XYZW, 4, 1)).up(MADDAbc(1, XYZW, 5, 1)).up(MADDAbc(2, XYZW, 6, 1)).up(MADDbc(3, XYZW, 2, 7, 1));
+    p.up(FTOI4(XYZW, 3, 2));
+    p.lower(SQI(XYZW, 8, 2)).lower(SQI(XYZW, 3, 2));
+    p.lower(ISUBIU(3, 3, 1)).lower(kNopLower);   // the NOP: a branch right after ISUBIU would read the old VI3
+    const int32_t branchAt = static_cast<int32_t>(p.size());
+    p.lower(IBNE(3, 0, loop - (branchAt + 1))).lower(kNopLower);
+    p.lower(IADDIU(4, 0, 16));
+    p.end(kNopUpper, XGKICK(4));
+    return p;
+}
+}  // namespace vu
+
+// VIF codes.
+namespace vif {
+constexpr uint32_t code(uint32_t cmd, uint32_t num, uint32_t imm) { return (cmd << 24) | ((num & 0xFF) << 16) | (imm & 0xFFFF); }
+constexpr uint32_t NOP() { return 0; }
+constexpr uint32_t STCYCL(uint32_t cl, uint32_t wl) { return code(0x01, 0, cl | (wl << 8)); }
+constexpr uint32_t OFFSET(uint32_t ofst) { return code(0x02, 0, ofst); }
+constexpr uint32_t BASE(uint32_t base) { return code(0x03, 0, base); }
+constexpr uint32_t ITOP(uint32_t v) { return code(0x04, 0, v); }
+constexpr uint32_t STMOD(uint32_t mode) { return code(0x05, 0, mode); }
+constexpr uint32_t MSCAL(uint32_t address) { return code(0x14, 0, address); }
+constexpr uint32_t FLUSH() { return code(0x11, 0, 0); }
+constexpr uint32_t STMASK() { return code(0x20, 0, 0); }
+constexpr uint32_t STROW() { return code(0x30, 0, 0); }
+constexpr uint32_t STCOL() { return code(0x31, 0, 0); }
+constexpr uint32_t MPG(uint32_t count, uint32_t address) { return code(0x4A, count, address); }
+constexpr uint32_t DIRECT(uint32_t qwc) { return code(0x50, 0, qwc); }
+// UNPACK: vn 0..3 (S, V2, V3, V4), vl 0..3 (32, 16, 8, 5-bit), masked, usn, flg (add TOPS).
+constexpr uint32_t UNPACK(uint32_t vn, uint32_t vl, uint32_t num, uint32_t address, bool masked = false, bool usn = false,
+                          bool flg = false) {
+    return code(0x60 | (masked ? 0x10 : 0) | (vn << 2) | vl, num, address | (usn ? 0x4000 : 0) | (flg ? 0x8000 : 0));
+}
+struct Stream {
+    std::vector<uint32_t> words;
+    Stream& add(uint32_t w) { words.push_back(w); return *this; }
+    Stream& add(const void* data, size_t bytes) {
+        const size_t first = words.size();
+        words.resize(first + (bytes + 3) / 4, 0);
+        std::memcpy(words.data() + first, data, bytes);
+        return *this;
+    }
+    // Pads with NOPs so that the next code is the last word of a qword (its data then starts aligned).
+    Stream& alignForData() { while (words.size() % 4 != 3) words.push_back(0); return *this; }
+    Stream& mpg(const vu::Program& program, uint32_t address) {
+        alignForData();
+        add(MPG(program.size(), address));
+        return add(program.words.data(), program.words.size() * 4);
+    }
+    const uint8_t* bytes() const { return reinterpret_cast<const uint8_t*>(words.data()); }
+    size_t size() const { return words.size() * 4; }
+};
+}  // namespace vif
+
+inline uint32_t floatBits(float f) { uint32_t u; std::memcpy(&u, &f, 4); return u; }
+
+// The VIF1 stream of the transform test: upload the microprogram, the vertices, matrix, colour and GIF
+// tag, then MSCAL. Draws a triangle (x0,y0) (x1,y1) (x2,y2) in the given colour through PATH1.
+inline vif::Stream transformStream(const float (&xy)[3][2], uint32_t r, uint32_t g, uint32_t b) {
+    vif::Stream s;
+    s.add(vif::STCYCL(1, 1));
+    s.mpg(vu::transformProgram(3), 0);
+    float vertices[3][4];
+    for (int k = 0; k < 3; ++k) { vertices[k][0] = xy[k][0]; vertices[k][1] = xy[k][1]; vertices[k][2] = 0; vertices[k][3] = 1; }
+    const float matrix[4][4] = {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {2048, 2048, 0, 0}};
+    const uint32_t color[4] = {r, g, b, 0x80};
+    // GIFtag: NLOOP 3, EOP, PRE with PRIM = triangle, PACKED, NREG 2: RGBAQ (1), XYZ2 (5).
+    const uint64_t tag[2] = {3ull | (1ull << 15) | (1ull << 46) | (3ull << 47) | (2ull << 60), 0x51};
+    s.alignForData().add(vif::UNPACK(3, 0, 3, 0)).add(vertices, sizeof(vertices));
+    s.alignForData().add(vif::UNPACK(3, 0, 4, 4)).add(matrix, sizeof(matrix));
+    s.alignForData().add(vif::UNPACK(3, 0, 1, 8)).add(color, sizeof(color));
+    s.alignForData().add(vif::UNPACK(3, 0, 1, 9)).add(tag, sizeof(tag));
+    s.add(vif::MSCAL(0));
+    return s;
+}
+
 }  // namespace gt4::test

@@ -1,5 +1,6 @@
-// gt4_host: the SDL3 + Vulkan platform host. It runs the display pipeline on a test scene until the R1
-// renderer exists (docs/RENDERING.md). Windowed, or headless (offscreen, no window or surface).
+// gt4_host: the SDL3 + Vulkan platform host. It runs the display pipeline on a test scene, or on the PS2's
+// displayed frame from the GS back end: a live gt4_game.exe (--game) or a capture (--replay)
+// (docs/RENDERING.md, docs/GS_BACKEND.md). Windowed, or headless (offscreen, no window or surface).
 #include <volk.h>
 
 #include <SDL3/SDL.h>
@@ -7,6 +8,8 @@
 #include <SDL3/SDL_vulkan.h>
 
 #include "display.h"
+#include "gs_host.h"
+#include "ps2_pad.h"
 #include "renderer.h"
 #include "session.h"
 #include "settings.h"
@@ -34,7 +37,7 @@ void require(bool success, const char* operation) {
 
 const char* kUsage =
     "Usage: gt4_host [mode] [options]\n"
-    "SDL3/Vulkan host with the display pipeline on a test scene; does not run GT4 yet.\n"
+    "SDL3/Vulkan host: the display pipeline on a test scene, or on GT4's frames (--game, --replay).\n"
     "Modes (default: interactive window, Escape closes it):\n"
     "  --probe              verify a window surface and a GPU that can present to it, then exit\n"
     "  --frames N           render N frames, then exit\n"
@@ -53,6 +56,12 @@ const char* kUsage =
     "  --session-dir PATH   attach a virtual gamepad, process commands, record frames/audio/events\n"
     "  --no-audio           disable playback and WAV capture for a session\n"
     "  --fixed-step         advance exactly one 60 Hz tick per frame (default for headless and sessions)\n"
+    "  --game PATH          start gt4_game.exe with a link and display its frames (GS back end)\n"
+    "  --game-args \"ARGS\"  extra arguments for the game (after --link NAME)\n"
+    "  --replay FILE        display a capture of the game's graphics stream (gt4_game --capture) instead;\n"
+    "                       with --fixed-step (headless) one VBlank per rendered frame, else 59.94 Hz\n"
+    "  --replay-loop        start the replay again at its end\n"
+    "  --gs-ssaa N          GS super-sampling 1 (faithful, default), 2, 4, 8 or 16\n"
     "Interactive runs read and save the settings file in the user's preference directory; scripted runs\n"
     "(--frames, --smoke-test, --session-dir, --headless) start from the defaults unless --settings is given.\n"
     "Keys: F1 readout, F2 preset, F3 anti-aliasing, F4 upscaler, F5 render quality, F6 aspect ratio,\n"
@@ -63,7 +72,10 @@ const char* kUsage =
 
 struct Options {
     bool probe = false, smoke = false, headless = false, listGpus = false, listDisplays = false, listOptions = false;
-    bool fixedStep = false, audio = true;
+    bool fixedStep = false, audio = true, replayLoop = false;
+    uint32_t gsSsaa = 1;
+    std::string game, replay;
+    std::vector<std::string> gameArgs;
     uint32_t frames = 0;
     VkExtent2D size{0, 0};   // headless output; 0 = the window size setting
     std::string gpu, settingsPath, sessionDirectory, capture;
@@ -75,6 +87,24 @@ bool parseUnsigned(const std::string& text, uint32_t& value) {
     const char* end = begin + text.size();
     const auto parsed = std::from_chars(begin, end, value);
     return !text.empty() && parsed.ec == std::errc{} && parsed.ptr == end;
+}
+
+// Splits --game-args on spaces; double quotes group words ("a b" is one argument).
+std::vector<std::string> splitArguments(const std::string& text) {
+    std::vector<std::string> out;
+    std::string current;
+    bool quoted = false, any = false;
+    for (char c : text) {
+        if (c == '"') { quoted = !quoted; any = true; continue; }
+        if ((c == ' ' || c == '\t') && !quoted) {
+            if (any) { out.push_back(current); current.clear(); any = false; }
+            continue;
+        }
+        current += c;
+        any = true;
+    }
+    if (any) out.push_back(current);
+    return out;
 }
 
 Options parse(int argc, char** argv) {
@@ -98,6 +128,14 @@ Options parse(int argc, char** argv) {
         else if (a == "--settings") o.settingsPath = value(i);
         else if (a == "--session-dir") o.sessionDirectory = value(i);
         else if (a == "--capture") o.capture = value(i);
+        else if (a == "--game") o.game = value(i);
+        else if (a == "--game-args") o.gameArgs = splitArguments(value(i));
+        else if (a == "--replay") o.replay = value(i);
+        else if (a == "--replay-loop") o.replayLoop = true;
+        else if (a == "--gs-ssaa") {
+            if (!parseUnsigned(value(i), o.gsSsaa) || (o.gsSsaa != 1 && o.gsSsaa != 2 && o.gsSsaa != 4 && o.gsSsaa != 8 && o.gsSsaa != 16))
+                throw std::invalid_argument("--gs-ssaa takes 1, 2, 4, 8 or 16");
+        }
         else if (a == "--preset") o.sets.emplace_back("graphics.preset", value(i));
         else if (a == "--set") {
             const std::string pair = value(i);
@@ -120,6 +158,7 @@ Options parse(int argc, char** argv) {
     if (modes > 1) throw std::invalid_argument("Choose only one of --probe, --frames, --smoke-test and the --list options");
     if (o.probe && !o.sessionDirectory.empty()) throw std::invalid_argument("--probe cannot record a session");
     if (o.headless && (o.smoke || o.probe)) throw std::invalid_argument("--smoke-test and --probe need a window");
+    if (!o.game.empty() && !o.replay.empty()) throw std::invalid_argument("Choose one of --game and --replay");
     if (!o.capture.empty() && !o.frames) throw std::invalid_argument("--capture needs --frames");
     if (o.smoke) o.frames = 180;
     if (o.headless || !o.sessionDirectory.empty()) o.fixedStep = true;
@@ -269,7 +308,10 @@ std::string adjust(gt4::Settings& s, const std::string& key, float step, float m
 }
 
 // Keyboard toggles of the interactive test scene. Returns a description of the change (empty: none).
-std::string keyCommand(gt4::Settings& s, const SDL_KeyboardEvent& key) {
+// With the game's frames (gameKeys), only the function keys and Alt+Enter: the rest drive the pad.
+std::string keyCommand(gt4::Settings& s, const SDL_KeyboardEvent& key, bool gameKeys = false) {
+    const bool functionKey = key.key >= SDLK_F1 && key.key <= SDLK_F12;
+    if (gameKeys && !functionKey && key.key != SDLK_RETURN) return {};
     const int direction = (key.mod & SDL_KMOD_SHIFT) ? -1 : 1;
     switch (key.key) {
     case SDLK_F1: s.overlayText = !s.overlayText; return std::string("debug.overlay = ") + (s.overlayText ? "on" : "off");
@@ -327,6 +369,61 @@ std::string gamepadCommand(gt4::Settings& s, SDL_GamepadButton button) {
     }
 }
 
+// The game's pad 1 from the SDL gamepad (standard layout) and the keyboard (docs/GS_BACKEND.md, "Input").
+gt4::ps2::PadInput readPad(SDL_Gamepad* gamepad) {
+    using namespace gt4::ps2;
+    PadInput in;
+    auto press = [&](PadButton b, bool down) { if (down) in.button[b] = 1.0f; };
+    const bool* keys = SDL_GetKeyboardState(nullptr);
+    if (keys) {
+        press(PadUp, keys[SDL_SCANCODE_UP]);
+        press(PadDown, keys[SDL_SCANCODE_DOWN]);
+        press(PadLeft, keys[SDL_SCANCODE_LEFT]);
+        press(PadRight, keys[SDL_SCANCODE_RIGHT]);
+        press(PadCross, keys[SDL_SCANCODE_X]);
+        press(PadCircle, keys[SDL_SCANCODE_C]);
+        press(PadSquare, keys[SDL_SCANCODE_Z]);
+        press(PadTriangle, keys[SDL_SCANCODE_V]);
+        press(PadL1, keys[SDL_SCANCODE_Q]);
+        press(PadR1, keys[SDL_SCANCODE_E]);
+        press(PadL2, keys[SDL_SCANCODE_1]);
+        press(PadR2, keys[SDL_SCANCODE_3]);
+        press(PadStart, keys[SDL_SCANCODE_RETURN]);
+        press(PadSelect, keys[SDL_SCANCODE_BACKSPACE] || keys[SDL_SCANCODE_RSHIFT]);
+        if (keys[SDL_SCANCODE_J]) in.leftX -= 1.0f;
+        if (keys[SDL_SCANCODE_L]) in.leftX += 1.0f;
+        if (keys[SDL_SCANCODE_I]) in.leftY -= 1.0f;
+        if (keys[SDL_SCANCODE_K]) in.leftY += 1.0f;
+    }
+    if (gamepad) {
+        auto button = [&](SDL_GamepadButton b) { return SDL_GetGamepadButton(gamepad, b); };
+        auto axis = [&](SDL_GamepadAxis a) { return static_cast<float>(SDL_GetGamepadAxis(gamepad, a)) / 32767.0f; };
+        press(PadCross, button(SDL_GAMEPAD_BUTTON_SOUTH));
+        press(PadCircle, button(SDL_GAMEPAD_BUTTON_EAST));
+        press(PadSquare, button(SDL_GAMEPAD_BUTTON_WEST));
+        press(PadTriangle, button(SDL_GAMEPAD_BUTTON_NORTH));
+        press(PadSelect, button(SDL_GAMEPAD_BUTTON_BACK));
+        press(PadStart, button(SDL_GAMEPAD_BUTTON_START));
+        press(PadL3, button(SDL_GAMEPAD_BUTTON_LEFT_STICK));
+        press(PadR3, button(SDL_GAMEPAD_BUTTON_RIGHT_STICK));
+        press(PadL1, button(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER));
+        press(PadR1, button(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER));
+        press(PadUp, button(SDL_GAMEPAD_BUTTON_DPAD_UP));
+        press(PadDown, button(SDL_GAMEPAD_BUTTON_DPAD_DOWN));
+        press(PadLeft, button(SDL_GAMEPAD_BUTTON_DPAD_LEFT));
+        press(PadRight, button(SDL_GAMEPAD_BUTTON_DPAD_RIGHT));
+        // Analogue triggers drive the L2/R2 pressures (GT4's accelerator/brake can use them).
+        in.button[PadL2] = std::max(in.button[PadL2], std::clamp(axis(SDL_GAMEPAD_AXIS_LEFT_TRIGGER), 0.0f, 1.0f));
+        in.button[PadR2] = std::max(in.button[PadR2], std::clamp(axis(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER), 0.0f, 1.0f));
+        auto stick = [](float v) { return std::fabs(v) < 0.08f ? 0.0f : v; };
+        in.leftX = std::clamp(in.leftX + stick(axis(SDL_GAMEPAD_AXIS_LEFTX)), -1.0f, 1.0f);
+        in.leftY = std::clamp(in.leftY + stick(axis(SDL_GAMEPAD_AXIS_LEFTY)), -1.0f, 1.0f);
+        in.rightX = stick(axis(SDL_GAMEPAD_AXIS_RIGHTX));
+        in.rightY = stick(axis(SDL_GAMEPAD_AXIS_RIGHTY));
+    }
+    return in;
+}
+
 std::string jsonQuote(const std::string& text) {
     std::string out = "\"";
     for (char c : text) {
@@ -347,6 +444,9 @@ int run(const Options& options) {
         for (const auto& warning : gt4::loadSettings(settings, settingsPath)) std::fprintf(stderr, "Settings: %s\n", warning.c_str());
         std::printf("Settings: %s\n", settingsPath.c_str());
     }
+    // The PS2 frame fills a 4:3 TV picture (640 x 448 with non-square pixels); --set aspect.ratio overrides.
+    const bool gsMode = !options.game.empty() || !options.replay.empty();
+    if (gsMode && settings.aspect == gt4::AspectRatio::Window) gt4::setOption(settings, "aspect.ratio", "4:3");
     for (const auto& [key, value] : options.sets) {
         const std::string error = gt4::setOption(settings, key, value);
         if (!error.empty()) throw std::invalid_argument("--set " + key + "=" + value + ": " + error);
@@ -392,6 +492,30 @@ int run(const Options& options) {
     if (options.probe) {
         std::printf("Probe OK: %s can present to %s\n", renderer->gpu().name.c_str(), gt4::windowDisplayName(sdlWindow).c_str());
         return 0;
+    }
+
+    // The game's frames: the GS back end (its own Vulkan device on the renderer's GPU) fed by a live game
+    // or a capture. Creating it loads volk's globals for its own instance, so the renderer reloads its own.
+    std::unique_ptr<gt4::gs::GsHost> gs;
+    const bool lockstep = !options.replay.empty() && options.fixedStep;
+    gt4::gs::DisplayFrame gsFrame;
+    uint64_t gsSerial = 0;
+    bool gameExited = false;
+    if (gsMode) {
+        gt4::gs::GsHost::Options gsOptions;
+        gsOptions.gamePath = options.game;
+        gsOptions.gameArgs = options.gameArgs;
+        gsOptions.replayPath = options.replay;
+        gsOptions.lockstep = lockstep;
+        gsOptions.loop = options.replayLoop;
+        gsOptions.backend.gpu = renderer->gpu().name;
+        gsOptions.backend.superSampling = options.gsSsaa;
+        std::string error;
+        gs = gt4::gs::GsHost::create(gsOptions, error);
+        renderer->reloadVulkanFunctions();
+        if (!gs) throw std::runtime_error(error);
+        renderer->useGameFrame(true);
+        if (window) SDL_SetWindowTitle(window->window, options.game.empty() ? "GT4 native host - replay" : "GT4 native host");
     }
 
     std::unique_ptr<Session> session;
@@ -448,7 +572,7 @@ int run(const Options& options) {
                 if (gamepad && SDL_GetGamepadID(gamepad) == event.gdevice.which) { SDL_CloseGamepad(gamepad); gamepad = nullptr; }
                 break;
             case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
-                if (interactive && gamepad && SDL_GetGamepadID(gamepad) == event.gbutton.which) {
+                if (interactive && !gsMode && gamepad && SDL_GetGamepadID(gamepad) == event.gbutton.which) {
                     const std::string change = gamepadCommand(settings, static_cast<SDL_GamepadButton>(event.gbutton.button));
                     if (!change.empty()) { std::printf("%s\n", change.c_str()); renderer->apply(settings); save(); }
                 }
@@ -459,7 +583,7 @@ int run(const Options& options) {
                 if (event.key.key == SDLK_RIGHT) keyboardStick = 1.0f;
                 if (event.key.key == SDLK_SPACE) keyboardAction = true;
                 if (interactive && !event.key.repeat) {
-                    const std::string change = keyCommand(settings, event.key);
+                    const std::string change = keyCommand(settings, event.key, gsMode);
                     if (!change.empty()) {
                         std::printf("%s\n", change.c_str());
                         renderer->apply(settings);
@@ -486,6 +610,27 @@ int run(const Options& options) {
             renderer.reset();
             renderer = makeRenderer(settings.gpu);
             activeGpu = settings.gpu;
+            if (gs) {   // the GS back end keeps its own device; show its frames on the new renderer
+                renderer->useGameFrame(true);
+                if (!gsFrame.rgba.empty()) renderer->setGameFrame(gsFrame.width, gsFrame.height, gsFrame.rgba.data());
+            }
+        }
+        // The game's frames: in lockstep replay one VBlank per rendered frame; otherwise the newest one.
+        if (gs) {
+            if (lockstep) gs->advance();
+            if (gs->takeFrame(gsFrame, gsSerial)) renderer->setGameFrame(gsFrame.width, gsFrame.height, gsFrame.rgba.data());
+            if (gs->live()) {
+                uint8_t pad[18];
+                gt4::ps2::encodePad(readPad(gamepad), pad);
+                gs->sendPad(0, true, pad);
+            }
+            renderer->setStatus(gs->status());
+            if (!options.game.empty() && gs->finished()) {
+                std::printf("The game has exited; closing the host\n");
+                gameExited = true;
+                running = false;
+                break;
+            }
         }
         // Controls are sampled once per frame here; the game will sample its input once per tick.
         if (session) {
@@ -538,7 +683,9 @@ int run(const Options& options) {
         previous = now;
         float alpha = 1.0f;
         float delta = static_cast<float>(elapsed);
-        if (options.fixedStep) {
+        if (gs) {
+            // The game owns its clock; nothing to advance here.
+        } else if (options.fixedStep) {
             renderer->scene().tick();
             delta = static_cast<float>(kTickSeconds);
         } else {
@@ -586,7 +733,8 @@ int run(const Options& options) {
         }
     }
     if (gamepad) SDL_CloseGamepad(gamepad);
-    if (options.frames && frames < options.frames) throw std::runtime_error("Window closed before the requested frames were presented");
+    if (options.frames && frames < options.frames && !gameExited)
+        throw std::runtime_error("Window closed before the requested frames were presented");
     if (options.smoke && (!firstResize || !minimized || !restored || !sawMinimized))
         throw std::runtime_error("Rendering smoke test did not complete window transitions");
     std::printf("%s %u frames on %s (%s); %s; GPU %.3f ms/frame%s\n", windowed ? "Presented" : "Rendered", frames,

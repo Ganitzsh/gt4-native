@@ -631,8 +631,10 @@ struct FramePipeline::Impl {
     }
 
     // Returns the number of accumulated levels (0 = no bloom).
-    uint32_t bloomPass(VkCommandBuffer command, vk::Image* hdr) {
+    uint32_t bloomPass(VkCommandBuffer command, vk::Image* hdr, bool gameDrawsOriginal) {
         if (settings.bloom == EffectQuality::Off) return 0;
+        // The game's own image already contains its glare: "original" adds nothing on top.
+        if (settings.bloom == EffectQuality::Original && gameDrawsOriginal) return 0;
         vk::beginLabel(command, "bloom");
         const bool original = settings.bloom == EffectQuality::Original;
         const uint32_t wanted[4] = {4, 5, 6, 8};
@@ -736,7 +738,7 @@ struct FramePipeline::Impl {
         // 2. HDR effects at the post resolution.
         if (enabled(settings.dof)) hdr = depthOfField(command, hdr, camera);
         if (enabled(settings.motionBlur)) hdr = motionBlurPass(command, hdr, camera);
-        const uint32_t bloomLevels = bloomPass(command, hdr);
+        const uint32_t bloomLevels = bloomPass(command, hdr, scene.drawsOriginalEffects());
 
         // 3. Display transform.
         vk::beginLabel(command, "tonemap");

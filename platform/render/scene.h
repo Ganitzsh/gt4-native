@@ -57,6 +57,9 @@ public:
     // shading the motion vectors do not describe (reflections, animated textures). The test scene has none.
     virtual vk::Image* reactiveMask() { return nullptr; }
     virtual vk::Image* transparencyMask() { return nullptr; }
+    // True when the frame is the game's own displayed image (the GS output): the effects it draws itself
+    // (glare, fog, ...) are already in it, so the pipeline adds nothing for effects set to `original`.
+    virtual bool drawsOriginalEffects() const { return false; }
 };
 
 }  // namespace gt4

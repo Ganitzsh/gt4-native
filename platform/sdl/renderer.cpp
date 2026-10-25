@@ -2,6 +2,7 @@
 
 #include "display.h"
 
+#include "gs_scene.h"
 #include "overlay.h"
 #include "pipeline.h"
 #include "test_scene.h"
@@ -224,11 +225,13 @@ struct Renderer::Impl {
     VkFormat format = VK_FORMAT_UNDEFINED;
     bool srgbFormat = false;
     VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
-    bool resized = true, suspended = false, displayMoved = false;
+    bool resized = true, suspended = false, displayMoved = false, sceneSwitched = false;
     gt4::VSync presentedVsync = gt4::VSync::On;
     int presentedBits = 8;
 
     std::unique_ptr<gt4::TestScene> scene;
+    std::unique_ptr<gt4::GsScene> gsScene;
+    bool gameFrame = false;
     std::unique_ptr<gt4::FramePipeline> pipeline;
     std::unique_ptr<gt4::Overlay> overlay;
     float stick = 0.0f;
@@ -242,6 +245,7 @@ struct Renderer::Impl {
         overlay.reset();
         pipeline.reset();
         scene.reset();
+        gsScene.reset();
         if (!device.device) {
             if (surface) SDL_Vulkan_DestroySurface(instance, surface, nullptr);
             return;
@@ -348,6 +352,7 @@ struct Renderer::Impl {
             check(vkCreateQueryPool(device.device, &queries, nullptr, &timestamps), "vkCreateQueryPool");
         }
         scene = std::make_unique<gt4::TestScene>(device, pool);
+        gsScene = std::make_unique<gt4::GsScene>(device, pool);
         pipeline = std::make_unique<gt4::FramePipeline>(device, pool);
         overlay = std::make_unique<gt4::Overlay>(device, pool);
     }
@@ -539,6 +544,7 @@ struct Renderer::Impl {
         canvas.safeArea = settings.safeArea;
         overlay->setFilter(settings.uiFilter);
         overlay->begin(frameSlot, extent, canvas);
+        if (gameFrame) { composeReadout(); return; }
         // Test HUD on the 640 x 480 canvas, anchored like a racing game's.
         const gt4::Color8 panel{8, 12, 20, 170}, white{240, 240, 240, 255}, accent{255, 190, 40, 255};
         overlay->canvasRect(16, 16, 150, 44, panel, gt4::Anchor::Left);
@@ -555,6 +561,10 @@ struct Renderer::Impl {
         overlay->canvasRect(16, 384, 80, 80, panel, gt4::Anchor::Left);
         overlay->canvasSprite(36, 404, 40, '@', accent, gt4::Anchor::Left);
         overlay->canvasText(320, 20, 8, "GT4 NATIVE - DISPLAY PIPELINE TEST SCENE", white, gt4::Anchor::Center);
+        composeReadout();
+    }
+
+    void composeReadout() {
         if (!settings.overlayText) return;
         const auto content = pipeline->contentRect();
         const float scale = std::max(1.0f, std::floor(static_cast<float>(content.extent.height) / 540.0f));
@@ -680,7 +690,10 @@ struct Renderer::Impl {
             target.stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
             target.access = VK_ACCESS_2_NONE;
         }
-        pipeline->configure(settings, extent, *scene);
+        gt4::SceneSource& active = gameFrame ? static_cast<gt4::SceneSource&>(*gsScene) : *scene;
+        if (sceneSwitched) { vkDeviceWaitIdle(device.device); pipeline.reset(); pipeline = std::make_unique<gt4::FramePipeline>(device, pool);
+                             pipeline->prepareOutput(format, srgbFormat, static_cast<uint32_t>(presentedBits)); sceneSwitched = false; }
+        pipeline->configure(settings, extent, active);
         scene->setControls(stick, action);
         scene->apply(settings);
         const gt4::SceneView view = pipeline->beginFrame(slot, frameCounter);
@@ -694,7 +707,7 @@ struct Renderer::Impl {
             vkCmdResetQueryPool(frame.command, timestamps, slot * 2, 2);
             vkCmdWriteTimestamp2(frame.command, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, timestamps, slot * 2);
         }
-        pipeline->record(frame.command, *scene, view, target, *overlay, deltaSeconds);
+        pipeline->record(frame.command, active, view, target, *overlay, deltaSeconds);
         const bool capturing = !capturePath.empty();
         if (capturing) recordCapture(frame.command, target);
         if (!headless) {
@@ -779,6 +792,15 @@ void Renderer::capture(const std::string& path) {
 }
 void Renderer::setStatus(const std::string& text) { impl->status = text; }
 gt4::TestScene& Renderer::scene() { return *impl->scene; }
+void Renderer::useGameFrame(bool enabled) {
+    if (impl->gameFrame != enabled) impl->sceneSwitched = true;   // the pipeline prepares the new scene source
+    impl->gameFrame = enabled;
+}
+void Renderer::setGameFrame(uint32_t width, uint32_t height, const uint32_t* rgba) { impl->gsScene->setFrame(width, height, rgba); }
+void Renderer::reloadVulkanFunctions() {
+    volkLoadInstanceOnly(impl->instance);
+    volkLoadDevice(impl->device.device);
+}
 const GpuInfo& Renderer::gpu() const { return impl->info; }
 double Renderer::gpuMilliseconds() const { return impl->gpuMs; }
 double Renderer::averageGpuMilliseconds() const { return impl->gpuSamples ? impl->gpuMsTotal / static_cast<double>(impl->gpuSamples) : 0.0; }

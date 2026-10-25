@@ -64,6 +64,9 @@ public:
     void writeVram(uint32_t offset, const void* data, size_t bytes);
     void readVram(uint32_t offset, void* data, size_t bytes);
     void setEventSink(EventSink sink);
+    // The back end is used from one thread at a time; a thread other than the creating one calls this
+    // before its first use (Granite keeps a per-thread index).
+    void bindToCurrentThread();
     void setSuperSampling(uint32_t rate, bool highResolutionScanout);
 
     std::string deviceName() const;
