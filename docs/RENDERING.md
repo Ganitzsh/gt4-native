@@ -23,8 +23,8 @@ py tools\host_session.py run --exe build\host-windows-Release\gt4_host.exe --hos
    --script tests\scenarios\features.json --no-audio      :: one capture per feature, HTML report
 ```
 
-- **Headless** (`--headless`): the whole pipeline renders into an offscreen image of `--size WxH` (default
-  1920x1080). No window, surface or swapchain is created, so any GPU can be used (default: the discrete one)
+- **Headless** (`--headless`): the whole pipeline renders into an offscreen image of `--size WxH` (default:
+  the window size, 1280x720). No window, surface or swapchain is created, so any GPU can be used (default: the discrete one)
   and no desktop is needed. Captures, session commands and reports are the same as in windowed runs.
 - **Sessions** (`tools/host_session.py`, `--session-dir`): a virtual gamepad plus a command queue (`axis`,
   `button`, `reset`, `capture NAME`, `set KEY VALUE`, `wait FRAMES`, `resize W H`, `tone HZ S`, `quit`). The

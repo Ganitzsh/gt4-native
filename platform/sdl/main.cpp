@@ -44,7 +44,7 @@ const char* kUsage =
     "  --list-options       list every setting with its value, allowed values and help\n"
     "Options:\n"
     "  --headless           render offscreen (no window, surface or swapchain); default GPU: discrete\n"
-    "  --size WxH           headless output size (default 1920x1080)\n"
+    "  --size WxH           headless output size (default: display.window_width x display.window_height)\n"
     "  --gpu INDEX|NAME     Vulkan device (overrides display.gpu)\n"
     "  --set KEY=VALUE      override one setting (repeatable), e.g. --set render.aa=smaa\n"
     "  --preset NAME        shorthand for --set graphics.preset=NAME\n"
@@ -65,7 +65,7 @@ struct Options {
     bool probe = false, smoke = false, headless = false, listGpus = false, listDisplays = false, listOptions = false;
     bool fixedStep = false, audio = true;
     uint32_t frames = 0;
-    VkExtent2D size{1920, 1080};
+    VkExtent2D size{0, 0};   // headless output; 0 = the window size setting
     std::string gpu, settingsPath, sessionDirectory, capture;
     std::vector<std::pair<std::string, std::string>> sets;
 };
@@ -380,9 +380,12 @@ int run(const Options& options) {
         display = std::make_unique<gt4::DisplayManager>(sdlWindow);
         if (!options.probe && !options.smoke) display->apply(settings);
     }
+    // Headless output: --size, or the size a window would have.
+    const VkExtent2D headlessSize = options.size.width ? options.size
+        : VkExtent2D{static_cast<uint32_t>(settings.windowWidth), static_cast<uint32_t>(settings.windowHeight)};
     auto makeRenderer = [&](const std::string& gpu) {
         return windowed ? std::make_unique<Renderer>(sdlWindow, instance.instance, gpu, settings)
-                        : std::make_unique<Renderer>(instance.instance, options.size, gpu, settings);
+                        : std::make_unique<Renderer>(instance.instance, headlessSize, gpu, settings);
     };
     std::unique_ptr<Renderer> renderer = makeRenderer(settings.gpu);
     std::string activeGpu = settings.gpu;
