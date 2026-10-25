@@ -1,6 +1,8 @@
+diff --git a/include/obstack.h b/include/obstack.h
+index 38e9677..41939cd 100644
 --- a/include/obstack.h
 +++ b/include/obstack.h
-@@ -417,7 +417,7 @@
+@@ -417,7 +417,7 @@ __extension__								\
  ({ struct obstack *__o = (OBSTACK);					\
     if (__o->next_free + sizeof (void *) > __o->chunk_limit)		\
       _obstack_newchunk (__o, sizeof (void *));				\
@@ -9,7 +11,7 @@
     (void) 0; })
  
  # define obstack_int_grow(OBSTACK,datum)				\
-@@ -425,11 +425,11 @@
+@@ -425,11 +425,11 @@ __extension__								\
  ({ struct obstack *__o = (OBSTACK);					\
     if (__o->next_free + sizeof (int) > __o->chunk_limit)		\
       _obstack_newchunk (__o, sizeof (int));				\
@@ -24,7 +26,7 @@
  
  # define obstack_blank(OBSTACK,length)					\
  __extension__								\
-@@ -536,8 +536,8 @@
+@@ -536,8 +536,8 @@ __extension__								\
     ? (_obstack_newchunk ((h), sizeof (int)), 0) : 0),			\
    (*((int *) (((h)->next_free+=sizeof(int))-sizeof(int))) = ((int) datum)))
  
@@ -125,12 +127,96 @@ index 2d0783d..df81442 100644
        while (top - bot > 1)
  	{
  	  half = (top - bot + 1) >> 1;
+diff --git a/gcc/calls.c b/gcc/calls.c
+index c4e29c7..eb9ff3d 100644
+--- a/gcc/calls.c
++++ b/gcc/calls.c
+@@ -388,6 +388,10 @@ prepare_call_address (funexp, fndecl, call_fusage, reg_parm_seen)
+ 
+    IS_CONST is true if this is a `const' call.  */
+ 
++/* gt4: bytes of padding the caller reserved above the arguments of the call being emitted
++   (expand_call sets it just before emit_call_1, which pops it with the arguments).  */
++static HOST_WIDE_INT gt4_call_pad;
++
+ /* CYGNUS LOCAL sibcall/law */
+ static void
+ emit_call_1 (funexp, fndecl, funtype, stack_size, struct_value_size, 
+@@ -564,6 +568,11 @@ emit_call_1 (funexp, fndecl, funtype, stack_size, struct_value_size,
+       stack_size_rtx = GEN_INT (stack_size);
+     }
+ 
++  /* gt4: the padding above the arguments is the caller's to pop, whoever pops the arguments.  */
++  stack_size += gt4_call_pad;
++  stack_size_rtx = GEN_INT (stack_size);
++  gt4_call_pad = 0;
++
+   if (stack_size != 0)
+     {
+       if (flag_defer_pop && inhibit_defer_pop == 0 && !is_const)
+@@ -1995,6 +2004,12 @@ expand_call (exp, target, ignore)
+   special_function_p (name, fndecl, &returns_twice, &is_longjmp,
+ 		      &is_malloc, &may_be_alloca);
+ 
++  /* gt4: a function named malloc that returns no pointer (the decomp declares the game's
++     own malloc as void in places) is an ordinary call: the malloc handling below moves the
++     return value register, which a void call does not have.  */
++  if (is_malloc && TREE_CODE (TREE_TYPE (exp)) != POINTER_TYPE)
++    is_malloc = 0;
++
+   if (may_be_alloca)
+     current_function_calls_alloca = 1;
+ 
+@@ -2011,6 +2026,7 @@ expand_call (exp, target, ignore)
+   for (pass = 0; pass < 2; pass++)
+     {
+       int sibcall_failure = 0;
++      HOST_WIDE_INT call_pad = 0;
+       /* We want to emit ay pending stack adjustments before the tail
+ 	 recursion "call".  That way we know any adjustment after the tail
+ 	 recursion call can be ignored if we indeed use the tail recursion
+@@ -2223,11 +2239,27 @@ expand_call (exp, target, ignore)
+       precompute_arguments (is_const, must_preallocate, num_actuals,
+ 			    args, &args_size);
+ 
++      /* gt4: every call reserves GT4_CALL_PAD bytes above its arguments, so a callee declared with
++	 more parameters than the caller passes (harmless on the EE, where they are registers) writes
++	 its extra parameter slots into the caller's padding, not the caller's frame.  Pending pops
++	 go first: otherwise their space would be reused for the arguments, below the padding.  */
++      call_pad = 0;
++#ifdef GT4_CALL_PAD
++      if (pass != 0 && args_size.var == 0)
++	{
++	  do_pending_stack_adjust ();
++	  call_pad = GT4_CALL_PAD;
++	}
++#endif
++
+       /* Now we are about to start emitting insns that can be deleted
+ 	 if a libcall is deleted.  */
+       if (is_const || is_malloc)
+ 	start_sequence ();
+ 
++      if (call_pad)
++	anti_adjust_stack (GEN_INT (call_pad));
++
+       /* If we have no actual push instructions, or shouldn't use them,
+ 	 make space for all args right now.  */
+ 
+@@ -2516,6 +2548,7 @@ expand_call (exp, target, ignore)
+ 	 now!  */
+ 
+       /* Generate the actual call instruction.  */
++      gt4_call_pad = call_pad;
+       emit_call_1 (funexp, fndecl, funtype, args_size.constant,
+ 		   struct_value_size,
+ 		   FUNCTION_ARG (args_so_far, VOIDmode, void_type_node, 1),
 diff --git a/gcc/config/i386/gt4-native.h b/gcc/config/i386/gt4-native.h
 new file mode 100755
-index 0000000..7f1983c
+index 0000000..eee386a
 --- /dev/null
 +++ b/gcc/config/i386/gt4-native.h
-@@ -0,0 +1,69 @@
+@@ -0,0 +1,75 @@
 +/* GT4 native port: the i386 PE-COFF (mingw32) target with the PS2 Emotion Engine's data model.
 +
 +   The game's decompiled sources were written for Sony's ee-gcc 2.96 (MIPS R5900, EABI, 32-bit
@@ -200,6 +286,12 @@ index 0000000..7f1983c
 +   name (varasm.c make_decl_rtl, patched): the decomp names one game function by asm label in one
 +   source and by its C name in another, which on the EE (no prefix) is one symbol.  */
 +#define ASMSPEC_USER_LABEL_PREFIX 1
++
++/* Every call reserves 32 bytes above its pushed arguments (calls.c): the decomp declares many
++   functions with more parameters than their callers pass, harmless on the EE (they are registers,
++   with a home area) but here the callee would write its extra parameter slots into the caller's
++   frame.  The callee's view is the usual cdecl one ([esp+4] = first argument).  */
++#define GT4_CALL_PAD 32
 diff --git a/gcc/configure b/gcc/configure
 index 1da1509..00e0da1 100755
 --- a/gcc/configure
@@ -283,10 +375,40 @@ index cde1aff..4691fd1 100644
  
  /* Define fields and accessors for nodes representing declared names.  */
 diff --git a/gcc/cp/decl.c b/gcc/cp/decl.c
-index 2be8e86..39ba5c5 100644
+index 2be8e86..c16e62f 100644
 --- a/gcc/cp/decl.c
 +++ b/gcc/cp/decl.c
-@@ -6771,7 +6771,10 @@ check_tag_decl (declspecs)
+@@ -4450,6 +4450,9 @@ redeclaration_error_message (newdecl, olddecl)
+    Create one if none exists so far for the current function.
+    This function is called for both label definitions and label references.  */
+ 
++/* gt4: set by finish_label_address_expr: the reference is `&&label', not a goto.  */
++int lookup_label_address_only;
++
+ tree
+ lookup_label (id)
+      tree id;
+@@ -4463,7 +4466,8 @@ lookup_label (id)
+       return NULL_TREE;
+     }
+ 
+-  if ((decl == NULL_TREE
++  if (! lookup_label_address_only
++      && (decl == NULL_TREE
+       || DECL_SOURCE_LINE (decl) == 0)
+       && (named_label_uses == NULL
+ 	  || named_label_uses->names_in_scope != current_binding_level->names
+@@ -4509,7 +4513,8 @@ lookup_label (id)
+   SET_IDENTIFIER_LABEL_VALUE (id, decl);
+ 
+   named_labels = tree_cons (NULL_TREE, decl, named_labels);
+-  named_label_uses->label_decl = decl;
++  if (! lookup_label_address_only)
++    named_label_uses->label_decl = decl;
+ 
+   return decl;
+ }
+@@ -6771,7 +6776,10 @@ check_tag_decl (declspecs)
    /* Check for an anonymous union.  We're careful
       accessing TYPE_IDENTIFIER because some built-in types, like
       pointer-to-member types, do not have TYPE_NAME.  */
@@ -425,6 +547,24 @@ index 0218b56..a1d7b4a 100644
  	unuse_fields (TREE_TYPE (fields));
      }
  
+diff --git a/gcc/cp/semantics.c b/gcc/cp/semantics.c
+index 0e028d2..80ef311 100644
+--- a/gcc/cp/semantics.c
++++ b/gcc/cp/semantics.c
+@@ -1027,8 +1027,13 @@ finish_label_address_expr (label)
+      tree label;
+ {
+   tree result;
++  extern int lookup_label_address_only;
+ 
++  /* gt4: taking a label's address (`&&next') is not a jump to it: gcc 2.96 does not check it
++     against the initializations between here and the label.  */
++  lookup_label_address_only = 1;
+   label = lookup_label (label);
++  lookup_label_address_only = 0;
+   if (label == NULL_TREE)
+     result = null_pointer_node;
+   else
 diff --git a/gcc/cp/typeck.c b/gcc/cp/typeck.c
 index a127bfb..4a94a0c 100644
 --- a/gcc/cp/typeck.c

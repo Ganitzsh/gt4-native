@@ -53,6 +53,18 @@ dependency); libiberty built from the top-level configure.
 
 `int`, `size_t`, `ptrdiff_t`, pointers and enums stay 32-bit; `char` is signed on both.
 
+**Call-site padding (`GT4_CALL_PAD` 32, `calls.c`).** Every call reserves 32 bytes above its pushed
+arguments (`addl $-32,%esp` before the pushes; the pop after the call includes them; pending pops are
+flushed first so the padding is always directly above the arguments; a const/malloc call's padding
+is inside its libcall sequence). The decomp declares many functions with more parameters than their
+callers pass, harmless on the EE (parameters are registers) but natively the callee owns those
+stack slots and may write them (an assignment to a parameter, or gcc 2.9's sibling calls, which
+store the next callee's arguments into the caller's incoming slots: `movl $0,12(%ebp); leave; jmp`).
+With the padding, slots up to 8 words past the actual arguments are the caller's scratch. The
+callee's view is plain cdecl (`[esp+4]` = first argument), so runtime code calls game code and back
+unchanged. gcc 2.9 emits a sibling call only when the callee's arguments fit in the caller's
+*declared* incoming area (`current_function_args_size`), so it never writes past it.
+
 ### Frontend patches (gcc 2.96 behaviour the decomp relies on)
 
 gcc 2.96 (2000-10-03 snapshot, the game's compiler) has a newer frontend than this 2.9 snapshot.
@@ -77,6 +89,15 @@ The patch adds what the census showed the sources need:
   link resolves them to the game image's own (their entries point at the original code addresses;
   `dynamic_cast` compares type-info addresses). `-fno-gt4-extern-class-data` emits them as gcc
   normally does (for the ABI probes).
+- **`malloc` declared `void`** (`extern "C" void malloc(s32);`, 4 sources): gcc 2.9 recognises
+  malloc/calloc/realloc by name and moved the (absent) return register, an internal compiler error
+  (or signal 11). A malloc-named function that returns no pointer is an ordinary call (`calls.c`).
+- **`&&label`** is not a jump to the label: gcc 2.9 checked taking a label's address against the
+  initializations between it and the label ("jump to label crosses initialization", computed-goto
+  interpreters); gcc 2.96 does not (`cp/decl.c` `lookup_label`, `cp/semantics.c`).
+- **`extern "C" int f ();` means no arguments** in C++, as in gcc 2.96: the driver passes
+  `-fstrict-prototype` to C++ compiles (gcc 2.9 read it as `(...)`, so such a function did not
+  convert to `int (*)()`).
 
 Varargs, `__builtin_expect` and the 128-bit types are handled without compiler changes, in
 `compat/game/gt4_prelude.h` (below).
@@ -160,7 +181,44 @@ assemblies; all with `--keep-s`); `census.jsonl` (`file, profile, lang, ok, stag
   become a compiler barrier (`asm volatile ("" ::: "memory")`); `li %0, IMM` a constant; the EE
   kernel's privileged instructions become calls into the native runtime, declared in
   `gt4_prelude.h`: `__gt4_ee_ei()`, `__gt4_ee_di()`, `__gt4_ee_mfc0(reg)`, `__gt4_ee_get_gp()`,
-  `__gt4_ee_set_gp(gp)`, `__gt4_ee_break(code)`. VU0 macro-mode and other MMI asm is left alone.
+  `__gt4_ee_set_gp(gp)`, `__gt4_ee_break(code)`.
+- **Every other asm statement** (several instructions, MMI, COP2/VU0 macro mode, explicit
+  registers, asm in a single-line `#define`) goes to `tools/game_toolchain/asm_translate.py`, which
+  turns it into C when it knows all its instructions (else it is left alone and the compile fails as
+  before):
+  `({ temporaries; inputs copied in; one helper call per instruction; outputs copied out; })`.
+  Register operands are `__gt4_reg` temporaries (the EE's 128-bit GPR; a 32-bit value
+  sign-extended into it, non-MMI instructions write the low 64 bits, MMI all 128); `"f"` operands
+  are floats; `"m"` operands are used by address; an input tied to an output (`"0"`) initialises it.
+  Explicit registers (`$8`, `$v0`, `$f2`, HI/LO of the MMI multiplies, the FPU accumulator) are
+  file-scope statics, so a value goes from one asm statement to the next as in the original;
+  `$28`/`$gp` goes through `__gt4_ee_get_gp`/`set_gp`. Because the EE keeps 128 bits in a register
+  even when the C variable bound to it is smaller (`qmfc2 %0,$vf1 : "=r"(u64 lo)` then
+  `pcpyud %0,%1,%1 : "=r"(hi) : "r"(lo)` reads lo's high half), a plain variable that is a register
+  output and a register input in the same file gets a shadow static of its full register, used
+  while its low bytes still equal the variable. VU0 registers are one program-wide register file,
+  `__gt4_vu0` (`runtime/native/vu0.cpp`); `vcallms` runs the VU0 microprogram interpreter there.
+  The semantics (MMI lanes and saturation, FPU incl. the EE's truncating `cvt.w.s`, VU0 FMAC with
+  dest masks and broadcasts, Q/I/R, clipping, VU0 integer and memory ops, COP2 moves, COP0 and
+  `syscall` as runtime calls) are C helpers in `compat/game/gt4_asm.h`, included by the prelude.
+  A `#param` stringified into a VU register name in a macro (`"$vf" #n`) becomes the C index `n`.
+- **C99 variadic macros** (`#define F(a, ...) ... __VA_ARGS__`) take gcc 2.9's named form.
+- **Register variables** (`register int i __asm__("$25")`) lose the binding; a file-scope one bound
+  to `$28` becomes a macro reading the module's `$gp` from the runtime.
+- **`(u128) 0`** (a mode(TI) typedef name) becomes `__gt4_zero_u128 ()`; C++ also gets integer
+  assignment to the 128-bit structures (sign-extended) and copies to/from `volatile` ones (member
+  templates and non-copy `operator=`s, so the structures stay trivial for unions).
+- **Explicit instantiation of an operator through a typedef** (`template Vec &Vec::operator=(const
+  Vec &);`) is preceded by `typedef char __gt4_complete_N[sizeof (Vec)];`: gcc 2.9 needs the class
+  complete there.
+
+`gt4_prelude.h` also predefines `__MIPSEL__`, as ee-gcc does (newlib picks its IEEE word order by it).
+
+**Recovered sources** (`--recovered`, implied by `--all`): `config/asm_functions.txt` lists functions
+the decomp keeps as assembly although they were matched in C once (`... (was NAME.cpp)`: moved out
+by its inline-asm policy). The driver reads their last matched version from the decomp's git
+history (`git show`, read only) and compiles them as `recovered/<src path>` (objects under
+`obj/recovered/`), exporting the listed address: 39 functions, mostly the VU0 graphics helpers.
 
 `compat/game/` also replaces `spr.h`: `spr_base()` returns `(void *)0x70002000`, assuming the native
 program maps the scratchpad at its guest address like the rest of the EE address space.
@@ -182,7 +240,17 @@ instantiates a template has its function in a link-once `.text$...` section: tha
 and its section made an ordinary one, so the linker cannot discard it for another object's copy.
 All 30,189 objects have their alias; a symbol scan finds no duplicate global definition.
 
-## Census (2026-10-25, decomp at that day's master, 30,257 sources)
+## Census
+
+**2026-10-25, second run: all 30,257 sources and the 39 recovered ones compile and assemble
+(30,296 of 30,296).** What fixed the 68 below: the compiler (malloc ICE: the 3 signal 11 and the
+boot-path internal error; `&&label`), `-fstrict-prototype` (the 2 `extern "C" f()` conversions),
+the general asm translation (30 MIPS asm, 17 `emit_move_insn` crashes), the transforms (C99 variadic
+macros, register variables, `__as` instantiations, `volatile u128`), `__MIPSEL__` (newlib dtoa).
+Compiling a 2,467-source sample (all u128 users, the newlib units, 1,800 random others) before and
+after the prelude and flag changes gave identical code up to local label numbers.
+
+First run, 2026-10-25, decomp at that day's master, 30,257 sources:
 
 **30,189 compile and assemble (99.8%)**: 23,848 of 23,905 C++ files, 6,341 of 6,352 C files.
 
@@ -218,7 +286,7 @@ Symbol scan of all 30,189 objects (`nm`): no duplicate global definitions; the u
 
 Other things to keep in mind when linking and running:
 
-- The 68 sources that do not compile (above) need native replacements, mostly VU0/MMI code.
+- All sources compile now (above); hand-written assembly the boot reaches gets native code in `runtime/native/` (one file per decomp unit), VU0 microprograms run in `runtime/native/vu0.cpp`.
 - 2.9 inlines less than 2.96; with `--export own` every out-of-line copy is local, so nothing
   collides, but the code is larger.
 - `delete[]` passes in-charge 0 instead of 2 to element destructors (classes with virtual bases

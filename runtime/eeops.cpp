@@ -1,5 +1,5 @@
-// The EE's privileged one-instruction asm statements, which tools/game_cc.py turns into calls
-// (compat/game/gt4_prelude.h): ei/di, mfc0, the module $gp, break.
+// The EE's privileged asm instructions, which tools/game_cc.py turns into calls
+// (compat/game/gt4_prelude.h, gt4_asm.h): ei/di, mfc0/mtc0, the module $gp, break, syscall.
 #include "kernel.h"
 #include "log.h"
 
@@ -37,5 +37,31 @@ void *__gt4_ee_get_gp(void) { return t_gp; }
 void __gt4_ee_set_gp(void *gp) { t_gp = gp; }
 
 void __gt4_ee_break(int code) { fatal("game code executed a break instruction (code %d)", code); }
+
+// mtc0 (tools/game_toolchain/asm_translate.py): the performance counter control (25), Wired (6),
+// and other COP0 writes have nothing to drive natively.
+void __gt4_ee_mtc0(int reg, unsigned int value) {
+    (void)reg;
+    (void)value;
+}
+
+int gt4_sys_GetThreadId();
+
+// An inline `syscall` (asm_translate.py: $v1 = number, $a0-$a3 = arguments, result in $v0). The
+// syscall stubs of the image go through kernel_install_syscalls; this is for the few that the
+// game's C code issues itself (iWakeupThread/iSuspendThread in thread.o: iGetThreadId).
+int __gt4_ee_syscall(int number, unsigned int a0, unsigned int a1, unsigned int a2, unsigned int a3) {
+    (void)a0;
+    (void)a1;
+    (void)a2;
+    (void)a3;
+    switch (number) {
+    case 0x2F:
+    case -0x2F:
+        return gt4_sys_GetThreadId();
+    default:
+        fatal("game code issued syscall %d (0x%x) inline; not implemented", number, number & 0xFFFF);
+    }
+}
 
 }  // extern "C"

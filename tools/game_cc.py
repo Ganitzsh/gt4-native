@@ -42,6 +42,9 @@ import sys
 import tarfile
 import time
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "game_toolchain"))
+import asm_translate  # noqa: E402
+
 try:
     import tomllib
 except ImportError:  # Python < 3.11
@@ -169,78 +172,152 @@ ASM_C = [
     (re.compile(rb"^mfc0 %0,\$(\d+)$"), rb"{o0} = __gt4_ee_mfc0 (\1)"),
     (re.compile(rb"^li %0,(-?(?:0x[0-9a-fA-F]+|\d+))$"), rb"{o0} = (__typeof__ ({o0})) \1"),
     (re.compile(rb"^(?:daddu %0,\$(?:28|gp),\$0|move %0,\$(?:28|gp))$"), b"{o0} = (__typeof__ ({o0})) __gt4_ee_get_gp ()"),
-    (re.compile(rb"^(?:daddu \$(?:28|gp),%0,\$0|move \$(?:28|gp),%0)$"), b"__gt4_ee_set_gp ((void *) ({i0}))"),
+    (re.compile(rb"^(?:daddu \$(?:28|gp),%0,\$0|move \$(?:28|gp),%0)$"), b"__gt4_ee_set_gp ((void *) __GT4_LO32 ({i0}))"),
     (re.compile(rb"^sw \$(?:28|gp),%0$"), b"*(void **) &({o0}) = __gt4_ee_get_gp ()"),
     (re.compile(rb"^break(?: (\d+))?$"), rb"__gt4_ee_break (0\1)"),
 ]
 
 
-def translate_asm(data):
-    """One-instruction MIPS asm statements (the decomp's policy, tools/asm_policy.py) with a C
-    meaning become C: FPU min/max/sqrt/abs/rsqrt, mtc1/mfc1, plzcw, the barriers (sync, pref,
-    cache: an empty asm with a memory clobber) and the EE kernel's privileged instructions (calls
-    into the native runtime, see gt4_prelude.h). VU0 and other multimedia asm is left as it is."""
-    out, pos = [], 0
+def _close_paren_macro(data, i):
+    """As _close_paren, through backslash-newlines (an asm statement in a #define)."""
+    depth, quote = 1, None
+    while i < len(data):
+        c = data[i:i + 1]
+        if quote:
+            if c == b"\\":
+                i += 1
+            elif c == quote:
+                quote = None
+        elif c in (b'"', b"'"):
+            quote = c
+        elif c == b"(":
+            depth += 1
+        elif c == b")":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        elif c == b"\n" and data[i - 1:i] != b"\\":
+            return None  # the end of a #define line: unbalanced
+        i += 1
+    return None
+
+
+def _asm_c(data, m, end):
+    """The ASM_C translation of the asm statement data[m.start():end], or None."""
+    parts = _split_top(data[m.end():end - 1], b":")
+    strings = re.findall(rb'"((?:[^"\\]|\\.)*)"', parts[0])
+    if not strings or re.sub(rb'"(?:[^"\\]|\\.)*"|\s', b"", parts[0]):
+        return None
+    insn = b"".join(strings).replace(b"\\n", b";").replace(b"\\t", b" ")
+    insn = re.sub(rb"\s*([,;()])\s*", rb"\1", insn.strip()).strip(b";")
+    insn = re.sub(rb"\s+", b" ", insn)
+    ops = []
+    for section in parts[1:3]:
+        for o in _split_top(section, b","):
+            if o.strip():
+                om = _OPERAND.match(o)
+                if not om:
+                    return None
+                ops.append(om.group(1).strip())
+    n_out = len([o for o in _split_top(parts[1], b",") if o.strip()]) if len(parts) > 1 else 0
+    for rx, tmpl in ASM_C:
+        im = rx.match(insn)
+        if not im:
+            continue
+        c = im.expand(tmpl)
+        try:
+            for k, e in enumerate(ops):
+                c = c.replace(b"{o%d}" % k if k < n_out else b"{i%d}" % k, b"(" + e + b")")
+        except Exception:
+            return None
+        if b"{" in c.replace(b"__GT4", b"") and re.search(rb"\{[oi]\d\}", c):
+            return None  # an operand the template needs is missing
+        return b"(" + c + b")" if not c.startswith(b"__asm__") else c
+    return None
+
+
+def translate_asm(data, name=None):
+    """MIPS asm statements become C. One-instruction statements with a C meaning (the decomp's
+    policy, tools/asm_policy.py) go through ASM_C: FPU min/max/sqrt/abs/rsqrt, mtc1/mfc1, plzcw,
+    the barriers (sync, pref, cache: an empty asm with a memory clobber) and the EE kernel's
+    privileged instructions (calls into the native runtime, see gt4_prelude.h). Every other
+    statement (several instructions, MMI, COP2/VU0 macro mode, explicit registers, asm in a
+    #define) goes to tools/game_toolchain/asm_translate.py, which turns it into C over 128-bit
+    register temporaries and the VU0 register file (compat/game/gt4_asm.h) when it knows all its
+    instructions; the statics it needs are declared at the top of the file."""
+    stmts = []
     for m in ASM_START.finditer(data):
+        end = _close_paren(data, m.end())
+        macro = False
+        if end is None:
+            end, macro = _close_paren_macro(data, m.end()), True
+            if end is None:
+                continue
+        stmts.append((m, end, macro))
+    if not stmts:
+        return data
+    bodies = [data[m.end():end - 1].decode("latin-1") for m, end, _ in stmts]
+    ctx = asm_translate.Ctx(asm_translate.scan_shadow_names(bodies))
+    out, pos = [], 0
+    for (m, end, macro), body in zip(stmts, bodies):
         if m.start() < pos:
             continue
-        end = _close_paren(data, m.end())
-        if end is None:
-            continue
-        parts = _split_top(data[m.end():end - 1], b":")
-        strings = re.findall(rb'"((?:[^"\\]|\\.)*)"', parts[0])
-        if not strings or re.sub(rb'"(?:[^"\\]|\\.)*"|\s', b"", parts[0]):
-            continue
-        insn = b"".join(strings).replace(b"\\n", b";").replace(b"\\t", b" ")
-        insn = re.sub(rb"\s*([,;()])\s*", rb"\1", insn.strip()).strip(b";")
-        insn = re.sub(rb"\s+", b" ", insn)
-        ops = []
-        for section in parts[1:3]:
-            for o in _split_top(section, b","):
-                if o.strip():
-                    om = _OPERAND.match(o)
-                    if not om:
-                        ops = None
-                        break
-                    ops.append(om.group(1).strip())
-            if ops is None:
-                break
-        if ops is None:
-            continue
-        n_out = len([o for o in _split_top(parts[1], b",") if o.strip()]) if len(parts) > 1 else 0
-        for rx, tmpl in ASM_C:
-            im = rx.match(insn)
-            if not im:
+        c = None if macro else _asm_c(data, m, end)
+        if c is None:
+            g = asm_translate.translate(body, ctx)
+            if g is None:
                 continue
-            c = im.expand(tmpl)
-            try:
-                for k, e in enumerate(ops):
-                    c = c.replace(b"{o%d}" % k if k < n_out else b"{i%d}" % k, b"(" + e + b")")
-            except Exception:
-                break
-            if b"{" in c.replace(b"__GT4", b"") and re.search(rb"\{[oi]\d\}", c):
-                break  # an operand the template needs is missing
-            out.append(data[pos:m.start()])
-            out.append(b"(" + c + b")" if not c.startswith(b"__asm__") else c)
-            pos = end
-            break
+            nl = data[m.start():end].count(b"\n")
+            c = g.encode("latin-1") + (b"\\\n" if macro else b"\n") * nl
+        out.append(data[pos:m.start()])
+        out.append(c)
+        pos = end
     out.append(data[pos:])
-    return b"".join(out)
+    data = b"".join(out)
+    pro = ctx.prologue()
+    if pro:
+        line = b'#line 1 "%s"\n' % name.encode() if name else b""
+        data = pro.encode("latin-1") + line + data
+    return data
 
 
-def transform(data):
+def transform(data, name=None):
     """Source rewrites done on the fly (the decomp stays untouched): every 128-bit mode(TI)
     typedef names one of the 16-byte structures of compat/game/gt4_prelude.h instead, C99
     hexadecimal floating constants become decimal ones of the same value, and the MIPS asm
-    statements that have a C meaning become that C (translate_asm)."""
+    statements become C (translate_asm). name: the file's path, for #line after added lines.
+    Also: C99 variadic macros (`#define F(a, ...) ... __VA_ARGS__`) take gcc 2.9's named form
+    (`__VA_ARGS__...`); variables bound to a MIPS register (`register T v __asm__("$25")`) lose the
+    binding, and a file-scope one bound to $28 reads the module's $gp from the runtime; an explicit
+    instantiation of an operator of a class named by a typedef (`template Vec &Vec::operator=(...)`)
+    is preceded by a sizeof of that class, which gcc 2.9 needs complete there."""
     if b"TI" in data:
+        ti = {m.group(2): b"u" if m.group(1).startswith(b"unsigned") else b"s" for m in TI_TYPEDEF.finditer(data)}
         data = TI_TYPEDEF.sub(lambda m: b"typedef struct __gt4_%s128 %s;" % (
             b"u" if m.group(1).startswith(b"unsigned") else b"s", m.group(2)), data)
+        if ti:
+            # `(u128) 0`: a 128-bit zero (the structures have no constructor from int)
+            names = b"|".join(re.escape(n) for n in ti)
+            data = re.sub(rb"\(\s*(" + names + rb")\s*\)\s*0\b(?![.xX])",
+                          lambda m: b"__gt4_zero_%s128 ()" % ti[m.group(1)], data)
     if b"0x" in data or b"0X" in data:
         data = HEX_FLOAT.sub(hex_float_decimal, data)
+    if b"__VA_ARGS__" in data:
+        data = VA_DEFINE.sub(rb"\1__VA_ARGS__...)", data)
+    if b"operator" in data and b"template" in data:
+        data = INST_OPERATOR.sub(lambda m: b"typedef char __gt4_complete_%d[sizeof (%s)]; " % (m.start(), m.group(1))
+                                 + m.group(0), data)
     if b"asm" in data:
-        data = translate_asm(data)
+        data = GP_GLOBAL.sub(lambda m: b"#define %s ((%s) __gt4_ee_get_gp ())" % (m.group(2), m.group(1).strip()), data)
+        data = REG_VAR.sub(rb"\1", data)
+        data = translate_asm(data, name)
     return data
+
+
+VA_DEFINE = re.compile(rb"^([ \t]*#[ \t]*define[ \t]+\w+\([^)\n]*?)\.\.\.\)", re.M)
+GP_GLOBAL = re.compile(rb'^register\s+([^;=(]*?)\b(\w+)\s*(?:__asm__|asm)\s*\(\s*"\$(?:28|gp)"\s*\)\s*;', re.M)
+INST_OPERATOR = re.compile(rb"^template\s+[^<;{}]*?\b(\w+)\s*::\s*operator\b", re.M)
+REG_VAR = re.compile(rb'(\bregister\s+[^;=(){}]*?\w)\s*(?:__asm__|asm)\s*\(\s*"\$\w+"\s*\)')
 
 
 def load_profiles(decomp):
@@ -293,6 +370,45 @@ def list_sources(decomp, args):
     return sorted(set(files))
 
 
+RECOVERED = "recovered/"
+
+
+def recovered_sources(decomp):
+    """{"recovered/<src path>": (address, source bytes)}: the functions config/asm_functions.txt
+    keeps as assembly although they were matched in C once (`... (was NAME.cpp)`: moved out by the
+    decomp's inline-asm policy, tools/asm_policy.py). Their last matched version is read from the
+    decomp's history (git show, read only); the asm translation makes them native code."""
+    path = os.path.join(decomp, "config", "asm_functions.txt")
+    if not os.path.exists(path):
+        return {}
+    wanted = {}
+    for line in open(path, encoding="utf-8"):
+        m = re.match(r"^([0-9a-fA-F]{8})\b.*\(was ([\w.]+\.(?:c|cpp))\)", line)
+        if m:
+            wanted[m.group(2)] = int(m.group(1), 16)
+    if not wanted:
+        return {}
+    log = subprocess.run(["git", "-C", decomp, "log", "--all", "--diff-filter=D", "--format=commit %H",
+                          "--name-only", "--", "src"], capture_output=True, text=True, check=True).stdout
+    found, commit = {}, None
+    for line in log.splitlines():
+        if line.startswith("commit "):
+            commit = line.split()[1]
+        elif line.strip():
+            name = line.strip().rsplit("/", 1)[-1]
+            if name in wanted and name not in found:  # newest deletion first
+                found[name] = (commit, line.strip())
+    out = {}
+    for name, (commit, src) in sorted(found.items()):
+        data = subprocess.run(["git", "-C", decomp, "show", f"{commit}^:{src}"], capture_output=True, check=True).stdout
+        out[RECOVERED + src] = (wanted[name], data)
+    missing = sorted(set(wanted) - set(found))
+    if missing:
+        print(f"warning: {len(missing)} moved-out sources not found in the decomp's history: {missing[:5]}",
+              file=sys.stderr)
+    return out
+
+
 def profile_of(head):
     m = MARKER.match(head.split(b"\n", 1)[0].rstrip(b"\r") + b"\n") if head else None
     return m.group(1).decode() if m else None
@@ -314,7 +430,7 @@ def static_tar_members(decomp):
             for f in sorted(files):
                 p = os.path.join(dirpath, f)
                 rel = arc + "/" + os.path.relpath(p, base).replace(os.sep, "/")
-                out.append((rel, transform(open(p, "rb").read())))
+                out.append((rel, transform(open(p, "rb").read(), rel)))
     return out
 
 
@@ -352,8 +468,11 @@ def run_batch(decomp, batch, profiles, static, args):
         for rel, data in static:
             add_bytes(tar, "tree/" + rel, data)
         for i, (rel, prof, data) in enumerate(batch):
-            add_bytes(tar, "tree/" + rel, transform(data))
+            add_bytes(tar, "tree/" + rel, transform(data, rel))
             flags = ["-Icompat"] + profiles[prof] + ["-include", "compat/gt4_prelude.h"]
+            if not rel.endswith(".c"):
+                # `extern "C" int f ();` takes no arguments, as in gcc 2.96 (2.9 read it as `(...)`)
+                flags.append("-fstrict-prototype")
             jobs.append(f"{i} {rel} {' '.join(flags)}")
         add_bytes(tar, "jobs.txt", ("\n".join(jobs) + "\n").encode())
     script = WSL_SCRIPT.format(gcc=GCC, timeout=args.timeout, jobs=args.jobs)
@@ -478,6 +597,13 @@ def source_addresses(decomp):
     return json.loads(p.stdout)
 
 
+def stem_address(rel):
+    """The address in a file name func_XXXXXXXX.c(pp): files outside the decomp's source map
+    (tools/draft_natives.py stages kept drafts that way)."""
+    m = re.match(r"func_([0-9A-Fa-f]{8})\.", os.path.basename(rel))
+    return int(m.group(1), 16) if m else None
+
+
 GLOBL = re.compile(rb"^\.globl[ \t]+(\S+)[ \t]*\r?\n", re.M)
 DEF_EXT = re.compile(rb"(\.def[ \t]+([^;\s]+);[ \t]*\.scl[ \t]+)2(?=;)")
 
@@ -557,6 +683,9 @@ def main():
     ap.add_argument("--out", required=True, help="output directory (under this worktree's build/)")
     ap.add_argument("--all", action="store_true", help="every .c/.cpp under the decomp's src/")
     ap.add_argument("--list", help="a file listing sources, one per line")
+    ap.add_argument("--recovered", action="store_true",
+                    help="also the matched sources the decomp moved to config/asm_functions.txt (read "
+                         "from its git history; objects under obj/recovered/); implied by --all")
     ap.add_argument("--jobs", type=int, default=8, help="parallel compiles in WSL and assemblies on Windows")
     ap.add_argument("--timeout", type=int, default=60, help="seconds per compile before it is killed")
     ap.add_argument("--batch", type=int, default=1500, help="sources per WSL call")
@@ -572,11 +701,14 @@ def main():
         raise SystemExit("--out must not be inside the decomp tree")
     os.makedirs(out, exist_ok=True)
     profiles = load_profiles(decomp)
-    files = list_sources(decomp, args)
+    files = list_sources(decomp, args) if (args.all or args.files or args.list) else []
+    recovered = recovered_sources(decomp) if (args.all or args.recovered) else {}
+    files += sorted(recovered)
     if not files:
         raise SystemExit("no sources")
     static = static_tar_members(decomp)
     addresses = source_addresses(decomp) if args.export == "own" else {}
+    addresses.update({rel: addr for rel, (addr, _) in recovered.items()})
     census_path = os.path.join(out, "census.jsonl")
     census = open(census_path, "w", encoding="utf-8", newline="\n")
     counts = collections.Counter()
@@ -586,7 +718,7 @@ def main():
         chunk = files[b:b + args.batch]
         batch = []
         for rel in chunk:
-            data = open(os.path.join(decomp, rel), "rb").read()
+            data = recovered[rel][1] if rel in recovered else open(os.path.join(decomp, rel), "rb").read()
             prof = profile_of(data[:200])
             if prof not in profiles:
                 prof = None
@@ -604,7 +736,7 @@ def main():
             if os.path.exists(o_path):
                 os.remove(o_path)
             if asm is not None and args.export == "own":
-                asm, rec["exports"] = localize(asm, rel, addresses.get(rel))
+                asm, rec["exports"] = localize(asm, rel, addresses.get(rel) or stem_address(rel))
             if asm is None:
                 rec["stage"] = "timeout" if rc in (124, 137) else "compile"
                 rec["first_error"] = first_error(err) if rc not in (124, 137) else f"killed after {args.timeout} s"
