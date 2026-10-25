@@ -10,14 +10,16 @@
 /* Copies to and from volatile 128-bit objects (hardware FIFOs, volatile buffers): a member template
  * is never a copy assignment operator, so the structures stay trivial (union members, aggregates)
  * and a plain copy still takes the implicit operator.  Assigning an integer (`q = 0`, as the EE's
- * TImode allows) sign-extends it; these are not copy assignment operators either. */
-#define __GT4_INT_SET(T) \
-  void operator= (T v) { lo = (unsigned long long) v; hi = (long long) v < 0 && (T) -1 < 0 ? ~0ull : 0; } \
-  void operator= (T v) volatile { lo = (unsigned long long) v; hi = (long long) v < 0 && (T) -1 < 0 ? ~0ull : 0; }
+ * TImode allows) extends it by its signedness; these are not copy assignment operators either. */
+#define __GT4_INT_SET(T, HI) \
+  void operator= (T v) { lo = (unsigned long long) v; hi = (HI); } \
+  void operator= (T v) volatile { lo = (unsigned long long) v; hi = (HI); }
+#define __GT4_SIGNED_HI ((unsigned long long) ((long long) v >> 63))
 #define __GT4_VOLATILE_COPY \
   template <class __gt4_T> void operator= (const volatile __gt4_T &o) volatile { lo = o.lo; hi = o.hi; } \
-  __GT4_INT_SET (int) __GT4_INT_SET (unsigned int) __GT4_INT_SET (long) __GT4_INT_SET (unsigned long) \
-  __GT4_INT_SET (long long) __GT4_INT_SET (unsigned long long)
+  __GT4_INT_SET (int, __GT4_SIGNED_HI) __GT4_INT_SET (unsigned int, 0) \
+  __GT4_INT_SET (long, __GT4_SIGNED_HI) __GT4_INT_SET (unsigned long, 0) \
+  __GT4_INT_SET (long long, __GT4_SIGNED_HI) __GT4_INT_SET (unsigned long long, 0)
 #else
 #define __GT4_VOLATILE_COPY
 #endif
