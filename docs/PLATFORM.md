@@ -1,17 +1,31 @@
 # Platform host: SDL3 + Vulkan
 
-`gt4_host` (`platform/sdl/`, built with `-DGT4_BUILD_HOST=ON`) is the native platform layer the port
-targets: SDL3 for the window, input, audio and timing, Vulkan for presentation and rendering. It links
-no game code yet. Today it presents a diagnostic scene and proves the host plumbing end to end:
+`gt4_host` (`platform/sdl/`, `platform/render/`, built with `-DGT4_BUILD_HOST=ON`) is the native platform
+layer the port targets: SDL3 for the window, input, audio and timing, Vulkan for presentation and rendering. It
+links no game code yet. It renders a procedural test scene through the full display and image-quality pipeline
+(`docs/RENDERING.md`) and proves the host plumbing end to end:
 
 | Area | What works | How it is checked |
 |---|---|---|
-| Window / presentation | Vulkan device, swapchain, resize, minimize/restore, suspend recovery | `gt4_host --probe`, `gt4_host --smoke-test` |
+| Window / presentation | Vulkan 1.3 device chosen among those that can present to the window's display, swapchain, resize, minimize/restore, windowed / borderless / exclusive fullscreen, vsync modes, frame cap, surface loss and display changes | `gt4_host --probe`, `--smoke-test`, `--list-gpus`, `--list-displays` |
+| Headless | the whole pipeline into an offscreen image on any GPU, no window or desktop | `gt4_host --headless --frames N --capture F` |
+| Display pipeline | render scale, MSAA, FXAA, SMAA 1x/T2x, TAA(U), FSR 1, FSR 2, RCAS, anisotropic filtering, bloom, DOF, motion blur, tonemapping, aspect ratios, 2D layer | `tests/scenarios/features.json`, Vulkan validation layers |
+| Settings | versioned settings file, presets, `--set` overrides, live changes | `ctest -R host_settings` |
 | Input | SDL gamepad, including a scripted virtual gamepad | `tools/host_session.py run` drives `tests/scenarios/controller.json` |
 | Audio | SDL playback, stereo 48 kHz, with a PCM WAV tap of what is submitted | session report (clipping, level) |
 | Capture | GPU framebuffer readback to PPM/PNG per scripted frame | session report |
 
-Run a session (Linux/WSL; on Windows, `tools/host_windows.ps1` starts it on the logged-in desktop):
+Build and run on Windows (VS 2022 Build Tools; `tools/host_windows.ps1` starts windowed runs on the logged-in
+desktop when called from session 0 or WSL):
+
+```bat
+tools\build_windows.cmd Release
+build\host-windows-Release\gt4_host.exe --smoke-test
+py tools\host_session.py run --exe build\host-windows-Release\gt4_host.exe --verify-diagnostics
+py tools\host_session.py run --exe build\host-windows-Release\gt4_host.exe --host-arg=--headless --verify-diagnostics
+```
+
+On Linux:
 
 ```sh
 cmake -S . -B build/host-linux -G Ninja -DCMAKE_BUILD_TYPE=Release -DGT4_BUILD_HOST=ON

@@ -215,7 +215,7 @@ const std::vector<Option>& options() {
             "Extra texture LOD bias added to the automatic one (negative = sharper, more shimmer)."));
         o.push_back(boolOption("texture.auto_lod_bias", &Settings::autoLodBias,
             "Bias texture LOD by log2(render / output width) when upscaling, so textures keep output-resolution "
-            "detail (with temporal upscalers a further -1 as AMD recommends for FSR 2)."));
+            "detail; a further -1 with FSR 2 (AMD's recommendation) and -0.5 with TAA."));
         o.push_back(enumOption("texture.ui_filter", &Settings::uiFilter, kFilters,
             "Filtering of the 2D layer (HUD, menus, sprites): point keeps pixel art sharp."));
         o.push_back(enumOption("effects.shadows", &Settings::shadows, kEffects,
@@ -223,21 +223,26 @@ const std::vector<Option>& options() {
             "with contact-hardening (PCSS)."));
         o.push_back(enumOption("effects.reflections", &Settings::reflections, kEffects,
             "Environment reflections on cars: original = one sharp environment map; low..ultra = cube map of "
-            "64..512 px prefiltered for roughness (GGX)."));
+            "64..512 px prefiltered for roughness (GGX); off = a dimmed sharp map only."));
         o.push_back(enumOption("effects.bloom", &Settings::bloom, kEffects,
-            "Bloom/glare: physically based bloom (energy-conserving mip chain, no threshold) with 4..8 mips."));
+            "Bloom/glare: original = the PS2-style glare (bright pass over 3 levels, added); low..ultra = physically "
+            "based bloom (energy-conserving mip chain, no threshold) over 4..8 levels."));
         o.push_back(enumOption("effects.dof", &Settings::dof, kEffects,
             "Depth of field: thin-lens circle of confusion with a golden-angle bokeh gather, 16..96 samples."));
         o.push_back(enumOption("effects.motion_blur", &Settings::motionBlur, kEffects,
             "Motion blur: per-pixel reconstruction filter with tile max velocity (McGuire et al. 2012), 8..24 samples."));
         o.push_back(enumOption("effects.heat_haze", &Settings::heatHaze, kEffects,
-            "Heat haze: screen-space refraction over hot surfaces, with 1..3 noise octaves."));
+            "Heat haze (screen-space refraction over hot air and exhausts). Schema only: applied by the R1 game "
+            "renderer; the test scene has none."));
         o.push_back(enumOption("effects.particles", &Settings::particles, kEffects,
-            "Particles (smoke, sparks, dust): count and soft-particle depth fade."));
+            "Particles (smoke, sparks, dust): count and soft-particle depth fade. Schema only: applied by the R1 "
+            "game renderer; the test scene has none."));
         o.push_back(enumOption("effects.sky_fog", &Settings::skyFog, kEffects,
-            "Sky and fog: original = linear distance fog; low..ultra = exponential height fog with sun in-scattering."));
+            "Sky and fog: original = linear distance fog (the GS fog of the PS2); low = exponential height fog; "
+            "medium..ultra = height fog with sun in-scattering."));
         o.push_back(enumOption("effects.ambient_occlusion", &Settings::ambientOcclusion, kEffects,
-            "Ambient occlusion (an enhancement; the PS2 had none): ground-truth AO (GTAO), 4..16 directions."));
+            "Ambient occlusion (an enhancement; the PS2 had none), planned as ground-truth AO (GTAO) with 4..16 "
+            "directions. Schema only for now: not rendered yet."));
         o.push_back(enumOption("post.tonemapper", &Settings::tonemapper, kTonemappers,
             "HDR to display: original (clamp, as the PS2), reinhard (luminance), aces (Hill fit), agx and "
             "agx_punchy (Sobotka, Wrensch fit), pbr_neutral (Khronos PBR Neutral)."));
