@@ -66,7 +66,7 @@ extern "C" void func_003BB440(Info *, char *);
 extern "C" void RaceInformation__setEntryCars(Info *, s32);
 extern "C" void func_00430750(Obj *);
 extern "C" void func_004307A0(Obj *, s32);
-extern "C" s32 func_00447C78(char *);
+extern "C" long long func_00447C78(char *); /* the 64-bit SPEC_DATABASE id */
 extern "C" void func_0044CA98(int, int, int, int);
 extern "C" void func_0044CB10(void);
 extern "C" void func_004F83E8(Net *);
