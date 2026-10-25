@@ -3,6 +3,7 @@
 // its packed memcpy 0058ACB0. Written from the original instructions (gt4-decomp:
 // tools/match.py asm ADDR).
 #include "guest.h"
+#include "log.h"
 
 #include <cstdint>
 #include <cstring>
@@ -427,5 +428,33 @@ int gt4_replace_func_0058A4A8(uint32_t out, int capacity, const uint8_t *in, uin
     if (end) *end = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(in + ((z.bit + 7) >> 3)));
     return static_cast<int>(z.out - out);
 }
+
+// 0058B320 (8 bytes; with seven more stubs to 0058B360): liberx's import stub for modload export
+// 0xC, _sceErxLoadStartModuleFile (005870C0). The stubs (`break 0,1; addiu $zero, N`, tables
+// "ErXsTuB" at 0068B9A0: sysmem 0058B120, loadcore 0058B198, modload 0058B2E8) trap until
+// sceErxInit links them (_sceErxRegisterLibraryEntries rewrites each to `j export`); the only
+// callers, sceErxInit (00583718) and 00576E10, run after that. Natively the stub goes where the
+// link would make it go, through the export's trampoline.
+int gt4_replace_func_0058B320(const char *path, int a, int b, int c, int d, int *result) {
+    using Fn = int (*)(const char *, int, int, int, int, int *);
+    return reinterpret_cast<Fn>(guest_ptr(0x005870C0))(path, a, b, c, d, result);
+}
+
+// 0058A280 (the 64-bit bit-buffer refills, each jumping back into its reader), 0058A5F8 (one
+// Huffman code), 0058A668 (code lengths), 0058A7A8 (table builder), 0058A950 (dynamic block
+// header), 0058AB08 (Huffman block), 0058AC20 (stored block): the inflater's inner pieces. They
+// keep the stream state in $s5-$s7 as 0058A4A8 sets it up and are reached only from inside the
+// routine (no call from outside 0058A280-0058ACB0, no pointer to them in the image); 0058A4A8 is
+// replaced as a whole above, so natively nothing reaches them.
+[[noreturn]] static void inflate_piece(uint32_t addr) {
+    gt4::rt::fatal("%08X: an inner piece of the DEFLATE decoder (entry 0058A4A8) called directly", addr);
+}
+void gt4_replace_func_0058A280(void) { inflate_piece(0x0058A280); }
+void gt4_replace_func_0058A5F8(void) { inflate_piece(0x0058A5F8); }
+void gt4_replace_func_0058A668(void) { inflate_piece(0x0058A668); }
+void gt4_replace_func_0058A7A8(void) { inflate_piece(0x0058A7A8); }
+void gt4_replace_func_0058A950(void) { inflate_piece(0x0058A950); }
+void gt4_replace_func_0058AB08(void) { inflate_piece(0x0058AB08); }
+void gt4_replace_func_0058AC20(void) { inflate_piece(0x0058AC20); }
 
 }  // extern "C"
