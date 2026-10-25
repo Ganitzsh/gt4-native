@@ -218,6 +218,7 @@ void GsHost::sendPad(uint32_t port, bool connected, const uint8_t data[18]) {
 
 bool GsHost::live() const { return impl->link && impl->link->running(); }
 bool GsHost::finished() const { return impl->done; }
+int GsHost::gameExitCode() const { return impl->link && !impl->link->running() ? impl->link->exitCode() : 0; }
 std::string GsHost::deviceName() const { return impl->backend->deviceName(); }
 
 std::string GsHost::status() const {

@@ -62,6 +62,7 @@ const char* kUsage =
     "                       with --fixed-step (headless) one VBlank per rendered frame, else 59.94 Hz\n"
     "  --replay-loop        start the replay again at its end\n"
     "  --gs-ssaa N          GS super-sampling 1 (faithful, default), 2, 4, 8 or 16\n"
+    "  --gs-hires           with --gs-ssaa 4 or more: scan out at twice the resolution (1280 x 896)\n"
     "Interactive runs read and save the settings file in the user's preference directory; scripted runs\n"
     "(--frames, --smoke-test, --session-dir, --headless) start from the defaults unless --settings is given.\n"
     "Keys: F1 readout, F2 preset, F3 anti-aliasing, F4 upscaler, F5 render quality, F6 aspect ratio,\n"
@@ -72,7 +73,7 @@ const char* kUsage =
 
 struct Options {
     bool probe = false, smoke = false, headless = false, listGpus = false, listDisplays = false, listOptions = false;
-    bool fixedStep = false, audio = true, replayLoop = false;
+    bool fixedStep = false, audio = true, replayLoop = false, gsHires = false;
     uint32_t gsSsaa = 1;
     std::string game, replay;
     std::vector<std::string> gameArgs;
@@ -132,6 +133,7 @@ Options parse(int argc, char** argv) {
         else if (a == "--game-args") o.gameArgs = splitArguments(value(i));
         else if (a == "--replay") o.replay = value(i);
         else if (a == "--replay-loop") o.replayLoop = true;
+        else if (a == "--gs-hires") o.gsHires = true;
         else if (a == "--gs-ssaa") {
             if (!parseUnsigned(value(i), o.gsSsaa) || (o.gsSsaa != 1 && o.gsSsaa != 2 && o.gsSsaa != 4 && o.gsSsaa != 8 && o.gsSsaa != 16))
                 throw std::invalid_argument("--gs-ssaa takes 1, 2, 4, 8 or 16");
@@ -510,6 +512,7 @@ int run(const Options& options) {
         gsOptions.loop = options.replayLoop;
         gsOptions.backend.gpu = renderer->gpu().name;
         gsOptions.backend.superSampling = options.gsSsaa;
+        gsOptions.backend.highResolutionScanout = options.gsHires;
         std::string error;
         gs = gt4::gs::GsHost::create(gsOptions, error);
         renderer->reloadVulkanFunctions();
@@ -724,8 +727,10 @@ int run(const Options& options) {
             SDL_Delay(10);
         }
         // Frame-rate cap (display.fps_limit): paces presentation only; the tick rate above is unaffected.
-        if (settings.fpsLimit > 0 && windowed) {
-            const Uint64 interval = 1000000000ull / static_cast<Uint64>(settings.fpsLimit);
+        // Without a window, a live game or a real-time replay is shown at its own 59.94 Hz.
+        const bool paceToGame = gs && !windowed && !lockstep;
+        if ((settings.fpsLimit > 0 && windowed) || paceToGame) {
+            const Uint64 interval = paceToGame ? 16683350ull : 1000000000ull / static_cast<Uint64>(settings.fpsLimit);
             nextFrame += interval;
             const Uint64 current = SDL_GetTicksNS();
             if (nextFrame > current) SDL_DelayPrecise(nextFrame - current);
@@ -741,6 +746,11 @@ int run(const Options& options) {
                 renderer->gpu().name.c_str(), renderer->gpu().type.c_str(), renderer->pipelineDescription().c_str(),
                 renderer->averageGpuMilliseconds(), options.smoke ? "; resize/minimize/restore smoke test OK" : "");
     save();
+    // A game that ended by itself with an error makes the host fail too (scripts and sessions see it).
+    if (gameExited && gs && gs->gameExitCode() != 0) {
+        std::fprintf(stderr, "gt4_game failed with exit code %d\n", gs->gameExitCode());
+        return 3;
+    }
     return 0;
 }
 

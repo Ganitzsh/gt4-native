@@ -7,6 +7,7 @@
 #include "vif1.h"
 #include "vu1.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -337,9 +338,26 @@ void testPad() {
     expect(out[6 + 6] == 0xFF && out[6 + 11] == 128 && out[6 + 0] == 0, "pressures (Cross, R2)");
 }
 
+// Interpreter speed (printed, not checked): the transform loop over 200 vertices, repeated.
+void reportThroughput() {
+    struct Null final : gt4::ps2::GifSink { void gif(uint32_t, const uint8_t*, size_t) override {} } sink;
+    Vu1 unit;
+    unit.setGifSink(&sink);
+    load(unit, vu::transformProgram(200));
+    const auto start = std::chrono::steady_clock::now();
+    uint64_t cycles = 0;
+    const int runs = 2000;
+    for (int k = 0; k < runs; ++k) cycles += unit.run(0);
+    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    std::printf("ps2gfx: VU1 interpreter %.1f M instruction pairs/s, %.1f M VU cycles/s (%llu pairs in %.3f s)\n",
+                static_cast<double>(unit.instructions) / seconds * 1e-6, static_cast<double>(cycles) / seconds * 1e-6,
+                static_cast<unsigned long long>(unit.instructions), seconds);
+}
+
 }  // namespace
 
 int main() {
+    reportThroughput();
     testArithmetic();
     testBranches();
     testFlags();

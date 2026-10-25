@@ -30,10 +30,11 @@ inline uint32_t vuRound(double r, uint32_t& flags) {
     flags = 0;
     if (a == 0.0 || std::isnan(a)) { flags = 1; return sign; }
     if (a >= 0x1p128) { flags = 4; return sign | 0x7F7FFFFFu; }
-    float f = static_cast<float>(a);
-    if (static_cast<double>(f) > a) f = std::nextafter(f, 0.0f);   // toward zero
-    if (f < FLT_MIN) { flags = 3; return sign; }
-    return sign | bitsOf(f);
+    const float f = static_cast<float>(a);
+    uint32_t u = bitsOf(f);
+    if (static_cast<double>(f) > a) --u;   // rounded up: the next smaller magnitude (toward zero)
+    if (u < 0x00800000u) { flags = 3; return sign; }   // below the smallest normal
+    return sign | u;
 }
 
 // A result without flags (EFU, DIV).

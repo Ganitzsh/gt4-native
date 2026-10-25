@@ -37,6 +37,7 @@ public:
 
     bool live() const;          // linked to a running game
     bool finished() const;      // the game exited, or the replay reached its end (without loop)
+    int gameExitCode() const;   // the game's exit code once it has exited (0 otherwise)
     std::string status() const;     // one line for the overlay
     std::string summary() const;    // statistics for the log at exit
     std::string deviceName() const;

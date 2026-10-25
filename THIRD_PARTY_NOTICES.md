@@ -43,5 +43,23 @@ fetched by CMake at pinned commits (`cmake/HostDependencies.cmake`) and are not 
 | SMAA | `third_party/smaa/` (vendored, unmodified) | MIT-style, Copyright (C) 2013 Jorge Jimenez, Jose I. Echevarria, Belen Masia, Fernando Navarro, Diego Gutierrez (`third_party/smaa/LICENSE.txt`) | SMAA 1x / T2x anti-aliasing: the shader and its precomputed area and search textures. |
 | SDL 3 | fetched, linked | zlib | Window, input, audio, timing. |
 | Vulkan-Headers | fetched, headers only | Apache-2.0 OR MIT | Vulkan API declarations. |
-| volk | fetched, compiled into gt4_host | MIT | Vulkan function loader. |
+| volk | fetched (at Granite's pinned commit), compiled into gt4_host | MIT | Vulkan function loader, shared by the host and the GS back end. |
 | glslang | fetched, build tool only (nothing linked) | BSD-3-Clause and others (its LICENSE.txt) | Compiles the GLSL shaders to SPIR-V during the build. |
+| paraLLEl-GS | fetched (https://github.com/Arntzen-Software/parallel-gs, commit `cc6184af`), linked | LGPL-3.0-or-later, Copyright (c) 2024 Arntzen Software AS (Hans-Kristian Arntzen, Runar Heyer) | The GS back end: the PS2 Graphics Synthesizer emulated with Vulkan compute shaders (docs/GS_BACKEND.md). |
+| Granite | fetched as paraLLEl-GS's submodule (commit `16e7395f`), linked | MIT, Copyright (c) 2017-2026 Hans-Kristian Arntzen | paraLLEl-GS's Vulkan layer (device, memory, command buffers). Only Granite itself is fetched, not its own submodules. |
+
+**paraLLEl-GS and the LGPL.** paraLLEl-GS is licensed under the GNU Lesser General Public License,
+version 3 or later. gt4_host links it statically and is itself distributed under the GPL-3.0 (LICENSE),
+which the LGPL permits (an LGPL-3.0 library may be combined into a GPL-3.0 program): the complete
+corresponding source of gt4_host, including the paraLLEl-GS revision it is built from
+(`cmake/HostDependencies.cmake`), is available under the GPL-3.0, so a recipient can modify paraLLEl-GS and
+relink. Binary distributions of gt4_host must carry this notice, the GPL-3.0 and LGPL-3.0 texts, and
+paraLLEl-GS's and Granite's copyright notices. paraLLEl-GS is used unmodified.
+
+**PCSX2 (reference only).** The VIF1 and VU1 interpreter of the development scaffold
+(`platform/gs/vif1.*`, `platform/gs/vu1.*`, CMake option `GT4_VU1_INTERPRETER`) was written for this
+project from the public VU/VIF documentation. For behaviour the public documents leave open (flag and
+Q/P pipeline latencies, the integer-branch read of the previous VI value, the same-register write of both
+instruction slots, UNPACK filling writes and V2/V3 field order, the double-buffer swap on MSCAL), PCSX2's
+interpreter (https://github.com/PCSX2/pcsx2, GPL-3.0-or-later, Copyright (c) 2002-2026 PCSX2 Dev Team) was
+consulted as a reference; no PCSX2 source is copied.

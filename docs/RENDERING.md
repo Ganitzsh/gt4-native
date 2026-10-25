@@ -6,7 +6,9 @@ layer and presentation. Until the game's own renderer exists (milestone R1, `doc
 from a procedural test scene (`platform/render/test_scene.cpp`, no game data) that exercises every stage: fine
 geometry (fence wires, gantry trusses), textures seen at grazing angles, moving cars with clear-coat paint,
 very bright emitters, a large depth range, an analytic sky and a 2D HUD. The R1 renderer plugs into the same
-interface (`platform/render/scene.h`, see "Scene contract").
+interface (`platform/render/scene.h`, see "Scene contract"). With `--game` or `--replay` the scene is the PS2's
+displayed frame from the GS back end (`platform/render/gs_scene.cpp`, `docs/GS_BACKEND.md`): the game's own
+image, which the `original` preset shows unaltered.
 
 Rendering only observes game state (`docs/PLATFORM.md`): the scene advances only through `TestScene::tick()`
 at the game's fixed 60 Hz; frames interpolate between ticks, and no setting, frame rate or GPU feeds back into
@@ -157,6 +159,8 @@ values.
   (`VK_COMPARE_OP_GREATER_OR_EQUAL`, cleared to 0).
 - `camera()`: the unjittered view and projection, the previous unjittered view-projection, the near plane, the
   vertical field of view and a `cut` flag (the camera jumped: temporal history resets).
+- `drawsOriginalEffects()`: true when the colour is the game's own displayed image (the GS frame), whose glare
+  and fog are already drawn: effects set to `original` then add nothing in the pipeline.
 - `SceneView` gives the scene its sizes, the content aspect ratio (for the Hor+ projection), the sub-pixel jitter
   in pixels and in clip units (pre-multiply the projection by a translation of `jitterClip`), the frame index and
   slot, and the **material sampler** every 3D texture must use (filter, anisotropy, and the LOD bias of the
