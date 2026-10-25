@@ -4,12 +4,14 @@
 #   (default)          records a scripted session in DIR (--session-dir DIR)
 #   -SmokeTest         runs --smoke-test instead
 #   -Arguments "..."   runs gt4_host with exactly these arguments instead (e.g. "--frames 60 --gpu 1")
+#   -Extra "..."       appends these arguments to the session command line (e.g. "--set render.aa=smaa")
 param(
     [Parameter(Mandatory=$true)][string]$Executable,
     [Parameter(Mandatory=$true)][string]$Session,
     [switch]$NoAudio,
     [switch]$SmokeTest,
     [string]$Arguments = '',
+    [string]$Extra = '',
     [int]$TimeoutSeconds = 60
 )
 $ErrorActionPreference = 'Stop'
@@ -28,9 +30,10 @@ try {
     foreach ($path in @($Executable, $Session, $commandFile)) {
         if ($path -match '["%\r\n]') { throw 'Launch paths cannot contain quotes, percent signs or newlines.' }
     }
-    if ($Arguments -match '["%&|<>^\r\n]') { throw 'Arguments cannot contain quotes, percent signs, redirections or newlines.' }
+    if (($Arguments + $Extra) -match '["%&|<>^\r\n]') { throw 'Arguments cannot contain quotes, percent signs, redirections or newlines.' }
     $commandLine = '--session-dir "' + $Session + '"'
     if ($NoAudio) { $commandLine += ' --no-audio' }
+    if ($Extra) { $commandLine += ' ' + $Extra }
     if ($SmokeTest) { $commandLine = '--smoke-test' }
     if ($Arguments) { $commandLine = $Arguments }
     $lines = @('@echo off', ('"' + $Executable + '" ' + $commandLine + ' > "' + $output + '" 2>&1'),

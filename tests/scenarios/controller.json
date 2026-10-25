@@ -1,4 +1,7 @@
 [
+  {"at": 0.0, "command": "set graphics.preset original"},
+  {"at": 0.0, "command": "set scene.animate off"},
+  {"at": 0.0, "command": "set debug.overlay off"},
   {"at": 0.1, "command": "capture neutral"},
   {"at": 0.3, "command": "axis leftx -24000"},
   {"at": 0.5, "command": "capture left"},

@@ -96,7 +96,13 @@ def inspect(directory):
     process_log = (directory / 'process.log').read_text(encoding='utf-8', errors='replace') if (directory / 'process.log').exists() else ''
     native_log = (directory / 'native.log').read_text(encoding='utf-8', errors='replace') if (directory / 'native.log').exists() else ''
     validation_errors = [line for line in (process_log + native_log).splitlines() if 'Validation Error' in line or re.search(r'VUID-[A-Za-z]', line)]
-    report = {'validation_errors': validation_errors, 'frames': len(frames), 'max_frame_ms': max((e['duration_ms'] for e in frames), default=0),
+    gpu_times = [e['gpu_ms'] for e in frames if e.get('gpu_ms')]
+    renderer = next((e for e in events if e['type'] == 'renderer'), None)
+    settings = [{'key': e['key'], 'value': e['value'], 'pipeline': e.get('pipeline')} for e in events if e['type'] == 'setting']
+    report = {'renderer': renderer, 'settings': settings,
+              'gpu_ms_mean': sum(gpu_times) / len(gpu_times) if gpu_times else None,
+              'gpu_ms_max': max(gpu_times, default=None),
+              'validation_errors': validation_errors, 'frames': len(frames), 'max_frame_ms': max((e['duration_ms'] for e in frames), default=0),
               'frames_over_50ms': sum(e['duration_ms'] > 50 for e in frames),
               'command_errors': errors, 'captures': captures, 'audio': audio_report(directory / 'audio.wav')}
     (directory / 'report.json').write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
@@ -168,20 +174,33 @@ def run(args):
     native_directory = str(directory)
     if os.name != 'nt' and executable.suffix.lower() == '.exe':
         native_directory = subprocess.check_output(['wslpath', '-w', str(directory)], text=True).strip()
+    host_args = list(args.host_arg or [])
+    headless = '--headless' in host_args
+    for value in host_args:
+        if any(c in value for c in '"%&|<>^\r\n'):
+            raise ValueError('Host arguments cannot contain quotes, percent signs or shell operators')
     command = [str(executable), '--session-dir', native_directory]
     if args.no_audio:
         command.append('--no-audio')
-    if os.name != 'nt' and executable.suffix.lower() == '.exe':
+    command += host_args
+    if executable.suffix.lower() == '.exe' and not headless:
+        # A window can only present on the logged-in desktop; from session 0 (services, WSL) the run is
+        # started there by tools/host_windows.ps1. Headless runs need no desktop.
+        powershell = 'powershell.exe' if os.name != 'nt' else 'powershell'
         windows_session = subprocess.check_output(
-            ['powershell.exe', '-NoProfile', '-Command', '[System.Diagnostics.Process]::GetCurrentProcess().SessionId'], text=True).strip()
+            [powershell, '-NoProfile', '-Command', '[System.Diagnostics.Process]::GetCurrentProcess().SessionId'], text=True).strip()
         if windows_session == '0':
             def windows(path):
+                if os.name == 'nt':
+                    return str(path)
                 return subprocess.check_output(['wslpath', '-w', str(path)], text=True).strip()
-            command = ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+            command = [powershell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                        windows(ROOT / 'tools/host_windows.ps1'), '-Executable', windows(executable),
                        '-Session', native_directory, '-TimeoutSeconds', str(int(max((e['at'] for e in plan), default=0) + 45))]
             if args.no_audio:
                 command.append('-NoAudio')
+            if host_args:
+                command += ['-Extra', ' '.join(host_args)]
     (directory / 'script.json').write_text(json.dumps(plan, indent=2) + '\n', encoding='utf-8')
     print(f'Session: {directory}', flush=True)
     environment = dict(os.environ)
@@ -242,6 +261,8 @@ def main():
     launch.add_argument('--script', type=Path)
     launch.add_argument('--no-audio', action='store_true')
     launch.add_argument('--verify-diagnostics', action='store_true')
+    launch.add_argument('--host-arg', action='append', metavar='ARG',
+                        help='extra gt4_host argument, repeatable; use the = form: --host-arg=--headless')
     control = commands.add_parser('send', help='Send a command to an active session')
     control.add_argument('session', type=Path); control.add_argument('command', nargs='+')
     analyze = commands.add_parser('inspect', help='Create PNGs and an HTML/WAV playtest report')
