@@ -60,3 +60,14 @@ Multiplayer will come, so these rules hold from the first line of host code:
 - **Network shims get their own seam.** When the network unit is ported, its IOP RPC calls go through
   the same shim pattern as the other services, so the LAN battle protocol can run over `NetService`
   without the game noticing the PS2 stack is gone.
+
+## The renderer seam (R1)
+
+`docs/HW_ACCESS.md` (`tools/hw_access.py`) lists every EE hardware register the game code reaches. The
+graphics boundary is narrow: 53 game functions, all in the PS2 graphics library around 0x49F000-0x4AC000.
+GIF packets leave through two DMA kicks (`004AB548`, `004AB6D8`), VIF1 uploads through two more
+(`004AB930`, `004AB9C0`), and the display mode and framebuffers are set in one place (`004A0C10`). R1
+starts by replacing those kicks: the packet they would send is handed to the Vulkan renderer instead of
+the DMA controller, captured first as reference data, then interpreted (GS primitives, then the VU1
+microprograms the VIF1 packets run). `docs/PS2_SERVICES.md` and `docs/BOOT_PATH.md` give the rest of the
+shim surface and the order in which boot needs it.
