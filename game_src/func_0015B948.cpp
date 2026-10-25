@@ -62,7 +62,7 @@ extern "C" void func_0015AAC0(void *arg0, void *arg1) throw();
 extern "C" void func_00326798(void *p, s32 size, s32 align, const char *name);
 extern "C" s32 func_00433348(s32, const char *, B32 *, float);
 extern "C" s32 func_00447BB8(const char *arg0);
-extern "C" s32 func_004482C0(s32 a);
+extern "C" s32 func_004482C0(unsigned long a);
 extern "C" void func_0044B258(In *src, B32 *dst, s32 n);
 extern "C" void func_005A48D8(void *p, s32 c, s32 n);
 extern "C" struct S00659988 *func_005C11A8(void);

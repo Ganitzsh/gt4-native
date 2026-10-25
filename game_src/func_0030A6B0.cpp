@@ -1,10 +1,11 @@
 /* compiler: ee-gcc2.96-no-strict-aliasing */
+/* Native correction (width): func_00326750 (the allocator) takes unsigned int size, int align, const char *name; this source declares the size long (one register on the EE, 8 bytes natively), which shifts align and name. Declaring it unsigned int no longer matches on the EE (the long is truncated). */
 struct Elem { void *p; };
 struct Vec { int alloc; Elem *start,*finish,*limit; };
 struct Obj { int ref; void *vt; int n; Vec *v; };
 extern char hObject__vtable[],D_0069DE48[];
 extern "C" int RefCounter__structor_1(void *);
-extern "C" void *func_00326750(long,int,const char *);
+extern "C" void *func_00326750(unsigned int,int,const char *);
 extern "C" const char **HObject__tf();
 extern "C" Elem *func_005EC5E0(Elem *,Elem *,Elem *,int);
 static inline Elem *copy(Elem *first,Elem *last,Elem *p) {
