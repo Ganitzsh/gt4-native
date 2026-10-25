@@ -385,6 +385,7 @@ int run(const Options& options) {
                         : std::make_unique<Renderer>(instance.instance, options.size, gpu, settings);
     };
     std::unique_ptr<Renderer> renderer = makeRenderer(settings.gpu);
+    std::string activeGpu = settings.gpu;
     if (options.probe) {
         std::printf("Probe OK: %s can present to %s\n", renderer->gpu().name.c_str(), gt4::windowDisplayName(sdlWindow).c_str());
         return 0;
@@ -475,6 +476,13 @@ int run(const Options& options) {
         if (session) {
             running &= session->tick(*renderer, sdlWindow, frames);
             if (!running) break;
+        }
+        // display.gpu changed (key, session or settings): choose the device again with a new renderer.
+        if (settings.gpu != activeGpu) {
+            std::printf("display.gpu = %s: recreating the renderer\n", settings.gpu.c_str());
+            renderer.reset();
+            renderer = makeRenderer(settings.gpu);
+            activeGpu = settings.gpu;
         }
         // Controls are sampled once per frame here; the game will sample its input once per tick.
         if (session) {
