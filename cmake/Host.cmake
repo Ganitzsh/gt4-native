@@ -141,11 +141,19 @@ target_include_directories(gt4_fsr2 PRIVATE ${GT4_FSR2_DIR} ${GT4_SHADER_OUT} pl
 target_compile_definitions(gt4_fsr2 PRIVATE VK_NO_PROTOTYPES FFX_GCC _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
     _CRT_SECURE_NO_WARNINGS)
 target_link_libraries(gt4_fsr2 PRIVATE Vulkan::Headers)
-target_include_directories(gt4_fsr2 PRIVATE ${volk_SOURCE_DIR})
+target_link_libraries(gt4_fsr2 PRIVATE granite-volk-headers)
 if(MSVC)
   target_compile_options(gt4_fsr2 PRIVATE /W0 /FI${CMAKE_CURRENT_SOURCE_DIR}/platform/render/ffx_compat.h)
 else()
   target_compile_options(gt4_fsr2 PRIVATE -w -include ${CMAKE_CURRENT_SOURCE_DIR}/platform/render/ffx_compat.h)
+endif()
+
+# The GS back end: paraLLEl-GS on its own Vulkan device (docs/GS_BACKEND.md).
+add_library(gt4_gs STATIC platform/gs/gs_backend.cpp)
+target_include_directories(gt4_gs PUBLIC platform/gs)
+target_link_libraries(gt4_gs PRIVATE parallel-gs)
+if(MSVC)
+  target_compile_options(gt4_gs PRIVATE /W3 /wd4267 /wd4244)
 endif()
 
 add_executable(gt4_host
@@ -155,7 +163,6 @@ add_executable(gt4_host
     platform/sdl/settings.cpp
     platform/sdl/display.cpp
     platform/render/vk.cpp
-    platform/render/volk.cpp
     platform/render/pipeline.cpp
     platform/render/test_scene.cpp
     platform/render/overlay.cpp
@@ -163,19 +170,19 @@ add_executable(gt4_host
     platform/render/smaa_textures.cpp
     ${GT4_SHADER_OUT}/gt4_shaders.cpp
     ${GT4_SHADER_HEADERS})
-target_include_directories(gt4_host PRIVATE platform/sdl platform/render ${GT4_SHADER_OUT} ${volk_SOURCE_DIR}
+target_include_directories(gt4_host PRIVATE platform/sdl platform/render ${GT4_SHADER_OUT}
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party
     ${GT4_FSR2_DIR})
 target_compile_definitions(gt4_host PRIVATE VK_NO_PROTOTYPES FFX_GCC)
-target_link_libraries(gt4_host PRIVATE SDL3::SDL3 Vulkan::Headers gt4_guest_abi gt4_fsr2)
+target_link_libraries(gt4_host PRIVATE SDL3::SDL3 Vulkan::Headers gt4_guest_abi gt4_fsr2 gt4_gs granite-volk granite-volk-headers)
 if(MSVC)
   target_compile_options(gt4_host PRIVATE /W4)
   # Generated SPIR-V tables and the volk loader are third-party style code: no warnings there.
-  set_source_files_properties(${GT4_SHADER_OUT}/gt4_shaders.cpp platform/render/volk.cpp
+  set_source_files_properties(${GT4_SHADER_OUT}/gt4_shaders.cpp
       platform/render/smaa_textures.cpp PROPERTIES COMPILE_OPTIONS "/W0")
 else()
   target_compile_options(gt4_host PRIVATE -Wall -Wextra -Wpedantic)
-  set_source_files_properties(${GT4_SHADER_OUT}/gt4_shaders.cpp platform/render/volk.cpp
+  set_source_files_properties(${GT4_SHADER_OUT}/gt4_shaders.cpp
       platform/render/smaa_textures.cpp PROPERTIES COMPILE_OPTIONS "-w")
 endif()
 if(MINGW)
@@ -195,4 +202,16 @@ if(BUILD_TESTING)
     target_compile_options(gt4_host_settings_test PRIVATE -Wall -Wextra -Wpedantic)
   endif()
   add_test(NAME host_settings COMMAND gt4_host_settings_test)
+
+  # The GS back end checked by pixel: needs a Vulkan GPU that meets paraLLEl-GS's requirements; skipped
+  # (exit code 77) where there is none, as on CI.
+  add_executable(gt4_gs_backend_test tests/gs_backend.cpp)
+  target_link_libraries(gt4_gs_backend_test PRIVATE gt4_gs)
+  add_test(NAME gs_backend COMMAND gt4_gs_backend_test)
+  set_tests_properties(gs_backend PROPERTIES SKIP_RETURN_CODE 77)
+  if(MSVC)
+    target_compile_options(gt4_gs_backend_test PRIVATE /UNDEBUG /W4)
+  else()
+    target_compile_options(gt4_gs_backend_test PRIVATE -UNDEBUG -Wall -Wextra)
+  endif()
 endif()
