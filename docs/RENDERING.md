@@ -170,8 +170,10 @@ render size. The PS2 game has none, so R1 must produce them:
 2. Moving objects (cars, wheels, driver, flags, crowd) need their previous transform: R1 keeps the previous
    frame's object matrices (the per-object inputs of the VU1 microprograms) and emits per-vertex previous clip
    positions, matching objects across frames by their draw identity.
-3. Effects without stable geometry (particles, smoke, heat haze, glare sprites) belong in FSR 2's reactive and
-   transparency masks (not wired yet) or after the temporal pass; the 2D layer already is.
+3. Effects without stable geometry (particles, smoke, heat haze, glare sprites) go into FSR 2's reactive mask,
+   surfaces whose shading moves differently from their geometry (reflections, scrolling textures) into its
+   transparency/composition mask: R8 images at the render size returned by `SceneSource::reactiveMask()` and
+   `transparencyMask()`. The 2D layer is drawn after the temporal pass and needs neither.
 
 ### Anti-aliasing
 
