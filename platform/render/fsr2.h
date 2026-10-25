@@ -14,6 +14,11 @@ struct Fsr2Inputs {
     vk::Image* velocity = nullptr;   // render resolution, previous uv - current uv
     vk::Image* exposure = nullptr;   // 1x1 R32F exposure scale
     vk::Image* output = nullptr;     // display resolution, RGBA16F storage
+    // Optional R8 masks at render resolution (null: none). Reactive: how much the current frame should
+    // replace the history (particles, alpha-blended effects); transparency and composition: pixels whose
+    // shading the motion vectors do not describe (reflections, UV-animated textures). See the FSR 2 docs.
+    vk::Image* reactive = nullptr;
+    vk::Image* transparencyAndComposition = nullptr;
     VkExtent2D renderSize{};
     Vec2 jitter;                     // pixels, content shift
     float sharpness = 0.0f;          // 0..1, 0 = off

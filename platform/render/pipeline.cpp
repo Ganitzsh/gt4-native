@@ -704,6 +704,8 @@ struct FramePipeline::Impl {
             in.reset = reset;
             in.near = camera.near;
             in.verticalFov = camera.verticalFov;
+            in.reactive = scene.reactiveMask();
+            in.transparencyAndComposition = scene.transparencyMask();
             fsr2.dispatch(command, in);
             hdr = &fsrOutput;
             vk::endLabel(command);

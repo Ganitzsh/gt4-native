@@ -52,6 +52,11 @@ public:
     // Draws into the bound main targets (colour 0, velocity 1, depth), viewport = render extent.
     virtual void recordMain(VkCommandBuffer command, const SceneView& view) = 0;
     virtual SceneCamera camera() const = 0;
+    // Optional FSR 2 masks for this frame (R8_UNORM, render size, written by the scene; null: none):
+    // reactive = particles and other alpha-blended effects, transparency/composition = surfaces whose
+    // shading the motion vectors do not describe (reflections, animated textures). The test scene has none.
+    virtual vk::Image* reactiveMask() { return nullptr; }
+    virtual vk::Image* transparencyMask() { return nullptr; }
 };
 
 }  // namespace gt4

@@ -76,6 +76,8 @@ void Fsr2::dispatch(VkCommandBuffer command, const Fsr2Inputs& in) {
     vk::toSampled(barriers, *in.velocity, vk::kCompute);
     vk::toSampled(barriers, *in.exposure, vk::kCompute);
     vk::toStorage(barriers, *in.output, true);
+    for (vk::Image* mask : {in.reactive, in.transparencyAndComposition})
+        if (mask) vk::toSampled(barriers, *mask, vk::kCompute);
     barriers.flush(command);
     FfxFsr2DispatchDescription d{};
     d.commandList = ffxGetCommandListVK(command);
@@ -84,6 +86,10 @@ void Fsr2::dispatch(VkCommandBuffer command, const Fsr2Inputs& in) {
     d.motionVectors = resource(&impl->context, *in.velocity, L"FSR2 motion vectors", FFX_RESOURCE_STATE_COMPUTE_READ);
     d.exposure = resource(&impl->context, *in.exposure, L"FSR2 exposure", FFX_RESOURCE_STATE_COMPUTE_READ);
     d.output = resource(&impl->context, *in.output, L"FSR2 output", FFX_RESOURCE_STATE_UNORDERED_ACCESS);
+    if (in.reactive) d.reactive = resource(&impl->context, *in.reactive, L"FSR2 reactive", FFX_RESOURCE_STATE_COMPUTE_READ);
+    if (in.transparencyAndComposition)
+        d.transparencyAndComposition = resource(&impl->context, *in.transparencyAndComposition, L"FSR2 transparency",
+                                                FFX_RESOURCE_STATE_COMPUTE_READ);
     d.jitterOffset = {in.jitter.x, in.jitter.y};
     // Motion vectors are stored in uv units; FSR2 divides the scale by the render size.
     d.motionVectorScale = {static_cast<float>(in.renderSize.width), static_cast<float>(in.renderSize.height)};
@@ -100,7 +106,8 @@ void Fsr2::dispatch(VkCommandBuffer command, const Fsr2Inputs& in) {
     const FfxErrorCode error = ffxFsr2ContextDispatch(&impl->context, &d);
     if (error != FFX_OK) std::fprintf(stderr, "FSR2: dispatch failed (%d)\n", static_cast<int>(error));
     // The backend leaves the inputs readable and the output in GENERAL; record that for our tracking.
-    for (vk::Image* image : {in.color, in.depth, in.velocity, in.exposure}) {
+    for (vk::Image* image : {in.color, in.depth, in.velocity, in.exposure, in.reactive, in.transparencyAndComposition}) {
+        if (!image) continue;
         image->layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         image->stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
         image->access = VK_ACCESS_2_SHADER_READ_BIT;
