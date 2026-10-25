@@ -72,6 +72,19 @@ LONG WINAPI on_crash(EXCEPTION_POINTERS *ep) {
             }
         }
     }
+    // the stack words around esp (a smashed frame shows here)
+    {
+        MEMORY_BASIC_INFORMATION mi;
+        const auto *sp = reinterpret_cast<const uint32_t *>(c->Esp);
+        if (VirtualQuery(sp - 8, &mi, sizeof mi) && mi.State == MEM_COMMIT &&
+            reinterpret_cast<uintptr_t>(sp + 24) <= reinterpret_cast<uintptr_t>(mi.BaseAddress) + mi.RegionSize) {
+            for (int row = -8; row < 24; row += 8) {
+                fprintf(stderr, "  esp%+04x:", row * 4);
+                for (int k = 0; k < 8; ++k) fprintf(stderr, " %08x", sp[row + k]);
+                fprintf(stderr, "\n");
+            }
+        }
+    }
     // the frame-pointer chain ([ebp] = caller's ebp, [ebp+4] = return address): game code keeps
     // frame pointers, so this is the call chain as far as it goes through such frames
     {
