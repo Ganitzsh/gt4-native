@@ -646,6 +646,7 @@ def localize(asm, rel, addr):
 
 
 LABEL_DEF = re.compile(rb"^(_[A-Za-z0-9_$.]+):", re.M)
+LCOMM_DEF = re.compile(rb"^[ \t]*\.lcomm[ \t]+(_[A-Za-z0-9_$.]+)", re.M)  # file-static data (bss)
 ADDR_IMM = re.compile(rb"(?<![A-Za-z0-9_$.])\$(_[A-Za-z_][A-Za-z0-9_$.]*)")  # not a `$` inside a name
 ADDR_LONG = re.compile(rb"^([ \t]*\.long[ \t]+)(_[A-Za-z_][A-Za-z0-9_$.]*)", re.M)
 
@@ -657,7 +658,8 @@ def guest_addresses(asm, exported):
     compare equal to the ones in the original image's data (get_eh_context in 005BC930 tests whether
     the pointer in data is still itself). Direct calls and jumps keep their host targets.
     Local definitions of this file (statics without a PS2 identity) are left alone."""
-    local = {m.group(1) for m in LABEL_DEF.finditer(asm)} - {e.encode() for e in exported}
+    local = ({m.group(1) for m in LABEL_DEF.finditer(asm)} | {m.group(1) for m in LCOMM_DEF.finditer(asm)}) \
+        - {e.encode() for e in exported}
 
     def imm(m):
         return m.group(0) if m.group(1) in local else b"$_gt4addr_" + m.group(1)
