@@ -557,7 +557,7 @@ struct FramePipeline::Impl {
         vk::beginLabel(command, "depth of field");
         const int q = level(settings.dof);
         const float maxCoc[4] = {8.0f, 12.0f, 16.0f, 24.0f};
-        const float radiusScale[4] = {1.4f, 1.0f, 0.7f, 0.5f};
+        const float sampleCounts[4] = {16.0f, 32.0f, 64.0f, 96.0f};   // bokeh gather samples per pixel
         // Lens from the field of view: a 24 mm tall sensor at the post.aperture f-number.
         const float sensor = 0.024f;
         const float focal = 0.5f * sensor / std::tan(0.5f * camera.verticalFov);
@@ -581,7 +581,7 @@ struct FramePipeline::Impl {
         computeBarriers({&dofHalf}, dofBlur, command);
         vk::bind(command, dofGather);
         vk::Descriptors().sampled(0, dofHalf.view, linearClamp).storage(1, dofBlur.view).push(command, dofGather);
-        struct { int32_t w, h; float radiusScale, maxCoc; } gather{push.w, push.h, radiusScale[q], push.maxCoc};
+        struct { int32_t w, h; float samples, maxCoc; } gather{push.w, push.h, sampleCounts[q], push.maxCoc};
         vk::pushConstants(command, dofGather, gather);
         vk::dispatch2D(command, half.width, half.height);
         vk::Image* out = hdr == &hdrA ? &hdrB : &hdrA;

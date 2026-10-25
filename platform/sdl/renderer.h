@@ -46,6 +46,7 @@ public:
     gt4::TestScene& scene();
     const GpuInfo& gpu() const;
     double gpuMilliseconds() const;          // GPU time of the last finished frame (0 if unknown)
+    double averageGpuMilliseconds() const;   // mean GPU time over every timed frame so far
     std::string pipelineDescription() const;
 
 private:

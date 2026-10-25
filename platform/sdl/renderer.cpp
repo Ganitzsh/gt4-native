@@ -211,7 +211,8 @@ struct Renderer::Impl {
     uint32_t frameCounter = 0;
     VkQueryPool timestamps = VK_NULL_HANDLE;
     bool timestampsSupported = false;
-    double gpuMs = 0.0;
+    double gpuMs = 0.0, gpuMsTotal = 0.0;
+    uint64_t gpuSamples = 0;
 
     // Presentation target.
     VkSwapchainKHR swapchain = VK_NULL_HANDLE;
@@ -637,7 +638,11 @@ struct Renderer::Impl {
         uint64_t values[2] = {};
         if (vkGetQueryPoolResults(device.device, timestamps, frameSlot * 2, 2, sizeof(values), values, sizeof(uint64_t),
                                   VK_QUERY_RESULT_64_BIT) == VK_SUCCESS && values[1] >= values[0])
+        {
             gpuMs = static_cast<double>(values[1] - values[0]) * static_cast<double>(device.properties.limits.timestampPeriod) * 1e-6;
+            gpuMsTotal += gpuMs;
+            ++gpuSamples;
+        }
     }
 
     bool draw(float deltaSeconds) {
@@ -767,4 +772,5 @@ void Renderer::setStatus(const std::string& text) { impl->status = text; }
 gt4::TestScene& Renderer::scene() { return *impl->scene; }
 const GpuInfo& Renderer::gpu() const { return impl->info; }
 double Renderer::gpuMilliseconds() const { return impl->gpuMs; }
+double Renderer::averageGpuMilliseconds() const { return impl->gpuSamples ? impl->gpuMsTotal / static_cast<double>(impl->gpuSamples) : 0.0; }
 std::string Renderer::pipelineDescription() const { return impl->pipeline->describe(); }
