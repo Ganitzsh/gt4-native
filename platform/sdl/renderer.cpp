@@ -559,7 +559,9 @@ struct Renderer::Impl {
         const auto content = pipeline->contentRect();
         const float scale = std::max(1.0f, std::floor(static_cast<float>(content.extent.height) / 540.0f));
         std::ostringstream text;
-        text << "[F1] help  preset " << gt4::name(settings.preset) << "\n" << pipeline->describe() << "\n"
+        text << "preset " << gt4::name(settings.preset) << "   F1 hide  F2 preset  F3 AA  F4 upscaler  F5 quality\n"
+             << "F6 aspect  F7 tonemap  F8 HUD  F9 vsync  F10 MSAA  F11 fullscreen  B N M H R F T Y [ ] - =\n"
+             << pipeline->describe() << "\n"
              << "display " << (headless ? "headless" : gt4::name(settings.windowMode)) << " " << extent.width << "x" << extent.height
              << " vsync " << gt4::name(settings.vsync) << " aspect " << gt4::name(settings.aspect) << " hud " << gt4::name(settings.hud)
              << "\ntex " << gt4::name(settings.textureFilter) << " af " << settings.anisotropy << "x  tonemap "
@@ -571,8 +573,15 @@ struct Renderer::Impl {
         if (!status.empty()) text << "\n" << status;
         const float x = static_cast<float>(content.offset.x) + 8.0f * scale;
         const float y = static_cast<float>(content.offset.y) + 72.0f * scale;
-        overlay->pixelRect(x - 4 * scale, y - 4 * scale, 8 * scale * 62, 10 * scale * 7 + 8 * scale, {0, 0, 0, 140});
-        overlay->pixelText(x, y, scale, text.str(), {230, 235, 240, 255});
+        const std::string lines = text.str();
+        size_t rows = 1, columns = 0, column = 0;
+        for (char c : lines) {
+            if (c == '\n') { ++rows; column = 0; }
+            else columns = std::max(columns, ++column);
+        }
+        overlay->pixelRect(x - 4 * scale, y - 4 * scale, 8 * scale * static_cast<float>(columns) + 8 * scale,
+                           10 * scale * static_cast<float>(rows) + 6 * scale, {0, 0, 0, 140});
+        overlay->pixelText(x, y, scale, lines, {230, 235, 240, 255});
     }
 
     void recordCapture(VkCommandBuffer command, gt4::vk::Image& target) {
