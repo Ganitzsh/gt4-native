@@ -1,0 +1,100 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+// Exposure, bloom composite and display transform. Output: display-referred values encoded with the
+// sRGB curve (what the anti-aliasing, the spatial upscalers and RCAS expect: perceptual space).
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D hdr;
+layout(set = 0, binding = 1) uniform sampler2D bloom;          // pre-exposed, linear clamp
+layout(set = 0, binding = 2) uniform sampler2D exposureTexture;
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D target;
+layout(push_constant) uniform Push {
+    ivec2 size;
+    int tonemapper;      // 0 original, 1 reinhard, 2 aces, 3 agx, 4 agx punchy, 5 pbr neutral
+    float bloomIntensity;
+    float bloomScale;    // 1 / number of accumulated bloom levels (0 = no bloom)
+    float bloomAdditive; // 1 for the thresholded "original" glare (added), 0 for the energy-conserving mix
+} push;
+
+// Extended Reinhard on luminance (Reinhard et al. 2002), white point 4.
+vec3 reinhard(vec3 c) {
+    float l = luminance(c);
+    float mapped = l * (1.0 + l / 16.0) / (1.0 + l);
+    return c * (mapped / max(l, 1e-6));
+}
+
+// ACES filmic fit of the RRT + sRGB ODT (Stephen Hill, "BakingLab", MIT).
+vec3 acesFitted(vec3 c) {
+    const mat3 inputMatrix = mat3(0.59719, 0.07600, 0.02840, 0.35458, 0.90834, 0.13383, 0.04823, 0.01566, 0.83777);
+    const mat3 outputMatrix = mat3(1.60475, -0.10208, -0.00327, -0.53108, 1.10813, -0.07276, -0.07367, -0.00605, 1.07602);
+    c = inputMatrix * c;
+    vec3 a = c * (c + 0.0245786) - 0.000090537;
+    vec3 b = c * (0.983729 * c + 0.4329510) + 0.238081;
+    return outputMatrix * (a / b);
+}
+
+// AgX (Troy Sobotka) with the 6th-order sigmoid fit of Benjamin Wrensch ("Minimal AgX Implementation",
+// 2023). "Punchy" applies the look with more saturation and contrast.
+vec3 agxContrast(vec3 x) {
+    vec3 x2 = x * x, x4 = x2 * x2;
+    return 15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4 - 6.868 * x2 * x + 0.4298 * x2 + 0.1191 * x - 0.00232;
+}
+vec3 agx(vec3 c, bool punchy) {
+    const mat3 inset = mat3(0.842479062253094, 0.0423282422610123, 0.0423756549057051,
+                            0.0784335999999992, 0.878468636469772, 0.0784336,
+                            0.0792237451477643, 0.0791661274605434, 0.879142973793104);
+    const mat3 outset = mat3(1.19687900512017, -0.0528968517574562, -0.0529716355144438,
+                             -0.0980208811401368, 1.15190312990417, -0.0980434501171241,
+                             -0.0990297440797205, -0.0989611768448433, 1.15107367264116);
+    const float minEv = -12.47393, maxEv = 4.026069;
+    c = inset * max(c, vec3(0.0));
+    c = clamp(log2(max(c, vec3(1e-10))), minEv, maxEv);
+    c = (c - minEv) / (maxEv - minEv);
+    c = agxContrast(c);
+    if (punchy) {
+        float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+        c = pow(max(c, vec3(0.0)), vec3(1.35));
+        c = l + 1.4 * (c - l);
+    }
+    // The sigmoid output is display-encoded (approximately sRGB); linearise it for the shared encode below.
+    c = outset * c;
+    return pow(clamp(c, 0.0, 1.0), vec3(2.2));
+}
+
+// Khronos PBR Neutral (Lalish 2024): keeps base colours accurate up to a highlight shoulder.
+vec3 pbrNeutral(vec3 c) {
+    const float startCompression = 0.8 - 0.04;
+    const float desaturation = 0.15;
+    float x = min(c.r, min(c.g, c.b));
+    float offset = x < 0.08 ? x - 6.25 * x * x : 0.04;
+    c -= offset;
+    float peak = max3(c);
+    if (peak < startCompression) return c;
+    float d = 1.0 - startCompression;
+    float newPeak = 1.0 - d * d / (peak + d - startCompression);
+    c *= newPeak / peak;
+    float g = 1.0 - 1.0 / (desaturation * (peak - newPeak) + 1.0);
+    return mix(c, vec3(newPeak), g);
+}
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, push.size))) return;
+    vec2 uv = (vec2(p) + 0.5) / vec2(push.size);
+    float exposure = texelFetch(exposureTexture, ivec2(0), 0).r;
+    vec3 c = texelFetch(hdr, p, 0).rgb * exposure;
+    if (push.bloomScale > 0.0) {
+        vec3 glow = textureLod(bloom, uv, 0.0).rgb * push.bloomScale;
+        c = push.bloomAdditive > 0.5 ? c + glow * push.bloomIntensity * 4.0 : mix(c, glow, push.bloomIntensity);
+    }
+    vec3 display;
+    switch (push.tonemapper) {
+    case 1: display = reinhard(c); break;
+    case 2: display = acesFitted(c); break;
+    case 3: display = agx(c, false); break;
+    case 4: display = agx(c, true); break;
+    case 5: display = pbrNeutral(c); break;
+    default: display = clamp(c, 0.0, 1.0); break;   // original: the PS2 framebuffer simply saturates
+    }
+    imageStore(target, p, vec4(srgbEncode(clamp(display, 0.0, 1.0)), 1.0));
+}

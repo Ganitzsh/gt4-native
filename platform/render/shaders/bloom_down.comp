@@ -1,0 +1,47 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+// Bloom downsample: the 13-tap filter of Jimenez 2014 ("Next Generation Post Processing in Call of Duty:
+// Advanced Warfare"), five overlapping 2x2 boxes. The first pass weights each box by 1 / (1 + luma)
+// (Karis average) to suppress fireflies. With a threshold (the "original" glare), it is a bright pass.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D source;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D target;
+layout(set = 0, binding = 2) uniform sampler2D exposureTexture;
+layout(push_constant) uniform Push { vec2 sourceTexel; ivec2 targetSize; float firstPass; float threshold; } push;
+
+vec3 fetch(vec2 uv) { return textureLod(source, uv, 0.0).rgb; }
+float karis(vec3 c) { return 1.0 / (1.0 + luminance(c)); }
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, push.targetSize))) return;
+    vec2 uv = (vec2(p) + 0.5) / vec2(push.targetSize);
+    vec2 t = push.sourceTexel;
+    vec3 a = fetch(uv + t * vec2(-2, -2)), b = fetch(uv + t * vec2(0, -2)), c = fetch(uv + t * vec2(2, -2));
+    vec3 d = fetch(uv + t * vec2(-2, 0)), e = fetch(uv), f = fetch(uv + t * vec2(2, 0));
+    vec3 g = fetch(uv + t * vec2(-2, 2)), h = fetch(uv + t * vec2(0, 2)), i = fetch(uv + t * vec2(2, 2));
+    vec3 j = fetch(uv + t * vec2(-1, -1)), k = fetch(uv + t * vec2(1, -1));
+    vec3 l = fetch(uv + t * vec2(-1, 1)), m = fetch(uv + t * vec2(1, 1));
+    vec3 result;
+    if (push.firstPass > 0.5) {
+        float exposure = texelFetch(exposureTexture, ivec2(0), 0).r;
+        vec3 boxes[5] = vec3[]((j + k + l + m) * 0.25, (a + b + d + e) * 0.25, (b + c + e + f) * 0.25,
+                               (d + e + g + h) * 0.25, (e + f + h + i) * 0.25);
+        float weights[5] = float[](0.5, 0.125, 0.125, 0.125, 0.125);
+        vec3 sum = vec3(0.0);
+        float total = 0.0;
+        for (int n = 0; n < 5; ++n) {
+            vec3 box = boxes[n] * exposure;
+            if (push.threshold > 0.0) box = max(box - push.threshold, vec3(0.0));
+            float w = weights[n] * karis(box);
+            sum += box * w;
+            total += w;
+        }
+        // Stored pre-exposed: bloom is mixed with the exposed scene in the tonemap pass.
+        result = sum / max(total, 1e-5);
+    } else {
+        result = (j + k + l + m) * 0.125 + (a + c + g + i) * 0.03125 + (b + d + f + h) * 0.0625 + e * 0.125;
+    }
+    imageStore(target, p, vec4(result, 1.0));
+}

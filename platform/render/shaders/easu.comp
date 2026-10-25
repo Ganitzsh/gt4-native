@@ -1,0 +1,123 @@
+#version 460
+// AMD FidelityFX Super Resolution 1.0, EASU (Edge Adaptive Spatial Upsampling): a GLSL port of the 32-bit
+// float path of ffx_fsr1.h (FsrEasuF, Copyright (c) 2021 Advanced Micro Devices, Inc., MIT licence; see
+// THIRD_PARTY_NOTICES.md). The vendored FSR 2.2.1 copy of that header only compiles its EASU path as HLSL.
+// Input: the anti-aliased, tonemapped, perceptually encoded image at render resolution. One 12-tap
+// Lanczos-2-like kernel per output pixel, shaped by the local gradient direction and length.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D source;   // linear clamp
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D target;
+// FsrEasuCon constants (bit patterns of floats) and the output size.
+layout(push_constant) uniform Push { uvec4 con0; uvec4 con1; uvec4 con2; uvec4 con3; ivec2 targetSize; } push;
+
+// Approximations used by FSR 1 (ffx_a.h APrxLoRcpF1, APrxLoRsqF1).
+float rcpApprox(float a) { return uintBitsToFloat(0x7ef07ebbu - floatBitsToUint(a)); }
+float rsqApprox(float a) { return uintBitsToFloat(0x5f347d74u - (floatBitsToUint(a) >> 1u)); }
+
+// One filter tap: the kernel is a polynomial approximation of Lanczos-2 (window * base), stretched along
+// the edge direction.
+void easuTap(inout vec3 aC, inout float aW, vec2 off, vec2 dir, vec2 len, float lob, float clp, vec3 c) {
+    vec2 v = vec2(off.x * dir.x + off.y * dir.y, off.x * -dir.y + off.y * dir.x) * len;
+    float d2 = min(v.x * v.x + v.y * v.y, clp);
+    float wB = (2.0 / 5.0) * d2 - 1.0;
+    float wA = lob * d2 - 1.0;
+    wB *= wB;
+    wA *= wA;
+    wB = (25.0 / 16.0) * wB - (25.0 / 16.0 - 1.0);
+    float w = wB * wA;
+    aC += c * w;
+    aW += w;
+}
+
+// Accumulates direction and length for one of the four bilinear positions around the sample.
+void easuSet(inout vec2 dir, inout float len, vec2 pp, int corner, float lA, float lB, float lC, float lD, float lE) {
+    float w = corner == 0 ? (1.0 - pp.x) * (1.0 - pp.y) : corner == 1 ? pp.x * (1.0 - pp.y)
+            : corner == 2 ? (1.0 - pp.x) * pp.y : pp.x * pp.y;
+    float dc = lD - lC, cb = lC - lB;
+    float lenX = rcpApprox(max(abs(dc), abs(cb)));
+    float dirX = lD - lB;
+    dir.x += dirX * w;
+    lenX = clamp(abs(dirX) * lenX, 0.0, 1.0);
+    len += lenX * lenX * w;
+    float ec = lE - lC, ca = lC - lA;
+    float lenY = rcpApprox(max(abs(ec), abs(ca)));
+    float dirY = lE - lA;
+    dir.y += dirY * w;
+    lenY = clamp(abs(dirY) * lenY, 0.0, 1.0);
+    len += lenY * lenY * w;
+}
+
+void main() {
+    uvec2 ip = gl_GlobalInvocationID.xy;
+    if (any(greaterThanEqual(ip, uvec2(push.targetSize)))) return;
+    //      +---+---+
+    //      | b | c |
+    //  +---+---+---+---+
+    //  | e | f | g | h |
+    //  +---+---+---+---+
+    //  | i | j | k | l |
+    //  +---+---+---+---+
+    //      | n | o |
+    //      +---+---+
+    vec2 pp = vec2(ip) * uintBitsToFloat(push.con0.xy) + uintBitsToFloat(push.con0.zw);
+    vec2 fp = floor(pp);
+    pp -= fp;
+    vec2 p0 = fp * uintBitsToFloat(push.con1.xy) + uintBitsToFloat(push.con1.zw);
+    vec2 p1 = p0 + uintBitsToFloat(push.con2.xy);
+    vec2 p2 = p0 + uintBitsToFloat(push.con2.zw);
+    vec2 p3 = p0 + uintBitsToFloat(push.con3.xy);
+    vec4 bczzR = textureGather(source, p0, 0), bczzG = textureGather(source, p0, 1), bczzB = textureGather(source, p0, 2);
+    vec4 ijfeR = textureGather(source, p1, 0), ijfeG = textureGather(source, p1, 1), ijfeB = textureGather(source, p1, 2);
+    vec4 klhgR = textureGather(source, p2, 0), klhgG = textureGather(source, p2, 1), klhgB = textureGather(source, p2, 2);
+    vec4 zzonR = textureGather(source, p3, 0), zzonG = textureGather(source, p3, 1), zzonB = textureGather(source, p3, 2);
+    // Approximate luma times 2.
+    vec4 bczzL = bczzB * 0.5 + (bczzR * 0.5 + bczzG);
+    vec4 ijfeL = ijfeB * 0.5 + (ijfeR * 0.5 + ijfeG);
+    vec4 klhgL = klhgB * 0.5 + (klhgR * 0.5 + klhgG);
+    vec4 zzonL = zzonB * 0.5 + (zzonR * 0.5 + zzonG);
+    float bL = bczzL.x, cL = bczzL.y, iL = ijfeL.x, jL = ijfeL.y, fL = ijfeL.z, eL = ijfeL.w;
+    float kL = klhgL.x, lL = klhgL.y, hL = klhgL.z, gL = klhgL.w, oL = zzonL.z, nL = zzonL.w;
+    vec2 dir = vec2(0.0);
+    float len = 0.0;
+    easuSet(dir, len, pp, 0, bL, eL, fL, gL, jL);
+    easuSet(dir, len, pp, 1, cL, fL, gL, hL, kL);
+    easuSet(dir, len, pp, 2, fL, iL, jL, kL, nL);
+    easuSet(dir, len, pp, 3, gL, jL, kL, lL, oL);
+    // Normalise the direction (with a clean-up near zero).
+    vec2 dir2 = dir * dir;
+    float dirR = dir2.x + dir2.y;
+    bool zero = dirR < 1.0 / 32768.0;
+    dirR = zero ? 1.0 : rsqApprox(dirR);
+    dir.x = zero ? 1.0 : dir.x;
+    dir *= dirR;
+    // Length from {0..2} to {0..1}, shaped with a square.
+    len = len * 0.5;
+    len *= len;
+    // Stretch the kernel from 1 (horizontal/vertical) to sqrt(2) (diagonal), then anisotropic length.
+    float stretch = (dir.x * dir.x + dir.y * dir.y) * rcpApprox(max(abs(dir.x), abs(dir.y)));
+    vec2 len2 = vec2(1.0 + (stretch - 1.0) * len, 1.0 - 0.5 * len);
+    // Negative lobe strength: 0.5 (no edge) down to 0.21 (strong edge); clip point from it.
+    float lob = 0.5 + ((1.0 / 4.0 - 0.04) - 0.5) * len;
+    float clp = rcpApprox(lob);
+    // Deringing range from the nearest 2x2 texels (f, g, j, k).
+    vec3 f = vec3(ijfeR.z, ijfeG.z, ijfeB.z), g = vec3(klhgR.w, klhgG.w, klhgB.w);
+    vec3 j = vec3(ijfeR.y, ijfeG.y, ijfeB.y), k = vec3(klhgR.x, klhgG.x, klhgB.x);
+    vec3 min4 = min(min(f, g), min(j, k));
+    vec3 max4 = max(max(f, g), max(j, k));
+    vec3 aC = vec3(0.0);
+    float aW = 0.0;
+    easuTap(aC, aW, vec2(0.0, -1.0) - pp, dir, len2, lob, clp, vec3(bczzR.x, bczzG.x, bczzB.x));   // b
+    easuTap(aC, aW, vec2(1.0, -1.0) - pp, dir, len2, lob, clp, vec3(bczzR.y, bczzG.y, bczzB.y));   // c
+    easuTap(aC, aW, vec2(-1.0, 1.0) - pp, dir, len2, lob, clp, vec3(ijfeR.x, ijfeG.x, ijfeB.x));   // i
+    easuTap(aC, aW, vec2(0.0, 1.0) - pp, dir, len2, lob, clp, j);                                    // j
+    easuTap(aC, aW, vec2(0.0, 0.0) - pp, dir, len2, lob, clp, f);                                    // f
+    easuTap(aC, aW, vec2(-1.0, 0.0) - pp, dir, len2, lob, clp, vec3(ijfeR.w, ijfeG.w, ijfeB.w));   // e
+    easuTap(aC, aW, vec2(1.0, 1.0) - pp, dir, len2, lob, clp, k);                                    // k
+    easuTap(aC, aW, vec2(2.0, 1.0) - pp, dir, len2, lob, clp, vec3(klhgR.y, klhgG.y, klhgB.y));    // l
+    easuTap(aC, aW, vec2(2.0, 0.0) - pp, dir, len2, lob, clp, vec3(klhgR.z, klhgG.z, klhgB.z));    // h
+    easuTap(aC, aW, vec2(1.0, 0.0) - pp, dir, len2, lob, clp, g);                                    // g
+    easuTap(aC, aW, vec2(1.0, 2.0) - pp, dir, len2, lob, clp, vec3(zzonR.z, zzonG.z, zzonB.z));    // o
+    easuTap(aC, aW, vec2(0.0, 2.0) - pp, dir, len2, lob, clp, vec3(zzonR.w, zzonG.w, zzonB.w));    // n
+    vec3 color = min(max4, max(min4, aC / aW));
+    imageStore(target, ivec2(ip), vec4(color, 1.0));
+}

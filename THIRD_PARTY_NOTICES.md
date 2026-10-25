@@ -29,3 +29,19 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## gt4_host: vendored and fetched components
+
+`gt4_host` (built only with `-DGT4_BUILD_HOST=ON`) uses the components below. The two vendored ones live
+under `third_party/` with their licence files (provenance in `third_party/README.md`); the others are
+fetched by CMake at pinned commits (`cmake/HostDependencies.cmake`) and are not part of this repository.
+
+| Component | Where | Licence | Use |
+|---|---|---|---|
+| AMD FidelityFX Super Resolution 2.2.1 | `third_party/fidelityfx-fsr2/` (vendored, unmodified) | MIT, Copyright (c) 2022-2023 Advanced Micro Devices, Inc. (`third_party/fidelityfx-fsr2/LICENSE.txt`) | FSR 2 temporal upscaling; its RCAS header for sharpening. |
+| AMD FidelityFX Super Resolution 1.0, EASU | `platform/render/shaders/easu.comp` (a GLSL port of `ffx_fsr1.h`) | MIT, Copyright (c) 2021 Advanced Micro Devices, Inc. (same terms as FSR 2 above) | FSR 1 spatial upscaling. |
+| SMAA | `third_party/smaa/` (vendored, unmodified) | MIT-style, Copyright (C) 2013 Jorge Jimenez, Jose I. Echevarria, Belen Masia, Fernando Navarro, Diego Gutierrez (`third_party/smaa/LICENSE.txt`) | SMAA 1x / T2x anti-aliasing: the shader and its precomputed area and search textures. |
+| SDL 3 | fetched, linked | zlib | Window, input, audio, timing. |
+| Vulkan-Headers | fetched, headers only | Apache-2.0 OR MIT | Vulkan API declarations. |
+| volk | fetched, compiled into gt4_host | MIT | Vulkan function loader. |
+| glslang | fetched, build tool only (nothing linked) | BSD-3-Clause and others (its LICENSE.txt) | Compiles the GLSL shaders to SPIR-V during the build. |

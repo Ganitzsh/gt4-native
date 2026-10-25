@@ -1,0 +1,121 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+// Temporal anti-aliasing with optional upsampling (TAAU), run at output resolution.
+//  - Jittered input (Halton 2,3); each output pixel reconstructs the current frame from the 3x3 input
+//    samples around it with a Blackman-Harris-like Gaussian of their true (jittered) positions.
+//  - History fetched with a 5-tap Catmull-Rom filter (Jimenez 2016, "Filmic SMAA") at the reprojected
+//    position, using the motion vector of the nearest depth in the 3x3 neighbourhood (dilation,
+//    Karis 2014).
+//  - History rectified by variance clipping in YCoCg (Salvi 2016, "An Excursion in Temporal
+//    Supersampling"), clipping towards the neighbourhood mean (Playdead, Pedersen 2016).
+//  - Filtering and blending done on reversibly tonemapped values to stop fireflies and flicker (Karis 2014).
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D currentColor;   // render resolution, point/linear clamp
+layout(set = 0, binding = 1) uniform sampler2D sceneDepth;     // render resolution
+layout(set = 0, binding = 2) uniform sampler2D motionVectors;  // render resolution, previous uv - current uv
+layout(set = 0, binding = 3) uniform sampler2D history;        // output resolution, linear clamp
+layout(set = 0, binding = 4) uniform sampler2D exposureTexture;
+layout(set = 0, binding = 5, rgba16f) uniform writeonly image2D outHistory;
+layout(push_constant) uniform Push {
+    vec2 renderSize;
+    vec2 outputSize;
+    vec2 jitter;        // pixels, content shift of the current frame
+    float reset;
+    float sharpenHistory;
+} push;
+
+vec3 loadCurrent(ivec2 p, float exposure) {
+    p = clamp(p, ivec2(0), ivec2(push.renderSize) - 1);
+    return tonemapWeight(texelFetch(currentColor, p, 0).rgb * exposure);
+}
+
+vec3 sampleHistoryCatmullRom(vec2 uv, float exposure) {
+    vec2 position = uv * push.outputSize;
+    vec2 center = floor(position - 0.5) + 0.5;
+    vec2 f = position - center;
+    vec2 f2 = f * f, f3 = f2 * f;
+    vec2 w0 = -0.5 * f3 + f2 - 0.5 * f;
+    vec2 w1 = 1.5 * f3 - 2.5 * f2 + 1.0;
+    vec2 w2 = -1.5 * f3 + 2.0 * f2 + 0.5 * f;
+    vec2 w3 = 0.5 * f3 - 0.5 * f2;
+    vec2 w12 = w1 + w2;
+    vec2 texel = 1.0 / push.outputSize;
+    vec2 tc0 = (center - 1.0) * texel;
+    vec2 tc3 = (center + 2.0) * texel;
+    vec2 tc12 = (center + w2 / w12) * texel;
+    vec3 sum = vec3(0.0);
+    float weight = 0.0;
+    // The four corner taps of the full 16-tap filter are dropped (they carry little weight).
+    float w;
+    w = w12.x * w0.y;  sum += textureLod(history, vec2(tc12.x, tc0.y), 0.0).rgb * w; weight += w;
+    w = w0.x * w12.y;  sum += textureLod(history, vec2(tc0.x, tc12.y), 0.0).rgb * w; weight += w;
+    w = w12.x * w12.y; sum += textureLod(history, vec2(tc12.x, tc12.y), 0.0).rgb * w; weight += w;
+    w = w3.x * w12.y;  sum += textureLod(history, vec2(tc3.x, tc12.y), 0.0).rgb * w; weight += w;
+    w = w12.x * w3.y;  sum += textureLod(history, vec2(tc12.x, tc3.y), 0.0).rgb * w; weight += w;
+    return tonemapWeight(max(sum / weight, vec3(0.0)) * exposure);
+}
+
+vec3 clipToAabb(vec3 history, vec3 center, vec3 extents) {
+    vec3 offset = history - center;
+    vec3 units = abs(offset / max(extents, vec3(1e-5)));
+    float maxUnit = max3(units);
+    return maxUnit > 1.0 ? center + offset / maxUnit : history;
+}
+
+void main() {
+    ivec2 outPixel = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(outPixel, ivec2(push.outputSize)))) return;
+    float exposure = texelFetch(exposureTexture, ivec2(0), 0).r;
+    vec2 outUv = (vec2(outPixel) + 0.5) / push.outputSize;
+    // Position of this output pixel in input pixel units, and the input texel holding the closest sample.
+    vec2 inputPosition = outUv * push.renderSize;
+    ivec2 base = ivec2(floor(inputPosition + push.jitter));
+    float upscale = push.outputSize.x / push.renderSize.x;
+
+    vec3 sum = vec3(0.0);
+    float weightSum = 0.0, peak = 0.0;
+    vec3 m1 = vec3(0.0), m2 = vec3(0.0);
+    float nearest = -1.0;
+    ivec2 nearestPixel = base;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            ivec2 p = base + ivec2(x, y);
+            vec3 c = loadCurrent(p, exposure);
+            // Sample position in input pixels = texel centre minus the jitter (the content shifted by +jitter).
+            vec2 d = (vec2(p) + 0.5 - push.jitter) - inputPosition;
+            // Kernel narrows with upscaling so the reconstruction keeps output-resolution detail.
+            float w = exp(-2.29 * dot(d, d) * max(upscale, 1.0));
+            sum += c * w;
+            weightSum += w;
+            peak = max(peak, w);
+            vec3 ycocg = rgbToYCoCg(c);
+            m1 += ycocg;
+            m2 += ycocg * ycocg;
+            float depth = texelFetch(sceneDepth, clamp(p, ivec2(0), ivec2(push.renderSize) - 1), 0).r;
+            if (depth > nearest) { nearest = depth; nearestPixel = p; }
+        }
+    }
+    vec3 current = sum / max(weightSum, 1e-5);
+    nearestPixel = clamp(nearestPixel, ivec2(0), ivec2(push.renderSize) - 1);
+    vec2 velocity = texelFetch(motionVectors, nearestPixel, 0).rg;
+    vec2 previousUv = outUv + velocity;
+
+    vec3 result;
+    if (push.reset > 0.5 || any(lessThan(previousUv, vec2(0.0))) || any(greaterThan(previousUv, vec2(1.0)))) {
+        result = current;
+    } else {
+        vec3 mean = m1 / 9.0;
+        vec3 sigma = sqrt(max(m2 / 9.0 - mean * mean, vec3(0.0)));
+        // Wider box when standing still (more accumulation), tighter in motion (less ghosting).
+        float speed = length(velocity * push.outputSize);
+        float gamma = mix(1.25, 0.85, clamp(speed / 8.0, 0.0, 1.0));
+        vec3 historyColor = rgbToYCoCg(sampleHistoryCatmullRom(previousUv, exposure));
+        historyColor = yCoCgToRgb(clipToAabb(historyColor, mean, sigma * gamma));
+        // The current frame weighs more where a sample sits right on this pixel and when moving.
+        float alpha = mix(0.06, 0.2, clamp(speed / 16.0, 0.0, 1.0));
+        alpha *= clamp(peak * 1.25, 0.25, 1.0);
+        result = mix(historyColor, current, alpha);
+    }
+    imageStore(outHistory, outPixel, vec4(tonemapWeightInverse(result) / exposure, 1.0));
+}

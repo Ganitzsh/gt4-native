@@ -1,0 +1,15 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "cube.glsl"
+#include "sky.glsl"
+// Renders the analytic sky into the base mip of the environment cube map.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(set = 0, binding = 0, rgba16f) uniform writeonly image2DArray target;
+layout(push_constant) uniform Push { vec4 sun; float size; float sunScale; } push;
+void main() {
+    uvec3 id = gl_GlobalInvocationID;
+    if (id.x >= uint(push.size) || id.y >= uint(push.size)) return;
+    vec3 direction = cubeDirection(id.z, vec2(id.xy), push.size);
+    // The sun disc is left out of the reflections' source: it is added analytically as a specular highlight.
+    imageStore(target, ivec3(id), vec4(skyRadiance(direction, push.sun.xyz, push.sunScale, false), 1.0));
+}

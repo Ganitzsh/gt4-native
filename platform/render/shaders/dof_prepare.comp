@@ -1,0 +1,39 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+#include "dof.glsl"
+// Half-resolution colour and signed circle of confusion for the bokeh gather.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D color;   // post resolution, linear clamp
+layout(set = 0, binding = 1) uniform sampler2D depth;   // render resolution, point clamp
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D target;  // half post resolution
+layout(push_constant) uniform Push {
+    ivec2 targetSize; float near; float focusDistance; float focalLength; float aperture; float sensorHeight;
+    float maxCoc; float autofocus;
+} push;
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, push.targetSize))) return;
+    vec2 uv = (vec2(p) + 0.5) / vec2(push.targetSize);
+    DofParams params = DofParams(push.near, push.focusDistance, push.focalLength, push.aperture, push.sensorHeight,
+                                 float(push.targetSize.y), push.maxCoc);
+    if (push.autofocus > 0.5) {
+        // Autofocus: the mean depth of five points around the centre.
+        float sum = textureLod(depth, vec2(0.5), 0.0).r + textureLod(depth, vec2(0.48, 0.5), 0.0).r +
+                    textureLod(depth, vec2(0.52, 0.5), 0.0).r + textureLod(depth, vec2(0.5, 0.47), 0.0).r +
+                    textureLod(depth, vec2(0.5, 0.53), 0.0).r;
+        params.focusDistance = linearDepth(sum / 5.0, push.near);
+    }
+    vec2 texel = 0.5 / vec2(push.targetSize);
+    vec3 c = textureLod(color, uv, 0.0).rgb;  // bilinear = 2x2 box of the full-resolution image
+    // CoC: the largest magnitude among the four covered depths keeps foreground edges blurry.
+    float coc = 0.0;
+    for (int i = 0; i < 4; ++i) {
+        vec2 o = vec2((i & 1) == 0 ? -0.5 : 0.5, (i & 2) == 0 ? -0.5 : 0.5) * texel;
+        float z = linearDepth(textureLod(depth, uv + o, 0.0).r, push.near);
+        float candidate = circleOfConfusion(z, params);
+        if (abs(candidate) > abs(coc)) coc = candidate;
+    }
+    imageStore(target, p, vec4(c, coc));
+}

@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
@@ -57,6 +58,7 @@ struct Session::Impl {
     Uint64 resizeDeadline = 0;
     Uint64 toneUntil = 0;
     std::vector<fs::path> captures;
+    std::function<std::string(const std::string&, const std::string&)> setting;
     explicit Impl(const std::string& path) : directory(path) {}
     ~Impl() {
         if (audio) SDL_DestroyAudioStream(audio);
@@ -113,7 +115,7 @@ struct Session::Impl {
             header();
         }
         event("session", "\"audio\":" + std::string(audio ? "true" : "false") +
-              ",\"controller\":" + std::to_string(id) + ",\"video_driver\":" + quote(SDL_GetCurrentVideoDriver()));
+              ",\"controller\":" + std::to_string(id) + ",\"video_driver\":" + quote(SDL_GetCurrentVideoDriver() ? SDL_GetCurrentVideoDriver() : "none (headless)"));
     }
     void reset() {
         for (int i = 0; i < 15; ++i) require(SDL_SetJoystickVirtualButton(joystick, i, false), "virtual button");
@@ -201,12 +203,28 @@ struct Session::Impl {
             int width, height;
             if (!(input >> width >> height) || width < 64 || height < 64 || width > 8192 || height > 8192)
                 throw std::runtime_error("resize WIDTH HEIGHT requires 64..8192 pixels");
-            if (SDL_GetWindowFlags(window) & (SDL_WINDOW_MAXIMIZED | SDL_WINDOW_MINIMIZED))
-                require(SDL_RestoreWindow(window), "SDL_RestoreWindow");
-            require(SDL_SetWindowSize(window, width, height), "SDL_SetWindowSize"); renderer.resize();
+            if (window) {
+                if (SDL_GetWindowFlags(window) & (SDL_WINDOW_MAXIMIZED | SDL_WINDOW_MINIMIZED))
+                    require(SDL_RestoreWindow(window), "SDL_RestoreWindow");
+                require(SDL_SetWindowSize(window, width, height), "SDL_SetWindowSize");
+                renderer.resize();
+            } else {
+                renderer.resizeHeadless({static_cast<uint32_t>(width), static_cast<uint32_t>(height)});
+            }
             resizeWidth = width; resizeHeight = height; resizeDeadline = SDL_GetTicks() + 15000;
             event("resize_requested", "\"width\":" + std::to_string(width) + ",\"height\":" + std::to_string(height) +
-                  ",\"window_flags\":" + std::to_string(SDL_GetWindowFlags(window)));
+                  ",\"window_flags\":" + std::to_string(window ? SDL_GetWindowFlags(window) : 0));
+        } else if (op == "set") {
+            // set KEY VALUE (or KEY=VALUE): a display / image-quality setting, applied live.
+            std::string key, value;
+            input >> key;
+            const auto equals = key.find('=');
+            if (equals != std::string::npos) { value = key.substr(equals + 1); key = key.substr(0, equals); }
+            else input >> value;
+            if (key.empty() || value.empty() || !setting) throw std::runtime_error("set KEY VALUE required");
+            if (const std::string error = setting(key, value); !error.empty()) throw std::runtime_error(error);
+            event("setting", "\"key\":" + quote(key) + ",\"value\":" + quote(value) +
+                  ",\"pipeline\":" + quote(renderer.pipelineDescription()));
         } else if (op == "quit") quit = true;
         else throw std::runtime_error("Unknown command");
         std::string extra;
@@ -254,8 +272,13 @@ bool Session::tick(Renderer& renderer, SDL_Window* window, uint32_t frame) {
 float Session::horizontal() const { return SDL_GetGamepadAxis(impl->gamepad, SDL_GAMEPAD_AXIS_LEFTX) / 32768.0f; }
 bool Session::action() const { return SDL_GetGamepadButton(impl->gamepad, SDL_GAMEPAD_BUTTON_SOUTH); }
 void Session::submitAudio(const int16_t* samples, uint32_t frames) { impl->submit(samples, frames); }
-void Session::frame(uint32_t number, double milliseconds, uint32_t width, uint32_t height) {
+void Session::onSetting(std::function<std::string(const std::string&, const std::string&)> handler) {
+    impl->setting = std::move(handler);
+}
+void Session::record(const char* type, const std::string& fields) { impl->event(type, fields); }
+void Session::frame(uint32_t number, double milliseconds, double gpuMilliseconds, uint32_t width, uint32_t height) {
     impl->event("frame", "\"frame\":" + std::to_string(number) + ",\"duration_ms\":" + std::to_string(milliseconds) +
+                ",\"gpu_ms\":" + std::to_string(gpuMilliseconds) +
                 ",\"width\":" + std::to_string(width) + ",\"height\":" + std::to_string(height) +
                 ",\"leftx\":" + std::to_string(SDL_GetGamepadAxis(impl->gamepad, SDL_GAMEPAD_AXIS_LEFTX)) +
                 ",\"cross\":" + std::string(action() ? "true" : "false"));

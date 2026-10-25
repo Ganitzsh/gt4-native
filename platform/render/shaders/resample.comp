@@ -1,0 +1,54 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+// Resampling of the display-referred image from the render to the output resolution:
+// 0 bilinear, 1 bicubic (Catmull-Rom, B = 0, C = 0.5; Mitchell & Netravali 1988), 2 Lanczos-2.
+// When downsampling (supersampling, render scale > 100 %) the kernels are widened by the ratio so they
+// act as proper low-pass filters. Upsampling Lanczos is clamped to the nearest 2x2 range against ringing.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D source;   // linear clamp
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D target;
+layout(push_constant) uniform Push { ivec2 sourceSize; ivec2 targetSize; int mode; } push;
+
+float catmullRom(float x) {
+    x = abs(x);
+    if (x < 1.0) return 1.5 * x * x * x - 2.5 * x * x + 1.0;
+    if (x < 2.0) return -0.5 * x * x * x + 2.5 * x * x - 4.0 * x + 2.0;
+    return 0.0;
+}
+float sinc(float x) { return abs(x) < 1e-5 ? 1.0 : sin(PI * x) / (PI * x); }
+float lanczos2(float x) { return abs(x) < 2.0 ? sinc(x) * sinc(x * 0.5) : 0.0; }
+float kernel(float x) { return push.mode == 1 ? catmullRom(x) : lanczos2(x); }
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, push.targetSize))) return;
+    vec2 uv = (vec2(p) + 0.5) / vec2(push.targetSize);
+    if (push.mode == 0) {
+        imageStore(target, p, vec4(textureLod(source, uv, 0.0).rgb, 1.0));
+        return;
+    }
+    vec2 scale = max(vec2(push.sourceSize) / vec2(push.targetSize), vec2(1.0));  // > 1 when downsampling
+    vec2 position = uv * vec2(push.sourceSize) - 0.5;
+    ivec2 radius = ivec2(ceil(2.0 * scale));
+    ivec2 base = ivec2(floor(position));
+    vec3 sum = vec3(0.0);
+    float weight = 0.0;
+    vec3 lo = vec3(1e9), hi = vec3(-1e9);
+    for (int y = -radius.y + 1; y <= radius.y; ++y) {
+        float wy = kernel((float(base.y + y) - position.y) / scale.y);
+        if (wy == 0.0) continue;
+        for (int x = -radius.x + 1; x <= radius.x; ++x) {
+            float w = kernel((float(base.x + x) - position.x) / scale.x) * wy;
+            if (w == 0.0) continue;
+            ivec2 q = clamp(base + ivec2(x, y), ivec2(0), push.sourceSize - 1);
+            vec3 c = texelFetch(source, q, 0).rgb;
+            sum += c * w;
+            weight += w;
+            if (x >= 0 && x <= 1 && y >= 0 && y <= 1) { lo = min(lo, c); hi = max(hi, c); }
+        }
+    }
+    vec3 result = sum / max(weight, 1e-5);
+    if (scale.x <= 1.0 && scale.y <= 1.0) result = clamp(result, lo, hi);
+    imageStore(target, p, vec4(max(result, vec3(0.0)), 1.0));
+}

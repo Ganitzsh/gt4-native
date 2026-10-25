@@ -1,406 +1,717 @@
 #include "renderer.h"
+
+#include "display.h"
+
+#include "overlay.h"
+#include "pipeline.h"
+#include "test_scene.h"
+#include "vk.h"
+
 #include <SDL3/SDL.h>
+#include <SDL3/SDL_vulkan.h>
+
 #include <algorithm>
 #include <array>
 #include <cstdio>
-#include <limits>
+#include <cstring>
 #include <fstream>
+#include <limits>
+#include <sstream>
 #include <stdexcept>
-#include <string>
-#include <vector>
+
+using gt4::vk::check;
 
 namespace {
-void check(VkResult result, const char* operation) {
-    if (result != VK_SUCCESS)
-        throw std::runtime_error(std::string(operation) + ": Vulkan result " + std::to_string(result));
+
+constexpr uint32_t kFramesInFlight = 2;
+
+std::string lower(std::string text) {
+    for (char& c : text) if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    return text;
 }
-template <typename T>
-T load(PFN_vkGetInstanceProcAddr get, VkInstance instance, const char* name) {
-    auto function = reinterpret_cast<T>(get(instance, name));
-    if (!function) throw std::runtime_error(std::string("Missing Vulkan entry point: ") + name);
-    return function;
+
+const char* typeName(VkPhysicalDeviceType type) {
+    switch (type) {
+    case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU: return "discrete";
+    case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: return "integrated";
+    case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU: return "virtual";
+    case VK_PHYSICAL_DEVICE_TYPE_CPU: return "cpu";
+    default: return "other";
+    }
 }
-#define DEVICE_FUNCTIONS(X) \
-    X(vkDestroyDevice) X(vkDeviceWaitIdle) X(vkGetDeviceQueue) \
-    X(vkCreateSwapchainKHR) X(vkDestroySwapchainKHR) X(vkGetSwapchainImagesKHR) \
-    X(vkCreateImageView) X(vkDestroyImageView) X(vkCreateRenderPass) X(vkDestroyRenderPass) \
-    X(vkCreateFramebuffer) X(vkDestroyFramebuffer) X(vkCreateCommandPool) X(vkDestroyCommandPool) \
-    X(vkAllocateCommandBuffers) X(vkResetCommandBuffer) X(vkBeginCommandBuffer) X(vkEndCommandBuffer) \
-    X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass) X(vkCmdClearAttachments) \
-    X(vkCreateSemaphore) X(vkDestroySemaphore) X(vkCreateFence) X(vkDestroyFence) \
-    X(vkWaitForFences) X(vkResetFences) X(vkAcquireNextImageKHR) X(vkQueueSubmit) X(vkQueuePresentKHR) \
-    X(vkCreateBuffer) X(vkDestroyBuffer) X(vkGetBufferMemoryRequirements) X(vkAllocateMemory) \
-    X(vkFreeMemory) X(vkBindBufferMemory) X(vkMapMemory) X(vkUnmapMemory) \
-    X(vkCmdPipelineBarrier) X(vkCmdCopyImageToBuffer)
+
+std::string versionString(uint32_t v) {
+    return std::to_string(VK_API_VERSION_MAJOR(v)) + "." + std::to_string(VK_API_VERSION_MINOR(v)) + "." +
+           std::to_string(VK_API_VERSION_PATCH(v));
+}
+
+struct Candidate {
+    VkPhysicalDevice device = VK_NULL_HANDLE;
+    uint32_t index = 0;
+    uint32_t family = 0;
+    VkPhysicalDeviceProperties properties{};
+    VkPhysicalDeviceDriverProperties driver{};
+    std::string problem;   // empty when usable
+    int score = 0;
+};
+
+bool hasExtension(VkPhysicalDevice device, const char* name) {
+    uint32_t count = 0;
+    vkEnumerateDeviceExtensionProperties(device, nullptr, &count, nullptr);
+    std::vector<VkExtensionProperties> extensions(count);
+    vkEnumerateDeviceExtensionProperties(device, nullptr, &count, extensions.data());
+    for (const auto& e : extensions) if (std::strcmp(e.extensionName, name) == 0) return true;
+    return false;
+}
+
+// Checks one device; with a surface, also that it can really present to it (capabilities, formats and
+// present modes all query successfully: a GPU cannot present to a display driven by another adapter).
+Candidate examine(VkPhysicalDevice device, uint32_t index, VkSurfaceKHR surface) {
+    Candidate c;
+    c.device = device;
+    c.index = index;
+    c.driver.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES;
+    VkPhysicalDeviceProperties2 properties{};
+    properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    properties.pNext = &c.driver;
+    vkGetPhysicalDeviceProperties2(device, &properties);
+    c.properties = properties.properties;
+    c.score = c.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? 3 :
+              c.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? 2 : 1;
+    if (c.properties.apiVersion < VK_API_VERSION_1_3) { c.problem = "needs Vulkan 1.3 (has " + versionString(c.properties.apiVersion) + ")"; return c; }
+    VkPhysicalDeviceVulkan13Features features13{};
+    features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+    VkPhysicalDeviceFeatures2 features{};
+    features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    features.pNext = &features13;
+    vkGetPhysicalDeviceFeatures2(device, &features);
+    if (!features13.dynamicRendering || !features13.synchronization2) { c.problem = "no dynamic rendering / synchronization2"; return c; }
+    if (!hasExtension(device, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME)) { c.problem = "no VK_KHR_push_descriptor"; return c; }
+    if (surface && !hasExtension(device, VK_KHR_SWAPCHAIN_EXTENSION_NAME)) { c.problem = "no VK_KHR_swapchain"; return c; }
+    uint32_t familyCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &familyCount, nullptr);
+    std::vector<VkQueueFamilyProperties> families(familyCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &familyCount, families.data());
+    bool found = false;
+    for (uint32_t i = 0; i < familyCount && !found; ++i) {
+        const VkQueueFlags need = VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT;
+        if ((families[i].queueFlags & need) != need || !families[i].queueCount) continue;
+        if (surface) {
+            VkBool32 present = VK_FALSE;
+            if (vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface, &present) != VK_SUCCESS || !present) continue;
+        }
+        c.family = i;
+        found = true;
+    }
+    if (!found) { c.problem = surface ? "cannot present to this window's display" : "no graphics+compute queue"; return c; }
+    if (surface) {
+        VkSurfaceCapabilitiesKHR caps{};
+        VkResult result = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, surface, &caps);
+        if (result != VK_SUCCESS) {
+            c.problem = "surface capabilities failed (" + std::to_string(static_cast<int>(result)) +
+                        "): the window is on a display this GPU does not drive";
+            return c;
+        }
+        uint32_t count = 0;
+        result = vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &count, nullptr);
+        if (result != VK_SUCCESS || !count) { c.problem = "no surface formats"; return c; }
+        result = vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &count, nullptr);
+        if (result != VK_SUCCESS || !count) { c.problem = "no present modes"; return c; }
+    }
+    return c;
+}
+
+std::vector<Candidate> examineAll(VkInstance instance, VkSurfaceKHR surface) {
+    uint32_t count = 0;
+    check(vkEnumeratePhysicalDevices(instance, &count, nullptr), "vkEnumeratePhysicalDevices");
+    std::vector<VkPhysicalDevice> devices(count);
+    if (count) check(vkEnumeratePhysicalDevices(instance, &count, devices.data()), "vkEnumeratePhysicalDevices");
+    std::vector<Candidate> result;
+    for (uint32_t i = 0; i < count; ++i) result.push_back(examine(devices[i], i, surface));
+    return result;
+}
+
+std::string label(const Candidate& c) {
+    std::ostringstream out;
+    out << "#" << c.index << " " << c.properties.deviceName << " (" << typeName(c.properties.deviceType) << ", Vulkan "
+        << versionString(c.properties.apiVersion) << ", driver " << c.driver.driverName << " " << c.driver.driverInfo << ")";
+    return out.str();
+}
+
+Candidate choose(VkInstance instance, VkSurfaceKHR surface, const std::string& request, SDL_Window* window) {
+    auto candidates = examineAll(instance, surface);
+    if (candidates.empty()) throw std::runtime_error("No Vulkan device found");
+    for (const auto& c : candidates)
+        std::printf("GPU %s: %s\n", label(c).c_str(), c.problem.empty() ? "usable" : c.problem.c_str());
+    const Candidate* chosen = nullptr;
+    const std::string want = lower(request);
+    if (!want.empty() && want != "auto") {
+        char* end = nullptr;
+        const unsigned long index = std::strtoul(want.c_str(), &end, 10);
+        for (const auto& c : candidates) {
+            const bool match = (end && *end == '\0') ? c.index == index : lower(c.properties.deviceName).find(want) != std::string::npos;
+            if (!match) continue;
+            if (!c.problem.empty())
+                throw std::runtime_error("Requested GPU " + label(c) + " cannot be used: " + c.problem +
+                                         (surface ? ". The window is on " + gt4::windowDisplayName(window) +
+                                                    "; move it to a display this GPU drives, or use --headless." : ""));
+            chosen = &c;
+            break;
+        }
+        if (!chosen) throw std::runtime_error("No GPU matches --gpu " + request + " (gt4_host --list-gpus)");
+    } else {
+        for (const auto& c : candidates)
+            if (c.problem.empty() && (!chosen || c.score > chosen->score)) chosen = &c;
+        if (!chosen)
+            throw std::runtime_error(surface ?
+                "No GPU can present to the window on " + gt4::windowDisplayName(window) + ". That display may be driven "
+                "by an adapter without Vulkan presentation (for example the virtual display of a remote-streaming "
+                "tool). Move the window to another monitor (display.monitor), turn a monitor on, or use --headless." :
+                std::string("No usable Vulkan 1.3 GPU (see the list above)"));
+    }
+    std::printf("Using GPU %s\n", label(*chosen).c_str());
+    return *chosen;
+}
+
+}  // namespace
+
+std::vector<std::string> describeGpus(VkInstance instance, SDL_Window* window) {
+    std::vector<std::string> lines;
+    VkSurfaceKHR surface = VK_NULL_HANDLE;
+    if (window && !SDL_Vulkan_CreateSurface(window, instance, nullptr, &surface)) surface = VK_NULL_HANDLE;
+    if (surface) lines.push_back("Presentation to the window on " + gt4::windowDisplayName(window) + ":");
+    for (const auto& c : examineAll(instance, surface))
+        lines.push_back("  " + label(c) + (c.problem.empty() ? " - usable" : " - " + c.problem));
+    if (surface) {
+        lines.push_back("Headless (no presentation):");
+        for (const auto& c : examineAll(instance, VK_NULL_HANDLE))
+            lines.push_back("  " + label(c) + (c.problem.empty() ? " - usable" : " - " + c.problem));
+        SDL_Vulkan_DestroySurface(instance, surface, nullptr);
+    }
+    return lines;
 }
 
 struct Renderer::Impl {
-    SDL_Window* window;
-    VkSurfaceKHR surface;
-    VkPhysicalDevice physical;
-    uint32_t family;
-    VkDevice device = VK_NULL_HANDLE;
-    VkQueue queue = VK_NULL_HANDLE;
-    VkSwapchainKHR swapchain = VK_NULL_HANDLE;
-    VkRenderPass renderPass = VK_NULL_HANDLE;
+    SDL_Window* window = nullptr;
+    VkInstance instance = VK_NULL_HANDLE;
+    VkSurfaceKHR surface = VK_NULL_HANDLE;
+    bool headless = false;
+    gt4::vk::Device device;
+    GpuInfo info;
+    gt4::Settings settings;
     VkCommandPool pool = VK_NULL_HANDLE;
-    VkCommandBuffer command = VK_NULL_HANDLE;
-    VkSemaphore acquired = VK_NULL_HANDLE;
-    VkFence submitted = VK_NULL_HANDLE;
-    VkExtent2D extent{};
-    bool resized = true;
-    bool suspended = false;
-    VkFormat pixelFormat = VK_FORMAT_UNDEFINED;
-    bool canCapture = false;
-    float horizontal = 0.0f;
-    bool action = false;
-    std::string capturePath;
-    VkBuffer readback = VK_NULL_HANDLE;
-    VkDeviceMemory readbackMemory = VK_NULL_HANDLE;
-    VkPhysicalDeviceMemoryProperties memoryProperties{};
-    std::vector<VkImage> swapImages;
-    std::vector<VkImageView> views;
-    std::vector<VkFramebuffer> framebuffers;
-    // Present waits are tied to swapchain images, not CPU frames. Reacquiring an image
-    // guarantees its earlier present wait has finished before we signal this semaphore again.
-    std::vector<VkSemaphore> finished;
-#define DECLARE(name) PFN_##name name = nullptr;
-    DEVICE_FUNCTIONS(DECLARE)
-#undef DECLARE
-    PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR capabilities = nullptr;
-    PFN_vkGetPhysicalDeviceSurfaceFormatsKHR formats = nullptr;
+    struct Frame {
+        VkCommandBuffer command = VK_NULL_HANDLE;
+        VkFence fence = VK_NULL_HANDLE;
+        VkSemaphore acquired = VK_NULL_HANDLE;
+        bool timed = false;
+    };
+    std::array<Frame, kFramesInFlight> frames{};
+    uint32_t slot = 0;
+    uint32_t frameCounter = 0;
+    VkQueryPool timestamps = VK_NULL_HANDLE;
+    bool timestampsSupported = false;
+    double gpuMs = 0.0;
 
-    Impl(SDL_Window* window_, VkSurfaceKHR surface_, VkPhysicalDevice physical_, uint32_t family_)
-        : window(window_), surface(surface_), physical(physical_), family(family_) {}
+    // Presentation target.
+    VkSwapchainKHR swapchain = VK_NULL_HANDLE;
+    std::vector<gt4::vk::Image> swapImages;     // views owned here, images by the swapchain
+    std::vector<VkSemaphore> finished;
+    gt4::vk::Image offscreen;
+    VkExtent2D extent{};
+    VkExtent2D headlessSize{};
+    VkFormat format = VK_FORMAT_UNDEFINED;
+    bool srgbFormat = false;
+    VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
+    bool resized = true, suspended = false, displayMoved = false;
+    gt4::VSync presentedVsync = gt4::VSync::On;
+    int presentedBits = 8;
+
+    std::unique_ptr<gt4::TestScene> scene;
+    std::unique_ptr<gt4::FramePipeline> pipeline;
+    std::unique_ptr<gt4::Overlay> overlay;
+    float stick = 0.0f;
+    bool action = false;
+    std::string status;
+    std::string capturePath;
+    gt4::vk::Buffer readback;
+
     ~Impl() {
-        if (!device) return;
-        if (vkDeviceWaitIdle) vkDeviceWaitIdle(device);
-        releaseReadback();
-        releaseSwapchain();
-        if (submitted && vkDestroyFence) vkDestroyFence(device, submitted, nullptr);
-        if (acquired && vkDestroySemaphore) vkDestroySemaphore(device, acquired, nullptr);
-        if (pool && vkDestroyCommandPool) vkDestroyCommandPool(device, pool, nullptr);
-        if (vkDestroyDevice) vkDestroyDevice(device, nullptr);
+        if (device.device) vkDeviceWaitIdle(device.device);
+        overlay.reset();
+        pipeline.reset();
+        scene.reset();
+        if (!device.device) {
+            if (surface) SDL_Vulkan_DestroySurface(instance, surface, nullptr);
+            return;
+        }
+        gt4::vk::destroy(device, readback);
+        releaseTarget();
+        for (auto& f : frames) {
+            if (f.fence) vkDestroyFence(device.device, f.fence, nullptr);
+            if (f.acquired) vkDestroySemaphore(device.device, f.acquired, nullptr);
+        }
+        if (timestamps) vkDestroyQueryPool(device.device, timestamps, nullptr);
+        if (pool) vkDestroyCommandPool(device.device, pool, nullptr);
+        vkDestroyDevice(device.device, nullptr);
+        if (surface) SDL_Vulkan_DestroySurface(instance, surface, nullptr);
     }
-    void initialize(VkInstance instance, PFN_vkGetInstanceProcAddr get) {
-        auto memory = load<PFN_vkGetPhysicalDeviceMemoryProperties>(get, instance, "vkGetPhysicalDeviceMemoryProperties");
-        memory(physical, &memoryProperties);
-        capabilities = load<PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR>(get, instance, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
-        formats = load<PFN_vkGetPhysicalDeviceSurfaceFormatsKHR>(get, instance, "vkGetPhysicalDeviceSurfaceFormatsKHR");
-        auto create = load<PFN_vkCreateDevice>(get, instance, "vkCreateDevice");
-        auto getDevice = load<PFN_vkGetDeviceProcAddr>(get, instance, "vkGetDeviceProcAddr");
+
+    void createDevice(const std::string& request) {
+        const Candidate chosen = choose(instance, surface, request, window);
+        device.instance = instance;
+        device.physical = chosen.device;
+        device.family = chosen.family;
+        device.properties = chosen.properties;
+        info.index = chosen.index;
+        info.name = chosen.properties.deviceName;
+        info.type = typeName(chosen.properties.deviceType);
+        info.driver = std::string(chosen.driver.driverName) + " " + chosen.driver.driverInfo;
+        info.api = versionString(chosen.properties.apiVersion);
+        vkGetPhysicalDeviceMemoryProperties(device.physical, &device.memory);
+        VkPhysicalDeviceFeatures supported{};
+        vkGetPhysicalDeviceFeatures(device.physical, &supported);
+        VkPhysicalDeviceVulkan13Features supported13{};
+        supported13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+        VkPhysicalDeviceFeatures2 query{};
+        query.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        query.pNext = &supported13;
+        vkGetPhysicalDeviceFeatures2(device.physical, &query);
+
+        VkPhysicalDeviceVulkan13Features features13{};
+        features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+        features13.dynamicRendering = VK_TRUE;
+        features13.synchronization2 = VK_TRUE;
+        features13.shaderDemoteToHelperInvocation = VK_TRUE;   // required by 1.3; glslang emits it for discard
+        features13.subgroupSizeControl = supported13.subgroupSizeControl;   // FSR 2 may request wave64
+        features13.computeFullSubgroups = supported13.computeFullSubgroups;
+        VkPhysicalDeviceFeatures2 features{};
+        features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        features.pNext = &features13;
+        features.features.samplerAnisotropy = supported.samplerAnisotropy;
+        features.features.shaderStorageImageReadWithoutFormat = supported.shaderStorageImageReadWithoutFormat;
+        features.features.shaderStorageImageWriteWithoutFormat = supported.shaderStorageImageWriteWithoutFormat;
+        features.features.shaderImageGatherExtended = supported.shaderImageGatherExtended;
+        device.anisotropy = supported.samplerAnisotropy == VK_TRUE;
+        device.maxAnisotropy = device.anisotropy ? chosen.properties.limits.maxSamplerAnisotropy : 1.0f;
+        device.sampleCounts = chosen.properties.limits.framebufferColorSampleCounts &
+                              chosen.properties.limits.framebufferDepthSampleCounts;
+        std::vector<const char*> extensions{VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME};
+        if (surface) extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
         float priority = 1.0f;
-        VkDeviceQueueCreateInfo queueInfo{};
-        queueInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-        queueInfo.queueFamilyIndex = family;
-        queueInfo.queueCount = 1;
-        queueInfo.pQueuePriorities = &priority;
-        const char* extensions[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
-        VkDeviceCreateInfo info{};
-        info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-        info.queueCreateInfoCount = 1;
-        info.pQueueCreateInfos = &queueInfo;
-        info.enabledExtensionCount = 1;
-        info.ppEnabledExtensionNames = extensions;
-        check(create(physical, &info, nullptr, &device), "vkCreateDevice");
-#define LOAD(name) \
-        name = reinterpret_cast<PFN_##name>(getDevice(device, #name)); \
-        if (!name) throw std::runtime_error("Missing Vulkan device entry point: " #name);
-        DEVICE_FUNCTIONS(LOAD)
-#undef LOAD
-        vkGetDeviceQueue(device, family, 0, &queue);
+        VkDeviceQueueCreateInfo queue{};
+        queue.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        queue.queueFamilyIndex = device.family;
+        queue.queueCount = 1;
+        queue.pQueuePriorities = &priority;
+        VkDeviceCreateInfo create{};
+        create.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+        create.pNext = &features;
+        create.queueCreateInfoCount = 1;
+        create.pQueueCreateInfos = &queue;
+        create.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
+        create.ppEnabledExtensionNames = extensions.data();
+        check(vkCreateDevice(device.physical, &create, nullptr, &device.device), "vkCreateDevice");
+        volkLoadDevice(device.device);
+        vkGetDeviceQueue(device.device, device.family, 0, &device.queue);
         VkCommandPoolCreateInfo poolInfo{};
         poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
         poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-        poolInfo.queueFamilyIndex = family;
-        check(vkCreateCommandPool(device, &poolInfo, nullptr, &pool), "vkCreateCommandPool");
-        VkCommandBufferAllocateInfo allocation{};
-        allocation.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        allocation.commandPool = pool;
-        allocation.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        allocation.commandBufferCount = 1;
-        check(vkAllocateCommandBuffers(device, &allocation, &command), "vkAllocateCommandBuffers");
-        VkSemaphoreCreateInfo semaphore{};
-        semaphore.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-        check(vkCreateSemaphore(device, &semaphore, nullptr, &acquired), "vkCreateSemaphore");
-        VkFenceCreateInfo fence{};
-        fence.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-        fence.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-        check(vkCreateFence(device, &fence, nullptr, &submitted), "vkCreateFence");
+        poolInfo.queueFamilyIndex = device.family;
+        check(vkCreateCommandPool(device.device, &poolInfo, nullptr, &pool), "vkCreateCommandPool");
+        for (auto& f : frames) {
+            VkCommandBufferAllocateInfo allocation{};
+            allocation.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            allocation.commandPool = pool;
+            allocation.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            allocation.commandBufferCount = 1;
+            check(vkAllocateCommandBuffers(device.device, &allocation, &f.command), "vkAllocateCommandBuffers");
+            VkFenceCreateInfo fence{};
+            fence.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+            fence.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+            check(vkCreateFence(device.device, &fence, nullptr, &f.fence), "vkCreateFence");
+            VkSemaphoreCreateInfo semaphore{};
+            semaphore.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+            check(vkCreateSemaphore(device.device, &semaphore, nullptr, &f.acquired), "vkCreateSemaphore");
+        }
+        uint32_t familyCount = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(device.physical, &familyCount, nullptr);
+        std::vector<VkQueueFamilyProperties> families(familyCount);
+        vkGetPhysicalDeviceQueueFamilyProperties(device.physical, &familyCount, families.data());
+        timestampsSupported = families[device.family].timestampValidBits > 0 && device.properties.limits.timestampPeriod > 0.0f;
+        if (timestampsSupported) {
+            VkQueryPoolCreateInfo queries{};
+            queries.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+            queries.queryType = VK_QUERY_TYPE_TIMESTAMP;
+            queries.queryCount = 2 * kFramesInFlight;
+            check(vkCreateQueryPool(device.device, &queries, nullptr, &timestamps), "vkCreateQueryPool");
+        }
+        scene = std::make_unique<gt4::TestScene>(device, pool);
+        pipeline = std::make_unique<gt4::FramePipeline>(device, pool);
+        overlay = std::make_unique<gt4::Overlay>(device, pool);
     }
-    void releaseSwapchain() {
-        for (auto framebuffer : framebuffers) if (framebuffer) vkDestroyFramebuffer(device, framebuffer, nullptr);
-        framebuffers.clear();
-        if (renderPass) vkDestroyRenderPass(device, renderPass, nullptr);
-        renderPass = VK_NULL_HANDLE;
-        for (auto view : views) if (view) vkDestroyImageView(device, view, nullptr);
-        views.clear();
-        for (auto semaphore : finished) if (semaphore) vkDestroySemaphore(device, semaphore, nullptr);
+
+    void releaseTarget() {
+        for (auto& image : swapImages) if (image.view) vkDestroyImageView(device.device, image.view, nullptr);
+        swapImages.clear();
+        for (auto s : finished) if (s) vkDestroySemaphore(device.device, s, nullptr);
         finished.clear();
-        if (swapchain) vkDestroySwapchainKHR(device, swapchain, nullptr);
+        if (swapchain) vkDestroySwapchainKHR(device.device, swapchain, nullptr);
         swapchain = VK_NULL_HANDLE;
+        gt4::vk::destroy(device, offscreen);
     }
-    bool recreate() {
+
+    VkPresentModeKHR wantedPresentMode() const {
+        switch (settings.vsync) {
+        case gt4::VSync::Off: return VK_PRESENT_MODE_IMMEDIATE_KHR;
+        case gt4::VSync::Adaptive: return VK_PRESENT_MODE_FIFO_RELAXED_KHR;
+        case gt4::VSync::Mailbox: return VK_PRESENT_MODE_MAILBOX_KHR;
+        case gt4::VSync::On: break;
+        }
+        return VK_PRESENT_MODE_FIFO_KHR;
+    }
+
+    void recreateSurface() {
+        std::fprintf(stderr, "Vulkan surface lost; recreating it\n");
+        vkDeviceWaitIdle(device.device);
+        releaseTarget();
+        SDL_Vulkan_DestroySurface(instance, surface, nullptr);
+        surface = VK_NULL_HANDLE;
+        if (!SDL_Vulkan_CreateSurface(window, instance, nullptr, &surface))
+            throw std::runtime_error(std::string("SDL_Vulkan_CreateSurface: ") + SDL_GetError());
+        VkBool32 present = VK_FALSE;
+        VkSurfaceCapabilitiesKHR caps{};
+        if (vkGetPhysicalDeviceSurfaceSupportKHR(device.physical, device.family, surface, &present) != VK_SUCCESS || !present ||
+            vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device.physical, surface, &caps) != VK_SUCCESS)
+            throw PresentationLost("The window moved to " + gt4::windowDisplayName(window) + ", which " + info.name +
+                                   " cannot present to");
+    }
+
+    // After the window changed display: the surface may now belong to an adapter this GPU does not drive.
+    void checkPresentation() {
+        displayMoved = false;
+        VkBool32 present = VK_FALSE;
+        VkSurfaceCapabilitiesKHR caps{};
+        const bool ok = vkGetPhysicalDeviceSurfaceSupportKHR(device.physical, device.family, surface, &present) == VK_SUCCESS &&
+                        present && vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device.physical, surface, &caps) == VK_SUCCESS;
+        if (!ok) recreateSurface();   // throws PresentationLost when the new surface is not presentable either
+        resized = true;
+    }
+
+    bool recreateTarget() {
+        if (headless) {
+            if (offscreen.valid() && extent.width == headlessSize.width && extent.height == headlessSize.height &&
+                presentedBits == settings.outputBits) { resized = false; return true; }
+            vkDeviceWaitIdle(device.device);
+            releaseTarget();
+            gt4::vk::ImageDesc desc;
+            desc.format = settings.outputBits == 10 ? VK_FORMAT_A2B10G10R10_UNORM_PACK32 : VK_FORMAT_B8G8R8A8_UNORM;
+            desc.extent = headlessSize;
+            desc.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+            desc.name = "headless output";
+            offscreen = gt4::vk::createImage(device, desc);
+            extent = headlessSize;
+            format = desc.format;
+            srgbFormat = false;
+            presentedBits = settings.outputBits;
+            overlay->prepare(format, srgbFormat);
+            pipeline->prepareOutput(format, srgbFormat, static_cast<uint32_t>(settings.outputBits));
+            resized = false;
+            return true;
+        }
         int width = 0, height = 0;
         if (!SDL_GetWindowSizeInPixels(window, &width, &height))
             throw std::runtime_error(std::string("SDL_GetWindowSizeInPixels: ") + SDL_GetError());
         if (width <= 0 || height <= 0 || (SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED)) return false;
         VkSurfaceCapabilitiesKHR caps{};
-        check(capabilities(physical, surface, &caps), "vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
-        extent = caps.currentExtent;
-        if (extent.width == std::numeric_limits<uint32_t>::max()) {
-            extent.width = std::clamp(static_cast<uint32_t>(width), caps.minImageExtent.width, caps.maxImageExtent.width);
-            extent.height = std::clamp(static_cast<uint32_t>(height), caps.minImageExtent.height, caps.maxImageExtent.height);
+        VkResult result = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device.physical, surface, &caps);
+        if (result != VK_SUCCESS) {
+            // Surface lost, or the window is now on a display driven by another adapter (VK_ERROR_UNKNOWN on some
+            // drivers): a new surface either works or raises PresentationLost.
+            recreateSurface();
+            result = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device.physical, surface, &caps);
         }
-        if (!extent.width || !extent.height) return false;
-        if (!(caps.supportedUsageFlags & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT))
-            throw std::runtime_error("Vulkan surface does not support color attachments");
+        if (result != VK_SUCCESS)
+            throw PresentationLost("vkGetPhysicalDeviceSurfaceCapabilitiesKHR failed (" + std::to_string(static_cast<int>(result)) +
+                                   ") on " + info.name + ": the window is on " + gt4::windowDisplayName(window) +
+                                   ", which this GPU does not drive");
+        VkExtent2D size = caps.currentExtent;
+        if (size.width == std::numeric_limits<uint32_t>::max()) {
+            size.width = std::clamp(static_cast<uint32_t>(width), caps.minImageExtent.width, caps.maxImageExtent.width);
+            size.height = std::clamp(static_cast<uint32_t>(height), caps.minImageExtent.height, caps.maxImageExtent.height);
+        }
+        if (!size.width || !size.height) return false;
         uint32_t count = 0;
-        check(formats(physical, surface, &count, nullptr), "vkGetPhysicalDeviceSurfaceFormatsKHR");
-        if (!count) throw std::runtime_error("Vulkan surface has no formats");
-        std::vector<VkSurfaceFormatKHR> choices(count);
-        check(formats(physical, surface, &count, choices.data()), "vkGetPhysicalDeviceSurfaceFormatsKHR");
-        // Prefer sRGB so diagnostic colors have the same encoding on both platforms.
-        auto chosen = choices[0];
-        if (count == 1 && chosen.format == VK_FORMAT_UNDEFINED)
-            chosen.format = VK_FORMAT_B8G8R8A8_SRGB;
-        for (uint32_t i = 0; i < count; ++i)
-            if (choices[i].format == VK_FORMAT_B8G8R8A8_SRGB && choices[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
-                chosen = choices[i];
-        // This simple host has one submission in flight. Wait only for teardown/recreation,
-        // not on every frame. FIFO presentation is guaranteed by Vulkan surface support.
-        check(vkDeviceWaitIdle(device), "vkDeviceWaitIdle");
-        releaseSwapchain();
-        VkSwapchainCreateInfoKHR info{};
-        info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
-        info.surface = surface;
-        info.minImageCount = caps.minImageCount + 1;
-        if (caps.maxImageCount && info.minImageCount > caps.maxImageCount) info.minImageCount = caps.maxImageCount;
-        info.imageFormat = chosen.format;
-        info.imageColorSpace = chosen.colorSpace;
-        info.imageExtent = extent;
-        info.imageArrayLayers = 1;
-        info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-        canCapture = (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
-        if (canCapture) info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-        pixelFormat = chosen.format;
-        info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        info.preTransform = caps.currentTransform;
-        for (auto alpha : { VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR, VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
-                            VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR, VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR })
-            if (caps.supportedCompositeAlpha & alpha) { info.compositeAlpha = alpha; break; }
-        info.presentMode = VK_PRESENT_MODE_FIFO_KHR;
-        info.clipped = VK_TRUE;
-        std::printf("Creating swapchain: format %u, color space %u, alpha %u, extent %ux%u\n",
-                    static_cast<unsigned>(chosen.format), static_cast<unsigned>(chosen.colorSpace),
-                    static_cast<unsigned>(info.compositeAlpha), extent.width, extent.height);
-        check(vkCreateSwapchainKHR(device, &info, nullptr, &swapchain), "vkCreateSwapchainKHR");
-        check(vkGetSwapchainImagesKHR(device, swapchain, &count, nullptr), "vkGetSwapchainImagesKHR");
-        std::vector<VkImage> images(count);
-        check(vkGetSwapchainImagesKHR(device, swapchain, &count, images.data()), "vkGetSwapchainImagesKHR");
-        images.resize(count);
-        swapImages = images;
-        VkAttachmentDescription attachment{};
-        attachment.format = chosen.format;
-        attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-        attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-        VkAttachmentReference color{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-        VkSubpassDescription subpass{};
-        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        subpass.colorAttachmentCount = 1;
-        subpass.pColorAttachments = &color;
-        VkSubpassDependency dependency{};
-        dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-        dependency.dstSubpass = 0;
-        dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        VkRenderPassCreateInfo pass{};
-        pass.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-        pass.attachmentCount = 1;
-        pass.pAttachments = &attachment;
-        pass.subpassCount = 1;
-        pass.pSubpasses = &subpass;
-        pass.dependencyCount = 1;
-        pass.pDependencies = &dependency;
-        check(vkCreateRenderPass(device, &pass, nullptr, &renderPass), "vkCreateRenderPass");
-        views.resize(count);
-        framebuffers.resize(count);
-        finished.resize(count);
-        for (uint32_t i = 0; i < count; ++i) {
+        check(vkGetPhysicalDeviceSurfaceFormatsKHR(device.physical, surface, &count, nullptr), "vkGetPhysicalDeviceSurfaceFormatsKHR");
+        std::vector<VkSurfaceFormatKHR> formats(count);
+        check(vkGetPhysicalDeviceSurfaceFormatsKHR(device.physical, surface, &count, formats.data()), "vkGetPhysicalDeviceSurfaceFormatsKHR");
+        // Preference: the pipeline writes sRGB-encoded values, so a UNORM format stores them exactly.
+        std::vector<VkFormat> preferred;
+        if (settings.outputBits == 10) preferred = {VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_FORMAT_A2R10G10B10_UNORM_PACK32};
+        for (VkFormat f : {VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_SRGB, VK_FORMAT_R8G8B8A8_SRGB})
+            preferred.push_back(f);
+        VkSurfaceFormatKHR chosen = formats.empty() ? VkSurfaceFormatKHR{VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR} : formats[0];
+        bool found = false;
+        for (VkFormat want : preferred) {
+            for (const auto& f : formats)
+                if (f.format == want && f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) { chosen = f; found = true; break; }
+            if (found) break;
+        }
+        if (count == 1 && formats[0].format == VK_FORMAT_UNDEFINED) chosen = {VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR};
+        uint32_t modeCount = 0;
+        check(vkGetPhysicalDeviceSurfacePresentModesKHR(device.physical, surface, &modeCount, nullptr), "vkGetPhysicalDeviceSurfacePresentModesKHR");
+        std::vector<VkPresentModeKHR> modes(modeCount);
+        check(vkGetPhysicalDeviceSurfacePresentModesKHR(device.physical, surface, &modeCount, modes.data()), "vkGetPhysicalDeviceSurfacePresentModesKHR");
+        presentMode = VK_PRESENT_MODE_FIFO_KHR;
+        const VkPresentModeKHR want = wantedPresentMode();
+        if (std::find(modes.begin(), modes.end(), want) != modes.end()) presentMode = want;
+        else if (want == VK_PRESENT_MODE_IMMEDIATE_KHR && std::find(modes.begin(), modes.end(), VK_PRESENT_MODE_MAILBOX_KHR) != modes.end())
+            presentMode = VK_PRESENT_MODE_MAILBOX_KHR;   // no tearing available: at least do not wait
+        check(vkDeviceWaitIdle(device.device), "vkDeviceWaitIdle");
+        for (auto& image : swapImages) if (image.view) vkDestroyImageView(device.device, image.view, nullptr);
+        swapImages.clear();
+        for (auto s : finished) if (s) vkDestroySemaphore(device.device, s, nullptr);
+        finished.clear();
+        VkSwapchainKHR old = swapchain;
+        VkSwapchainCreateInfoKHR create{};
+        create.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+        create.surface = surface;
+        create.minImageCount = std::max(caps.minImageCount + 1, presentMode == VK_PRESENT_MODE_MAILBOX_KHR ? 3u : 2u);
+        if (caps.maxImageCount && create.minImageCount > caps.maxImageCount) create.minImageCount = caps.maxImageCount;
+        create.imageFormat = chosen.format;
+        create.imageColorSpace = chosen.colorSpace;
+        create.imageExtent = size;
+        create.imageArrayLayers = 1;
+        create.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        if (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) create.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        create.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        create.preTransform = caps.currentTransform;
+        for (auto alpha : {VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR, VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
+                           VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR, VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR})
+            if (caps.supportedCompositeAlpha & alpha) { create.compositeAlpha = alpha; break; }
+        create.presentMode = presentMode;
+        create.clipped = VK_TRUE;
+        create.oldSwapchain = old;
+        check(vkCreateSwapchainKHR(device.device, &create, nullptr, &swapchain), "vkCreateSwapchainKHR");
+        if (old) vkDestroySwapchainKHR(device.device, old, nullptr);
+        uint32_t imageCount = 0;
+        check(vkGetSwapchainImagesKHR(device.device, swapchain, &imageCount, nullptr), "vkGetSwapchainImagesKHR");
+        std::vector<VkImage> images(imageCount);
+        check(vkGetSwapchainImagesKHR(device.device, swapchain, &imageCount, images.data()), "vkGetSwapchainImagesKHR");
+        for (VkImage image : images) {
+            gt4::vk::Image wrapper;
+            wrapper.image = image;
+            wrapper.format = chosen.format;
+            wrapper.extent = size;
             VkImageViewCreateInfo view{};
             view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-            view.image = images[i];
+            view.image = image;
             view.viewType = VK_IMAGE_VIEW_TYPE_2D;
             view.format = chosen.format;
-            view.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-            check(vkCreateImageView(device, &view, nullptr, &views[i]), "vkCreateImageView");
-            VkFramebufferCreateInfo framebuffer{};
-            framebuffer.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-            framebuffer.renderPass = renderPass;
-            framebuffer.attachmentCount = 1;
-            framebuffer.pAttachments = &views[i];
-            framebuffer.width = extent.width;
-            framebuffer.height = extent.height;
-            framebuffer.layers = 1;
-            check(vkCreateFramebuffer(device, &framebuffer, nullptr, &framebuffers[i]), "vkCreateFramebuffer");
+            view.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            check(vkCreateImageView(device.device, &view, nullptr, &wrapper.view), "vkCreateImageView(swapchain)");
+            swapImages.push_back(wrapper);
             VkSemaphoreCreateInfo semaphore{};
             semaphore.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-            check(vkCreateSemaphore(device, &semaphore, nullptr, &finished[i]), "vkCreateSemaphore");
+            VkSemaphore s = VK_NULL_HANDLE;
+            check(vkCreateSemaphore(device.device, &semaphore, nullptr, &s), "vkCreateSemaphore");
+            finished.push_back(s);
         }
+        extent = size;
+        format = chosen.format;
+        srgbFormat = chosen.format == VK_FORMAT_B8G8R8A8_SRGB || chosen.format == VK_FORMAT_R8G8B8A8_SRGB;
+        presentedVsync = settings.vsync;
+        presentedBits = settings.outputBits;
+        overlay->prepare(format, srgbFormat);
+        pipeline->prepareOutput(format, srgbFormat, chosen.format == VK_FORMAT_A2B10G10R10_UNORM_PACK32 ||
+                                chosen.format == VK_FORMAT_A2R10G10B10_UNORM_PACK32 ? 10u : 8u);
         resized = false;
-        std::printf("Vulkan swapchain: %ux%u, %u images\n", extent.width, extent.height, count);
+        std::printf("Swapchain %ux%u, format %d, present mode %d, %u images\n", size.width, size.height,
+                    static_cast<int>(chosen.format), static_cast<int>(presentMode), imageCount);
         return true;
     }
-    void releaseReadback() {
-        if (readback) vkDestroyBuffer(device, readback, nullptr);
-        readback = VK_NULL_HANDLE;
-        if (readbackMemory) vkFreeMemory(device, readbackMemory, nullptr);
-        readbackMemory = VK_NULL_HANDLE;
+
+    void composeOverlay(uint32_t frameSlot) {
+        gt4::Canvas2D canvas;
+        canvas.content = pipeline->contentRect();
+        canvas.layout = settings.hud;
+        canvas.safeArea = settings.safeArea;
+        overlay->setFilter(settings.uiFilter);
+        overlay->begin(frameSlot, extent, canvas);
+        // Test HUD on the 640 x 480 canvas, anchored like a racing game's.
+        const gt4::Color8 panel{8, 12, 20, 170}, white{240, 240, 240, 255}, accent{255, 190, 40, 255};
+        overlay->canvasRect(16, 16, 150, 44, panel, gt4::Anchor::Left);
+        overlay->canvasText(24, 24, 12, "LAP " + std::to_string(scene->lap()) + "/5", white, gt4::Anchor::Left);
+        overlay->canvasText(24, 42, 8, "BEST 1'23.456", accent, gt4::Anchor::Left);
+        overlay->canvasRect(474, 16, 150, 44, panel, gt4::Anchor::Right);
+        overlay->canvasText(616, 24, 12, "POS 1/6", white, gt4::Anchor::Right);
+        overlay->canvasRect(474, 392, 150, 72, panel, gt4::Anchor::Right);
+        char speed[32];
+        std::snprintf(speed, sizeof(speed), "%3d", static_cast<int>(scene->speedKmh()));
+        overlay->canvasText(600, 404, 32, speed, white, gt4::Anchor::Right);
+        overlay->canvasText(616, 444, 8, "KM/H", accent, gt4::Anchor::Right);
+        // Minimap placeholder and pixel-art sprites (texture.ui_filter: point keeps them crisp).
+        overlay->canvasRect(16, 384, 80, 80, panel, gt4::Anchor::Left);
+        overlay->canvasSprite(36, 404, 40, '@', accent, gt4::Anchor::Left);
+        overlay->canvasText(320, 20, 8, "GT4 NATIVE - DISPLAY PIPELINE TEST SCENE", white, gt4::Anchor::Center);
+        if (!settings.overlayText) return;
+        const auto content = pipeline->contentRect();
+        const float scale = std::max(1.0f, std::floor(static_cast<float>(content.extent.height) / 540.0f));
+        std::ostringstream text;
+        text << "[F1] help  preset " << gt4::name(settings.preset) << "\n" << pipeline->describe() << "\n"
+             << "display " << gt4::name(settings.windowMode) << " " << extent.width << "x" << extent.height
+             << " vsync " << gt4::name(settings.vsync) << " aspect " << gt4::name(settings.aspect) << " hud " << gt4::name(settings.hud)
+             << "\ntex " << gt4::name(settings.textureFilter) << " af " << settings.anisotropy << "x  tonemap "
+             << gt4::name(settings.tonemapper) << "  bloom " << gt4::name(settings.bloom) << " dof " << gt4::name(settings.dof)
+             << " mb " << gt4::name(settings.motionBlur) << "\nshadows " << gt4::name(settings.shadows) << " refl "
+             << gt4::name(settings.reflections) << " fog " << gt4::name(settings.skyFog) << "  sharp " << settings.sharpness
+             << "\nGPU " << info.name;
+        if (gpuMs > 0.0) { char ms[32]; std::snprintf(ms, sizeof(ms), "  %.2f ms", gpuMs); text << ms; }
+        if (!status.empty()) text << "\n" << status;
+        const float x = static_cast<float>(content.offset.x) + 8.0f * scale;
+        const float y = static_cast<float>(content.offset.y) + 72.0f * scale;
+        overlay->pixelRect(x - 4 * scale, y - 4 * scale, 8 * scale * 62, 10 * scale * 7 + 8 * scale, {0, 0, 0, 140});
+        overlay->pixelText(x, y, scale, text.str(), {230, 235, 240, 255});
     }
-    void recordReadback(uint32_t index) {
-        if (!canCapture || (pixelFormat != VK_FORMAT_R8G8B8A8_UNORM && pixelFormat != VK_FORMAT_R8G8B8A8_SRGB &&
-                            pixelFormat != VK_FORMAT_B8G8R8A8_UNORM && pixelFormat != VK_FORMAT_B8G8R8A8_SRGB))
-            throw std::runtime_error("Framebuffer capture requires transfer-source support and an RGBA/BGRA8 surface");
-        releaseReadback();
-        VkBufferCreateInfo buffer{};
-        buffer.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        buffer.size = static_cast<VkDeviceSize>(extent.width) * extent.height * 4;
-        buffer.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-        buffer.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        check(vkCreateBuffer(device, &buffer, nullptr, &readback), "vkCreateBuffer");
-        VkMemoryRequirements requirements{};
-        vkGetBufferMemoryRequirements(device, readback, &requirements);
-        uint32_t type = UINT32_MAX;
-        for (uint32_t i = 0; i < memoryProperties.memoryTypeCount; ++i)
-            if ((requirements.memoryTypeBits & (1u << i)) &&
-                (memoryProperties.memoryTypes[i].propertyFlags & (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) ==
-                (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) { type = i; break; }
-        if (type == UINT32_MAX) throw std::runtime_error("No coherent host-visible memory for framebuffer capture");
-        VkMemoryAllocateInfo allocation{};
-        allocation.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        allocation.allocationSize = requirements.size;
-        allocation.memoryTypeIndex = type;
-        check(vkAllocateMemory(device, &allocation, nullptr, &readbackMemory), "vkAllocateMemory");
-        check(vkBindBufferMemory(device, readback, readbackMemory, 0), "vkBindBufferMemory");
-        VkImageMemoryBarrier barrier{};
-        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-        barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.image = swapImages[index];
-        barrier.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-        vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    void recordCapture(VkCommandBuffer command, gt4::vk::Image& target) {
+        const bool supported = target.format == VK_FORMAT_B8G8R8A8_UNORM || target.format == VK_FORMAT_B8G8R8A8_SRGB ||
+            target.format == VK_FORMAT_R8G8B8A8_UNORM || target.format == VK_FORMAT_R8G8B8A8_SRGB ||
+            target.format == VK_FORMAT_A2B10G10R10_UNORM_PACK32 || target.format == VK_FORMAT_A2R10G10B10_UNORM_PACK32;
+        if (!supported) throw std::runtime_error("Capture does not support the output format " + std::to_string(static_cast<int>(target.format)));
+        gt4::vk::destroy(device, readback);
+        readback = gt4::vk::createBuffer(device, static_cast<VkDeviceSize>(target.extent.width) * target.extent.height * 4,
+                                         VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
+        gt4::vk::Barriers b;
+        b.image(target, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, gt4::vk::kTransfer, VK_ACCESS_2_TRANSFER_READ_BIT);
+        b.flush(command);
         VkBufferImageCopy copy{};
-        copy.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-        copy.imageExtent = { extent.width, extent.height, 1 };
-        vkCmdCopyImageToBuffer(command, swapImages[index], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback, 1, &copy);
-        VkBufferMemoryBarrier hostRead{};
-        hostRead.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-        hostRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        hostRead.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
-        hostRead.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        hostRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        hostRead.buffer = readback;
-        hostRead.size = VK_WHOLE_SIZE;
-        vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
-                             0, 0, nullptr, 1, &hostRead, 0, nullptr);
-        barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        barrier.dstAccessMask = 0;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-        vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                             0, 0, nullptr, 0, nullptr, 1, &barrier);
+        copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        copy.imageExtent = {target.extent.width, target.extent.height, 1};
+        vkCmdCopyImageToBuffer(command, target.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback.buffer, 1, &copy);
+        VkMemoryBarrier2 host{};
+        host.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+        host.srcStageMask = gt4::vk::kTransfer;
+        host.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        host.dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT;
+        host.dstAccessMask = VK_ACCESS_2_HOST_READ_BIT;
+        VkDependencyInfo dependency{};
+        dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        dependency.memoryBarrierCount = 1;
+        dependency.pMemoryBarriers = &host;
+        vkCmdPipelineBarrier2(command, &dependency);
     }
-    void saveReadback() {
-        void* mapped = nullptr;
-        check(vkMapMemory(device, readbackMemory, 0, VK_WHOLE_SIZE, 0, &mapped), "vkMapMemory");
-        const auto* pixels = static_cast<const unsigned char*>(mapped);
-        std::vector<unsigned char> rgb(static_cast<size_t>(extent.width) * extent.height * 3);
-        const bool bgra = pixelFormat == VK_FORMAT_B8G8R8A8_UNORM || pixelFormat == VK_FORMAT_B8G8R8A8_SRGB;
-        for (size_t i = 0; i < rgb.size() / 3; ++i) {
-            rgb[i * 3] = pixels[i * 4 + (bgra ? 2 : 0)];
-            rgb[i * 3 + 1] = pixels[i * 4 + 1];
-            rgb[i * 3 + 2] = pixels[i * 4 + (bgra ? 0 : 2)];
+
+    void saveCapture(const gt4::vk::Image& target) {
+        const auto* pixels = static_cast<const uint8_t*>(readback.mapped);
+        const size_t count = static_cast<size_t>(target.extent.width) * target.extent.height;
+        std::vector<unsigned char> rgb(count * 3);
+        const bool bgra = target.format == VK_FORMAT_B8G8R8A8_UNORM || target.format == VK_FORMAT_B8G8R8A8_SRGB;
+        const bool a2b10 = target.format == VK_FORMAT_A2B10G10R10_UNORM_PACK32;
+        const bool a2r10 = target.format == VK_FORMAT_A2R10G10B10_UNORM_PACK32;
+        for (size_t i = 0; i < count; ++i) {
+            if (a2b10 || a2r10) {
+                uint32_t v = 0;
+                std::memcpy(&v, pixels + i * 4, 4);
+                const uint32_t low = v & 1023u, mid = (v >> 10) & 1023u, high = (v >> 20) & 1023u;
+                const uint32_t r = a2b10 ? low : high, b = a2b10 ? high : low;
+                rgb[i * 3] = static_cast<unsigned char>((r * 255u + 511u) / 1023u);
+                rgb[i * 3 + 1] = static_cast<unsigned char>((mid * 255u + 511u) / 1023u);
+                rgb[i * 3 + 2] = static_cast<unsigned char>((b * 255u + 511u) / 1023u);
+            } else {
+                rgb[i * 3] = pixels[i * 4 + (bgra ? 2 : 0)];
+                rgb[i * 3 + 1] = pixels[i * 4 + 1];
+                rgb[i * 3 + 2] = pixels[i * 4 + (bgra ? 0 : 2)];
+            }
         }
-        vkUnmapMemory(device, readbackMemory);
         std::ofstream output(capturePath, std::ios::binary);
-        output << "P6\n" << extent.width << " " << extent.height << "\n255\n";
+        output << "P6\n" << target.extent.width << " " << target.extent.height << "\n255\n";
         output.write(reinterpret_cast<const char*>(rgb.data()), static_cast<std::streamsize>(rgb.size()));
         if (!output) throw std::runtime_error("Could not write framebuffer capture: " + capturePath);
         capturePath.clear();
-        releaseReadback();
+        gt4::vk::destroy(device, readback);
     }
-    bool draw() {
-        if (suspended || (SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED)) { resized = true; return false; }
-        if (resized && !recreate()) return false;
-        check(vkWaitForFences(device, 1, &submitted, VK_TRUE, UINT64_MAX), "vkWaitForFences");
+
+    void readTimestamps(Frame& frame, uint32_t frameSlot) {
+        if (!timestampsSupported || !frame.timed) return;
+        uint64_t values[2] = {};
+        if (vkGetQueryPoolResults(device.device, timestamps, frameSlot * 2, 2, sizeof(values), values, sizeof(uint64_t),
+                                  VK_QUERY_RESULT_64_BIT) == VK_SUCCESS && values[1] >= values[0])
+            gpuMs = static_cast<double>(values[1] - values[0]) * static_cast<double>(device.properties.limits.timestampPeriod) * 1e-6;
+    }
+
+    bool draw(float deltaSeconds) {
+        if (!headless && (suspended || (SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED))) { resized = true; return false; }
+        if (displayMoved) checkPresentation();
+        if (!headless && (presentedVsync != settings.vsync || presentedBits != settings.outputBits)) resized = true;
+        if (headless && presentedBits != settings.outputBits) resized = true;
+        if (resized && !recreateTarget()) return false;
+        Frame& frame = frames[slot];
+        check(vkWaitForFences(device.device, 1, &frame.fence, VK_TRUE, UINT64_MAX), "vkWaitForFences");
+        readTimestamps(frame, slot);
         uint32_t index = 0;
-        // A finite acquire timeout allows the event loop to remain responsive when obscured.
-        auto result = vkAcquireNextImageKHR(device, swapchain, 100000000, acquired, VK_NULL_HANDLE, &index);
-        if (result == VK_TIMEOUT || result == VK_NOT_READY) return false;
-        if (result == VK_ERROR_OUT_OF_DATE_KHR) { resized = true; return false; }
-        const bool suboptimal = result == VK_SUBOPTIMAL_KHR;
-        if (!suboptimal) check(result, "vkAcquireNextImageKHR");
-        check(vkResetCommandBuffer(command, 0), "vkResetCommandBuffer");
+        bool suboptimal = false;
+        if (!headless) {
+            VkResult result = vkAcquireNextImageKHR(device.device, swapchain, 100000000, frame.acquired, VK_NULL_HANDLE, &index);
+            if (result == VK_TIMEOUT || result == VK_NOT_READY) return false;
+            if (result == VK_ERROR_OUT_OF_DATE_KHR) { resized = true; return false; }
+            if (result == VK_ERROR_SURFACE_LOST_KHR) { recreateSurface(); resized = true; return false; }
+            suboptimal = result == VK_SUBOPTIMAL_KHR;
+            if (!suboptimal) check(result, "vkAcquireNextImageKHR");
+        }
+        gt4::vk::Image& target = headless ? offscreen : swapImages[index];
+        if (!headless) {
+            // A swapchain image's contents are not kept between frames.
+            target.layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            target.stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+            target.access = VK_ACCESS_2_NONE;
+        }
+        pipeline->configure(settings, extent, *scene);
+        scene->setControls(stick, action);
+        scene->apply(settings);
+        const gt4::SceneView view = pipeline->beginFrame(slot, frameCounter);
+        composeOverlay(slot);
+        check(vkResetCommandBuffer(frame.command, 0), "vkResetCommandBuffer");
         VkCommandBufferBeginInfo begin{};
         begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        check(vkBeginCommandBuffer(command, &begin), "vkBeginCommandBuffer");
-        VkClearValue background{};
-        background.color = {{0.018f, 0.026f, 0.045f, 1.0f}};
-        VkRenderPassBeginInfo pass{};
-        pass.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-        pass.renderPass = renderPass;
-        pass.framebuffer = framebuffers[index];
-        pass.renderArea.extent = extent;
-        pass.clearValueCount = 1;
-        pass.pClearValues = &background;
-        vkCmdBeginRenderPass(command, &pass, VK_SUBPASS_CONTENTS_INLINE);
-        // A diagnostic pattern proves rendering/presentation without any game assets or shaders.
-        // The green bar moves each frame, exposing frozen presentation and wrong resize extents.
-        VkClearAttachment stripe{};
-        stripe.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        stripe.colorAttachment = 0;
-        stripe.clearValue.color = action ? VkClearColorValue{{0.8f, 0.12f, 0.025f, 1.0f}} : VkClearColorValue{{0.035f, 0.45f, 0.22f, 1.0f}};
-        const uint32_t barWidth = std::max(1u, extent.width / 8);
-        const uint32_t travel = extent.width - barWidth;
-        const uint32_t offset = static_cast<uint32_t>((horizontal + 1.0f) * 0.5f * static_cast<float>(travel));
-        VkClearRect rect{};
-        rect.rect.offset = {static_cast<int32_t>(offset), static_cast<int32_t>(extent.height / 3)};
-        rect.rect.extent = {barWidth, std::max(1u, extent.height / 3)};
-        rect.layerCount = 1;
-        vkCmdClearAttachments(command, 1, &stripe, 1, &rect);
-        vkCmdEndRenderPass(command);
-        if (!capturePath.empty()) recordReadback(index);
-        check(vkEndCommandBuffer(command), "vkEndCommandBuffer");
-        VkPipelineStageFlags stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        VkSubmitInfo submission{};
-        submission.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submission.waitSemaphoreCount = 1;
-        submission.pWaitSemaphores = &acquired;
-        submission.pWaitDstStageMask = &stage;
-        submission.commandBufferCount = 1;
-        submission.pCommandBuffers = &command;
-        submission.signalSemaphoreCount = 1;
-        submission.pSignalSemaphores = &finished[index];
-        // Reset only once a valid image and command buffer exist. An out-of-date acquire
-        // must leave the fence signaled, otherwise the next frame would wait forever.
-        check(vkResetFences(device, 1, &submitted), "vkResetFences");
-        check(vkQueueSubmit(queue, 1, &submission, submitted), "vkQueueSubmit");
-        if (!capturePath.empty()) {
-            check(vkWaitForFences(device, 1, &submitted, VK_TRUE, UINT64_MAX), "vkWaitForFences(readback)");
-            saveReadback();
+        check(vkBeginCommandBuffer(frame.command, &begin), "vkBeginCommandBuffer");
+        if (timestampsSupported) {
+            vkCmdResetQueryPool(frame.command, timestamps, slot * 2, 2);
+            vkCmdWriteTimestamp2(frame.command, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, timestamps, slot * 2);
         }
+        pipeline->record(frame.command, *scene, view, target, *overlay, deltaSeconds);
+        const bool capturing = !capturePath.empty();
+        if (capturing) recordCapture(frame.command, target);
+        if (!headless) {
+            gt4::vk::Barriers b;
+            b.image(target, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, VK_ACCESS_2_NONE);
+            b.flush(frame.command);
+        }
+        if (timestampsSupported) vkCmdWriteTimestamp2(frame.command, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, timestamps, slot * 2 + 1);
+        frame.timed = timestampsSupported;
+        check(vkEndCommandBuffer(frame.command), "vkEndCommandBuffer");
+        VkPipelineStageFlags stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        VkSubmitInfo submit{};
+        submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        if (!headless) {
+            submit.waitSemaphoreCount = 1;
+            submit.pWaitSemaphores = &frame.acquired;
+            submit.pWaitDstStageMask = &stage;
+            submit.signalSemaphoreCount = 1;
+            submit.pSignalSemaphores = &finished[index];
+        }
+        submit.commandBufferCount = 1;
+        submit.pCommandBuffers = &frame.command;
+        check(vkResetFences(device.device, 1, &frame.fence), "vkResetFences");
+        check(vkQueueSubmit(device.queue, 1, &submit, frame.fence), "vkQueueSubmit");
+        if (capturing) {
+            check(vkWaitForFences(device.device, 1, &frame.fence, VK_TRUE, UINT64_MAX), "vkWaitForFences(capture)");
+            saveCapture(target);
+        }
+        ++frameCounter;
+        slot = (slot + 1) % kFramesInFlight;
+        if (headless) return true;
         VkPresentInfoKHR present{};
         present.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
         present.waitSemaphoreCount = 1;
@@ -408,28 +719,52 @@ struct Renderer::Impl {
         present.swapchainCount = 1;
         present.pSwapchains = &swapchain;
         present.pImageIndices = &index;
-        result = vkQueuePresentKHR(queue, &present);
+        const VkResult result = vkQueuePresentKHR(device.queue, &present);
         if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || suboptimal) resized = true;
+        if (result == VK_ERROR_SURFACE_LOST_KHR) { recreateSurface(); resized = true; return true; }
         if (result != VK_ERROR_OUT_OF_DATE_KHR && result != VK_SUBOPTIMAL_KHR) check(result, "vkQueuePresentKHR");
-        return result != VK_ERROR_OUT_OF_DATE_KHR;
+        return true;
     }
 };
 
-Renderer::Renderer(SDL_Window* window, VkInstance instance, VkSurfaceKHR surface,
-                   VkPhysicalDevice physical, uint32_t family, PFN_vkGetInstanceProcAddr get)
-    : impl(std::make_unique<Impl>(window, surface, physical, family)) {
-    impl->initialize(instance, get);
+Renderer::Renderer(SDL_Window* window, VkInstance instance, const std::string& gpuRequest, const gt4::Settings& settings)
+    : impl(std::make_unique<Impl>()) {
+    impl->window = window;
+    impl->instance = instance;
+    impl->settings = settings;
+    if (!SDL_Vulkan_CreateSurface(window, instance, nullptr, &impl->surface))
+        throw std::runtime_error(std::string("SDL_Vulkan_CreateSurface: ") + SDL_GetError());
+    impl->createDevice(gpuRequest);
 }
+
+Renderer::Renderer(VkInstance instance, VkExtent2D size, const std::string& gpuRequest, const gt4::Settings& settings)
+    : impl(std::make_unique<Impl>()) {
+    impl->instance = instance;
+    impl->headless = true;
+    impl->headlessSize = size;
+    impl->settings = settings;
+    impl->createDevice(gpuRequest);
+}
+
 Renderer::~Renderer() = default;
 void Renderer::resize() { impl->resized = true; }
-bool Renderer::draw() { return impl->draw(); }
+void Renderer::displayChanged() { if (!impl->headless) impl->displayMoved = true; }
+bool Renderer::headless() const { return impl->headless; }
+void Renderer::resizeHeadless(VkExtent2D size) { impl->headlessSize = size; impl->resized = true; }
+void Renderer::suspend(bool paused) { impl->suspended = paused; impl->resized = true; }
+void Renderer::apply(const gt4::Settings& settings) { impl->settings = settings; }
+bool Renderer::draw(float deltaSeconds) { return impl->draw(deltaSeconds); }
 VkExtent2D Renderer::drawableExtent() const { return impl->extent; }
 void Renderer::setControls(float horizontal, bool action) {
-    impl->horizontal = std::clamp(horizontal, -1.0f, 1.0f);
+    impl->stick = std::clamp(horizontal, -1.0f, 1.0f);
     impl->action = action;
 }
 void Renderer::capture(const std::string& path) {
     if (!impl->capturePath.empty()) throw std::runtime_error("A framebuffer capture is already pending");
     impl->capturePath = path;
 }
-void Renderer::suspend(bool paused) { impl->suspended = paused; impl->resized = true; }
+void Renderer::setStatus(const std::string& text) { impl->status = text; }
+gt4::TestScene& Renderer::scene() { return *impl->scene; }
+const GpuInfo& Renderer::gpu() const { return impl->info; }
+double Renderer::gpuMilliseconds() const { return impl->gpuMs; }
+std::string Renderer::pipelineDescription() const { return impl->pipeline->describe(); }

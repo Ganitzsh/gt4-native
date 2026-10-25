@@ -1,0 +1,29 @@
+#version 460
+// Motion blur, pass 1: the dominant (longest) velocity in each K x K tile (McGuire et al. 2012,
+// "A Reconstruction Filter for Plausible Motion Blur"). Velocities are converted from uv to post-
+// resolution pixels and scaled by the shutter, then clamped to the tile size.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D motionVectors;   // previous uv - current uv
+layout(set = 0, binding = 1, rg16f) uniform writeonly image2D tiles;
+layout(push_constant) uniform Push { ivec2 tileCount; ivec2 postSize; int tileSize; float shutter; } push;
+
+void main() {
+    ivec2 tile = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(tile, push.tileCount))) return;
+    vec2 best = vec2(0.0);
+    float bestLength = 0.0;
+    // Sampling every other pixel of the tile is enough to find its maximum.
+    for (int y = 0; y < push.tileSize; y += 2) {
+        for (int x = 0; x < push.tileSize; x += 2) {
+            ivec2 p = tile * push.tileSize + ivec2(x, y);
+            if (any(greaterThanEqual(p, push.postSize))) continue;
+            vec2 uv = (vec2(p) + 0.5) / vec2(push.postSize);
+            vec2 v = -textureLod(motionVectors, uv, 0.0).rg * vec2(push.postSize) * push.shutter;
+            float l = dot(v, v);
+            if (l > bestLength) { bestLength = l; best = v; }
+        }
+    }
+    float len = sqrt(bestLength);
+    if (len > float(push.tileSize)) best *= float(push.tileSize) / len;
+    imageStore(tiles, tile, vec4(best, 0.0, 0.0));
+}

@@ -1,3 +1,5 @@
 # Provenance hashes use the exact LF bytes from the pinned upstream Git blobs.
 upstream/gt4/** text eol=lf
 compat/abi/** text eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf
