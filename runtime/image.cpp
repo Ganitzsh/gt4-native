@@ -1,0 +1,123 @@
+#include "image.h"
+
+#include "guest.h"
+#include "log.h"
+
+#include <windows.h>
+
+#include <algorithm>
+#include <cstdio>
+#include <cstring>
+#include <vector>
+
+extern "C" void gt4_missing_entry();
+
+namespace gt4::rt {
+namespace {
+
+struct Elf32Header {
+    unsigned char ident[16];
+    uint16_t type, machine;
+    uint32_t version, entry, phoff, shoff, flags;
+    uint16_t ehsize, phentsize, phnum, shentsize, shnum, shstrndx;
+};
+struct Elf32Phdr {
+    uint32_t type, offset, vaddr, paddr, filesz, memsz, flags, align;
+};
+
+struct HostRange {
+    uintptr_t start;
+    const NativeFunction *fn;
+};
+std::vector<HostRange> g_host_ranges;  // native functions sorted by host address
+
+void write_rel32(uint32_t at, uint8_t opcode, const void *target) {
+    auto *p = static_cast<uint8_t *>(guest_ptr(at));
+    p[0] = opcode;
+    const int32_t rel = static_cast<int32_t>(reinterpret_cast<uintptr_t>(target) - (at + 5));
+    std::memcpy(p + 1, &rel, 4);
+}
+
+}  // namespace
+
+bool load_elf(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        log_error("cannot open the game executable %s (set GT4_ELF or --elf)", path);
+        return false;
+    }
+    std::vector<unsigned char> data;
+    unsigned char buf[1 << 16];
+    for (size_t n; (n = fread(buf, 1, sizeof buf, f)) > 0;) data.insert(data.end(), buf, buf + n);
+    fclose(f);
+    if (data.size() < sizeof(Elf32Header) || std::memcmp(data.data(), "\x7f" "ELF", 4) != 0) {
+        log_error("%s is not an ELF file", path);
+        return false;
+    }
+    Elf32Header h;
+    std::memcpy(&h, data.data(), sizeof h);
+    if (h.machine != 8 || h.ident[4] != 1 || h.ident[5] != 1) {
+        log_error("%s is not a 32-bit little-endian MIPS executable", path);
+        return false;
+    }
+    for (int i = 0; i < h.phnum; ++i) {
+        Elf32Phdr ph;
+        std::memcpy(&ph, data.data() + h.phoff + i * sizeof ph, sizeof ph);
+        if (ph.type != 1) continue;
+        if (ph.vaddr < kGuestSectionStart || ph.vaddr + ph.memsz > kRamSize ||
+            ph.offset + ph.filesz > data.size()) {
+            log_error("segment %d (%08x +%x) does not fit guest RAM", i, ph.vaddr, ph.memsz);
+            return false;
+        }
+        std::memcpy(guest_ptr(ph.vaddr), data.data() + ph.offset, ph.filesz);
+        std::memset(static_cast<char *>(guest_ptr(ph.vaddr)) + ph.filesz, 0, ph.memsz - ph.filesz);
+        log_info("loaded segment %08x-%08x", ph.vaddr, ph.vaddr + ph.memsz);
+    }
+    return true;
+}
+
+void install_trampolines() {
+    std::vector<const NativeFunction *> natives(gt4_native_function_count);
+    for (uint32_t i = 0; i < gt4_native_function_count; ++i) natives[i] = &gt4_native_functions[i];
+    std::sort(natives.begin(), natives.end(), [](auto *a, auto *b) { return a->addr < b->addr; });
+    size_t ni = 0, native = 0, missing = 0;
+    for (uint32_t i = 0; i < gt4_guest_function_count; ++i) {
+        const GuestFunction &g = gt4_guest_functions[i];
+        while (ni < natives.size() && natives[ni]->addr < g.addr) ++ni;
+        if (g.size < 5) continue;  // no room (does not happen for MIPS functions, at least 8 bytes)
+        if (ni < natives.size() && natives[ni]->addr == g.addr) {
+            write_rel32(g.addr, 0xE9, natives[ni]->fn);  // jmp native
+            ++native;
+        } else {
+            write_rel32(g.addr, 0xE8, reinterpret_cast<const void *>(&gt4_missing_entry));  // call missing
+            ++missing;
+        }
+    }
+    // Native functions at addresses the function list does not know (named library functions, etc.).
+    for (const NativeFunction *n : natives) {
+        const auto *b = static_cast<const uint8_t *>(guest_ptr(n->addr));
+        if (b[0] != 0xE9) {
+            write_rel32(n->addr, 0xE9, n->fn);
+            ++native;
+        }
+    }
+    FlushInstructionCache(GetCurrentProcess(), nullptr, 0);
+    g_host_ranges.reserve(natives.size());
+    for (const NativeFunction *n : natives) g_host_ranges.push_back({reinterpret_cast<uintptr_t>(n->fn), n});
+    std::sort(g_host_ranges.begin(), g_host_ranges.end(), [](auto &a, auto &b) { return a.start < b.start; });
+    log_info("trampolines: %zu native, %zu missing (of %u functions in the image)", native, missing,
+             gt4_guest_function_count);
+}
+
+const char *native_name_for(uintptr_t host_pc, uint32_t *guest_addr_out) {
+    auto it = std::upper_bound(g_host_ranges.begin(), g_host_ranges.end(), host_pc,
+                               [](uintptr_t pc, const HostRange &r) { return pc < r.start; });
+    if (it == g_host_ranges.begin()) return "";
+    --it;
+    if (guest_addr_out) *guest_addr_out = it->fn->addr;
+    return it->fn->name;
+}
+
+uint32_t native_count() { return gt4_native_function_count; }
+
+}  // namespace gt4::rt
