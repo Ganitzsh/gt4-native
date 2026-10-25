@@ -64,11 +64,80 @@ static void show(unsigned a) {
     else printf("%08x", a);
 }
 
+/* --watch-call ADDR: when the instruction at host address ADDR (a call) executes, single-step until it
+ * returns, watching every stack slot where a callee saves ebx/esi/edi/ebp (push); report the first
+ * instruction that overwrites such a slot before it is popped (stack corruption). */
+typedef struct { unsigned slot, value, pushed_at; } Saved;
+static Saved saved[4096];
+static int nsaved;
+static unsigned watch_addr, watch_ret_esp;
+static unsigned char watch_orig;
+static int watching, watch_steps;
+
+static void set_tf(HANDLE th) {
+    CONTEXT c;
+    c.ContextFlags = CONTEXT_CONTROL;
+    GetThreadContext(th, &c);
+    c.EFlags |= 0x100;
+    SetThreadContext(th, &c);
+}
+
+static void watch_step(HANDLE proc, HANDLE th) {
+    CONTEXT c;
+    c.ContextFlags = CONTEXT_FULL;
+    GetThreadContext(th, &c);
+    ++watch_steps;
+    /* slots above esp were popped */
+    while (nsaved && saved[nsaved - 1].slot < c.Esp) --nsaved;
+    for (int k = 0; k < nsaved; ++k) {
+        unsigned v = 0;
+        SIZE_T got;
+        ReadProcessMemory(proc, (void *)(uintptr_t)saved[k].slot, &v, 4, &got);
+        if (v != saved[k].value) {
+            printf("STACK CORRUPTION: saved register slot %08x (pushed at ", saved[k].slot);
+            show(saved[k].pushed_at);
+            printf(") changed %08x -> %08x; now at ", saved[k].value, v);
+            show(c.Eip);
+            printf(" after %d steps\n", watch_steps);
+            fflush(stdout);
+            watching = 0;
+            return;
+        }
+    }
+    unsigned char op = 0;
+    SIZE_T got;
+    ReadProcessMemory(proc, (void *)(uintptr_t)c.Eip, &op, 1, &got);
+    static int pending_push;
+    static unsigned pending_at;
+    if (pending_push) {  /* the push executed: the slot is the new esp */
+        unsigned v = 0;
+        ReadProcessMemory(proc, (void *)(uintptr_t)c.Esp, &v, 4, &got);
+        if (nsaved < 4096) saved[nsaved++] = (Saved){c.Esp, v, pending_at};
+        pending_push = 0;
+    }
+    if (op == 0x53 || op == 0x55 || op == 0x56 || op == 0x57) { /* push ebx/ebp/esi/edi */
+        pending_push = 1;
+        pending_at = c.Eip;
+    }
+    if (c.Esp > watch_ret_esp) { /* returned from the watched call */
+        printf("watch: the call returned after %d steps with no corruption\n", watch_steps);
+        watching = 0;
+        return;
+    }
+    if (watch_steps > 50000000) {
+        printf("watch: gave up after %d steps\n", watch_steps);
+        watching = 0;
+        return;
+    }
+    set_tf(th);
+}
+
 int main(int argc, char **argv) {
     int i = 1, first = 0;
     for (; i < argc && argv[i][0] == '-' && argv[i][1] == '-'; ++i) {
         if (!strcmp(argv[i], "--map") && i + 1 < argc) load_map(argv[++i]);
         else if (!strcmp(argv[i], "--first")) first = 1;
+        else if (!strcmp(argv[i], "--watch-call") && i + 1 < argc) watch_addr = (unsigned)strtoul(argv[++i], NULL, 16);
     }
     if (i >= argc) {
         fprintf(stderr, "usage: gt4dbg [--map FILE] [--first] program [args]\n");
@@ -112,7 +181,44 @@ int main(int argc, char **argv) {
             EXCEPTION_RECORD *er = &ev.u.Exception.ExceptionRecord;
             int is_first = ev.u.Exception.dwFirstChance;
             cont = DBG_EXCEPTION_NOT_HANDLED;
-            if (er->ExceptionCode == EXCEPTION_BREAKPOINT || er->ExceptionCode == 0x4000001F) { cont = DBG_CONTINUE; break; }
+            HANDLE wth = NULL;
+            for (int k = 0; k < nthreads; ++k) if (tids[k] == ev.dwThreadId) wth = threads[k];
+            if (er->ExceptionCode == EXCEPTION_BREAKPOINT && watch_addr &&
+                (unsigned)(uintptr_t)er->ExceptionAddress == watch_addr && wth) {
+                /* our breakpoint: put the byte back, rewind eip, start stepping */
+                SIZE_T w;
+                WriteProcessMemory(pi.hProcess, (void *)(uintptr_t)watch_addr, &watch_orig, 1, &w);
+                FlushInstructionCache(pi.hProcess, NULL, 0);
+                CONTEXT c;
+                c.ContextFlags = CONTEXT_CONTROL;
+                GetThreadContext(wth, &c);
+                c.Eip = watch_addr;
+                c.EFlags |= 0x100;
+                SetThreadContext(wth, &c);
+                watch_ret_esp = c.Esp;  /* back above this once the call returns */
+                watching = 1;
+                nsaved = 0;
+                printf("watch: call at %08x reached, stepping\n", watch_addr);
+                cont = DBG_CONTINUE;
+                break;
+            }
+            if (er->ExceptionCode == EXCEPTION_SINGLE_STEP && watching && wth) {
+                watch_step(pi.hProcess, wth);
+                cont = DBG_CONTINUE;
+                break;
+            }
+            if (er->ExceptionCode == EXCEPTION_BREAKPOINT || er->ExceptionCode == 0x4000001F) {
+                if (watch_addr && !watch_orig) {
+                    /* the loader breakpoint: plant ours now */
+                    SIZE_T got;
+                    unsigned char cc = 0xCC;
+                    ReadProcessMemory(pi.hProcess, (void *)(uintptr_t)watch_addr, &watch_orig, 1, &got);
+                    WriteProcessMemory(pi.hProcess, (void *)(uintptr_t)watch_addr, &cc, 1, &got);
+                    FlushInstructionCache(pi.hProcess, NULL, 0);
+                }
+                cont = DBG_CONTINUE;
+                break;
+            }
             if (er->ExceptionCode == 0x406D1388) break; /* thread naming */
             if (is_first && !first) break;
             HANDLE th = NULL;

@@ -122,4 +122,23 @@ const char *native_name_for(uintptr_t host_pc, uint32_t *guest_addr_out) {
 
 uint32_t native_count() { return gt4_native_function_count; }
 
+void log_backtrace(const char *tag, int max_frames) {
+    // gcc 2.9 keeps frame pointers: [ebp] = caller's ebp, [ebp+4] = return address
+    auto *fp = static_cast<uintptr_t *>(__builtin_frame_address(0));
+    char line[1024];
+    int n = snprintf(line, sizeof line, "%s:", tag);
+    for (int i = 0; i < max_frames && fp && n < 900; ++i) {
+        MEMORY_BASIC_INFORMATION mi;
+        if (!VirtualQuery(fp, &mi, sizeof mi) || mi.State != MEM_COMMIT) break;
+        const uintptr_t ra = fp[1];
+        uint32_t g = 0;
+        const char *name = native_name_for(ra, &g);
+        if (*name && std::strcmp(name, "runtime") != 0) n += snprintf(line + n, sizeof line - n, " %08x", g);
+        auto *next = reinterpret_cast<uintptr_t *>(fp[0]);
+        if (next <= fp) break;
+        fp = next;
+    }
+    log_info("%s", line);
+}
+
 }  // namespace gt4::rt

@@ -55,8 +55,12 @@ def compile_runtime(out):
     objdir = os.path.join(out, "runtime")
     os.makedirs(objdir, exist_ok=True)
     jobs = []
-    for name in sorted(os.listdir(rt)):
-        src = os.path.join(rt, name)
+    files = []
+    for dirpath, _, names in os.walk(rt):  # runtime/ and its subdirectories (runtime/native/...)
+        sub = os.path.relpath(dirpath, rt)
+        prefix = "" if sub == "." else sub.replace(os.sep, "_") + "_"
+        files += [(os.path.join(dirpath, n), prefix + n) for n in sorted(names)]
+    for src, name in files:
         obj = os.path.join(objdir, os.path.splitext(name)[0] + (".s.o" if name.endswith(".s") else ".o"))
         if name.endswith(".cpp"):
             cmd = [tool("g++"), "-c", "-std=c++20", "-O2", "-g", "-msse2", "-mfpmath=sse", "-Wall", "-Wextra",
@@ -202,6 +206,20 @@ def read_symbol_addrs(decomp):
                 if m:
                     kind = "func" if "type:func" in (m.group(3) or "") else "data"
                     syms.setdefault(m.group(1), (int(m.group(2), 16), kind))
+    # The script engine's native methods (config/adhoc_methods.txt: `Class method 0xADDR`), named
+    # Class__method in the sources that register them, and GT HD's names (config/gthd_names.txt).
+    p = os.path.join(decomp, "config", "adhoc_methods.txt")
+    if os.path.exists(p):
+        for line in open(p, encoding="utf-8", errors="replace"):
+            parts = line.split()
+            if len(parts) >= 3 and not line.startswith("#") and parts[2].startswith("0x"):
+                syms.setdefault(f"{parts[0]}__{parts[1]}", (int(parts[2], 16), "func"))
+    p = os.path.join(decomp, "config", "gthd_names.txt")
+    if os.path.exists(p):
+        for line in open(p, encoding="utf-8", errors="replace"):
+            parts = line.split("\t")
+            if len(parts) >= 2 and parts[0].startswith("0x"):
+                syms.setdefault(parts[1], (int(parts[0], 16), "func"))
     return syms
 
 
@@ -247,7 +265,48 @@ def read_functions(decomp):
             a = int(row["address"], 16)
             if a not in not_fn:
                 fns.append((a, int(row["max_size"])))
+    known = {a for a, _ in fns}
+    fns += [(a, s) for a, s in extra_functions() if a not in known]
     return sorted(fns)
+
+
+def extra_functions():
+    """tools/extra_functions.txt: functions the decomp's inventory misses (address, size)."""
+    path = os.path.join(ROOT, "tools", "extra_functions.txt")
+    out = []
+    if os.path.exists(path):
+        for line in open(path):
+            parts = line.split()
+            if len(parts) >= 2 and not line.startswith("#"):
+                out.append((int(parts[0], 16), int(parts[1])))
+    return out
+
+
+def export_extra_functions(out, game_objs):
+    """Each function of tools/extra_functions.txt is defined only as a local symbol (the compile
+    driver exports a file's own function only); make one defining object export it."""
+    want = {f"_func_{a:08X}" for a, _ in extra_functions()}
+    if not want:
+        return game_objs
+    found = {}
+    chunks = [game_objs[i:i + 150] for i in range(0, len(game_objs), 150)]
+    for chunk in chunks:
+        r = run([tool("nm"), "-A", "--defined-only"] + chunk, env=mingw_env())
+        for line in r.splitlines():
+            path, _, rest = line.rpartition(":")
+            parts = rest.split()
+            if len(parts) == 3 and parts[1] == "t" and parts[2] in want and parts[2] not in found:
+                found[parts[2]] = path
+    rdir = os.path.join(out, "gen", "exported")
+    result = list(game_objs)
+    index = {os.path.normcase(os.path.normpath(p)): i for i, p in enumerate(result)}
+    for name, path in found.items():
+        i = index[os.path.normcase(os.path.normpath(path))]
+        dst = os.path.join(rdir, os.path.basename(path).replace(".o", f".{name}.o"))
+        os.makedirs(rdir, exist_ok=True)
+        run([tool("objcopy"), f"--globalize-symbol={name}", result[i], dst], env=mingw_env())
+        result[i] = dst
+    return result
 
 
 def c_label(name):
@@ -255,7 +314,8 @@ def c_label(name):
     return f'__asm__("{name}")'
 
 
-ADDR_IN_NAME = re.compile(r"^_?(func|D|jtbl|lbl|jumptable|L|gt4fn)_([0-9A-Fa-f]{8})(__F[A-Za-z0-9_$.]*)?$")
+# func_/D_ names, also as gcc 2.x mangled functions (func_X__Fi) and methods (func_X__10D_00659E80if)
+ADDR_IN_NAME = re.compile(r"^_?(func|D|jtbl|lbl|jumptable|L|gt4fn)_([0-9A-Fa-f]{8})(__[A-Za-z0-9_$.]*)?$")
 MANGLED_PARAMS = re.compile(r"__F[A-Za-z0-9_$.]*$")
 DTOR_OF_ADDR = re.compile(r"^_?_\$_\d+func_([0-9A-Fa-f]{8})$")
 RTTI_NAME = re.compile(r"^_?(_vt\$|__tf|__ti)\d+([A-Za-z_][A-Za-z0-9_]*)$")
@@ -347,6 +407,18 @@ def generate(out, decomp, defined, undefined, replaced):
     for name in sorted(undefined):
         if name in defined:
             continue
+        if name.startswith("_gt4addr_"):
+            # an address taken as a value (tools/game_cc.py guest_addresses): the PS2 address when
+            # the symbol has one, else the symbol itself
+            orig = name[len("_gt4addr_"):]
+            r = resolve(orig, syms)
+            if r:
+                provides.append((name, r[0]))
+            elif orig in defined or orig in host_syms:
+                provides.append((name, orig))
+            else:
+                unresolved.append(name)
+            continue
         if name in host_syms:
             continue  # memcpy, strlen...: the host's (game copies of such names were renamed gt4g_)
         r = resolve(name, syms)
@@ -429,6 +501,29 @@ def main():
     if a.objlist:
         game_objs = [l.strip() for l in open(a.objlist) if l.strip()]
     game_objs.sort()
+    # Curated native sources (game_src/, staged as build/native_curated) replace any other object
+    # defining the same function.
+    curated_objs = [o for o in game_objs if "native_curated" in o.replace("\\", "/")]
+    if curated_objs:
+        cur_defined, _ = nm_symbols(curated_objs)
+        cur_fns = {n for n in cur_defined if n.startswith("_gt4fn_")}
+        others = [o for o in game_objs if o not in curated_objs]
+        other_defined, _ = nm_symbols(others)
+        replaced_objs = {p for n, p in other_defined.items() if n in cur_fns}
+        if replaced_objs:
+            print(f"{len(replaced_objs)} objects replaced by curated native sources (game_src/)")
+            game_objs = [o for o in game_objs if o not in replaced_objs]
+    # Provisional drafts (tools/draft_natives.py) give way to a compiled source of the same function.
+    drafts = [o for o in game_objs if "native_drafts" in o.replace("\\", "/")]
+    if drafts:
+        regular_defined, _ = nm_symbols([o for o in game_objs if o not in drafts])
+        draft_defined, _ = nm_symbols(drafts)
+        taken = {n for n in regular_defined if n.startswith("_gt4fn_")}
+        stale = {p for n, p in draft_defined.items() if n.startswith("_gt4fn_") and n in taken}
+        if stale:
+            print(f"{len(stale)} provisional drafts left out: their functions now compile from source")
+            game_objs = [o for o in game_objs if o not in stale]
+    game_objs = export_extra_functions(a.out, game_objs)
     game_objs, renamed = rename_collisions(a.out, game_objs)
     if renamed:
         print(f"renamed {len(renamed)} game symbols that clash with host libraries (e.g. "
@@ -473,10 +568,6 @@ def main():
     cmd = [tool("g++"), "-o", exe, "@" + rsp,
            "-Wl,-T," + script, "-Wl,--image-base=0x10000", "-Wl,--disable-dynamicbase",
            "-Wl,--section-alignment=0x1000", "-Wl,--large-address-aware", "-Wl,--stack,0x400000",
-           # inline functions the old compiler emits as plain globals in every object that uses them,
-           # and library-group files overlapping single-function ones: equivalent copies, first wins
-           # (listed in LINK_REPORT.txt)
-           "-Wl,--allow-multiple-definition",
            "-static", "-static-libgcc", "-static-libstdc++", "-Wl,-Map," + os.path.join(a.out, "gt4_game.map")]
     run(cmd, env=mingw_env())
     with open(os.path.join(a.out, "LINK_REPORT.txt"), "w") as f:

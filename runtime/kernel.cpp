@@ -1,6 +1,7 @@
 #include "kernel.h"
 
 #include "guest.h"
+#include "image.h"
 #include "log.h"
 
 #include <windows.h>
@@ -375,7 +376,7 @@ KernelScope::~KernelScope() {
     Thread *t = self();
     if (!t) return;
     if (--t->kernel_depth == 0 && !t->di && t == g_running) {
-        if (g_pending_intc || g_pending_dmac) deliver_on_self(t);
+        if (g_pending_intc || g_pending_dmac || g_alarms_due()) deliver_on_self(t);
     }
 }
 
@@ -392,7 +393,7 @@ int kernel_ei() {
     if (!t) return 1;
     const bool was = !t->di;
     t->di = false;
-    if (t->kernel_depth == 0 && (g_pending_intc || g_pending_dmac)) deliver_on_self(t);
+    if (t->kernel_depth == 0 && (g_pending_intc || g_pending_dmac || g_alarms_due())) deliver_on_self(t);
     return was;
 }
 
@@ -456,10 +457,81 @@ void kernel_init() {
     g_running = &m;
 }
 
+namespace {
+// GT4_WATCH=seconds: logs every guest thread's state and where the running one is (sampled).
+DWORD WINAPI watchdog_thread(void *p) {
+    const DWORD period = static_cast<DWORD>(reinterpret_cast<uintptr_t>(p)) * 1000;
+    for (;;) {
+        Sleep(period);
+        char line[1024];
+        int n = snprintf(line, sizeof line, "watch: vblank %u, threads:", g_vblanks.load());
+        uint32_t pc = 0;
+        int running = 0;
+        {
+            Lock lock;
+            for (int i = 1; i < kMaxThreads && n < 900; ++i) {
+                const Thread &t = g_threads[i];
+                if (!t.used) continue;
+                n += snprintf(line + n, sizeof line - n, " %d:%s/p%d%s", t.id,
+                              t.status == THS_RUN ? "run" : t.status == THS_READY ? "ready"
+                              : t.status == THS_WAIT ? (t.wait == WAIT_SEMA ? "sema" : "sleep")
+                              : t.status == THS_DORMANT ? "dormant" : "susp",
+                              t.prio, t.kernel_depth ? "(k)" : "");
+            }
+            if (Thread *r = g_running) {
+                running = r->id;
+                if (!r->host_frozen && SuspendThread(r->host) != static_cast<DWORD>(-1)) {
+                    CONTEXT ctx;
+                    ctx.ContextFlags = CONTEXT_CONTROL;
+                    if (GetThreadContext(r->host, &ctx)) pc = ctx.Eip;
+                    ResumeThread(r->host);
+                }
+            }
+        }
+        uint32_t guest = 0;
+        const char *name = native_name_for(pc, &guest);
+        log_info("%s; running %d at %08x (%s, PS2 %08x)", line, running, pc, *name ? name : "?", guest);
+        // where each waiting thread is: the game functions on its stack (newest first)
+        for (int i = 1; i < kMaxThreads; ++i) {
+            Thread &t = g_threads[i];
+            if (!t.used || !t.host || t.status == THS_RUN || t.status == THS_DORMANT) continue;
+            if (SuspendThread(t.host) == static_cast<DWORD>(-1)) continue;
+            CONTEXT ctx;
+            ctx.ContextFlags = CONTEXT_CONTROL;
+            char frames[600];
+            int m = 0;
+            if (GetThreadContext(t.host, &ctx)) {
+                const auto *sp = reinterpret_cast<const uint32_t *>(ctx.Esp);
+                MEMORY_BASIC_INFORMATION mi;
+                int shown = 0;
+                for (int k = 0; k < 8192 && shown < 10 && m < 560; ++k) {
+                    if ((k == 0 || (reinterpret_cast<uintptr_t>(sp + k) & 0xFFF) == 0) &&
+                        (!VirtualQuery(sp + k, &mi, sizeof mi) || mi.State != MEM_COMMIT ||
+                         (mi.Protect & (PAGE_GUARD | PAGE_NOACCESS))))
+                        break;
+                    uint32_t g = 0;
+                    const char *nm = native_name_for(sp[k], &g);
+                    if (*nm && g && std::strcmp(nm, "runtime") != 0) {
+                        m += snprintf(frames + m, sizeof frames - m, " %08x", g);
+                        ++shown;
+                    }
+                }
+            }
+            ResumeThread(t.host);
+            frames[m] = 0;
+            log_info("watch:   thread %d:%s", t.id, frames);
+        }
+    }
+}
+}  // namespace
+
 void kernel_start_interrupts() {
     HANDLE h = CreateThread(nullptr, 1u << 20, interrupt_thread, nullptr, 0, nullptr);
     if (!h) fatal("cannot start the interrupt thread");
     log_info("kernel: vblank at %.2f Hz", kVblankHz);
+    if (const char *w = getenv("GT4_WATCH"))
+        CreateThread(nullptr, 1u << 16, watchdog_thread, reinterpret_cast<void *>(static_cast<uintptr_t>(atoi(w))), 0,
+                     nullptr);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -946,6 +1018,20 @@ SYSCALL uint32_t gt4_sys_SetupHeap(uint32_t heap, int32_t) { return heap; }
 SYSCALL uint32_t gt4_sys_EndOfHeap() { return 0x01E00000; }
 SYSCALL int gt4_sys_PSMode() { return 0; }
 
+// The console's system configuration (ConfigParam bitfield): S/PDIF on (0), screen 4:3 (bits 1-2 = 0),
+// RGB/component (bit 3 = 0), non-Japanese (bit 4), version 1 (bits 13-15), English (bits 16-20 = 1),
+// time zone offset in minutes (bits 21-31, signed) from the host.
+SYSCALL void gt4_sys_GetOsdConfigParam(uint32_t *param) {
+    TIME_ZONE_INFORMATION tz;
+    GetTimeZoneInformation(&tz);
+    const int32_t offset = -static_cast<int32_t>(tz.Bias);  // minutes east of UTC
+    *param = (1u << 4) | (1u << 13) | (1u << 16) | ((static_cast<uint32_t>(offset) & 0x7FF) << 21);
+}
+SYSCALL void gt4_sys_SetOsdConfigParam(uint32_t *) {}
+SYSCALL void gt4_sys_GetOsdConfigParam2(void *buf, int32_t size, int32_t) {
+    if (buf && size > 0) std::memset(buf, 0, static_cast<size_t>(size));
+}
+
 SYSCALL void gt4_sys_Exit(int status) {
     log_info("kernel: Exit(%d)", status);
     fflush(stderr);
@@ -997,6 +1083,7 @@ const SyscallImpl kSyscalls[] = {
     S(0x61, EnableCache), S(0x62, DisableCache), S(0x64, FlushCache), S(-0x68, FlushCache),
     S(0x70, GsGetIMR), S(-0x70, GsGetIMR), S(0x71, GsPutIMR), S(-0x71, GsPutIMR),
     S(0x73, SetVSyncFlag), S(0x7D, PSMode), S(0x7E, MachineType), S(0x7F, GetMemorySize),
+    S(0x4A, SetOsdConfigParam), S(0x4B, GetOsdConfigParam), S(0x6F, GetOsdConfigParam2),
     // installed by the SDK's InitAlarm (SetSyscall) on the PS2
     S(0xFC, SetAlarm), S(0xFD, ReleaseAlarm), S(-0xFE, SetAlarm), S(-0xFF, ReleaseAlarm),
 };

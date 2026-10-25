@@ -3,6 +3,7 @@
 // calls (reboot, module loads: all succeed), libcdvd's init, the pad (libpad2/libvib/libdbc) and the
 // memory card (libmc), and the SDK's DelayThread / GetTimerSystemTime / iWakeupThread.
 #include "guest.h"
+#include "image.h"
 #include "kernel.h"
 #include "link.h"
 #include "log.h"
@@ -11,6 +12,7 @@
 #include <windows.h>
 
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <map>
@@ -25,6 +27,7 @@ namespace {
 // Disc image
 
 HANDLE g_iso = INVALID_HANDLE_VALUE;
+const bool g_trace_disc = getenv("GT4_TRACE_DISC") != nullptr;  // log every disc/stream request
 std::mutex g_iso_mutex;
 constexpr uint32_t kLayer1Start = 1317040;  // absolute LBA of layer 1 (the image is linear)
 
@@ -64,7 +67,8 @@ struct Server {
     Handler handler;
 };
 
-uint8_t *gp(uint32_t addr) { return static_cast<uint8_t *>(guest_ptr(addr & 0x1FFFFFFF)); }
+// EE addresses as the game passes them; the uncached mirrors are real mappings (runtime/guest.cpp)
+uint8_t *gp(uint32_t addr) { return static_cast<uint8_t *>(guest_ptr(addr)); }
 uint32_t rd32(const uint8_t *p) {
     uint32_t v;
     std::memcpy(&v, p, 4);
@@ -83,6 +87,7 @@ void pcdv(uint32_t fno, uint8_t *send, uint32_t, uint8_t *recv, uint32_t rsize) 
     case 3: {
         const uint32_t lba = rd32(send), bytes = rd32(send + 4), dst = rd32(send + 8);
         const bool ok = iso_read(static_cast<uint64_t>(lba) * 2048, gp(dst), bytes);
+        if (g_trace_disc) log_info("PCDV read lba %u bytes %u -> %08x%s", lba, bytes, dst, ok ? "" : " FAILED");
         if (recv) wr32(recv, ok ? 0 : 1);
         break;
     }
@@ -160,6 +165,7 @@ void strp(uint32_t fno, uint8_t *send, uint32_t, uint8_t *recv, uint32_t rsize) 
         } else {
             log_warn("STRP: open of host file %s refused", path);
         }
+        if (g_trace_disc) log_info("STRP open lba %u size %u -> handle %u", rd32(send), rd32(send + 4), handle);
         if (recv) wr32(recv, handle);
         break;
     }
@@ -170,6 +176,7 @@ void strp(uint32_t fno, uint8_t *send, uint32_t, uint8_t *recv, uint32_t rsize) 
     }
     case 4: {  // read: +0 handle, +4 EE address, +8 bytes
         const uint32_t h = rd32(send), dst = rd32(send + 4), n = rd32(send + 8);
+        if (g_trace_disc) log_info("STRP read handle %u bytes %u -> %08x", h, n, dst);
         if (h < g_streams.size() && g_streams[h].used) {
             iso_read(g_streams[h].pos, gp(dst), n);
             g_streams[h].pos += n;
@@ -413,6 +420,52 @@ extern "C" int gt4_replace_sceSifSearchModuleByName(const char *name) {
     return -1;
 }
 
+// ---- fileio (filestub.o): the game uses it only for host:/debug files and a network-config probe
+// (docs/IOP_SERVICES.md 5.10); every device reports that the file or device does not exist.
+
+namespace {
+constexpr int kENOENT = -2, kENODEV = -19;
+int fileio_absent(const char *what, const char *path, int error) {
+    static int logged = 0;
+    if (logged++ < 16) log_info("fileio: %s(%s): not available", what, path ? path : "");
+    return error;
+}
+}  // namespace
+
+extern "C" int gt4_replace_sceOpen(const char *path, int) { return fileio_absent("sceOpen", path, kENOENT); }
+extern "C" int gt4_replace_sceClose(int) { return kENODEV; }
+extern "C" int gt4_replace_sceLseek(int, int, int) { return kENODEV; }
+extern "C" int64_t gt4_replace_sceLseek64(int, int64_t, int) { return kENODEV; }
+extern "C" int gt4_replace_sceRead(int, void *, int) { return kENODEV; }
+extern "C" int gt4_replace_sceWrite(int, const void *, int) { return kENODEV; }
+extern "C" int gt4_replace_sceIoctl(int, int, void *) { return kENODEV; }
+extern "C" int gt4_replace_sceIoctl2(int, int, void *, unsigned, void *, unsigned) { return kENODEV; }
+extern "C" int gt4_replace_sceMkdir(const char *path, int) { return fileio_absent("sceMkdir", path, kENODEV); }
+extern "C" int gt4_replace_sceFormat(const char *path, const char *, void *, int) {
+    return fileio_absent("sceFormat", path, kENODEV);
+}
+extern "C" int gt4_replace_sceAddDrv(void *) { return kENODEV; }
+extern "C" int gt4_replace_sceDopen(const char *path) { return fileio_absent("sceDopen", path, kENOENT); }
+extern "C" int gt4_replace_sceDclose(int) { return kENODEV; }
+extern "C" int gt4_replace_sceDread(int, void *) { return kENODEV; }
+extern "C" int gt4_replace_sceGetstat(const char *path, void *) { return fileio_absent("sceGetstat", path, kENOENT); }
+extern "C" int gt4_replace_sceChstat(const char *path, void *, unsigned) { return fileio_absent("sceChstat", path, kENOENT); }
+extern "C" int gt4_replace_sceRename(const char *path, const char *) { return fileio_absent("sceRename", path, kENOENT); }
+extern "C" int gt4_replace_sceSync(const char *, int) { return kENODEV; }
+extern "C" int gt4_replace_sceMount(const char *, const char *path, int, void *, int) {
+    return fileio_absent("sceMount", path, kENODEV);
+}
+extern "C" int gt4_replace_sceDevctl(const char *path, int, void *, unsigned, void *, unsigned) {
+    return fileio_absent("sceDevctl", path, kENODEV);
+}
+extern "C" int gt4_replace_sceSymlink(const char *path, const char *) { return fileio_absent("sceSymlink", path, kENODEV); }
+extern "C" int gt4_replace_sceReadlink(const char *path, char *, unsigned) {
+    return fileio_absent("sceReadlink", path, kENODEV);
+}
+extern "C" int gt4_replace__sceCallCode(const char *path, int) { return fileio_absent("_sceCallCode", path, kENODEV); }
+extern "C" int gt4_replace_sceFsSetIopBuf(int, int) { return 0; }
+extern "C" int gt4_replace_sceFsSetIopPrio(int) { return 0; }
+
 // ---- libcdvd (only init at boot)
 
 extern "C" int gt4_replace_sceCdInit(int mode) {
@@ -489,6 +542,14 @@ extern "C" int gt4_replace_sceMcSync(int, int *cmd, int *result) {
 // ---- SDK thread/timer helpers built on alarms and the timer the host does not emulate
 
 extern "C" int gt4_replace_DelayThread(uint32_t usec) {
+    {
+        // the retry loops of the boot all wait here: name the first few callers
+        static int logged = 0;
+        if (logged < 3) {
+            ++logged;
+            log_backtrace("DelayThread called by");
+        }
+    }
     const uint32_t ticks = std::max<uint32_t>(1, static_cast<uint32_t>(usec * 15734.26 / 1e6));
     gt4_sys_SetAlarm(ticks, guest_addr(reinterpret_cast<const void *>(&delay_wake)),
                      static_cast<uint32_t>(gt4_sys_GetThreadId()));

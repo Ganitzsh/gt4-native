@@ -25,7 +25,7 @@ namespace {
 constexpr uint32_t kGsPriv = 0x12000000;
 constexpr uint32_t kGsCsr = 0x12001000;
 constexpr uint32_t kDmaChanTable = 0x00629DC8;  // D_00629DC8: DMA channel register blocks, by channel
-constexpr uint32_t kSprState = 0x70000000;      // the library's state is at scratchpad + 0x50
+constexpr uint32_t kSprState = 0x70002000;      // spr_base(): the library state is at +0x50
 
 struct ChannelOut {
     std::vector<uint8_t> data;
@@ -211,6 +211,37 @@ extern "C" void gt4_replace_func_004ABA50(int channel, uint32_t address) {
     bool irq = false;
     walk_chain(address, (chcr & 0x40) != 0, out, irq);
     finish_transfer(channel, out);
+}
+
+// 0049FF38: resets VIF0, VIF1 (FBRST), both VUs (FBRST through vi28) and the GIF, and sets the
+// VIFs' error masks. Nothing to reset natively; the register values are kept for readers.
+extern "C" void gt4_replace_func_0049FF38() {
+    guest_ref<uint32_t>(0x10003810) = 1;  // VIF0_FBRST
+    guest_ref<uint32_t>(0x10003C10) = 1;  // VIF1_FBRST
+    guest_ref<uint32_t>(0x10003000) = 1;  // GIF_CTRL
+    guest_ref<uint32_t>(0x10003010) = 4;  // GIF_MODE
+    guest_ref<uint32_t>(0x10003820) = 6;  // VIF0_ERR
+    guest_ref<uint32_t>(0x10003C20) = 6;  // VIF1_ERR
+}
+
+// 004AB430: the graphics library's VBlank (INTC 2) handler (no matched source; docs/IOP_SERVICES.md
+// section 4). State S = scratchpad 0x70002050: +0 u64 VBlank counter, +0x10 optional hook
+// fn(counter), +0x14 u8 CSR.FIELD, +0x40 list of VSync waiters {next, thread id}, +0x20/+0x2C/+0x38
+// the DMA channels' waiter lists, +0x48/+0x50 accumulated performance counters (0 here).
+extern "C" int gt4_sys_WakeupThread(int);
+extern "C" int gt4_replace_func_004AB430(int) {
+    const uint32_t s = 0x70002050;
+    guest_ref<uint8_t>(s + 0x14) = (guest_ref<uint32_t>(kGsCsr) >> 13) & 1;
+    const uint64_t counter = ++guest_ref<uint64_t>(s);
+    if (const uint32_t hook = guest_ref<uint32_t>(s + 0x10))
+        reinterpret_cast<void (*)(int)>(guest_ptr(hook))(static_cast<int>(counter));
+    auto wake_list = [](uint32_t head_addr) {
+        for (uint32_t node = guest_ref<uint32_t>(head_addr); node; node = guest_ref<uint32_t>(node))
+            gt4_sys_WakeupThread(static_cast<int>(guest_ref<uint32_t>(node + 4)));
+    };
+    wake_list(s + 0x40);
+    for (int ch = 0; ch < 3; ++ch) wake_list(s + 0x20 + 0xC * ch);
+    return 1;
 }
 
 namespace gt4::rt {

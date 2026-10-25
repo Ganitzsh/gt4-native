@@ -23,6 +23,17 @@ keep='src/gcc src/include src/libiberty src/config src/config.sub src/config.gue
       src/symlink-tree src/missing src/ylwrap src/config-ml.in src/ltconfig src/ltmain.sh src/texinfo'
 tar xzf "$KIT/src/src.tar.gz" $keep
 (cd src && patch -s -p1 < "$HERE/gcc-2.9-ee-990721-i386-gt4.patch")
+# The caller, not the callee, pops a function's hidden struct-return pointer: the decomp declares
+# the same function both ways (struct by value, or an explicit first pointer argument, which the
+# EE treats alike), and a callee's `ret $4` against an explicit-pointer caller shifts %esp by 4.
+python3 - src/gcc/config/i386/i386.c <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = "  /* Lose any fake structure return argument.  */\n  if (aggregate_value_p (TREE_TYPE (funtype)))\n    return GET_MODE_SIZE (Pmode);\n"
+assert old in s, "i386_return_pops_args changed"
+open(p, "w").write(s.replace(old, "  /* gt4: the caller pops the struct-return pointer (see build_gcc29.sh).  */\n"))
+PYEOF
 
 export CC="gcc -m32"
 # gcc 2.9 is K&R/C89 code: old defaults for a modern host compiler; large-file stat for /mnt/c.

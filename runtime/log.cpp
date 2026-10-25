@@ -1,5 +1,7 @@
 #include "log.h"
 
+#include "kernel.h"
+
 #include <windows.h>
 
 #include <cstdio>
@@ -9,10 +11,14 @@
 namespace gt4::rt {
 namespace {
 
+using gt4::rt::KernelScope;
 FILE *g_file = nullptr;
 std::mutex g_mutex;
 
 void emit(const char *level, const char *fmt, va_list ap) {
+    // Runtime code: no interrupt may freeze this thread while it holds the log lock (a handler
+    // that logs would wait for it forever).
+    KernelScope ks;
     char line[2048];
     vsnprintf(line, sizeof line, fmt, ap);
     std::lock_guard<std::mutex> lock(g_mutex);

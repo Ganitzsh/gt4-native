@@ -48,6 +48,9 @@ DWORD WINAPI game_thread(void *) {
     if (g_self_test) return static_cast<DWORD>(kernel_self_test());
     static char arg0[] = "cdrom0:\\CORE.GT4;1";
     static char *argv[] = {arg0, nullptr};
+    // What crt0 does after _InitSys (which the native kernel stands in for): 0048EF90 sets up the
+    // game's heap (00575C78) and the time zone (005524B8). The .bss is already zero.
+    reinterpret_cast<void (*)()>(guest_ptr(0x0048EF90))();
     log_info("calling the game's main (%08x)", kGameMain);
     auto game_main = reinterpret_cast<int (*)(int, char **)>(guest_ptr(kGameMain));
     const int rc = game_main(1, argv);

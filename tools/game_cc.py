@@ -63,7 +63,9 @@ MARKER = re.compile(rb"^/\* compiler: ([\w.+-]+) \*/\s*$")
 DROP_PREFIX = ("-G", "-m", "-B", "-g")
 DROP = {"-c", "-fno-optimize-sibling-calls", "-foptimize-sibling-calls"}
 # Always on: the decompiled code reads one object through several types all the time.
-ALWAYS = ["-fno-strict-aliasing"]
+# -fpcc-struct-return: every struct is returned through memory, so a function the decomp declares
+# returning a struct and a caller passing an explicit result pointer agree (as on the EE).
+ALWAYS = ["-fno-strict-aliasing", "-fpcc-struct-return"] + os.environ.get("GT4_CC_EXTRA", "").split()  # GT4_CC_EXTRA: debugging flags
 
 # mode(TI) typedefs: `typedef [unsigned|signed] int NAME __attribute__((mode(TI)));`
 TI_TYPEDEF = re.compile(
@@ -642,6 +644,28 @@ def localize(asm, rel, addr):
     return asm, kept
 
 
+LABEL_DEF = re.compile(rb"^(_[A-Za-z0-9_$.]+):", re.M)
+ADDR_IMM = re.compile(rb"(?<![A-Za-z0-9_$.])\$(_[A-Za-z_][A-Za-z0-9_$.]*)")  # not a `$` inside a name
+ADDR_LONG = re.compile(rb"^([ \t]*\.long[ \t]+)(_[A-Za-z_][A-Za-z0-9_$.]*)", re.M)
+
+
+def guest_addresses(asm, exported):
+    """Addresses taken as values (`$_f` immediates, `.long _f` words) name `_gt4addr_` + the symbol,
+    which tools/game_link.py resolves to the PS2 address when it has one (the trampoline there
+    reaches the same native code) and to the symbol itself otherwise. Function pointers then
+    compare equal to the ones in the original image's data (get_eh_context in 005BC930 tests whether
+    the pointer in data is still itself). Direct calls and jumps keep their host targets.
+    Local definitions of this file (statics without a PS2 identity) are left alone."""
+    local = {m.group(1) for m in LABEL_DEF.finditer(asm)} - {e.encode() for e in exported}
+
+    def imm(m):
+        return m.group(0) if m.group(1) in local else b"$_gt4addr_" + m.group(1)
+
+    def word(m):
+        return m.group(0) if m.group(2) in local else m.group(1) + b"_gt4addr_" + m.group(2)
+    return ADDR_LONG.sub(word, ADDR_IMM.sub(imm, asm))
+
+
 FN_DEF = re.compile(rb"^\s*\.def\s+([^;\s]+);.*\.type\s+32;", re.M)
 
 
@@ -737,6 +761,7 @@ def main():
                 os.remove(o_path)
             if asm is not None and args.export == "own":
                 asm, rec["exports"] = localize(asm, rel, addresses.get(rel) or stem_address(rel))
+                asm = guest_addresses(asm, rec["exports"])
             if asm is None:
                 rec["stage"] = "timeout" if rc in (124, 137) else "compile"
                 rec["first_error"] = first_error(err) if rc not in (124, 137) else f"killed after {args.timeout} s"

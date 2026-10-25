@@ -28,6 +28,9 @@ void install_trampolines();
 const char *native_name_for(uintptr_t host_pc, uint32_t *guest_addr_out);
 uint32_t native_count();
 
+// Logs the PS2 addresses of the native game functions on the calling thread's stack (frame chain).
+void log_backtrace(const char *tag, int max_frames = 16);
+
 }  // namespace gt4::rt
 
 extern "C" {

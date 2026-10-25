@@ -15,4 +15,9 @@ char *gt4_replace_strncat(char *d, const char *s, size_t n) { return std::strnca
 char *gt4_replace_strchr(const char *s, int c) { return const_cast<char *>(std::strchr(s, c)); }
 int gt4_replace_strcmp(const char *a, const char *b) { return std::strcmp(a, b); }
 size_t gt4_replace_strlen(const char *s) { return std::strlen(s); }
+// libscf's BCD helpers (clock values)
+int gt4_replace_frombcd(int x) { return (x >> 4) * 10 + (x & 0xF); }
+int gt4_replace_tobcd(int x) { return ((x / 10) << 4) | (x % 10); }
+// 0057F188: newlib's hand-written memcmp (unnamed in the decomp's tables)
+int gt4_replace_func_0057F188(const void *a, const void *b, size_t n) { return std::memcmp(a, b, n); }
 }
