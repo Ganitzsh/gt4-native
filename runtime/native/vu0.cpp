@@ -27,6 +27,7 @@
 #include "log.h"
 
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 
 using namespace gt4::rt;
@@ -67,6 +68,13 @@ inline uint32_t ubits(float f) {
     uint32_t u;
     std::memcpy(&u, &f, 4);
     return u;
+}
+
+// MAX/MINI compare the operands as the VU does, as sign-magnitude integers: the VU has no NaN, so
+// 0x7FFFFFFF (the largest value the game uses as "no limit") is just bigger than every float.
+inline int32_t vu_order(float f) {
+    const int32_t i = static_cast<int32_t>(ubits(f));
+    return i ^ ((i >> 31) & 0x7FFFFFFF);
 }
 
 // The VU has no infinities: a division by zero gives the largest float of the right sign.
@@ -222,8 +230,8 @@ Upper upper(Gt4Vu0State &s, uint32_t u, uint32_t pc) {
         case 1: v = a - b; break;
         case 2: v = s.acc[k] + a * b; break;
         case 3: v = s.acc[k] - a * b; break;
-        case 4: v = a > b ? a : b; break;
-        case 5: v = a < b ? a : b; break;
+        case 4: v = vu_order(a) > vu_order(b) ? a : b; break;
+        case 5: v = vu_order(a) < vu_order(b) ? a : b; break;
         default: v = a * b; break;
         }
         r.v[k] = v;
@@ -250,6 +258,16 @@ extern "C" void __gt4_vu0_callms(unsigned int addr) {
     int64_t branch_to = -1;  // taken branch: next pc after the delay slot
     bool end_next = false;
     Pending q;
+    // GT4_VU0_TRACE=ADDR: log every pair of the first run of the microprogram at ADDR (debugging)
+    static const long trace_addr = getenv("GT4_VU0_TRACE") ? strtol(getenv("GT4_VU0_TRACE"), nullptr, 16) : -1;
+    static bool traced = false;
+    const bool tracing = !traced && static_cast<long>(addr) == trace_addr;
+    if (tracing) {
+        traced = true;
+        for (int r = 1; r < 32; ++r)
+            log_info("vu0 in vf%d = %g %g %g %g (%08x %08x %08x %08x)", r, s.vf[r][0], s.vf[r][1], s.vf[r][2],
+                     s.vf[r][3], ubits(s.vf[r][0]), ubits(s.vf[r][1]), ubits(s.vf[r][2]), ubits(s.vf[r][3]));
+    }
     for (long steps = 0;; ++steps) {
         if (steps > 1000000) fatal("VU0 microprogram at %04x: no end after a million instructions", addr);
         const uint32_t lo = code[pc / 4], up = code[pc / 4 + 1];
@@ -414,6 +432,10 @@ extern "C" void __gt4_vu0_callms(unsigned int addr) {
             if (u.to_acc || u.reg != 0)
                 for (int k = 0; k < 4; ++k) if (u.mask & (1 << k)) d[k] = u.v[k];
         }
+        if (tracing)
+            log_info("vu0 %04x: %08x %08x  upper -> %s%d (%g %g %g %g) vi1-6 %x %x %x %x %x %x", pc, up, lo,
+                     u.to_acc ? "acc" : "vf", u.to_acc ? 0 : u.reg, u.v[0], u.v[1], u.v[2], u.v[3], s.vi[1], s.vi[2],
+                     s.vi[3], s.vi[4], s.vi[5], s.vi[6]);
         // the end bit and branches take effect after the next pair (their delay slot)
         if (end_next) break;
         if (up & 0x40000000u) end_next = true;

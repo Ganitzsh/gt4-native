@@ -62,8 +62,11 @@ void __gt4_ee_break (int code);          /* break: the debugger trap */
 }
 #endif
 
-static __inline__ float __gt4_minf (float a, float b) { return a < b ? a : b; }
-static __inline__ float __gt4_maxf (float a, float b) { return a > b ? a : b; }
+/* min.s/max.s compare as the EE FPU does, as sign-magnitude integers: it has no NaN or infinity, so
+ * 0x7FFFFFFF is its largest value, not a NaN. */
+static __inline__ int __gt4_fpu_order (float f) { union { float f; int i; } u; u.f = f; return u.i ^ ((u.i >> 31) & 0x7FFFFFFF); }
+static __inline__ float __gt4_minf (float a, float b) { return __gt4_fpu_order (a) < __gt4_fpu_order (b) ? a : b; }
+static __inline__ float __gt4_maxf (float a, float b) { return __gt4_fpu_order (a) > __gt4_fpu_order (b) ? a : b; }
 static __inline__ float __gt4_sqrtf (float x) { float r; __asm__ ("fsqrt" : "=t" (r) : "0" (x)); return r; }
 static __inline__ float __gt4_absf (float x) { float r; __asm__ ("fabs" : "=t" (r) : "0" (x)); return r; }
 static __inline__ float __gt4_bits_float (unsigned int u) { union { unsigned int u; float f; } v; v.u = u; return v.f; }

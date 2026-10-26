@@ -316,8 +316,16 @@ static __inline__ void NAME (float *d, const float *s, const float *t, int bc, i
 __GT4_VUOP (__gt4_vadd, a + b)
 __GT4_VUOP (__gt4_vsub, a - b)
 __GT4_VUOP (__gt4_vmul, a * b)
-__GT4_VUOP (__gt4_vmax, a > b ? a : b)
-__GT4_VUOP (__gt4_vmini, a < b ? a : b)
+/* MAX/MINI compare as the VU does, as sign-magnitude integers: the VU has no NaN, so 0x7FFFFFFF
+ * (the largest value, which the game uses as "no limit") is bigger than every float. */
+static __inline__ int __gt4_vu_order (float f)
+{
+  union { float f; int i; } u;
+  u.f = f;
+  return u.i ^ ((u.i >> 31) & 0x7FFFFFFF);
+}
+__GT4_VUOP (__gt4_vmax, __gt4_vu_order (a) > __gt4_vu_order (b) ? a : b)
+__GT4_VUOP (__gt4_vmini, __gt4_vu_order (a) < __gt4_vu_order (b) ? a : b)
 __GT4_VUOP (__gt4_vmadd, __gt4_vu0.acc[k] + a * b)
 __GT4_VUOP (__gt4_vmsub, __gt4_vu0.acc[k] - a * b)
 

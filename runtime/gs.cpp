@@ -15,6 +15,7 @@
 
 #include <windows.h>
 
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -54,6 +55,14 @@ bool walk_chain(uint32_t tadr, bool tte, std::vector<uint8_t> &out, bool &irq_st
         const uint32_t addr = static_cast<uint32_t>(lo >> 32) & 0x7FFFFFF0;
         const bool spr = (lo >> 63) & 1;
         if (tte) out.insert(out.end(), tag + 8, tag + 16);  // the tag's upper half (VIF codes) goes first
+        // GT4_DMA_LOG=N [GT4_DMA_LOG_FROM=VBLANK]: log the first N tags walked (from that VBlank on),
+        // to find a packet's guest address (debugging)
+        static long dma_log = getenv("GT4_DMA_LOG") ? atol(getenv("GT4_DMA_LOG")) : 0;
+        static uint32_t dma_from = getenv("GT4_DMA_LOG_FROM") ? atol(getenv("GT4_DMA_LOG_FROM")) : 0;
+        if (dma_log > 0 && kernel_vblank_count() >= dma_from) {
+            --dma_log;
+            log_info("dma tag %08x: id %u qwc %u addr %08x tte %d", tadr, id, qwc, addr, tte);
+        }
         uint32_t next = 0;
         bool end = false;
         switch (id) {

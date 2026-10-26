@@ -75,7 +75,18 @@ build\game\gt4_game.exe --self-test        (kernel scheduling and interrupt chec
 
 `GT4_MISSING=continue` makes missing functions return 0 instead of stopping (to list what a run
 needs; the results after the first one are not trustworthy). `tools/gt4dbg.c` is a minimal
-debugger (exceptions with registers and the native functions on the stack).
+debugger (exceptions with registers and the native functions on the stack; `--watch-write ADDR` /
+`--watch-rw ADDR` report every write / access to a guest word with the writer and its callers;
+`--scan WORD` or `--dump ADDR LEN` with `--scan-after SECONDS` read guest RAM during a run).
+`GT4_WATCH=SECONDS` logs every guest thread's state and call chain; `GT4_DMA_LOG=N`
+(`GT4_DMA_LOG_FROM=VBLANK`) logs the DMA tags walked, to find a packet in guest memory;
+`GT4_VU0_TRACE=ADDR` logs every instruction pair of the first run of a VU0 microprogram.
+
+Finding a wrong GS packet: decode the `--capture` file (GIF/VIF1 records), find the packet's guest
+address with `GT4_DMA_LOG`, then its writer with `gt4dbg --watch-write`. Provisional drafts
+(`build/game/draft_natives.txt`) are the first suspects: they are chosen by instruction distance,
+and an `order` or `other` draft can behave differently (004AB318 stored each value one A+D slot
+early; 004AA570 truncated its size to 16 bits).
 
 ## Status
 

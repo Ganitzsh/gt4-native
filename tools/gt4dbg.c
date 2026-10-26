@@ -5,6 +5,8 @@
  *   gt4dbg [--map FILE.map] [--first] program.exe [args...]
  *
  * --first: also report first-chance exceptions (by default only the ones the program does not handle).
+ * --watch-write ADDR: a hardware data breakpoint on the 4 bytes at ADDR in every thread; each write
+ *   is reported with the writing instruction and the native functions on the stack (at most 40).
  * Build: C:\msys64\mingw32\bin\gcc -O1 tools/gt4dbg.c -o build/gt4dbg.exe
  */
 #include <windows.h>
@@ -132,12 +134,100 @@ static void watch_step(HANDLE proc, HANDLE th) {
     set_tf(th);
 }
 
+/* --watch-write ADDR: DR0 on ADDR, write, 4 bytes (DR7: L0, RW0 = 01, LEN0 = 11) */
+static unsigned write_addr, write_dr7 = 0x000D0001;
+static int write_hits;
+
+/* --scan WORD --scan-after SECONDS: once, after that many seconds, list the guest RAM addresses
+ * (00011000-02000000) holding the 32-bit WORD */
+static unsigned scan_word, scan_after;
+static int scan_back = -4;
+
+/* --dump ADDR LEN (with --scan-after): show LEN bytes at ADDR instead of scanning */
+static unsigned dump_addr, dump_len;
+
+static void scan_memory(HANDLE proc) {
+    static unsigned char buf[1 << 20];
+    int found = 0;
+    if (dump_addr) {
+        SIZE_T got = 0;
+        ReadProcessMemory(proc, (void *)(uintptr_t)dump_addr, buf, dump_len < sizeof buf ? dump_len : sizeof buf, &got);
+        for (SIZE_T k = 0; k < got; k += 16) {
+            printf("dump %08x:", (unsigned)(dump_addr + k));
+            for (SIZE_T j = k; j < k + 16 && j + 4 <= got; j += 4) printf(" %08x", *(unsigned *)(buf + j));
+            printf("\n");
+        }
+        fflush(stdout);
+        return;
+    }
+    for (unsigned base = 0x00010000; base < 0x02000000 && found < 64; base += sizeof buf) {
+        SIZE_T got = 0;
+        if (!ReadProcessMemory(proc, (void *)(uintptr_t)base, buf, sizeof buf, &got)) continue;
+        for (SIZE_T k = 0; k + 4 <= got && found < 64; k += 4)
+            if (*(unsigned *)(buf + k) == scan_word) {
+                printf("scan: %08x at %08x:", scan_word, (unsigned)(base + k));
+                for (int j = scan_back; j < 8; ++j)
+                    if (k + 4 * j < got) printf(" %08x", *(unsigned *)(buf + k + 4 * j));
+                printf("\n");
+                ++found;
+            }
+    }
+    printf("scan: %d found\n", found);
+    fflush(stdout);
+}
+
+static void arm_write(HANDLE th) {
+    CONTEXT c;
+    c.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+    if (!GetThreadContext(th, &c)) return;
+    c.Dr0 = write_addr;
+    c.Dr7 = write_dr7;
+    SetThreadContext(th, &c);
+}
+
+static void report_write(HANDLE proc, HANDLE th, DWORD tid) {
+    CONTEXT c;
+    c.ContextFlags = CONTEXT_FULL | CONTEXT_DEBUG_REGISTERS;
+    GetThreadContext(th, &c);
+    unsigned v = 0;
+    SIZE_T got;
+    ReadProcessMemory(proc, (void *)(uintptr_t)write_addr, &v, 4, &got);
+    printf("write #%d to %08x = %08x by thread %lu at ", ++write_hits, write_addr, v, tid);
+    show(c.Eip);
+    printf("\n  eax %08lx ebx %08lx ecx %08lx edx %08lx esi %08lx edi %08lx ebp %08lx esp %08lx\n", c.Eax, c.Ebx,
+           c.Ecx, c.Edx, c.Esi, c.Edi, c.Ebp, c.Esp);
+    unsigned stack[1024];
+    got = 0;
+    ReadProcessMemory(proc, (void *)(uintptr_t)c.Esp, stack, sizeof stack, &got);
+    for (unsigned k = 0, shown = 0; k < got / 4 && shown < 10; ++k) {
+        unsigned off;
+        if (stack[k] >= 0x02000000 && stack[k] < 0x08000000 && sym_for(stack[k], &off)) {
+            printf("  [esp+%04x] ", k * 4);
+            show(stack[k]);
+            printf("\n");
+            ++shown;
+        }
+    }
+    fflush(stdout);
+    c.Dr6 = 0;
+    if (write_hits >= 40) c.Dr7 = 0;
+    c.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+    SetThreadContext(th, &c);
+}
+
 int main(int argc, char **argv) {
     int i = 1, first = 0;
     for (; i < argc && argv[i][0] == '-' && argv[i][1] == '-'; ++i) {
         if (!strcmp(argv[i], "--map") && i + 1 < argc) load_map(argv[++i]);
         else if (!strcmp(argv[i], "--first")) first = 1;
         else if (!strcmp(argv[i], "--watch-call") && i + 1 < argc) watch_addr = (unsigned)strtoul(argv[++i], NULL, 16);
+        else if (!strcmp(argv[i], "--watch-write") && i + 1 < argc) write_addr = (unsigned)strtoul(argv[++i], NULL, 16);
+        else if (!strcmp(argv[i], "--watch-rw") && i + 1 < argc) write_addr = (unsigned)strtoul(argv[++i], NULL, 16), write_dr7 = 0x000F0001;
+        else if (!strcmp(argv[i], "--scan") && i + 1 < argc) scan_word = (unsigned)strtoul(argv[++i], NULL, 16);
+        else if (!strcmp(argv[i], "--dump") && i + 2 < argc)
+            dump_addr = (unsigned)strtoul(argv[i + 1], NULL, 16), dump_len = (unsigned)strtoul(argv[i + 2], NULL, 0), i += 2;
+        else if (!strcmp(argv[i], "--scan-after") && i + 1 < argc) scan_after = (unsigned)atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--scan-back") && i + 1 < argc) scan_back = -atoi(argv[++i]);
     }
     if (i >= argc) {
         fprintf(stderr, "usage: gt4dbg [--map FILE] [--first] program [args]\n");
@@ -161,16 +251,28 @@ int main(int argc, char **argv) {
     DWORD tids[4096] = {0};
     int nthreads = 0;
     for (;;) {
-        if (!WaitForDebugEvent(&ev, INFINITE)) break;
+        if (!WaitForDebugEvent(&ev, scan_after ? 500 : INFINITE)) {
+            if (GetLastError() != ERROR_SEM_TIMEOUT) break;
+            static DWORD start;
+            if (!start) start = GetTickCount();
+            if (GetTickCount() - start >= scan_after * 1000) {
+                DebugBreakProcess(pi.hProcess);  /* stop it while the memory is read */
+                scan_memory(pi.hProcess);
+                scan_after = 0;
+            }
+            continue;
+        }
         DWORD cont = DBG_CONTINUE;
         switch (ev.dwDebugEventCode) {
         case CREATE_PROCESS_DEBUG_EVENT:
             threads[nthreads] = ev.u.CreateProcessInfo.hThread;
             tids[nthreads++] = ev.dwThreadId;
+            if (write_addr) arm_write(ev.u.CreateProcessInfo.hThread);
             if (ev.u.CreateProcessInfo.hFile) CloseHandle(ev.u.CreateProcessInfo.hFile);
             break;
         case CREATE_THREAD_DEBUG_EVENT:
             if (nthreads < 4096) threads[nthreads] = ev.u.CreateThread.hThread, tids[nthreads++] = ev.dwThreadId;
+            if (write_addr && write_hits < 40) arm_write(ev.u.CreateThread.hThread);
             break;
         case LOAD_DLL_DEBUG_EVENT:
             if (ev.u.LoadDll.hFile) CloseHandle(ev.u.LoadDll.hFile);
@@ -199,6 +301,11 @@ int main(int argc, char **argv) {
                 watching = 1;
                 nsaved = 0;
                 printf("watch: call at %08x reached, stepping\n", watch_addr);
+                cont = DBG_CONTINUE;
+                break;
+            }
+            if (er->ExceptionCode == EXCEPTION_SINGLE_STEP && write_addr && wth && !watching) {
+                report_write(pi.hProcess, wth, ev.dwThreadId);
                 cont = DBG_CONTINUE;
                 break;
             }
