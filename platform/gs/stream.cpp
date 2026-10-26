@@ -1,7 +1,9 @@
 // Game -> host graphics stream dispatch (see stream.h).
 #include "stream.h"
 
+#include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <sstream>
 
@@ -12,6 +14,71 @@ GraphicsStream::GraphicsStream(GsTarget& target) : gs(target), vif1(unit) {
     unit.setGifSink(&sink);
     vif1.setGifSink(&sink);
     vif1.onPath3Mask = [this](bool masked) { if (!masked) releasePath3(); };
+    path1Stats = std::getenv("GT4_PATH1_STATS") != nullptr;
+}
+
+// PACKED RGBAQ (register 1) values of a PATH1 packet, counted by colour (debugging aid).
+void GraphicsStream::countColours(const uint8_t* data, size_t bytes) {
+    size_t q = 0;
+    const size_t n = bytes / 16;
+    while (q < n) {
+        uint64_t lo, hi;
+        std::memcpy(&lo, data + q * 16, 8);
+        std::memcpy(&hi, data + q * 16 + 8, 8);
+        ++q;
+        const uint32_t nloop = lo & 0x7FFF, flg = (lo >> 58) & 3;
+        uint32_t nreg = (lo >> 60) & 15;
+        if (!nreg) nreg = 16;
+        if (flg != 0) {
+            q += flg == 1 ? (nloop * nreg + 1) / 2 : nloop;
+            continue;
+        }
+        for (uint32_t l = 0; l < nloop && q < n; ++l)
+            for (uint32_t r = 0; r < nreg && q < n; ++r, ++q) {
+                const uint32_t reg = (hi >> (4 * r)) & 15;
+                uint32_t w[4];
+                std::memcpy(w, data + q * 16, 16);
+                if (reg == 0xE && ((w[2] & 0xFF) == 0x4C || (w[2] & 0xFF) == 0x4D)) {  // A+D FRAME: fbp, psm
+                    const uint32_t key = 0x40000000u | (w[0] & 0x1FF) | ((w[0] >> 24) & 0x3F) << 12;
+                    auto it = std::find_if(texCounts.begin(), texCounts.end(), [key](const auto& e) { return e.first == key; });
+                    if (it != texCounts.end()) ++it->second;
+                    else texCounts.push_back({key, 1});
+                    continue;
+                }
+                if (reg == 0xE && ((w[2] & 0xFF) == 6 || (w[2] & 0xFF) == 7)) {  // A+D TEX0: psm, cpsm, tfx, tcc
+                    const uint64_t t = w[0] | static_cast<uint64_t>(w[1]) << 32;
+                    const uint32_t key = 0x80000000u | static_cast<uint32_t>((t >> 20) & 0x3F) | static_cast<uint32_t>((t >> 51) & 0xF) << 8 |
+                                         static_cast<uint32_t>((t >> 35) & 3) << 12 | static_cast<uint32_t>((t >> 34) & 1) << 14;
+                    auto it = std::find_if(texCounts.begin(), texCounts.end(), [key](const auto& e) { return e.first == key; });
+                    if (it != texCounts.end()) ++it->second;
+                    else texCounts.push_back({key, 1});
+                    continue;
+                }
+                if (reg != 1) continue;
+                const uint32_t c = (w[0] & 0xFF) | (w[1] & 0xFF) << 8 | (w[2] & 0xFF) << 16 | (w[3] & 0xFF) << 24;
+                auto it = std::find_if(colourCounts.begin(), colourCounts.end(), [c](const auto& e) { return e.first == c; });
+                if (it != colourCounts.end()) ++it->second;
+                else if (colourCounts.size() < 4096) colourCounts.push_back({c, 1});
+            }
+    }
+}
+
+void GraphicsStream::reportColours(uint32_t frame) {
+    if (colourCounts.empty()) return;
+    std::sort(colourCounts.begin(), colourCounts.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+    std::printf("PATH1 colours, frame %u:", frame);
+    for (size_t i = 0; i < colourCounts.size() && i < 12; ++i) {
+        const uint32_t c = colourCounts[i].first;
+        std::printf(" (%u,%u,%u,%u)x%u", c & 0xFF, (c >> 8) & 0xFF, (c >> 16) & 0xFF, c >> 24, colourCounts[i].second);
+    }
+    std::printf("\n  TEX0 (psm cpsm tfx tcc):");
+    for (const auto& [k, count] : texCounts) {
+        if (k & 0x80000000u) std::printf(" (%#x %#x %u %u)x%u", k & 0x3F, (k >> 8) & 0xF, (k >> 12) & 3, (k >> 14) & 1, count);
+        else std::printf(" FRAME(fbp %#x psm %#x)x%u", k & 0x1FF, (k >> 12) & 0x3F, count);
+    }
+    std::printf("\n");
+    colourCounts.clear();
+    texCounts.clear();
 }
 
 void GraphicsStream::releasePath3() {
@@ -63,6 +130,7 @@ void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload)
         if (size >= 4) std::memcpy(&field, payload, 4);
         if (size >= 8) std::memcpy(&count, payload + 4, 4);
         ++counters.vsyncs;
+        if (path1Stats) reportColours(static_cast<uint32_t>(counters.vsyncs));
         if (!heldPath3.empty()) {   // still masked at the end of the frame: do not lose the data
             ++counters.path3ForcedAtVsync;
             releasePath3();

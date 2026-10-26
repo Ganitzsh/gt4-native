@@ -58,9 +58,16 @@ private:
         GraphicsStream* owner = nullptr;
         void gif(uint32_t path, const uint8_t* data, size_t bytes) override {
             ++owner->counters.gifPackets[path & 3];
+            if (path == 1 && owner->path1Stats) owner->countColours(data, bytes);
             owner->gs.gif(path, data, bytes);
         }
     };
+    // GT4_PATH1_STATS: the most frequent vertex colours (RGBAQ) of VU1's PATH1 packets, per frame
+    bool path1Stats = false;
+    std::vector<std::pair<uint32_t, uint32_t>> colourCounts;   // colour, count
+    std::vector<std::pair<uint32_t, uint32_t>> texCounts;      // TEX0 psm/cpsm/tfx/tcc, count
+    void countColours(const uint8_t* data, size_t bytes);
+    void reportColours(uint32_t frame);
     GsTarget& gs;
     CountingSink sink;
     Vu1 unit;

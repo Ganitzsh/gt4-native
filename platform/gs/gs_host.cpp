@@ -8,6 +8,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <sstream>
@@ -22,7 +23,17 @@ class BackendTarget final : public ps2::GsTarget {
 public:
     BackendTarget(Backend& gs, std::function<void(DisplayFrame&)> present) : backend(gs), publish(std::move(present)) {}
     void gif(uint32_t path, const uint8_t* data, size_t bytes) override { backend.gif(path, data, bytes); }
-    void privileged(uint32_t offset, uint64_t value) override { backend.writePrivileged(offset, value); }
+    void privileged(uint32_t offset, uint64_t value) override {
+        // GT4_DISPFB=FBP[,FBW[,PSM]] (hex FBP): scan out that frame buffer instead (debugging: look at
+        // an intermediate render target, e.g. the 3D before the post passes)
+        static const char* over = std::getenv("GT4_DISPFB");
+        if (over && (offset == 0x70 || offset == 0x90)) {
+            unsigned fbp = 0, fbw = 10, psm = 0;
+            std::sscanf(over, "%x,%u,%u", &fbp, &fbw, &psm);
+            value = (value & ~0xFFFFFull) | fbp | (fbw << 9) | (static_cast<uint64_t>(psm) << 15);
+        }
+        backend.writePrivileged(offset, value);
+    }
     void vsync(uint32_t field, uint32_t count) override {
         if (backend.vsync(field, count, frame)) publish(frame);
         else ++blankFrames;
