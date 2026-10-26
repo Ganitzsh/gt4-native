@@ -317,6 +317,69 @@ def transform(data, name=None):
         data = GP_GLOBAL.sub(lambda m: b"#define %s ((%s) __gt4_ee_get_gp ())" % (m.group(2), m.group(1).strip()), data)
         data = REG_VAR.sub(rb"\1", data)
         data = translate_asm(data, name)
+    if b"[" in data:
+        data = array_runs(data)
+    return data
+
+
+LOCAL_ARRAY = re.compile(rb"^([ \t]*)((?:unsigned\s+|signed\s+)?[A-Za-z_]\w*)\s+(\w+)\s*\[\s*(?:0x[0-9A-Fa-f]+|\d+)\s*\]\s*;", re.M)
+NOT_CODE_BLOCK = re.compile(rb"(\b(?:struct|union|class|enum|namespace)\b[^;{}()]*|=\s*|extern\s*\"C\"\s*)$")
+
+
+def _block(data, pos):
+    """(start, end) of the innermost {} block around pos, or None when pos is outside every block
+    or the block is a type's body or an initializer."""
+    depth, i = 0, pos - 1
+    while i >= 0:
+        c = data[i:i + 1]
+        if c == b"}":
+            depth += 1
+        elif c == b"{":
+            if depth == 0:
+                break
+            depth -= 1
+        i -= 1
+    if i < 0 or NOT_CODE_BLOCK.search(data[max(0, i - 200):i].rstrip()):
+        return None
+    depth, j = 1, pos
+    while j < len(data) and depth:
+        c = data[j:j + 1]
+        depth += {b"{": 1, b"}": -1}.get(c, 0)
+        j += 1
+    return i, j
+
+
+def array_runs(data):
+    """Adjacent local arrays of one type (`s32 buf0[4]; s32 buf1[4]; ...`, how m2c names a stack
+    area it could not type) become the members of one local structure. The EE lays locals out
+    upwards in declaration order, so a callee writing more than the first array (a 0x34-byte
+    request into `buf0[4]`) fills the next ones, which the code may then read (buf1, buf3) or
+    which are only padding; natively gcc puts the first array just below the saved registers and
+    the same write overruns the frame. The structure restores the EE order; the names in the rest
+    of the block become member accesses. Lines are kept, for the diagnostics."""
+    decls = list(LOCAL_ARRAY.finditer(data))
+    runs, run = [], []
+    for m in decls:
+        if run and data[run[-1].end():m.start()].strip() == b"" and m.group(2) == run[0].group(2):
+            run.append(m)
+            continue
+        if len(run) >= 2:
+            runs.append(run)
+        run = [m]
+    if len(run) >= 2:
+        runs.append(run)
+    for n, run in reversed(list(enumerate(runs))):
+        block = _block(data, run[0].start())
+        if block is None:
+            continue
+        tag = b"__gt4_run%d" % n
+        names = [m.group(3) for m in run]
+        end = run[-1].end()
+        rest = re.sub(rb"(?<![\w.>:])(" + b"|".join(re.escape(x) for x in names) + rb")\b",
+                      tag + rb".\1", data[end:block[1]])
+        first, last = run[0], run[-1]
+        data = (data[:first.start(2)] + b"struct { " + data[first.start(2):last.end()] + b" } " + tag + b";"
+                + rest + data[block[1]:])
     return data
 
 
@@ -622,6 +685,7 @@ def localize(asm, rel, addr):
     and the exported names."""
     stem = os.path.splitext(os.path.basename(rel))[0].encode()
     own = [b"_" + stem] + ([b"_func_%08X" % addr] if addr is not None else [])
+    declared_global = set(GLOBL.findall(asm))
     kept, dropped = [], set()
 
     def keep(m):
@@ -643,6 +707,11 @@ def localize(asm, rel, addr):
     if addr is not None:
         main, _ = main_function(asm, own)
         if main is not None:
+            if main not in declared_global and not any(main.startswith(o) for o in own):
+                # The address's code is the first function of .text: a file-static helper defined
+                # before it (a debugging aid in a game_src copy) would take over the address.
+                print(f"warning: {rel}: {main.decode()} is static but takes the address "
+                      f"{addr:08X} (define the function itself first)", file=sys.stderr)
             alias = b"_gt4fn_%08X" % addr
             asm = asm.rstrip(b"\r\n") + b"\n.globl %s\n%s = %s\n" % (alias, alias, main)
             kept.append(alias.decode())

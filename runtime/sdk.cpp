@@ -3,7 +3,9 @@
 #include "kernel.h"
 #include "log.h"
 
+#include <cstdarg>
 #include <cstdint>
+#include <cstdio>
 
 using namespace gt4::rt;
 
@@ -32,4 +34,34 @@ extern "C" int gt4_fpu_depth() {
     int used = 0;
     for (int r = 0; r < 8; ++r) used += ((env[4] >> (2 * r)) & 3) != 3;
     return used;
+}
+
+// glue.o write (005AE268): newlib's console output. On the PS2 descriptors 1 and 2 go to the
+// debug console (the game's printf: the script VM's error reports among them) and any other
+// descriptor fails; here the console is the run log, one log line per text line.
+extern "C" int gt4_replace_write(int fd, const char *buf, int n) {
+    if (fd != 1 && fd != 2) return -1;
+    static char line[1024];
+    static int used;
+    for (int i = 0; i < n; ++i) {
+        char c = buf[i];
+        if (c == '\n' || used == (int)sizeof line - 1) {
+            line[used] = 0;
+            gt4::rt::log_info("game: %s", line);
+            used = 0;
+            if (c == '\n') continue;
+        }
+        line[used++] = c;
+    }
+    return n;
+}
+
+// Debugging aid for game-side code (game_src checks): printf-style text into the run log.
+extern "C" void gt4_logf(const char *fmt, ...) {
+    char text[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(text, sizeof text, fmt, ap);
+    va_end(ap);
+    gt4::rt::log_info("%s", text);
 }

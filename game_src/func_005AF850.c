@@ -3,6 +3,8 @@
 // as returning double, but the soft-float helper returns the double's bits as a 64-bit integer
 // (edx:eax natively, as gt4-native implements it), so the double read from st(0) was garbage.
 // Declared as returning the bits here and converted back to double through a union (bit-exact).
+// Variadic arguments are read from the native va_list: 4 bytes for int, short, char and pointers,
+// 8 for long (64-bit in the EE data model) and double; the EE gives every argument an 8-byte slot.
 typedef int (*Output)();
 extern char D_006D2430[], D_006D2448[];
 float func_0057FA48(double);
@@ -14,8 +16,8 @@ int func_005AF678(Output,void *,int *,double);
 #define ZEROS() do { for (i=0;i<precision;i++) OUT('0'); } while (0)
 #define TEXT() do { while (start<end) OUT(*start++); } while (0)
 #define PADDING(c) do { for (i=0;i<width;i++) OUT(c); } while (0)
-#define UNSIGNED_ARG() ((flags&64)? *(unsigned long *)(args+=8,args-8): ((flags&128)? *(unsigned short *)(args+=8,args-8):*(unsigned int *)(args+=8,args-8)))
-#define SIGNED_ARG() ((flags&64)? *(long *)(args+=8,args-8): ((flags&128)? *(short *)(args+=8,args-8):*(int *)(args+=8,args-8)))
+#define UNSIGNED_ARG() ((flags&64)? *(unsigned long *)(args+=8,args-8): ((flags&128)? *(unsigned short *)(args+=4,args-4):*(unsigned int *)(args+=4,args-4)))
+#define SIGNED_ARG() ((flags&64)? *(long *)(args+=8,args-8): ((flags&128)? *(short *)(args+=4,args-4):*(int *)(args+=4,args-4)))
 int func_005AF850(Output output,void *context,int state,char *format,char *args) {
  char buffer[32],prefix[32];
  char *last=&buffer[31];
@@ -42,7 +44,7 @@ int func_005AF850(Output output,void *context,int state,char *format,char *args)
       goto next;
     case '.':
       ++format;flags|=32;
-      if (*format=='*') {args+=8;i=*(int *)(args-8);precision=i>=-1?i:-1;continue;}
+      if (*format=='*') {args+=4;i=*(int *)(args-4);precision=i>=-1?i:-1;continue;}
       i=0;
       while ((unsigned int)(unsigned char)*format-'0'<10) {i=i*10+*format-'0';++format;}
       precision=i>=-1?i:-1;
@@ -91,19 +93,19 @@ int func_005AF850(Output output,void *context,int state,char *format,char *args)
       else count+=func_005AF678(output,context,&state,bits_to_double(func_0057FB50(f)));
       goto next;
     case 's':
-      args+=8;start=*(char **)(args-8);
+      args+=4;start=*(char **)(args-4);
       if(!start){output(context,&state,'(');output(context,&state,'n');output(context,&state,'u');output(context,&state,'l');output(context,&state,'l');output(context,&state,')');goto next;}
       cursor=start;length=0;
       if(flags&32) {for(i=0;i<precision && *cursor++;i++);length=i;}
       else while(*cursor){cursor++;length++;}
       break;
     case 'c':
-      args+=8;value=*(char *)(args-8);cursor=last;
+      args+=4;value=*(char *)(args-4);cursor=last;
       flags|=256;precision=1;*cursor--=value;
       start=cursor+1;length=last-cursor;
       break;
     case 'p':
-      args+=8;uvalue=*(unsigned int *)(args-8);digits=D_006D2430;cursor=last;
+      args+=4;uvalue=*(unsigned int *)(args-4);digits=D_006D2430;cursor=last;
       if(!uvalue){if(!(flags&32)||precision)*cursor--='0';}
       else while(uvalue){*cursor--=digits[uvalue&15];uvalue>>=4;}
       prefix[0]='0';prefix[1]='x';prefixlen=2;

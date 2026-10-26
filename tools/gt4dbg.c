@@ -225,6 +225,49 @@ static void report_write(HANDLE proc, HANDLE th, DWORD tid) {
     SetThreadContext(th, &c);
 }
 
+/* --log-at ADDR (up to 8, repeatable): a breakpoint that logs the registers and the top of the stack
+ * each time the instruction at ADDR runs (at most 400 times each), then lets it run on. */
+static unsigned log_at[8];
+static unsigned char log_orig[8];
+static int log_count[8], nlog;
+static unsigned log_rearm[4096]; /* per thread: the breakpoint to re-plant after the single step */
+
+static void plant(HANDLE proc, unsigned addr, unsigned char *orig) {
+    SIZE_T got;
+    unsigned char cc = 0xCC;
+    if (orig) ReadProcessMemory(proc, (void *)(uintptr_t)addr, orig, 1, &got);
+    WriteProcessMemory(proc, (void *)(uintptr_t)addr, &cc, 1, &got);
+    FlushInstructionCache(proc, NULL, 0);
+}
+
+static int log_hit(HANDLE proc, HANDLE th, int tindex, DWORD tid, unsigned addr) {
+    int k;
+    for (k = 0; k < nlog; ++k)
+        if (log_at[k] == addr) break;
+    if (k == nlog) return 0;
+    CONTEXT c;
+    c.ContextFlags = CONTEXT_FULL;
+    GetThreadContext(th, &c);
+    unsigned st[8] = {0};
+    SIZE_T got;
+    ReadProcessMemory(proc, (void *)(uintptr_t)c.Esp, st, sizeof st, &got);
+    printf("at %08x #%d thread %lu: eax %08lx ebx %08lx ecx %08lx edx %08lx esi %08lx edi %08lx ebp %08lx esp %08lx"
+           " | %08x %08x %08x %08x %08x %08x\n", addr, ++log_count[k], tid, c.Eax, c.Ebx, c.Ecx, c.Edx, c.Esi, c.Edi,
+           c.Ebp, c.Esp, st[0], st[1], st[2], st[3], st[4], st[5]);
+    fflush(stdout);
+    SIZE_T w;
+    WriteProcessMemory(proc, (void *)(uintptr_t)addr, &log_orig[k], 1, &w);
+    FlushInstructionCache(proc, NULL, 0);
+    c.Eip = addr;
+    if (log_count[k] < 400) {
+        c.EFlags |= 0x100;
+        log_rearm[tindex] = addr;
+    }
+    c.ContextFlags = CONTEXT_CONTROL;
+    SetThreadContext(th, &c);
+    return 1;
+}
+
 int main(int argc, char **argv) {
     int i = 1, first = 0;
     for (; i < argc && argv[i][0] == '-' && argv[i][1] == '-'; ++i) {
@@ -234,6 +277,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--watch-write") && i + 1 < argc) write_addr = (unsigned)strtoul(argv[++i], NULL, 16);
         else if (!strcmp(argv[i], "--watch-rw") && i + 1 < argc) write_addr = (unsigned)strtoul(argv[++i], NULL, 16), write_dr7 = 0x000F0001;
         else if (!strcmp(argv[i], "--watch-value") && i + 1 < argc) write_value = (unsigned)strtoul(argv[++i], NULL, 16), write_has_value = 1;
+        else if (!strcmp(argv[i], "--log-at") && i + 1 < argc && nlog < 8) log_at[nlog++] = (unsigned)strtoul(argv[++i], NULL, 16);
         else if (!strcmp(argv[i], "--scan") && i + 1 < argc) scan_word = (unsigned)strtoul(argv[++i], NULL, 16);
         else if (!strcmp(argv[i], "--dump") && i + 2 < argc)
             dump_addr = (unsigned)strtoul(argv[i + 1], NULL, 16), dump_len = (unsigned)strtoul(argv[i + 2], NULL, 0), i += 2;
@@ -315,6 +359,20 @@ int main(int argc, char **argv) {
                 cont = DBG_CONTINUE;
                 break;
             }
+            int tindex = 0;
+            for (int k = 0; k < nthreads; ++k) if (tids[k] == ev.dwThreadId) tindex = k;
+            if (er->ExceptionCode == EXCEPTION_BREAKPOINT && nlog && wth &&
+                log_hit(pi.hProcess, wth, tindex, ev.dwThreadId, (unsigned)(uintptr_t)er->ExceptionAddress)) {
+                cont = DBG_CONTINUE;
+                break;
+            }
+            if (er->ExceptionCode == EXCEPTION_SINGLE_STEP && log_rearm[tindex]) {
+                for (int k = 0; k < nlog; ++k)
+                    if (log_at[k] == log_rearm[tindex]) plant(pi.hProcess, log_at[k], NULL);
+                log_rearm[tindex] = 0;
+                cont = DBG_CONTINUE;
+                break;
+            }
             if (er->ExceptionCode == EXCEPTION_SINGLE_STEP && write_addr && wth && !watching) {
                 report_write(pi.hProcess, wth, ev.dwThreadId);
                 cont = DBG_CONTINUE;
@@ -326,6 +384,11 @@ int main(int argc, char **argv) {
                 break;
             }
             if (er->ExceptionCode == EXCEPTION_BREAKPOINT || er->ExceptionCode == 0x4000001F) {
+                static int planted;
+                if (nlog && !planted) {  /* the loader breakpoint: plant the logging breakpoints */
+                    planted = 1;
+                    for (int k = 0; k < nlog; ++k) plant(pi.hProcess, log_at[k], &log_orig[k]);
+                }
                 if (watch_addr && !watch_orig) {
                     /* the loader breakpoint: plant ours now */
                     SIZE_T got;

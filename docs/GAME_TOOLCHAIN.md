@@ -65,6 +65,16 @@ callee's view is plain cdecl (`[esp+4]` = first argument), so runtime code calls
 unchanged. gcc 2.9 emits a sibling call only when the callee's arguments fit in the caller's
 *declared* incoming area (`current_function_args_size`), so it never writes past it.
 
+**No sibling-call attempt with objects passed by invisible reference (`calls.c`).** A C++ class with
+a copy constructor is passed by value as the address of a copy, built in a `TARGET_EXPR`'s slot.
+`expand_call` expands a call twice when a sibling call is possible (one insn chain each), and this
+snapshot's second expansion of a `TARGET_EXPR` reused a slot the first had freed as the next
+argument's temporary: of two such arguments, both were the second (`void f(It a, It b) { g(a, b); }`
+called `g(b, b)`). It broke every two-iterator call of the game's STL, e.g. `map::erase(first, last)`
+erased nothing (the unloaded menu project stayed registered and was unloaded again), and the widget
+sort's insertion step (the comparator copy went where the element belongs). Such calls are now
+never sibling calls. Not optimization-dependent beyond `-O1` (it needs `-fno-exceptions`).
+
 ### Frontend patches (gcc 2.96 behaviour the decomp relies on)
 
 gcc 2.96 (2000-10-03 snapshot, the game's compiler) has a newer frontend than this 2.9 snapshot.
