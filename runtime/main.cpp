@@ -88,6 +88,7 @@ int main(int argc, char **argv) {
     if (const char *la = getenv("LOCALAPPDATA")) default_card = std::string(la) + "\gt4-native\memcard1";
     else default_card = "memcard1";
     g_config.memcard_path = arg_value(argc, argv, "--memcard", "GT4_MEMCARD", default_card.c_str());
+    g_config.aspect = arg_value(argc, argv, "--aspect", "GT4_ASPECT", "");
     log_open(arg_value(argc, argv, "--log", "GT4_LOG", "build/game/run.log"));
     log_info("gt4_game: %u native functions linked", native_count());
     if (!guest_memory_init()) return 2;

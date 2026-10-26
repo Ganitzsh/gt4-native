@@ -10,6 +10,7 @@ struct RuntimeConfig {
     const char *link_name = "";     // --link: the shared section gt4_host created
     const char *capture_path = "";  // --capture: write the graphics stream to a file
     const char *memcard_path = "";  // --memcard: the folder holding memory card 1 (runtime/memcard.cpp)
+    const char *aspect = "";        // --aspect: the display shape (16:9, 21:9, 1.6...): the game's wide mode
 };
 extern RuntimeConfig g_config;
 
