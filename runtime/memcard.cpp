@@ -55,7 +55,10 @@ struct State {
     FILE *files[16] = {};
 } g;
 
+const bool g_trace = getenv("GT4_TRACE_MC") != nullptr;  // log every call and its result
+
 int finish(int cmd, int result) {
+    if (g_trace) log_info("memcard: command %d -> %d", cmd, result);
     g.cmd = cmd;
     g.result = result;
     g.pending = true;
@@ -175,6 +178,7 @@ int gt4_replace_sceMcGetInfo(int port, int, int *type, int *free_kb, int *format
 
 int gt4_replace_sceMcOpen(int port, int, const char *name, int mode) {
     KernelScope ks;
+    if (g_trace) log_info("memcard: open %s mode %x", name, mode);
     if (port != 0) return finish(2, kNoCard);
     const std::string card = card_path(name);
     const fs::path p = host_path(card);
@@ -215,12 +219,14 @@ int gt4_replace_sceMcSeek(int fd, int offset, int origin) {
 
 int gt4_replace_sceMcRead(int fd, void *buf, int size) {
     KernelScope ks;
+    if (g_trace) log_info("memcard: read fd %d %d bytes to %p", fd, size, buf);
     if (fd < 0 || fd >= 16 || !g.files[fd]) return finish(5, kNoEntry);
     return finish(5, static_cast<int>(std::fread(buf, 1, static_cast<size_t>(size), g.files[fd])));
 }
 
 int gt4_replace_sceMcWrite(int fd, const void *buf, int size) {
     KernelScope ks;
+    if (g_trace) log_info("memcard: write fd %d %d bytes from %p", fd, size, buf);
     if (fd < 0 || fd >= 16 || !g.files[fd]) return finish(6, kNoEntry);
     return finish(6, static_cast<int>(std::fwrite(buf, 1, static_cast<size_t>(size), g.files[fd])));
 }
@@ -233,6 +239,7 @@ int gt4_replace_sceMcFlush(int fd) {
 
 int gt4_replace_sceMcMkdir(int port, int, const char *name) {
     KernelScope ks;
+    if (g_trace) log_info("memcard: mkdir %s", name);
     if (port != 0) return finish(11, kNoCard);
     const fs::path p = host_path(card_path(name));
     std::error_code ec;
@@ -242,6 +249,7 @@ int gt4_replace_sceMcMkdir(int port, int, const char *name) {
 
 int gt4_replace_sceMcChdir(int port, int, const char *name, char *previous) {
     KernelScope ks;
+    if (g_trace) log_info("memcard: chdir %s", name);
     if (port != 0) return finish(12, kNoCard);
     if (previous) std::snprintf(previous, 1024, "%s", g.cwd.c_str());
     const std::string card = card_path(name);
@@ -253,6 +261,7 @@ int gt4_replace_sceMcChdir(int port, int, const char *name, char *previous) {
 
 int gt4_replace_sceMcGetDir(int port, int, const char *name, unsigned mode, int maxent, void *table) {
     KernelScope ks;
+    if (g_trace) log_info("memcard: getdir %s mode %u max %d", name, mode, maxent);
     if (port != 0) return finish(13, kNoCard);
     if (mode == 0) {  // a new listing: name is a directory pattern ("/BASCUS-97328*", "/DIR/*")
         g_listing = {};
