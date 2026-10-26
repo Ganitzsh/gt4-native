@@ -12,7 +12,9 @@
 // column (all the macroblocks of the first column, top to bottom, then the next: the order mStream
 // uploads them in), alpha 0x80, as the IPU's CSC leaves them.
 //
-// Movie audio is not played yet (the IOP's MPG1/MPG2 servers are silent).
+// The movie's audio (private stream 1: PCM or SPU ADPCM, which the IOP played) is decoded with it
+// and goes to the game's mix (runtime/audio.cpp) as 48 kHz stereo.
+#include "../audio.h"
 #include "../guest.h"
 #include "../kernel.h"
 #include "../log.h"
@@ -21,10 +23,12 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libswresample/swresample.h>
 }
 
 #include <algorithm>
 #include <cstring>
+#include <vector>
 
 using namespace gt4::rt;
 
@@ -96,6 +100,160 @@ int64_t disc_seek(void *opaque, int64_t offset, int whence) {
     return to;
 }
 
+// ---- the PSS audio --------------------------------------------------------------------------
+// Sony's movie audio is in private stream 1 (0xBD), which FFmpeg's demuxer does not expose: each
+// packet's payload is a 4-byte header (0xFF, 0xA1, 0x00, track) and the next bytes of that track's ADS stream
+// ("SShd": codec 1 16-bit PCM, 2 SPU ADPCM mono, 0x10 SPU ADPCM stereo; rate; channels; the
+// interleave, bytes per channel block; "SSbd": the data), as the BGM files. This reader walks the
+// PES packets on its own and keeps the mix's movie queue a little ahead of the pictures.
+
+struct PssAudio {
+    DiscFile file{};
+    std::vector<uint8_t> pes;     // bytes of the program stream read and not parsed yet
+    size_t pes_at = 0;
+    std::vector<uint8_t> data;    // the audio payload collected and not decoded yet
+    size_t data_at = 0;
+    bool header = false, ended = false;
+    uint32_t codec = 0, rate = 48000, channels = 2, interleave = 0x400;
+    uint8_t track = 1;            // the payload header's 4th byte numbers the tracks (two in the opening)
+    int32_t hist[2][2] = {};
+    uint64_t resample = 0;        // 16.16 position for a rate other than 48 kHz
+    int16_t last[2] = {};
+
+    void reset(uint64_t base, uint64_t size) {
+        *this = PssAudio{};
+        file = {base, size, 0};
+    }
+
+    bool more_pes(size_t need) {  // at least `need` unparsed bytes
+        while (pes.size() - pes_at < need) {
+            if (file.pos >= file.size) return false;
+            if (pes_at) {
+                pes.erase(pes.begin(), pes.begin() + static_cast<std::ptrdiff_t>(pes_at));
+                pes_at = 0;
+            }
+            const size_t old = pes.size();
+            const uint32_t n = static_cast<uint32_t>(std::min<uint64_t>(64 * 1024, file.size - file.pos));
+            pes.resize(old + n);
+            disc_read(file.base + file.pos, pes.data() + old, n);
+            file.pos += n;
+        }
+        return true;
+    }
+
+    // Collects audio payload until `want` bytes are waiting; false at the end of the stream.
+    bool more_data(size_t want) {
+        while (data.size() - data_at < want) {
+            if (!more_pes(6)) return false;
+            const uint8_t *p = &pes[pes_at];
+            if (p[0] != 0 || p[1] != 0 || p[2] != 1) {
+                ++pes_at;
+                continue;
+            }
+            if (p[3] == 0xB9) return false;  // end code
+            if (p[3] == 0xBA) {               // pack header (MPEG-2): 14 bytes and stuffing
+                if (!more_pes(14)) return false;
+                pes_at += 14 + (pes[pes_at + 13] & 7);
+                continue;
+            }
+            const size_t len = (static_cast<size_t>(p[4]) << 8) | p[5];
+            if (!more_pes(6 + len)) return false;
+            p = &pes[pes_at];
+            if (p[3] == 0xBD && len > 3) {
+                const size_t skip = 3 + p[8];  // PES header: flags, flags, header data length
+                if (len > skip + 4 && p[6 + skip] == 0xFF && p[6 + skip + 3] == track) {
+                    const uint8_t *payload = p + 6 + skip + 4;
+                    if (data_at) {
+                        data.erase(data.begin(), data.begin() + static_cast<std::ptrdiff_t>(data_at));
+                        data_at = 0;
+                    }
+                    data.insert(data.end(), payload, p + 6 + len);
+                }
+            }
+            pes_at += 6 + len;
+        }
+        return true;
+    }
+
+    void push(const int16_t *frames, int count) {
+        if (rate == 48000) {
+            movie_audio_push(frames, count);
+            return;
+        }
+        std::vector<int16_t> out;
+        const uint64_t step = (static_cast<uint64_t>(rate) << 16) / 48000;
+        for (int i = 0; i < count;) {  // linear, 16.16 positions in the input
+            const int32_t f = static_cast<int32_t>(resample & 0xFFFF);
+            for (int c = 0; c < 2; ++c)
+                out.push_back(static_cast<int16_t>(last[c] + (((frames[2 * i + c] - last[c]) * f) >> 16)));
+            resample += step;
+            while (resample >= 0x10000 && i < count) {
+                resample -= 0x10000;
+                last[0] = frames[2 * i];
+                last[1] = frames[2 * i + 1];
+                ++i;
+            }
+        }
+        movie_audio_push(out.data(), static_cast<int>(out.size() / 2));
+    }
+
+    // Decodes until the movie queue holds `frames` frames.
+    void pump(int frames) {
+        if (ended) return;
+        if (!header) {
+            if (!more_data(0x28) || std::memcmp(&data[data_at], "SShd", 4) != 0) {
+                ended = true;
+                return;
+            }
+            auto word = [&](int k) {
+                uint32_t v;
+                std::memcpy(&v, &data[data_at + 4 * k], 4);
+                return v;
+            };
+            codec = word(2);
+            rate = word(3) ? word(3) : 48000;
+            channels = std::clamp<uint32_t>(word(4), 1, 2);
+            interleave = word(5) ? word(5) : 0x400;
+            data_at += 0x28;
+            header = true;
+            log_info("movie: audio codec %#x, %u Hz, %u channel(s), interleave %#x", codec, rate, channels, interleave);
+        }
+        std::vector<int16_t> pcm;
+        while (movie_audio_queued() < frames) {
+            const size_t chunk = static_cast<size_t>(interleave) * channels;
+            if (!more_data(chunk)) {
+                ended = true;
+                return;
+            }
+            const uint8_t *in = &data[data_at];
+            if (codec == 1) {
+                const uint32_t n = interleave / 2;
+                pcm.resize(2 * n);
+                for (uint32_t i = 0; i < n; ++i)
+                    for (uint32_t c = 0; c < 2; ++c) {
+                        int16_t v;
+                        std::memcpy(&v, in + std::min(c, channels - 1) * interleave + 2 * i, 2);
+                        pcm[2 * i + c] = v;
+                    }
+            } else {
+                const uint32_t blocks = interleave / 16;
+                pcm.resize(2 * blocks * 28);
+                int16_t one[28];
+                for (uint32_t ch = 0; ch < channels; ++ch)
+                    for (uint32_t k = 0; k < blocks; ++k) {
+                        spu_adpcm_decode(in + ch * interleave + 16 * k, hist[ch][0], hist[ch][1], one);
+                        for (int i = 0; i < 28; ++i) {
+                            pcm[2 * (28 * k + i) + ch] = one[i];
+                            if (channels == 1) pcm[2 * (28 * k + i) + 1] = one[i];
+                        }
+                    }
+            }
+            data_at += chunk;
+            push(pcm.data(), static_cast<int>(pcm.size() / 2));
+        }
+    }
+};
+
 // ---- the decoder ----------------------------------------------------------------------------
 
 struct Movie {
@@ -106,6 +264,48 @@ struct Movie {
     AVPacket *packet = nullptr;
     AVFrame *frame = nullptr;
     int video = -1;
+    int audio = -1;
+    AVCodecContext *acodec = nullptr;
+    AVFrame *aframe = nullptr;
+    SwrContext *swr = nullptr;
+
+    void open_audio() {
+        audio = av_find_best_stream(fmt, AVMEDIA_TYPE_AUDIO, -1, video, nullptr, 0);
+        if (audio < 0) return;
+        const AVCodec *dec = avcodec_find_decoder(fmt->streams[audio]->codecpar->codec_id);
+        acodec = dec ? avcodec_alloc_context3(dec) : nullptr;
+        if (!acodec || avcodec_parameters_to_context(acodec, fmt->streams[audio]->codecpar) < 0 ||
+            avcodec_open2(acodec, dec, nullptr) < 0) {
+            log_warn("movie: no decoder for the audio (codec %d)", fmt->streams[audio]->codecpar->codec_id);
+            avcodec_free_context(&acodec);
+            audio = -1;
+            return;
+        }
+        AVChannelLayout stereo = AV_CHANNEL_LAYOUT_STEREO;
+        if (swr_alloc_set_opts2(&swr, &stereo, AV_SAMPLE_FMT_S16, 48000, &acodec->ch_layout, acodec->sample_fmt,
+                                acodec->sample_rate, 0, nullptr) < 0 ||
+            swr_init(swr) < 0) {
+            swr_free(&swr);
+            avcodec_free_context(&acodec);
+            audio = -1;
+            return;
+        }
+        aframe = av_frame_alloc();
+        log_info("movie: audio %s, %d Hz, %d channel(s)", dec->name, acodec->sample_rate, acodec->ch_layout.nb_channels);
+    }
+
+    void decode_audio(const AVPacket *pkt) {
+        if (avcodec_send_packet(acodec, pkt) < 0) return;
+        std::vector<int16_t> out;
+        while (avcodec_receive_frame(acodec, aframe) == 0) {
+            const int cap = swr_get_out_samples(swr, aframe->nb_samples);
+            out.resize(2 * static_cast<size_t>(std::max(cap, 0)));
+            uint8_t *dst = reinterpret_cast<uint8_t *>(out.data());
+            const int n = swr_convert(swr, &dst, cap, const_cast<const uint8_t **>(aframe->extended_data),
+                                      aframe->nb_samples);
+            if (n > 0) movie_audio_push(out.data(), n);
+        }
+    }
 
     bool open(uint32_t lba, uint32_t bytes) {
         file = {static_cast<uint64_t>(lba) * 2048, bytes, 0};
@@ -126,6 +326,7 @@ struct Movie {
         codec = avcodec_alloc_context3(dec);
         avcodec_parameters_to_context(codec, fmt->streams[video]->codecpar);
         if (avcodec_open2(codec, dec, nullptr) < 0) return false;
+        open_audio();
         packet = av_packet_alloc();
         frame = av_frame_alloc();
         return true;
@@ -142,16 +343,21 @@ struct Movie {
                 continue;
             }
             if (packet->stream_index == video) avcodec_send_packet(codec, packet);
+            else if (packet->stream_index == audio) decode_audio(packet);
             av_packet_unref(packet);
         }
     }
 
     bool rewind() {
         avcodec_flush_buffers(codec);
+        if (acodec) avcodec_flush_buffers(acodec);
         return av_seek_frame(fmt, -1, 0, AVSEEK_FLAG_BYTE) >= 0 || avformat_seek_file(fmt, -1, 0, 0, 0, AVSEEK_FLAG_BYTE) >= 0;
     }
 
     ~Movie() {
+        swr_free(&swr);
+        av_frame_free(&aframe);
+        avcodec_free_context(&acodec);
         av_frame_free(&frame);
         av_packet_free(&packet);
         avcodec_free_context(&codec);
@@ -236,6 +442,9 @@ extern "C" void gt4_replace_func_0054E3D8(StreamObj *p) {
         if (!ok) log_warn("movie: cannot decode the PSS at LBA %u (%u bytes)", p->entry, p->size);
         log_info("movie: LBA %u, %u bytes, %dx%d%s", p->entry, p->size, p->width, p->height,
                  p->loop == 1 ? "" : " (repeating)");
+        PssAudio pss;
+        const bool own_audio = ok && movie.audio < 0;  // FFmpeg found no audio: the PSS reader
+        if (own_audio) pss.reset(static_cast<uint64_t>(p->entry) * 2048, p->size);
         for (int frames = 0; ok;) {
             bool have;
             {
@@ -243,6 +452,7 @@ extern "C" void gt4_replace_func_0054E3D8(StreamObj *p) {
                 have = movie.next();
                 if (!have && p->loop != 1) {  // repeat: from the start again
                     have = movie.rewind() && movie.next();
+                    if (own_audio) pss.reset(static_cast<uint64_t>(p->entry) * 2048, p->size);
                 }
             }
             if (!have) break;
@@ -256,6 +466,7 @@ extern "C" void gt4_replace_func_0054E3D8(StreamObj *p) {
             {
                 KernelScope ks;
                 store_picture(movie.frame, static_cast<uint8_t *>(guest_ptr(slot)), p->width, p->height);
+                if (own_audio) pss.pump(48000 / 4);  // a quarter of a second ahead
             }
             game_fn<void(uint32_t)>(0x00564910)(state->queue);  // commit (sets "ready" once full)
             ++frames;
@@ -263,6 +474,7 @@ extern "C" void gt4_replace_func_0054E3D8(StreamObj *p) {
     }
 
     // the end, as the original's: no more pictures, the decoder closes
+    movie_audio_clear();
     game_int(kReady) = 0;
     game_fn<void(uint32_t)>(0x0054FDA8)(p->decoder);
     lock(stream_lock);

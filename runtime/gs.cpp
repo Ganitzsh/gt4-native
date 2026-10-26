@@ -7,6 +7,7 @@
 // channel's STR bit and raise its DMA-end interrupt so the game's handler (004AB6D8) advances.
 // At every VBlank the GS privileged registers the game wrote are sent with a frame marker, and
 // CSR.FIELD toggles as on an interlaced NTSC display.
+#include "audio.h"
 #include "guest.h"
 #include "gt4/link/protocol.h"
 #include "kernel.h"
@@ -184,6 +185,7 @@ void on_vblank(uint32_t count) {
     g_field ^= 1;
     auto &csr = guest_ref<uint32_t>(kGsCsr);
     csr = (csr & ~(1u << 13)) | (g_field << 13);
+    audio_vblank();
     if (!link_active()) return;
     for (uint32_t i = 0; i < 15; ++i) {  // PMODE .. BGCOLOR
         const uint64_t v = guest_ref<uint64_t>(kGsPriv + i * 0x10);

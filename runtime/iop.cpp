@@ -2,6 +2,7 @@
 // server the game binds is answered here (docs/IOP_SERVICES.md has the protocols). Also the IOP boot
 // calls (reboot, module loads: all succeed), libcdvd's init, the pad (libpad2/libvib/libdbc) and the
 // memory card (libmc), and the SDK's DelayThread / GetTimerSystemTime / iWakeupThread.
+#include "audio.h"
 #include "guest.h"
 #include "image.h"
 #include "kernel.h"
@@ -142,7 +143,6 @@ struct Stream {
     bool used;
 };
 std::vector<Stream> g_streams(64);
-std::vector<uint8_t> g_spu_ram(2 << 20);
 
 void strp(uint32_t fno, uint8_t *send, uint32_t, uint8_t *recv, uint32_t rsize) {
     if (recv && rsize) std::memset(recv, 0, rsize);
@@ -186,9 +186,9 @@ void strp(uint32_t fno, uint8_t *send, uint32_t, uint8_t *recv, uint32_t rsize) 
     }
     case 5: {  // stream into SPU2 RAM: +0 handle, +4 SPU address, +8 bytes
         const uint32_t h = rd32(send), spu = rd32(send + 4), n = rd32(send + 8);
-        if (h < g_streams.size() && g_streams[h].used && spu < g_spu_ram.size()) {
-            const uint32_t len = std::min<uint32_t>(n, static_cast<uint32_t>(g_spu_ram.size()) - spu);
-            iso_read(g_streams[h].pos, g_spu_ram.data() + spu, len);
+        if (h < g_streams.size() && g_streams[h].used && spu < (2u << 20)) {
+            const uint32_t len = std::min<uint32_t>(n, (2u << 20) - spu);
+            iso_read(g_streams[h].pos, spu_ram() + spu, len);
             g_streams[h].pos += n;
         }
         break;
@@ -198,11 +198,41 @@ void strp(uint32_t fno, uint8_t *send, uint32_t, uint8_t *recv, uint32_t rsize) 
     }
 }
 
-// ---- PBGM, VOIC, MPG1/MPG2: streamed audio and movies (silent for now)
+// ---- PBGM: streamed music (runtime/audio.cpp plays the .ads); VOIC, MPG1/MPG2: silent for now
 
-void pbgm(uint32_t fno, uint8_t *, uint32_t, uint8_t *recv, uint32_t rsize) {
+void pbgm(uint32_t fno, uint8_t *send, uint32_t, uint8_t *recv, uint32_t rsize) {
     if (recv && rsize) std::memset(recv, 0, rsize);
-    if (fno == 0 && recv) wr32(recv, 0x107);
+    const int32_t arg = send ? static_cast<int32_t>(rd32(send)) : 0;
+    if (fno != 8) log_info("PBGM %u (%d)", fno, arg);
+    switch (fno) {
+    case 0:
+        if (recv) wr32(recv, 0x107);
+        break;
+    case 1:  // play: +0 LBA, +4 size, +8 u8 loop
+        bgm_play(rd32(send), rd32(send + 4), send[8] != 0);
+        break;
+    case 2:
+        bgm_stop();
+        break;
+    case 3:
+        bgm_fade(arg);
+        break;
+    case 4:
+        bgm_volume(arg);
+        break;
+    case 6:
+    case 7:
+        bgm_pause(fno == 6);
+        break;
+    case 8:
+        if (recv && rsize >= 0x40) bgm_status(recv);
+        break;
+    case 9:
+        bgm_mono(arg != 0);
+        break;
+    default:
+        break;
+    }
 }
 
 void voic(uint32_t fno, uint8_t *, uint32_t, uint8_t *recv, uint32_t rsize) {
@@ -215,35 +245,17 @@ void mpg(uint32_t, uint8_t *, uint32_t, uint8_t *recv, uint32_t rsize) {
     if (recv && rsize) std::memset(recv, 0, rsize);  // MPG1 2: a zero slot header ends the movie
 }
 
-// ---- SPUP: the SPU2 register image every VBlank; reply ENDX + ENVX per core
-
-uint32_t g_keyed[2];  // voices keyed on and not keyed off
+// ---- SPUP: the SPU2 register image every VBlank (runtime/audio.cpp mixes the voices); the
+// reply is ENDX + ENVX per core
 
 void spup(uint32_t fno, uint8_t *send, uint32_t, uint8_t *recv, uint32_t rsize) {
+    if (fno == 4 && send) spu_apply(send);  // send and receive may share the buffer: read first
     if (recv && rsize) std::memset(recv, 0, rsize);
     if (fno == 0 && recv) {
         wr32(recv, 0x112);
         return;
     }
-    if (fno != 4 && fno != 3) return;
-    if (fno == 4 && send) {
-        for (int core = 0; core < 2; ++core) {
-            const uint8_t *c = send + core * 0x1D0;
-            const uint32_t flags = rd32(c);
-            if (flags & 0x800) g_keyed[core] |= rd32(c + 0x1B4) & 0xFFFFFF;    // KON
-            if (flags & 0x1000) g_keyed[core] &= ~(rd32(c + 0x1B8) & 0xFFFFFF);  // KOFF
-        }
-    }
-    if (recv && rsize >= 0x68) {
-        for (int core = 0; core < 2; ++core) {
-            uint8_t *r = recv + core * 0x34;
-            wr32(r, ~g_keyed[core] & 0xFFFFFF);  // ENDX: voices that have ended
-            for (int v = 0; v < 24; ++v) {
-                const uint16_t env = (g_keyed[core] >> v) & 1 ? 0x4000 : 0;
-                std::memcpy(r + 4 + 2 * v, &env, 2);
-            }
-        }
-    }
+    if ((fno == 4 || fno == 3) && recv && rsize >= 0x68) spu_status(recv);
 }
 
 // ---- Logitech wheel: version 0x010B2400, no device
@@ -480,7 +492,7 @@ extern "C" int gt4_replace_scePad2CreateSocket(const uint8_t *param, uint32_t) {
 }
 extern "C" int gt4_replace_scePad2DeleteSocket(int) { return 1; }
 extern "C" int gt4_replace_scePad2GetState(int) { return 1; }  // stable
-// GT4_PAD_SCRIPT=VBLANK:BUTTON[:FRAMES],...: without a host pad, hold BUTTON on pad 1 for FRAMES
+// GT4_PAD_SCRIPT=VBLANK:BUTTON[:FRAMES],...: on top of the host's pad, hold BUTTON on pad 1 for FRAMES
 // VBlanks (default 6) from VBLANK on, for unattended runs and captures. Buttons as gt4_host's
 // ps2_pad.h: select l3 r3 start up right down left l2 r2 l1 r1 triangle circle cross square.
 namespace {
@@ -516,8 +528,7 @@ int pressure_index(int bit) {
 }  // namespace
 
 extern "C" int gt4_replace_scePad2Read(int id, uint8_t *data) {
-    if (link_pad(id & 1, data)) return 18;
-    std::memcpy(data, g_pad[id & 1], 18);
+    if (!link_pad(id & 1, data)) std::memcpy(data, g_pad[id & 1], 18);
     static const std::vector<ScriptedPress> script = pad_script();
     if ((id & 1) == 0 && !script.empty()) {
         const uint32_t now = kernel_vblank_count();
