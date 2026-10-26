@@ -308,17 +308,7 @@ void pad_neutral() {
     }
 }
 
-// ---- memory card (no card yet)
 
-int g_mc_cmd = 0, g_mc_result = 0;
-bool g_mc_pending = false;
-int mc_queue(int cmd, int result) {
-    g_mc_cmd = cmd;
-    g_mc_result = result;
-    g_mc_pending = true;
-    return 0;
-}
-constexpr int kMcNoCard = -10;
 
 }  // namespace
 
@@ -549,41 +539,7 @@ extern "C" int gt4_replace_sceVibGetProfile(int, uint8_t *profile) {
 }
 extern "C" int gt4_replace_sceVibSetActParam(int, int, const uint8_t *, int, const uint8_t *) { return 1; }
 
-// ---- memory card: no card in either slot (for now)
-
-extern "C" int gt4_replace_sceMcInit() { return 0; }
-extern "C" int gt4_replace_sceMcEnd() { return 0; }
-extern "C" int gt4_replace_sceMcChangeThreadPriority(int) { return 0; }
-extern "C" int gt4_replace_sceMcGetSlotMax(int) { return 1; }
-extern "C" int gt4_replace_sceMcGetInfo(int, int, int *type, int *free, int *format) {
-    if (type) *type = 0;
-    if (free) *free = 0;
-    if (format) *format = 0;
-    return mc_queue(1, kMcNoCard);
-}
-extern "C" int gt4_replace_sceMcOpen(int, int, const char *, int) { return mc_queue(2, kMcNoCard); }
-extern "C" int gt4_replace_sceMcClose(int) { return mc_queue(3, kMcNoCard); }
-extern "C" int gt4_replace_sceMcSeek(int, int, int) { return mc_queue(4, kMcNoCard); }
-extern "C" int gt4_replace_sceMcRead(int, void *, int) { return mc_queue(5, kMcNoCard); }
-extern "C" int gt4_replace_sceMcWrite(int, const void *, int) { return mc_queue(6, kMcNoCard); }
-extern "C" int gt4_replace_sceMcFlush(int) { return mc_queue(10, kMcNoCard); }
-extern "C" int gt4_replace_sceMcMkdir(int, int, const char *) { return mc_queue(11, kMcNoCard); }
-extern "C" int gt4_replace_sceMcChdir(int, int, const char *, char *) { return mc_queue(12, kMcNoCard); }
-extern "C" int gt4_replace_sceMcGetDir(int, int, const char *, unsigned, int, void *) { return mc_queue(13, kMcNoCard); }
-extern "C" int gt4_replace_sceMcSetFileInfo(int, int, const char *, const void *, unsigned) { return mc_queue(14, kMcNoCard); }
-extern "C" int gt4_replace_sceMcDelete(int, int, const char *) { return mc_queue(15, kMcNoCard); }
-extern "C" int gt4_replace_sceMcFormat(int, int) { return mc_queue(16, kMcNoCard); }
-extern "C" int gt4_replace_sceMcUnformat(int, int) { return mc_queue(17, kMcNoCard); }
-extern "C" int gt4_replace_sceMcGetEntSpace(int, int, const char *) { return mc_queue(18, kMcNoCard); }
-extern "C" int gt4_replace_sceMcRename(int, int, const char *, const char *) { return mc_queue(19, kMcNoCard); }
-extern "C" int gt4_replace_sceMcUdCheckNewCard() { return 0; }
-extern "C" int gt4_replace_sceMcSync(int, int *cmd, int *result) {
-    if (!g_mc_pending) return -1;  // nothing in progress
-    g_mc_pending = false;
-    if (cmd) *cmd = g_mc_cmd;
-    if (result) *result = g_mc_result;
-    return 1;  // finished
-}
+// ---- memory card: runtime/memcard.cpp
 
 // ---- SDK thread/timer helpers built on alarms and the timer the host does not emulate
 

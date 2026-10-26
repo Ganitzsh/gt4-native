@@ -9,6 +9,7 @@ struct RuntimeConfig {
     const char *iso_path = "";
     const char *link_name = "";     // --link: the shared section gt4_host created
     const char *capture_path = "";  // --capture: write the graphics stream to a file
+    const char *memcard_path = "";  // --memcard: the folder holding memory card 1 (runtime/memcard.cpp)
 };
 extern RuntimeConfig g_config;
 

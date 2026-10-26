@@ -49,6 +49,26 @@ each of those calls lands in a shim that translates it to one host service:
 | Clock | vsync, timers, threads | P1 |
 | Net | IOP network stack (`sceInet*`, DNAS, lobby) | later |
 
+## Libraries instead of PS2 hardware
+
+Where the game reaches PS2 hardware or a Sony library, the port replaces it at the highest level that
+keeps the game's own logic, with an existing library where one fits, rather than emulating the
+device. The choices (status 2026-10-26):
+
+| PS2 piece | Replacement | Library | State |
+|---|---|---|---|
+| GS rasteriser | GS packets streamed to the host, drawn on the GPU | paraLLEl-GS (LGPL-3.0+) | done |
+| VU1 microprograms | host interpreter; native translation later | own | interpreter |
+| IPU + Polyphony's MPEG player | the stream loop (`0054E3D8`) decodes PSS with FFmpeg into the game's picture queue (`runtime/native/movie.cpp`) | FFmpeg: libavformat `mpegps`, libavcodec `mpeg2video` (LGPL-2.1+) | video done |
+| Movie audio (PSS private stream 1) | decoded with the video, to the host mixer | FFmpeg `adpcm_psx` / PCM, SDL3 audio | todo |
+| SPU2 voices (sound effects, engine sounds) and BGM streams | a software voice mixer fed by the sound driver's register writes (ADPCM decode, pitch, ADSR, reverb) | FFmpeg `adpcm_psx` for decoding, SDL3 audio for output | todo |
+| Memory card (libmc) | files in a host folder | std::filesystem | todo |
+| Pad, GT Force wheel (libpad2, libdbc, Logitech) | host input | SDL3 gamepad / joystick / haptics | pad done |
+| Disc, volumes (`sceCd`, `GT4.VOL`) | reads from the user's ISO image | own | done |
+| Upscaling, anti-aliasing, post effects | host display pipeline | AMD FidelityFX FSR 2 (MIT), SMAA (MIT) | in the host |
+| Widescreen | the game's projection and HUD layout (docs/WIDESCREEN.md) | own | todo |
+| Network (`sceInet`, DNAS) | `NetService`, null for now | later | stubbed |
+
 ## Network: ignored for now, designed in from the start
 
 The retail game's network code (lobby, connection objects, the LAN battle mode, about 3,600 functions
