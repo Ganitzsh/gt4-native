@@ -155,7 +155,9 @@ def rename_collisions(out, game_objs):
     defined, undefined = nm_symbols(game_objs)
     # The game keeps its own copy of what manages its memory or ends it, even where it calls the
     # function without defining it natively (the call then reaches the original address).
-    must_own = {"_" + n for n in ("malloc", "free", "calloc", "realloc", "memalign", "sbrk", "_sbrk", "exit",
+    # So do libgcc's 64-bit integer to float conversions: game code takes float results in eax
+    # (runtime/fpret.s), the host's return them on the x87 stack.
+    must_own = {"_" + n for n in ("__floatdisf", "__floatdidf", "malloc", "free", "calloc", "realloc", "memalign", "sbrk", "_sbrk", "exit",
                                   "_exit", "abort", "atexit", "setjmp", "longjmp", "_setjmp")}
     clash = sorted(n for n in set(defined) | set(undefined) if n in host and (n in defined or n in must_own))
     if not clash:
@@ -410,7 +412,7 @@ def generate(out, decomp, defined, undefined, replaced):
         f.write("};\n")
 
     host_syms = host_library_symbols(out)
-    provides, unresolved = [], []
+    provides, unresolved, host_bound = [], [], []
     for name in sorted(undefined):
         if name in defined:
             continue
@@ -427,6 +429,7 @@ def generate(out, decomp, defined, undefined, replaced):
                 unresolved.append(name)
             continue
         if name in host_syms:
+            host_bound.append(name)
             continue  # memcpy, strlen...: the host's (game copies of such names were renamed gt4g_)
         r = resolve(name, syms)
         if r is None:
@@ -455,7 +458,7 @@ def generate(out, decomp, defined, undefined, replaced):
         for n in unresolved:
             f.write(f'"{n}",\n')
         f.write('""};\n')
-    return fns, fn_addrs, natives, provides, unresolved, host
+    return fns, fn_addrs, natives, provides, unresolved, host, host_bound
 
 
 UNRESOLVED_BASE = 0x1000
@@ -553,7 +556,7 @@ def main():
         defined, undefined = nm_symbols(game_objs)
     for name, path in rt_defined.items():
         defined.setdefault(name, path)
-    fns, fn_addrs, natives, provides, unresolved, host = generate(a.out, a.decomp, defined, undefined, replaced)
+    fns, fn_addrs, natives, provides, unresolved, host, host_bound = generate(a.out, a.decomp, defined, undefined, replaced)
     gen = os.path.join(a.out, "gen")
     gen_objs = []
     for c in ("guest_functions.c", "native_functions.c", "unresolved.c"):
@@ -586,6 +589,9 @@ def main():
         f.write(f"host library symbols: {len(host)}\n")
         f.write(f"unresolved (stubbed): {len(unresolved)}\n")
         for n in unresolved:
+            f.write(f"  {n}\n")
+        f.write(f"bound to the host C runtime: {len(host_bound)}\n")
+        for n in host_bound:
             f.write(f"  {n}\n")
     print(open(os.path.join(a.out, "LINK_REPORT.txt")).read().split("unresolved")[0], end="")
     print(f"unresolved (stubbed): {len(unresolved)}\n-> {exe}")

@@ -5,7 +5,8 @@
  *   gt4dbg [--map FILE.map] [--first] program.exe [args...]
  *
  * --first: also report first-chance exceptions (by default only the ones the program does not handle).
- * --watch-write ADDR: a hardware data breakpoint on the 4 bytes at ADDR in every thread; each write
+ * --watch-write ADDR [--watch-value V]: a hardware data breakpoint on the 4 bytes at ADDR in every
+ *   thread (only writes leaving V there are reported, with --watch-value); each write
  *   is reported with the writing instruction and the native functions on the stack (at most 40).
  * Build: C:\msys64\mingw32\bin\gcc -O1 tools/gt4dbg.c -o build/gt4dbg.exe
  */
@@ -176,6 +177,9 @@ static void scan_memory(HANDLE proc) {
     fflush(stdout);
 }
 
+static unsigned write_value;
+static int write_has_value;
+
 static void arm_write(HANDLE th) {
     CONTEXT c;
     c.ContextFlags = CONTEXT_DEBUG_REGISTERS;
@@ -192,6 +196,12 @@ static void report_write(HANDLE proc, HANDLE th, DWORD tid) {
     unsigned v = 0;
     SIZE_T got;
     ReadProcessMemory(proc, (void *)(uintptr_t)write_addr, &v, 4, &got);
+    if (write_has_value && v != write_value) {  /* --watch-value: only that value is reported */
+        c.Dr6 = 0;
+        c.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+        SetThreadContext(th, &c);
+        return;
+    }
     printf("write #%d to %08x = %08x by thread %lu at ", ++write_hits, write_addr, v, tid);
     show(c.Eip);
     printf("\n  eax %08lx ebx %08lx ecx %08lx edx %08lx esi %08lx edi %08lx ebp %08lx esp %08lx\n", c.Eax, c.Ebx,
@@ -223,6 +233,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--watch-call") && i + 1 < argc) watch_addr = (unsigned)strtoul(argv[++i], NULL, 16);
         else if (!strcmp(argv[i], "--watch-write") && i + 1 < argc) write_addr = (unsigned)strtoul(argv[++i], NULL, 16);
         else if (!strcmp(argv[i], "--watch-rw") && i + 1 < argc) write_addr = (unsigned)strtoul(argv[++i], NULL, 16), write_dr7 = 0x000F0001;
+        else if (!strcmp(argv[i], "--watch-value") && i + 1 < argc) write_value = (unsigned)strtoul(argv[++i], NULL, 16), write_has_value = 1;
         else if (!strcmp(argv[i], "--scan") && i + 1 < argc) scan_word = (unsigned)strtoul(argv[++i], NULL, 16);
         else if (!strcmp(argv[i], "--dump") && i + 2 < argc)
             dump_addr = (unsigned)strtoul(argv[i + 1], NULL, 16), dump_len = (unsigned)strtoul(argv[i + 2], NULL, 0), i += 2;

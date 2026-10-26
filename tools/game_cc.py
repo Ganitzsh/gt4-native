@@ -65,7 +65,11 @@ DROP = {"-c", "-fno-optimize-sibling-calls", "-foptimize-sibling-calls"}
 # Always on: the decompiled code reads one object through several types all the time.
 # Struct returns follow the EE (tools/game_toolchain/build_gcc29.sh: in registers when the EE uses
 # $v0), so the decomp's two declarations of one function (struct by value or scalar) agree.
-ALWAYS = ["-fno-strict-aliasing"] + os.environ.get("GT4_CC_EXTRA", "").split()  # GT4_CC_EXTRA: debugging flags
+# Float and double results come back in eax (eax:edx), not on the x87 stack: the EE returns them
+# in $f0, so a caller that declares a float function void (or ignores its result) is harmless
+# there, but natively every such call would leave a value on the x87 stack until it overflows
+# and float loads become NaN. Runtime code that returns a float to game code returns its bits.
+ALWAYS = ["-fno-strict-aliasing", "-mno-fp-ret-in-387"] + os.environ.get("GT4_CC_EXTRA", "").split()  # GT4_CC_EXTRA: debugging flags
 
 # mode(TI) typedefs: `typedef [unsigned|signed] int NAME __attribute__((mode(TI)));`
 TI_TYPEDEF = re.compile(

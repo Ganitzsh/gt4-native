@@ -23,3 +23,13 @@ extern "C" void gt4_init_dwarf_reg_size_table(unsigned char *table) {
 // thread.o's StartThread wrapper (005AEDE0) around the syscall.
 extern "C" int gt4_sys_StartThread(int id, uint32_t arg);
 extern "C" int gt4_replace_StartThread(int id, uint32_t arg) { return gt4_sys_StartThread(id, arg); }
+
+// Debugging aid: how many x87 registers are in use (8 - the empty ones in the tag word). Game code
+// must leave the x87 stack empty between functions; a float result called as void leaks one.
+extern "C" int gt4_fpu_depth() {
+    unsigned short env[14];
+    __asm__ volatile("fnstenv %0; fldenv %0" : "=m"(env));
+    int used = 0;
+    for (int r = 0; r < 8; ++r) used += ((env[4] >> (2 * r)) & 3) != 3;
+    return used;
+}

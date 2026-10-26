@@ -451,9 +451,10 @@ void gt4_replace_func_004A7A00(void) {
 }
 
 // 004AC260 (212 bytes) sin(a), 004AC334 (204 bytes) cos(a), a in radians: one routine with two
-// entries (sin_cos above). Leave vf1-vf4 and ACC as the original does. Caller: 00285690.
-float gt4_replace_func_004AC260(float a) { return sin_cos(a, false); }
-float gt4_replace_func_004AC334(float a) { return sin_cos(a, true); }
+// entries (sin_cos above). Leave vf1-vf4 and ACC as the original does. Caller: 00285690. Game code
+// takes float results in eax (tools/game_cc.py, -mno-fp-ret-in-387): the bits are returned.
+uint32_t gt4_replace_func_004AC260(float a) { return float_result(sin_cos(a, false)); }
+uint32_t gt4_replace_func_004AC334(float a) { return float_result(sin_cos(a, true)); }
 
 // 00539688 (140 bytes): fills 14 words at p with a running sum of the CPU clock (Count, read
 // first and last), p itself, the TLB Random register and the caller's other argument registers

@@ -40,4 +40,12 @@ inline uint32_t guest_addr(const void *p) { return static_cast<uint32_t>(reinter
 
 template <class T> inline T &guest_ref(uint32_t addr) { return *reinterpret_cast<T *>(guest_ptr(addr)); }
 
+// Game code takes float results in eax (tools/game_cc.py builds it with -mno-fp-ret-in-387): a
+// runtime function that returns a float to game code is declared uint32_t and returns its bits.
+inline uint32_t float_result(float f) {
+    uint32_t u;
+    __builtin_memcpy(&u, &f, 4);
+    return u;
+}
+
 }  // namespace gt4::rt

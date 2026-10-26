@@ -31,7 +31,7 @@ int gt4_replace_func_0039A480(uint8_t *self) {
     set32(0x0, 0);
     for (int off = 0x8; off <= 0x18; off += 4) setf(off, 0.0f);
     using Set = void (*)(uint8_t *, int32_t, float, float, float, float);
-    using Gain = float (*)(uint8_t *, float);
+    using Gain = uint32_t (*)(uint8_t *, float);  // a float result, in eax (game code)
     reinterpret_cast<Set>(guest_ptr(0x0039A530))(self, 0, 1.5707964f, 0.0f, 0.0f, 0.0f);
     reinterpret_cast<Gain>(guest_ptr(0x0039A550))(self, 1.0f);
     return 0;
