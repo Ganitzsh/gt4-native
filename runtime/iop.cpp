@@ -12,6 +12,7 @@
 #include <windows.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
@@ -489,8 +490,53 @@ extern "C" int gt4_replace_scePad2CreateSocket(const uint8_t *param, uint32_t) {
 }
 extern "C" int gt4_replace_scePad2DeleteSocket(int) { return 1; }
 extern "C" int gt4_replace_scePad2GetState(int) { return 1; }  // stable
+// GT4_PAD_SCRIPT=VBLANK:BUTTON[:FRAMES],...: without a host pad, hold BUTTON on pad 1 for FRAMES
+// VBlanks (default 6) from VBLANK on, for unattended runs and captures. Buttons as gt4_host's
+// ps2_pad.h: select l3 r3 start up right down left l2 r2 l1 r1 triangle circle cross square.
+namespace {
+struct ScriptedPress {
+    uint32_t from, until;
+    int bit;
+};
+std::vector<ScriptedPress> pad_script() {
+    static const char *const names[16] = {"select", "l3", "r3", "start", "up", "right", "down", "left",
+                                          "l2", "r2", "l1", "r1", "triangle", "circle", "cross", "square"};
+    std::vector<ScriptedPress> out;
+    const char *e = getenv("GT4_PAD_SCRIPT");
+    for (const char *p = e; p && *p;) {
+        char name[16] = "";
+        unsigned at = 0, frames = 6;
+        int n = 0;
+        if (sscanf(p, "%u:%15[a-z0-9]%n", &at, name, &n) < 2) break;
+        p += n;
+        if (*p == ':') p += (sscanf(p, ":%u%n", &frames, &n) == 1) ? n : 1;
+        for (int b = 0; b < 16; ++b)
+            if (!std::strcmp(name, names[b])) out.push_back({at, at + frames, b});
+        if (*p == ',') ++p;
+    }
+    return out;
+}
+// the pressure byte of each button (out[6 + k]), as ps2_pad.h orders them; -1: no pressure
+int pressure_index(int bit) {
+    static const int order[12] = {5, 7, 4, 6, 12, 13, 14, 15, 10, 11, 8, 9};
+    for (int k = 0; k < 12; ++k)
+        if (order[k] == bit) return k;
+    return -1;
+}
+}  // namespace
+
 extern "C" int gt4_replace_scePad2Read(int id, uint8_t *data) {
-    if (!link_pad(id & 1, data)) std::memcpy(data, g_pad[id & 1], 18);
+    if (link_pad(id & 1, data)) return 18;
+    std::memcpy(data, g_pad[id & 1], 18);
+    static const std::vector<ScriptedPress> script = pad_script();
+    if ((id & 1) == 0 && !script.empty()) {
+        const uint32_t now = kernel_vblank_count();
+        for (const ScriptedPress &s : script)
+            if (now >= s.from && now < s.until) {
+                data[s.bit >> 3] &= static_cast<uint8_t>(~(1u << (s.bit & 7)));
+                if (int k = pressure_index(s.bit); k >= 0) data[6 + k] = 0xFF;
+            }
+    }
     return 18;
 }
 extern "C" int gt4_replace_scePad2GetButtonProfile(int, uint8_t *profile) {

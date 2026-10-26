@@ -81,6 +81,8 @@ debugger (exceptions with registers and the native functions on the stack; `--wa
 `GT4_WATCH=SECONDS` logs every guest thread's state and call chain; `GT4_DMA_LOG=N`
 (`GT4_DMA_LOG_FROM=VBLANK`) logs the DMA tags walked, to find a packet in guest memory;
 `GT4_VU0_TRACE=ADDR` logs every instruction pair of the first run of a VU0 microprogram.
+`GT4_PAD_SCRIPT=VBLANK:BUTTON[:FRAMES],...` presses pad-1 buttons at given VBlanks when no host pad
+is connected (e.g. `900:cross,1200:right,1320:cross` answers the boot's memory-card dialogs).
 
 Finding a wrong GS packet: decode the `--capture` file (GIF/VIF1 records), find the packet's guest
 address with `GT4_DMA_LOG`, then its writer with `gt4dbg --watch-write`. Provisional drafts
