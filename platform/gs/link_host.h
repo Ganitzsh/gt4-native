@@ -6,8 +6,9 @@
 // of their ring and writes host -> game records into the other one. A monitor thread logs the game's
 // exit code (crashes included). Windows only; elsewhere start() reports that the link is unavailable.
 //
-// ReplaySource reads a capture file (the game's --capture output: the same records, concatenated) and
-// hands them out one VBlank at a time.
+// ReplaySource maps a capture file (the game's --capture output: the same records, concatenated) into
+// memory, read-only (captures run to many gigabytes: nothing is copied), and hands the records out
+// one VBlank at a time.
 #include "gt4/link/protocol.h"
 
 #include <atomic>
@@ -67,7 +68,9 @@ public:
 
 private:
     std::string file;
-    std::vector<uint8_t> bytes;
+    const uint8_t* data = nullptr;   // the mapped capture
+    size_t size = 0;                 // its whole records
+    std::shared_ptr<void> mapping;   // unmaps the file with the last owner
     size_t offset = 0;
     size_t vsyncCount = 0;
 };

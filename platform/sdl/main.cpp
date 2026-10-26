@@ -513,6 +513,13 @@ int run(const Options& options) {
         gt4::gs::GsHost::Options gsOptions;
         gsOptions.gamePath = options.game;
         gsOptions.gameArgs = options.gameArgs;
+        // A wide content shape switches on the game's own 16:9 mode, generalised to that aspect (the
+        // game's --aspect: Hor+ 3D in the anamorphic 640 x 448 frame, which the host presents at the
+        // aspect). Read at start-up: changing aspect.ratio later needs a restart of the game.
+        if (const float a = gt4::aspectValue(settings.aspect); !options.game.empty() && a >= 1.5f) {
+            gsOptions.gameArgs.push_back("--aspect");
+            gsOptions.gameArgs.push_back(std::to_string(a));
+        }
         gsOptions.replayPath = options.replay;
         gsOptions.lockstep = lockstep;
         gsOptions.loop = options.replayLoop;

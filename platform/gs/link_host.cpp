@@ -17,6 +17,11 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#else
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 namespace gt4::ps2 {
@@ -238,29 +243,68 @@ uint32_t GameLink::gameState() const { return impl->header->game_state; }
 uint64_t GameLink::bytesReceived() const { return impl->received; }
 
 std::unique_ptr<ReplaySource> ReplaySource::open(const std::string& path, std::string& error) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) {
+    auto source = std::make_unique<ReplaySource>();
+    source->file = path;
+    size_t bytes = 0;
+#ifdef _WIN32
+    HANDLE file = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+    LARGE_INTEGER length{};
+    if (file == INVALID_HANDLE_VALUE || !GetFileSizeEx(file, &length)) {
+        if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
         error = "cannot open the capture " + path;
         return nullptr;
     }
-    auto source = std::make_unique<ReplaySource>();
-    source->file = path;
-    source->bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-    const size_t used = splitRecords(source->bytes.data(), source->bytes.size(), [&](const Gt4LinkRecord& r, const uint8_t*) {
-        if (r.type == GT4_REC_VSYNC) ++source->vsyncCount;
-    });
-    if (used != source->bytes.size())
-        std::fprintf(stderr, "Replay: %s ends with %zu bytes of an incomplete record (ignored)\n", path.c_str(),
-                     source->bytes.size() - used);
-    source->bytes.resize(used);
+    bytes = static_cast<size_t>(length.QuadPart);
+    if (bytes) {
+        HANDLE section = CreateFileMappingA(file, nullptr, PAGE_READONLY, 0, 0, nullptr);
+        void* view = section ? MapViewOfFile(section, FILE_MAP_READ, 0, 0, 0) : nullptr;
+        if (section) CloseHandle(section);
+        if (!view) {
+            CloseHandle(file);
+            error = "cannot map the capture " + path;
+            return nullptr;
+        }
+        source->mapping = std::shared_ptr<void>(view, [](void* v) { UnmapViewOfFile(v); });
+    }
+    CloseHandle(file);
+#else
+    const int fd = ::open(path.c_str(), O_RDONLY);
+    struct stat st {};
+    if (fd < 0 || fstat(fd, &st) != 0) {
+        if (fd >= 0) ::close(fd);
+        error = "cannot open the capture " + path;
+        return nullptr;
+    }
+    bytes = static_cast<size_t>(st.st_size);
+    if (bytes) {
+        void* view = mmap(nullptr, bytes, PROT_READ, MAP_PRIVATE, fd, 0);
+        if (view == MAP_FAILED) {
+            ::close(fd);
+            error = "cannot map the capture " + path;
+            return nullptr;
+        }
+        source->mapping = std::shared_ptr<void>(view, [bytes](void* v) { munmap(v, bytes); });
+    }
+    ::close(fd);
+#endif
+    source->data = static_cast<const uint8_t*>(source->mapping.get());
+    size_t used = 0;
+    if (source->data)
+        used = splitRecords(source->data, bytes, [&](const Gt4LinkRecord& r, const uint8_t*) {
+            if (r.type == GT4_REC_VSYNC) ++source->vsyncCount;
+        });
+    if (used != bytes)
+        std::fprintf(stderr, "Replay: %s ends with %zu bytes of an incomplete record (ignored)\n", path.c_str(), bytes - used);
+    source->size = used;
     return source;
 }
 
 bool ReplaySource::nextFrame(const RecordCallback& onRecord) {
-    while (offset + sizeof(Gt4LinkRecord) <= bytes.size()) {
+    while (offset + sizeof(Gt4LinkRecord) <= size) {
         Gt4LinkRecord header;
-        std::memcpy(&header, bytes.data() + offset, sizeof(header));
-        const uint8_t* payload = bytes.data() + offset + sizeof(header);
+        std::memcpy(&header, data + offset, sizeof(header));
+        const uint8_t* payload = data + offset + sizeof(header);
         offset += recordSpan(header.size);
         onRecord(header, payload);
         if (header.type == GT4_REC_VSYNC) return true;
