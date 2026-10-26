@@ -5,6 +5,7 @@
 #include "gs_backend.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -20,6 +21,8 @@ public:
         bool lockstep = false;               // replay: one VBlank per host frame (deterministic captures)
         bool loop = false;                   // replay: start again at the end
         BackendOptions backend;
+        // The game's sound (stereo s16 frames at `rate` Hz), called on the worker thread as it arrives.
+        std::function<void(uint32_t rate, const int16_t* frames, size_t count)> audio;
     };
     // Creates the GS back end (its own Vulkan device: the caller must reload its volk function pointers
     // afterwards, see Backend::create) and starts the game or opens the replay.

@@ -165,6 +165,10 @@ std::unique_ptr<GsHost> GsHost::create(const Options& options, std::string& erro
     Impl* raw = &h;
     h.target = std::make_unique<BackendTarget>(*h.backend, [raw](DisplayFrame& f) { raw->publish(f); });
     h.stream = std::make_unique<ps2::GraphicsStream>(*h.target);
+    if (options.audio)
+        h.stream->setAudioWriter([sink = options.audio](uint32_t stream, uint32_t rate, const int16_t* frames, size_t count) {
+            if (stream == 0) sink(rate, frames, count);  // stream 0: the game's final mix
+        });
     if (!options.gamePath.empty()) {
         ps2::GameLink::Options linkOptions;
         linkOptions.gamePath = options.gamePath;

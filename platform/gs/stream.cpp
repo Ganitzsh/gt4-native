@@ -91,6 +91,14 @@ void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload)
         break;
     }
     case GT4_REC_AUDIO:
+        ++counters.audio;
+        if (audioWriter && size >= 8) {
+            uint32_t id, rate;
+            std::memcpy(&id, payload, 4);
+            std::memcpy(&rate, payload + 4, 4);
+            audioWriter(id, rate, reinterpret_cast<const int16_t*>(payload + 8), (size - 8) / 4);
+        }
+        break;
     case GT4_REC_SPU2_REGS:
     case GT4_REC_SPU2_RAM:
         ++counters.audio;   // the audio stream belongs to the audio back end

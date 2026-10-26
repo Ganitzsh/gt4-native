@@ -504,6 +504,7 @@ int run(const Options& options) {
     // The game's frames: the GS back end (its own Vulkan device on the renderer's GPU) fed by a live game
     // or a capture. Creating it loads volk's globals for its own instance, so the renderer reloads its own.
     std::unique_ptr<gt4::gs::GsHost> gs;
+    SDL_AudioStream* gameAudio = nullptr;  // destroyed with the process (after the GS host stops)
     const bool lockstep = !options.replay.empty() && options.fixedStep;
     gt4::gs::DisplayFrame gsFrame;
     uint64_t gsSerial = 0;
@@ -518,6 +519,23 @@ int run(const Options& options) {
         gsOptions.backend.gpu = renderer->gpu().name;
         gsOptions.backend.superSampling = options.gsSsaa;
         gsOptions.backend.highResolutionScanout = options.gsHires;
+        // The game's sound to the default output (windowed runs: headless ones stay silent; the game
+        // writes its mix to a WAV file with GT4_AUDIO_WAV). A session owns its own audio stream.
+        if (options.audio && !options.headless && options.sessionDirectory.empty()) {
+            if (SDL_InitSubSystem(SDL_INIT_AUDIO)) {
+                SDL_AudioSpec spec{SDL_AUDIO_S16, 2, 48000};
+                gameAudio = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
+                if (gameAudio) SDL_ResumeAudioStreamDevice(gameAudio);
+            }
+            if (!gameAudio) std::fprintf(stderr, "No audio output: %s\n", SDL_GetError());
+            else
+                gsOptions.audio = [stream = gameAudio](uint32_t rate, const int16_t* frames, size_t count) {
+                    if (rate != 48000 || !count) return;
+                    // keep at most ~150 ms queued: a host that falls behind drops sound, not latency
+                    if (SDL_GetAudioStreamQueued(stream) > 48000 * 4 * 15 / 100) return;
+                    SDL_PutAudioStreamData(stream, frames, static_cast<int>(count * 4));
+                };
+        }
         std::string error;
         gs = gt4::gs::GsHost::create(gsOptions, error);
         renderer->reloadVulkanFunctions();

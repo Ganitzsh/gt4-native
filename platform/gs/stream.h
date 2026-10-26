@@ -27,11 +27,15 @@ public:
 // Host -> game records (pad, GS events, image data, commands); the live link writes them to its ring.
 using HostRecordWriter = std::function<void(uint32_t type, const void* payload, uint32_t size)>;
 
+// The game's sound (GT4_REC_AUDIO): interleaved stereo s16 frames of one stream at `rate` Hz.
+using AudioWriter = std::function<void(uint32_t stream, uint32_t rate, const int16_t* frames, size_t count)>;
+
 // Decodes records and dispatches them. One instance per stream; not thread-safe.
 class GraphicsStream {
 public:
     explicit GraphicsStream(GsTarget& target);
     void setHostWriter(HostRecordWriter writer) { hostWriter = std::move(writer); }
+    void setAudioWriter(AudioWriter writer) { audioWriter = std::move(writer); }
 
     // One whole record (header + payload).
     void record(const Gt4LinkRecord& header, const uint8_t* payload);
@@ -62,6 +66,7 @@ private:
     Vu1 unit;
     Vif1 vif1;
     HostRecordWriter hostWriter;
+    AudioWriter audioWriter;
     Stats counters;
     std::vector<uint8_t> scratch;
     // PATH3 data that arrived while VIF1 had PATH3 masked (MSKPATH3): sent when it is unmasked, as the
