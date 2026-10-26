@@ -9,7 +9,10 @@ namespace gt4::rt {
 bool link_open(const char *name);          // --link: the section gt4_host created
 bool link_capture(const char *path);       // --capture: write the game->host records to a file
 bool link_active();
-bool link_capture_window();               // the capture is writing now (GT4_CAPTURE_FROM / _FRAMES)
+bool link_capture_window();
+// Keeps a record for the start of a capture window (state sent once that a replay needs: the VU1
+// microprograms).
+void link_remember(uint32_t type, const void *payload, uint32_t size);               // the capture is writing now (GT4_CAPTURE_FROM / _FRAMES)
 bool link_connected();                    // a live host (--link), which reports GS events itself
 
 // Sends one record (thread-safe). `extra` (optional) follows `payload` in the same record.

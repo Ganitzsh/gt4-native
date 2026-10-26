@@ -104,6 +104,18 @@ bool link_open(const char *name) {
 // back end replays from there: gs.cpp resends the privileged registers when the window opens).
 uint32_t g_capture_from = 0, g_capture_frames = 0;
 
+// Records a capture window must start with: the VU1 microprograms, uploaded once at boot.
+std::vector<std::vector<uint8_t>> g_sticky;
+bool g_window_started = false;
+
+void link_remember(uint32_t type, const void *payload, uint32_t size) {
+    std::lock_guard<std::mutex> lock(g_send_mutex);
+    std::vector<uint8_t> rec(sizeof(uint32_t) + size);
+    std::memcpy(rec.data(), &type, 4);
+    std::memcpy(rec.data() + 4, payload, size);
+    g_sticky.push_back(std::move(rec));
+}
+
 bool link_capture_window() {
     if (!g_capture) return false;
     const uint32_t v = kernel_vblank_count();
@@ -129,6 +141,18 @@ void link_send(uint32_t type, const void *payload, uint32_t size, const void *ex
     const uint32_t total = static_cast<uint32_t>((sizeof rec + size + extra_size + 15) & ~15u);
     static const uint8_t zeros[16] = {};
     if (g_capture && link_capture_window()) {
+        if (!g_window_started) {  // the window opens: the remembered records first
+            g_window_started = true;
+            for (const auto &r : g_sticky) {
+                uint32_t t;
+                std::memcpy(&t, r.data(), 4);
+                const uint32_t n = static_cast<uint32_t>(r.size() - 4);
+                Gt4LinkRecord sr{t, n, 0};
+                fwrite(&sr, sizeof sr, 1, g_capture);
+                fwrite(r.data() + 4, 1, n, g_capture);
+                fwrite(zeros, 1, ((sizeof sr + n + 15) & ~15u) - sizeof sr - n, g_capture);
+            }
+        }
         fwrite(&rec, sizeof rec, 1, g_capture);
         if (size) fwrite(payload, 1, size, g_capture);
         if (extra_size) fwrite(extra, 1, extra_size, g_capture);

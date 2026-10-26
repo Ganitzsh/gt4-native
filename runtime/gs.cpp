@@ -33,15 +33,25 @@ struct ChannelOut {
     std::vector<uint8_t> data;
 };
 
+// A DMA address: the scratchpad, main RAM (physical, or its uncached mirrors 0x2/0x3xxxxxxx), or else
+// natively a game thread's stack, which Windows places anywhere (004A12B8 builds the microprogram
+// upload chain in a local array: masked to 32 MB it was read from the wrong memory, and VU1 never
+// received a microprogram).
 uint8_t *mem(uint32_t addr, bool spr) {
     if (spr || (addr & 0x70000000) == 0x70000000) return static_cast<uint8_t *>(guest_ptr(kScratchpad + (addr & 0x3FF0)));
-    return static_cast<uint8_t *>(guest_ptr(addr & 0x01FFFFF0));
+    const uint32_t high = addr >> 28;
+    if ((high == 0 || high == 2 || high == 3) && (addr & 0x0FFFFFFF) < 0x02000000)
+        return static_cast<uint8_t *>(guest_ptr(addr & 0x01FFFFF0));
+    return static_cast<uint8_t *>(guest_ptr(addr));  // as is: native stacks are only 4-aligned
 }
 
 void append(std::vector<uint8_t> &out, const uint8_t *p, uint32_t qwc) { out.insert(out.end(), p, p + qwc * 16); }
 
 // Source-chain DMA (EE DMAC tag IDs): returns false on a malformed chain.
+bool g_chain_has_mpg = false;  // the last chain walked uploaded a VU1 microprogram
+
 bool walk_chain(uint32_t tadr, bool tte, std::vector<uint8_t> &out, bool &irq_stop) {
+    g_chain_has_mpg = false;
     uint32_t asr[2];
     int sp = 0;
     bool spr_tag = (tadr & 0x80000000) != 0;
@@ -53,9 +63,18 @@ bool walk_chain(uint32_t tadr, bool tte, std::vector<uint8_t> &out, bool &irq_st
         const uint32_t qwc = static_cast<uint32_t>(lo & 0xFFFF);
         const uint32_t id = static_cast<uint32_t>(lo >> 28) & 7;
         const bool irq = (lo >> 31) & 1;
-        const uint32_t addr = static_cast<uint32_t>(lo >> 32) & 0x7FFFFFF0;
+        const uint32_t addr = static_cast<uint32_t>(lo >> 32) & 0x7FFFFFFF;  // mem() aligns the PS2 forms
         const bool spr = (lo >> 63) & 1;
         if (tte) out.insert(out.end(), tag + 8, tag + 16);  // the tag's upper half (VIF codes) goes first
+        if (tte && tag[15] == 0x4A) {  // an MPG (VU1 microprogram upload) in the tag
+            g_chain_has_mpg = true;
+            static int mpg_logged = 0;
+            if (mpg_logged < 40) {
+                ++mpg_logged;
+                log_info("gs: VU1 microprogram upload, %u doublewords at %u (VBlank %u)", tag[14] ? tag[14] : 256u,
+                         tag[12] | (tag[13] << 8), kernel_vblank_count());
+            }
+        }
         // GT4_DMA_LOG=N [GT4_DMA_LOG_FROM=VBLANK]: log the first N tags walked (from that VBlank on),
         // to find a packet's guest address (debugging)
         static long dma_log = getenv("GT4_DMA_LOG") ? atol(getenv("GT4_DMA_LOG")) : 0;
@@ -152,6 +171,8 @@ using WaitFn = int (*)(int);
 void finish_transfer(int channel, std::vector<uint8_t> &out) {
     if (!out.empty()) {
         if (channel == 1) {
+            if (g_chain_has_mpg) link_remember(GT4_REC_VIF1, out.data(), static_cast<uint32_t>(out.size()));
+            g_chain_has_mpg = false;
             link_send(GT4_REC_VIF1, out.data(), static_cast<uint32_t>(out.size()));
         } else if (channel == 0) {
             link_send(GT4_REC_VIF0, out.data(), static_cast<uint32_t>(out.size()));

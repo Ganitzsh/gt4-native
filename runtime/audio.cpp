@@ -191,7 +191,7 @@ int32_t voice_sample(Core &core, int n, Voice &v) {
 // ---- BGM: .ads ("SShd" header, then "SSbd" data) streamed from the disc image
 
 struct Bgm {
-    bool playing = false, paused = false, loop = false, finished = false, mono = false;
+    bool playing = false, paused = false, loop = false, finished = false, mono = false, started = false;
     uint64_t start = 0, data = 0, pos = 0, end = 0;  // byte offsets in the image
     uint32_t codec = 0, rate = kRate, channels = 2, interleave = 0x200;
     std::deque<int16_t> fifo;  // decoded stereo frames at the stream's rate
@@ -410,6 +410,7 @@ void bgm_play(uint32_t lba, uint32_t size, bool loop) {
     b.end = b.data + std::min<uint64_t>(bytes, size > 0x28 ? size - 0x28 : bytes);
     b.loop = loop;
     b.playing = true;
+    b.started = true;
     log_info("bgm: LBA %u, codec %u, %u Hz, %u channel(s), interleave %#x, %u bytes%s", lba, b.codec, b.rate,
              b.channels, b.interleave, bytes, loop ? ", looping" : "");
 }
@@ -444,6 +445,7 @@ void bgm_mono(bool mono) {
 void bgm_status(uint8_t *reply) {
     std::lock_guard<std::mutex> lock(g_mutex);
     std::memset(reply, 0, 0x40);
+    if (!g_bgm.started) return;  // nothing played yet: the IOP's status block is still zero
     const int64_t us = g_bgm.rate ? g_bgm.samples * 1000000 / g_bgm.rate : 0;
     const uint32_t finished = g_bgm.finished || !g_bgm.playing;
     std::memcpy(reply, &us, 8);
