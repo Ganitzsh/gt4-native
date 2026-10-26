@@ -330,6 +330,32 @@ RTTI_NAME = re.compile(r"^_?(_vt\$|__tf|__ti)\d+([A-Za-z_][A-Za-z0-9_]*)$")
 CTOR_OF_ADDR = re.compile(r"^_?__\d+func_([0-9A-Fa-f]{8})[A-Za-z0-9_$.]*$")
 
 
+def demangle_member(name):
+    """Class__Sub__method for a gcc 2.x mangled member function (method__<class><params>), where
+    <class> is <len><name> or Q<count><len><name>... (Q_<count>_ from ten levels); None otherwise."""
+    i = name.find("__", 1)
+    while i > 0:
+        method, rest = name[:i], name[i + 2:]
+        parts = []
+        if rest[:1] == "Q":
+            m = re.match(r"Q(?:_(\d+)_|(\d))", rest)
+            count, pos = (int(m.group(1) or m.group(2)), m.end()) if m else (0, 0)
+        else:
+            count, pos = 1, 0
+        for _ in range(count):
+            m = re.match(r"(\d+)", rest[pos:])
+            if not m:
+                break
+            n = int(m.group(1))
+            pos += m.end()
+            parts.append(rest[pos:pos + n])
+            pos += n
+        if parts and len(parts) == count and all(p and re.fullmatch(r"[A-Za-z_]\w*", p) for p in parts):
+            return "__".join(parts + [method])
+        i = name.find("__", i + 1)
+    return None
+
+
 def resolve(name, syms):
     """(PS2 address, "func" or "data") for a COFF symbol name, or None.
 
@@ -356,6 +382,11 @@ def resolve(name, syms):
     m = DTOR_OF_ADDR.match(name) or CTOR_OF_ADDR.match(name)
     if m:
         return int(m.group(1), 16), "func"
+    # a member function, gcc 2.x mangled: clear__Q210PitmenTiny4Team (+ parameters) is the
+    # symbol map's PitmenTiny__Team__clear, init__7MCarObj is MCarObj__init
+    member = demangle_member(bare)
+    if member and member in syms:
+        return syms[member]
     # gcc 2.x vtables, type-info functions and objects of a class: _vt$10D_00689C88, __tf7hObject...
     m = RTTI_NAME.match(name)
     if m:

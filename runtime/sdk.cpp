@@ -2,6 +2,7 @@
 // a function named gt4_replace_<SDK name> takes over that function's address (tools/game_link.py).
 #include "kernel.h"
 #include "log.h"
+#include "runtime.h"
 
 #include <cstdarg>
 #include <cstdint>
@@ -65,3 +66,16 @@ extern "C" void gt4_logf(const char *fmt, ...) {
     va_end(ap);
     gt4::rt::log_info("%s", text);
 }
+
+// The display shape for game_src/func_004365B8.cpp (the game's wide mode): --aspect W:H or a
+// number, x 1000; 0 when not given (the game's own option is kept).
+extern "C" int gt4_display_aspect_milli() {
+    const char *a = gt4::rt::g_config.aspect;
+    if (!a || !*a) return 0;
+    double w = 0, h = 1;
+    if (std::sscanf(a, "%lf:%lf", &w, &h) < 1 || w <= 0 || h <= 0) return 0;
+    return static_cast<int>(w / h * 1000.0 + 0.5);
+}
+
+// The VBlank counter, for game-side debugging checks (game_src copies).
+extern "C" unsigned gt4_vblank() { return gt4::rt::kernel_vblank_count(); }

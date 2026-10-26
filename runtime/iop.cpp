@@ -536,6 +536,12 @@ extern "C" int gt4_replace_scePad2Read(int id, uint8_t *data) {
             if (now >= s.from && now < s.until) {
                 data[s.bit >> 3] &= static_cast<uint8_t>(~(1u << (s.bit & 7)));
                 if (int k = pressure_index(s.bit); k >= 0) data[6 + k] = 0xFF;
+                static uint32_t logged = ~0u;
+                if (std::getenv("GT4_TRACE_PAD") && logged != s.from) {
+                    logged = s.from;
+                    log_info("pad: scripted press at VBlank %u (read %u): %02x %02x %02x %02x %02x %02x", s.from, now,
+                             data[0], data[1], data[2], data[3], data[4], data[5]);
+                }
             }
     }
     return 18;

@@ -65,15 +65,24 @@ callee's view is plain cdecl (`[esp+4]` = first argument), so runtime code calls
 unchanged. gcc 2.9 emits a sibling call only when the callee's arguments fit in the caller's
 *declared* incoming area (`current_function_args_size`), so it never writes past it.
 
-**No sibling-call attempt with objects passed by invisible reference (`calls.c`).** A C++ class with
-a copy constructor is passed by value as the address of a copy, built in a `TARGET_EXPR`'s slot.
-`expand_call` expands a call twice when a sibling call is possible (one insn chain each), and this
-snapshot's second expansion of a `TARGET_EXPR` reused a slot the first had freed as the next
-argument's temporary: of two such arguments, both were the second (`void f(It a, It b) { g(a, b); }`
-called `g(b, b)`). It broke every two-iterator call of the game's STL, e.g. `map::erase(first, last)`
-erased nothing (the unloaded menu project stayed registered and was unloaded again), and the widget
-sort's insertion step (the comparator copy went where the element belongs). Such calls are now
-never sibling calls. Not optimization-dependent beyond `-O1` (it needs `-fno-exceptions`).
+**No sibling calls (`calls.c`).** `expand_call` expands a call twice when a sibling call is
+possible (one insn chain each), and this snapshot's second expansion of the arguments is unsound:
+- a C++ class with a copy constructor is passed by value as the address of a copy built in a
+  `TARGET_EXPR`'s slot, and the second expansion reused a slot the first had freed as the next
+  argument's temporary: of two such arguments, both were the second (`void f(It a, It b) { g(a, b); }`
+  called `g(b, b)`). It broke every two-iterator call of the game's STL, e.g. `map::erase(first, last)`
+  erased nothing (the unloaded menu project stayed registered and was unloaded again), and the
+  widget sort's insertion step (the comparator copy went where the element belongs);
+- `UNSAVE_EXPR` reset saved expressions, so a `new` whose value is saved allocated twice (below).
+Sibling calls also store into the caller's incoming argument area (see the call-site padding), so
+they are now never made.
+
+**A new-expression's value is the allocated pointer (`cp/init.c`).** In gcc 2.x a constructor
+returns `this` and `new T(...)` takes its value from the constructor call. The decomp defines many
+constructors as plain functions under an asm label (`T(...) __asm__("func_0047FB80")`) that return
+nothing; on the EE `$v0` happened to hold `this` when they returned, natively `eax` did not (the
+race's script nodes got an owner pointer of 1). The pointer the allocation returned is used instead,
+as gcc already did for Java constructors.
 
 ### Frontend patches (gcc 2.96 behaviour the decomp relies on)
 

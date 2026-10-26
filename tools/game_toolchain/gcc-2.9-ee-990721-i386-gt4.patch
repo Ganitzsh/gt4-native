@@ -174,7 +174,22 @@ diff --git a/gcc/calls.c b/gcc/calls.c
        /* We want to emit ay pending stack adjustments before the tail
  	 recursion "call".  That way we know any adjustment after the tail
  	 recursion call can be ignored if we indeed use the tail recursion
-@@ -2049,7 +2065,13 @@
+@@ -2020,8 +2036,12 @@
+ 
+       if (pass == 0)
+ 	{
+-	  /* Various reasons we can not use a sibling call.  */
+-	  if (! optimize
++	  /* Various reasons we can not use a sibling call.  gt4: never; the second expansion of the
++	     arguments (UNSAVE_EXPR) re-evaluated saved expressions (a new-expression allocated
++	     twice) and reused freed temporaries (of two objects passed by invisible reference,
++	     both were the second); sibling calls also store into the caller's incoming argument
++	     area (GT4_CALL_PAD).  */
++	  if (1 || ! optimize
+ #ifdef HAVE_sibcall_epilogue
+ 	      || ! HAVE_sibcall_epilogue
+ #else
+@@ -2049,7 +2069,13 @@
  	     multiple times we need to wrap them in an UNSAVE_EXPR to prevent
  	     caching of info from multiple expansions.  */
  	  for (p = actparms; p; p = TREE_CHAIN (p))
@@ -189,7 +204,7 @@ diff --git a/gcc/calls.c b/gcc/calls.c
  	      break;
  
  	  /* If P is nonzero, then some argument was not safe for unsave,
-@@ -2223,11 +2245,27 @@
+@@ -2223,11 +2249,27 @@
        precompute_arguments (is_const, must_preallocate, num_actuals,
  			    args, &args_size);
  
@@ -217,7 +232,7 @@ diff --git a/gcc/calls.c b/gcc/calls.c
        /* If we have no actual push instructions, or shouldn't use them,
  	 make space for all args right now.  */
  
-@@ -2516,6 +2554,7 @@
+@@ -2516,6 +2558,7 @@
  	 now!  */
  
        /* Generate the actual call instruction.  */
@@ -517,6 +532,35 @@ index 7e551e4..1f39b01 100644
  		     || flag_keep_inline_functions)
  	      {
  		if (DECL_NOT_REALLY_EXTERN (decl))
+diff --git a/gcc/cp/init.c b/gcc/cp/init.c
+--- a/gcc/cp/init.c
++++ b/gcc/cp/init.c
+@@ -2361,8 +2361,10 @@
+ 	      flags |= LOOKUP_HAS_IN_CHARGE;
+ 	    }
+ 
+-	  if (use_java_new)
+-	    rval = save_expr (rval);
++	  /* gt4: the object pointer is the value of the expression, as for Java constructors
++	     below: the decomp defines many constructors as plain functions (asm labels), which
++	     return nothing natively (on the EE they left this in $v0).  */
++	  rval = save_expr (rval);
+ 	  newrval = rval;
+ 
+ 	  if (newrval && TREE_CODE (TREE_TYPE (newrval)) == POINTER_TYPE)
+@@ -2374,10 +2376,8 @@
+ 	  if (newrval == NULL_TREE || newrval == error_mark_node)
+ 	    return error_mark_node;
+ 
+-	  /* Java constructors compiled by jc1 do not return this. */
+-	  if (use_java_new)
+-	    newrval = build (COMPOUND_EXPR, TREE_TYPE (newrval),
+-			     newrval, rval);
++	  /* Java constructors compiled by jc1 do not return this (gt4: nor do the decomp's). */
++	  newrval = build (COMPOUND_EXPR, TREE_TYPE (rval), newrval, rval);
+ 	  rval = newrval;
+ 	  TREE_HAS_CONSTRUCTOR (rval) = 1;
+ 	}
 diff --git a/gcc/cp/lang-options.h b/gcc/cp/lang-options.h
 index 2ae409b..2ffc916 100644
 --- a/gcc/cp/lang-options.h

@@ -30,7 +30,7 @@ void func_0057D8A0(float*,float*,float);
 void func_003D03E0(char *arg0, char *arg1, f32 fparg0) {
     float sp0;
     float sp4;
-    float bounds[4]; float world[2]; Vec2 local; Vec2 delta; float circle[3];
+    float bounds[8]; /* 003D34A8 clears 4 pairs (8 floats) */ float world[2]; Vec2 local; Vec2 delta; float circle[3];
     int inner, yoff, coff; char *carbase; int *stateptr;
     f32 temp_f0;
     f32 temp_f0_2;

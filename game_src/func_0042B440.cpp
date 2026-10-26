@@ -206,9 +206,9 @@ extern "C" int func_0042B440(Motion *m, int ia, float sa, int ib, float sb, floa
   int op=pr->byte();
   switch(op) {
    case 0: break;
-   case 1: more=0; { Entry *e=t->vt+2; ((void (*)(void *))e->fn)((char *)t+e->delta); } break;
-   case 2: { Entry *e=t->vt+3; ((void (*)(void *))e->fn)((char *)t+e->delta); } break;
-   case 3: { Entry *e=t->vt+4; ((void (*)(void *))e->fn)((char *)t+e->delta); } break;
+   case 1: more=0; { Entry *e=t->vt+2; ((void (*)(void *, Frame *))e->fn)((char *)t+e->delta, a); } break;
+   case 2: { Entry *e=t->vt+3; ((void (*)(void *, Frame *))e->fn)((char *)t+e->delta, a); } break;
+   case 3: { Entry *e=t->vt+4; ((void (*)(void *, Frame *))e->fn)((char *)t+e->delta, a); } break;
    case 4: { char *name=pr->str(); { Entry *e=t->vt+1; ((void (*)(void *, char *))e->fn)((char *)t+e->delta, name); } break; }
    default: if(!command(op,pr,t,first,b,scale,sb,blend,interpolate)) return 0;
   }
@@ -216,4 +216,6 @@ extern "C" int func_0042B440(Motion *m, int ia, float sa, int ib, float sb, floa
  } while(more);
  return 1;
 }
+/* The no-argument calls of ops 1-3 (target vtable slots 2-4) pass &frames[ia]: the EE leaves it in $a1
+ * there, and some targets read a second argument (0042A660 searches a model by that name). */
 /* native correction of src/race/unit_004271E8/func_0042B440.cpp (gt4-decomp tools/argcheck.py fix --kind classes --native): classes func_0042B288; classes func_0042D688 */
