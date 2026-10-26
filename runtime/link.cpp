@@ -8,6 +8,7 @@
 #include <windows.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <vector>
@@ -99,7 +100,19 @@ bool link_open(const char *name) {
     return true;
 }
 
+// GT4_CAPTURE_FROM=VBLANK, GT4_CAPTURE_FRAMES=N: write only the records of those VBlanks (the GS
+// back end replays from there: gs.cpp resends the privileged registers when the window opens).
+uint32_t g_capture_from = 0, g_capture_frames = 0;
+
+bool link_capture_window() {
+    if (!g_capture) return false;
+    const uint32_t v = kernel_vblank_count();
+    return v >= g_capture_from && (!g_capture_frames || v - g_capture_from < g_capture_frames);
+}
+
 bool link_capture(const char *path) {
+    if (const char *e = std::getenv("GT4_CAPTURE_FROM")) g_capture_from = static_cast<uint32_t>(std::strtoul(e, nullptr, 0));
+    if (const char *e = std::getenv("GT4_CAPTURE_FRAMES")) g_capture_frames = static_cast<uint32_t>(std::strtoul(e, nullptr, 0));
     g_capture = fopen(path, "wb");
     if (!g_capture) log_error("link: cannot write the capture %s", path);
     else log_info("link: capturing the graphics stream to %s", path);
@@ -115,7 +128,7 @@ void link_send(uint32_t type, const void *payload, uint32_t size, const void *ex
     Gt4LinkRecord rec{type, size + extra_size, ++g_seq};
     const uint32_t total = static_cast<uint32_t>((sizeof rec + size + extra_size + 15) & ~15u);
     static const uint8_t zeros[16] = {};
-    if (g_capture) {
+    if (g_capture && link_capture_window()) {
         fwrite(&rec, sizeof rec, 1, g_capture);
         if (size) fwrite(payload, 1, size, g_capture);
         if (extra_size) fwrite(extra, 1, extra_size, g_capture);

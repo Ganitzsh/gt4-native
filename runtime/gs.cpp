@@ -187,6 +187,11 @@ void on_vblank(uint32_t count) {
     csr = (csr & ~(1u << 13)) | (g_field << 13);
     audio_vblank();
     if (!link_active()) return;
+    static bool capturing = false;
+    if (link_capture_window() != capturing) {  // a capture window opens: resend every register
+        capturing = !capturing;
+        std::memset(g_priv_valid, 0, sizeof g_priv_valid);
+    }
     for (uint32_t i = 0; i < 15; ++i) {  // PMODE .. BGCOLOR
         const uint64_t v = guest_ref<uint64_t>(kGsPriv + i * 0x10);
         if (g_priv_valid[i] && v == g_priv_sent[i]) continue;
