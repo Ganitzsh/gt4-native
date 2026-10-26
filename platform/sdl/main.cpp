@@ -53,6 +53,7 @@ const char* kUsage =
     "  --preset NAME        shorthand for --set graphics.preset=NAME\n"
     "  --settings PATH      settings file to read (interactive runs also save to it)\n"
     "  --capture PATH       write the last frame to PATH (PPM) before exiting (with --frames)\n"
+    "  --capture-every N    also write every Nth frame, numbered (PATH_000600.ppm)\n"
     "  --session-dir PATH   attach a virtual gamepad, process commands, record frames/audio/events\n"
     "  --no-audio           disable playback and WAV capture for a session\n"
     "  --fixed-step         advance exactly one 60 Hz tick per frame (default for headless and sessions)\n"
@@ -78,6 +79,7 @@ struct Options {
     std::string game, replay;
     std::vector<std::string> gameArgs;
     uint32_t frames = 0;
+    uint32_t captureEvery = 0;  // --capture-every: also every N frames, numbered
     VkExtent2D size{0, 0};   // headless output; 0 = the window size setting
     std::string gpu, settingsPath, sessionDirectory, capture;
     std::vector<std::pair<std::string, std::string>> sets;
@@ -129,6 +131,9 @@ Options parse(int argc, char** argv) {
         else if (a == "--settings") o.settingsPath = value(i);
         else if (a == "--session-dir") o.sessionDirectory = value(i);
         else if (a == "--capture") o.capture = value(i);
+        else if (a == "--capture-every") {
+            if (!parseUnsigned(value(i), o.captureEvery) || o.captureEvery == 0) throw std::invalid_argument("--capture-every requires a positive integer");
+        }
         else if (a == "--game") o.game = value(i);
         else if (a == "--game-args") o.gameArgs = splitArguments(value(i));
         else if (a == "--replay") o.replay = value(i);
@@ -700,6 +705,13 @@ int run(const Options& options) {
         }
         renderer->scene().setInterpolation(alpha);
         if (!options.capture.empty() && frames + 1 == options.frames) renderer->capture(options.capture);
+        else if (!options.capture.empty() && options.captureEvery && (frames + 1) % options.captureEvery == 0) {
+            const auto dot = options.capture.find_last_of('.');
+            char number[16];
+            std::snprintf(number, sizeof number, "_%06u", frames + 1);
+            renderer->capture(dot == std::string::npos ? options.capture + number
+                                                       : options.capture.substr(0, dot) + number + options.capture.substr(dot));
+        }
 
         const Uint64 frameStarted = SDL_GetPerformanceCounter();
         bool presented = false;
