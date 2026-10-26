@@ -15,4 +15,8 @@ extern RuntimeConfig g_config;
 // Starts the host services (kernel emulation of threads/semaphores is NOT done here: see kernel.cpp).
 void services_init();
 
+// Reads n bytes of the disc image at a byte offset (absolute: the image is linear, layer 1 follows
+// layer 0); the bytes past the end of the image read as zeros. Returns false if nothing was read.
+bool disc_read(uint64_t offset, void *dst, uint32_t n);
+
 }  // namespace gt4::rt

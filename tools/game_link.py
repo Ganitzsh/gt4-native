@@ -28,6 +28,9 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# FFmpeg (static, i686) for movies (runtime/native/movie.cpp): tools/build_ffmpeg.sh builds it here
+FFMPEG = os.environ.get("GT4_FFMPEG", os.path.join(ROOT, "build", "ffmpeg-i686"))
+FFMPEG_LIBS = ["avformat", "avcodec", "swscale", "swresample", "avutil"]
 MINGW = os.environ.get("GT4_MINGW32", r"C:\msys64\mingw32\bin")
 ADDR_NAME = re.compile(r"^_(?:func|D|jtbl|lbl|jumptable|L)_([0-9A-Fa-f]{8})$")
 
@@ -63,8 +66,10 @@ def compile_runtime(out):
     for src, name in files:
         obj = os.path.join(objdir, os.path.splitext(name)[0] + (".s.o" if name.endswith(".s") else ".o"))
         if name.endswith(".cpp"):
-            cmd = [tool("g++"), "-c", "-std=c++20", "-O2", "-g", "-msse2", "-mfpmath=sse", "-Wall", "-Wextra",
-                   "-I", rt, "-I", os.path.join(ROOT, "include"), src, "-o", obj]
+            # -mstackrealign: game code (gcc 2.9) calls into the runtime with a 4-byte aligned stack
+            cmd = [tool("g++"), "-c", "-std=c++20", "-O2", "-g", "-msse2", "-mfpmath=sse", "-mstackrealign", "-Wall",
+                   "-Wextra", "-I", rt, "-I", os.path.join(ROOT, "include"), "-I", os.path.join(FFMPEG, "include"),
+                   src, "-o", obj]
         elif name.endswith(".c"):
             cmd = [tool("gcc"), "-c", "-std=gnu11", "-O2", "-g", "-msse2", "-mfpmath=sse", "-Wall", "-I", rt,
                    "-I", os.path.join(ROOT, "include"), src, "-o", obj]
@@ -578,7 +583,8 @@ def main():
     cmd = [tool("g++"), "-o", exe, "@" + rsp,
            "-Wl,-T," + script, "-Wl,--image-base=0x10000", "-Wl,--disable-dynamicbase",
            "-Wl,--section-alignment=0x1000", "-Wl,--large-address-aware", "-Wl,--stack,0x400000",
-           "-static", "-static-libgcc", "-static-libstdc++", "-Wl,-Map," + os.path.join(a.out, "gt4_game.map")]
+           "-static", "-static-libgcc", "-static-libstdc++", "-Wl,-Map," + os.path.join(a.out, "gt4_game.map"),
+           "-L" + os.path.join(FFMPEG, "lib")] + ["-l" + n for n in FFMPEG_LIBS] + ["-lbcrypt"]
     run(cmd, env=mingw_env())
     with open(os.path.join(a.out, "LINK_REPORT.txt"), "w") as f:
         f.write(f"game objects: {len(game_objs)} ({len(dropped)} left out for runtime replacements)\n")

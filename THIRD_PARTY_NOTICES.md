@@ -45,3 +45,9 @@ fetched by CMake at pinned commits (`cmake/HostDependencies.cmake`) and are not 
 | Vulkan-Headers | fetched, headers only | Apache-2.0 OR MIT | Vulkan API declarations. |
 | volk | fetched, compiled into gt4_host | MIT | Vulkan function loader. |
 | glslang | fetched, build tool only (nothing linked) | BSD-3-Clause and others (its LICENSE.txt) | Compiles the GLSL shaders to SPIR-V during the build. |
+
+## FFmpeg
+
+The native game links a static FFmpeg (LGPL-2.1+, https://ffmpeg.org) for its movies, built by
+`tools/build_ffmpeg.sh` with only the MPEG-2 video decoder, the MPEG-PS demuxer, PCM/PS2 ADPCM,
+swscale and swresample. Its source is the release tarball that script downloads.

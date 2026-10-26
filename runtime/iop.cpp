@@ -607,6 +607,8 @@ extern "C" int gt4_replace_iWakeupThread(int id) { return gt4_sys_WakeupThread(i
 
 namespace gt4::rt {
 
+bool disc_read(uint64_t offset, void *dst, uint32_t n) { return iso_read(offset, dst, n); }
+
 void iop_init() {
     pad_neutral();
     const char *iso = g_config.iso_path;
