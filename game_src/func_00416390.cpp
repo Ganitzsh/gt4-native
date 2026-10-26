@@ -23,7 +23,7 @@ extern "C" void func_00416040(Obj *, V *, V *, Angle, S *) throw();
 extern "C" int func_00415AF8(V *, S *, float, float) throw();
 extern "C" V func_00415148(S *, const Angle &, float, float) throw();
 extern "C" V func_004150A0(S *, int, float, float) throw();
-extern "C" void func_00423BF8(V *, const V *, const V *, float, int);
+extern "C" void func_00423BF8(V *, const V *, const V *, const V *, float); /* (out, a, b, fallback, t) as its draft defines it */
 extern V D_00622B10;
 static inline int limit(int mode, const Angle &v) {
     if (mode == 0) {
@@ -74,7 +74,7 @@ extern "C" int func_00416390(Obj *o, float *pa, float *pb, S *path, float t, flo
         if (w <= 0.2f) {
             float k = w * 5.0f;
             V v = func_00415148(path, Angle(0.0f), 0.0f, 1.0f);
-            func_00423BF8(&o->c, &v, &D_00622B10, k, 0);
+            func_00423BF8(&o->c, &v, &D_00622B10, 0, k);
             o->e = 1.0f - k;
             o->f = k * o->scale;
         } else if (w <= 0.8f) {
@@ -85,7 +85,7 @@ extern "C" int func_00416390(Obj *o, float *pa, float *pb, S *path, float t, flo
             float k = (w - 0.8f) * 5.0f;
             V v = func_00415148(path, Angle(0.0f), 0.0f, 1.0f);
             float r = 1.0f - k;
-            func_00423BF8(&o->c, &D_00622B10, &v, k, 0);
+            func_00423BF8(&o->c, &D_00622B10, &v, 0, k);
             o->e = k;
             o->f = r * o->scale;
         }

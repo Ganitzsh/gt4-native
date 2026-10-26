@@ -3,13 +3,15 @@
 // as returning double, but the soft-float helper returns the double's bits as a 64-bit integer
 // (edx:eax natively, as gt4-native implements it), so the double read from st(0) was garbage.
 // Declared as returning the bits here and converted back to double through a union (bit-exact).
+// Argument order (argcheck.py orders): func_00375F58 takes its float fifth and func_00376238 last, as
+// their matched sources define them; the draft's orders are the same EE calls, not the same native ones.
 typedef unsigned long u64;
 typedef float f32;
 #define F(p,t,o) (*(t *)((char *)(p)+(o)))
 template<class T> struct VE { short delta,index; T fn; };
 extern "C" int func_0035C7C0(void *);
-extern "C" int func_00375F58(void *,int,void *,void *,int,float,void *,int) throw();
-extern "C" int func_00376238(void *,int,void *,void *,float,void *) throw();
+extern "C" int func_00375F58(void *,int,void *,void *,float,int,void *,int) throw();
+extern "C" int func_00376238(void *,int,void *,void *,void *,float) throw();
 extern "C" int func_003765F0(float *,float) throw();
 extern "C" int func_003FD620(void *,int,void *,int,int *);
 extern "C" float func_00400BA0(void *);
@@ -71,7 +73,7 @@ extern "C" int func_00376638(char *self,int idx,void *obj,char *s,int arg4) {
  for(;;) {
   switch(choice) {
   case -1: goto done;
-  case 0: func_00376238(self,idx,obj,s,time,rng); goto done;
+  case 0: func_00376238(self,idx,obj,s,rng,time); goto done;
   case 1: { char *p=F(rec,char *,0x170); init(p,x,s,0,time); F(self+idx*0x19C,char *,0x13C)=p; goto done; }
   case 2: { char *p=F(rec,char *,0x170); init(p,x,s,1,time); F(self+idx*0x19C,char *,0x13C)=p; goto done; }
   case 3: { char *p=F(rec,char *,0x170); init(p,x,s,2,time); F(self+idx*0x19C,char *,0x13C)=p; goto done; }
@@ -90,7 +92,7 @@ extern "C" int func_00376638(char *self,int idx,void *obj,char *s,int arg4) {
    if(F(p,int,0x18C)==0) goto retry;
    goto done;
   }
-  case 8: default: if(func_00375F58(self,idx,obj,s,arg4,time,rng,0)) goto done; break;
+  case 8: default: if(func_00375F58(self,idx,obj,s,time,arg4,rng,0)) goto done; break;
   }
 retry:
   choice=func_003765F0(D_00621108,func_00578598(rng));

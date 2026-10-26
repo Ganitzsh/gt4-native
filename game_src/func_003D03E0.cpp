@@ -1,5 +1,5 @@
 /* compiler: ee-gcc2.96-no-strict-aliasing */
-/* Native correction of the provisional draft drafts/003d03e0/003d03e0_1ba9466589197a0d.cpp (argument order, argcheck.py orders): func_0057D8A0 (sincos) takes (float *sine, float *cosine, float x); the draft declared the float first, which on the EE is the same call ($f12, $a0, $a1) but natively put x in the pointers' stack slots. */
+/* Native correction of the provisional draft drafts/003d03e0/003d03e0_1ba9466589197a0d.cpp (argument order, argcheck.py orders): func_0057D8A0 (sincos) takes (float *sine, float *cosine, float x); the draft declared the float first, which on the EE is the same call ($f12, $a0, $a1) but natively put x in the pointers' stack slots. Likewise Pitmen__update (003CFA98) takes (self, team, cars, float dt), as its draft defines it. */
 typedef int s32; typedef float f32; typedef char s8;
 #define M2C_FIELD(p,t,o) (*(t)((char *)(p)+(o)))
 struct Vec2 { float v[2]; operator float *() { return v; } float &operator[](int i) { return v[i]; } void add(const Vec2 &b) { v[0] += b.v[0]; v[1] += b.v[1]; } void subtract(const Vec2 &b) { v[0] -= b.v[0]; v[1] -= b.v[1]; } };
@@ -21,7 +21,7 @@ int func_003C9F38(int) throw(); void func_003CAFE0(char*) throw();
 int func_003CC7B0(char*) throw(); int func_003CC958(int) throw() __attribute__((const));
 void func_003CD430(char*,int,char*) throw();
 void func_003CF570(char*,char*,float) throw();
-void func_003CFA98(char*,int,float,char*) throw();
+void func_003CFA98(char*,int,char*,float) throw();
 void func_003D0D88(char*,int,char*); void func_003D3040(char*,int);
 void func_003D3490(float*); void func_003D34A8(float*);
 int func_003D34D8(float*,float*);
@@ -161,7 +161,7 @@ void func_003D03E0(char *arg0, char *arg1, f32 fparg0) {
         if (temp_s7 > 0) {
             do {
                 func_003D0D88(arg0, var_s3, arg1);
-                func_003CFA98(arg0, var_s3++, fparg0, arg1);
+                func_003CFA98(arg0, var_s3++, arg1, fparg0);
                 var_a2 = arg1;
             } while (var_s3 < temp_s7);
         }
