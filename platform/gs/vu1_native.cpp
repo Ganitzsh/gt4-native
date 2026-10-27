@@ -288,12 +288,18 @@ bool homogeneousCulled(const VuVec p[3], const VuVec& guard, bool variantB) {
 }
 
 // The polygon clipper (0x2FE0..0x3D48): Sutherland-Hodgman against the guard band's six planes, on a ring
-// of vertex records (the VU keeps them as a linked list at qwords 928..1023), then one strip packet.
+// of vertex records, then one strip packet. The records live where the VU keeps them, because the strip
+// packet can overrun them: five qwords each (position, ST + flags, colour, plus + next link, minus + previous
+// link), the triangle's at 933, 938 and 943, new ones from 948, a dummy at 928 (931 .w: the first record,
+// 932 .w: the last). The packet goes to 903 or 878, and from 903 a polygon of nine vertices or more runs into
+// 928..: the emit loop then reads what it wrote, which the code below reproduces by reading and writing VU
+// memory in the program's order.
 struct ClipVertex {
     VuVec pos;           // clip space
     VuVec st, colour;    // ST (x, y used), colour as floats
     VuVec plus, minus;   // the guard-scaled point g plus and minus g.w: the signed distances to the planes
     uint32_t flags = 0;  // CLIP of g against g.w
+    uint16_t address = 0;
 };
 
 ClipVertex clipVertex(const VuVec& pos, const VuVec& g, const VuVec& st, const VuVec& colour) {
@@ -309,11 +315,35 @@ ClipVertex clipVertex(const VuVec& pos, const VuVec& g, const VuVec& st, const V
     return r;
 }
 
-// Clips the triangle (records a, b, c) and writes its strip packet; kicks the packet before it (`pending`:
-// the batch's state packet before the first clipped polygon, then the previous polygon). The packets
-// alternate between qwords 903 and 878 (qword 870 .y holds 25 or 0).
-void clipPolygon(Batch& b, const ClipVertex triangle[3], uint32_t& pending, const VuVec& tag, const VuVec& adc, const Constants& c) {
+void setWord(Batch& absolute, uint32_t q, int lane, uint32_t value) { std::memcpy(absolute.qword(q) + lane * 4, &value, 4); }
+
+// A record as the VU stores it (its flags word holds 12 bits of CLIP history there; only the low 6 matter).
+void storeRecord(Batch& absolute, const ClipVertex& v) {
+    absolute.store(v.address, v.pos);
+    storeLanes(absolute, v.address + 1u, v.st, kXy);
+    setWord(absolute, v.address + 1u, 3, v.flags);
+    absolute.store(v.address + 2u, v.colour);
+    storeLanes(absolute, v.address + 3u, v.plus, kXyz);
+    storeLanes(absolute, v.address + 4u, v.minus, kXyz);
+}
+
+// Clips the triangle and writes its strip packet; kicks the packet before it (`pending`: the batch's state
+// packet before the first clipped polygon, then the previous polygon). False: the record allocator (never
+// reset within the call) would run past qword 1023 and wrap into the batch; the caller leaves such a batch
+// to the interpreter.
+bool clipPolygon(Batch& b, ClipVertex triangle[3], uint32_t& pending, const VuVec& tag, const VuVec& adc, const Constants& c) {
+    Batch m{b.vu, 0};
+    static const uint16_t initial[3] = {933, 938, 943};
+    for (int k = 0; k < 3; ++k) {
+        triangle[k].address = initial[k];
+        storeRecord(m, triangle[k]);
+    }
+    setWord(m, 931, 3, 933);
+    setWord(m, 946, 3, 933);
+    setWord(m, 936, 3, 938);
+    setWord(m, 941, 3, 943);
     std::vector<ClipVertex> ring(triangle, triangle + 3), next;
+    uint16_t allocated = 948;
     // Plane bit, which record (plus: the -w side, minus: the +w side) and lane, in the program's order.
     static const struct { uint32_t mask; bool plus; int lane; } planes[6] = {{32, true, 2}, {16, false, 2}, {8, true, 1}, {4, false, 1}, {2, true, 0}, {1, false, 0}};
     const VuVec guard = b.reg(23);
@@ -322,14 +352,19 @@ void clipPolygon(Batch& b, const ClipVertex triangle[3], uint32_t& pending, cons
         if (!(any & plane.mask)) continue;
         next.clear();
         any = 0;
+        uint16_t previous = 928;
+        auto push = [&](const ClipVertex& v) {
+            setWord(m, previous + 3u, 3, v.address);   // previous.next
+            setWord(m, v.address + 4u, 3, previous);   // v.previous
+            previous = v.address;
+            next.push_back(v);
+            any |= v.flags;
+        };
         for (size_t k = 0; k < ring.size(); ++k) {
-            const ClipVertex& a = ring[k];
+            const ClipVertex a = ring[k];
             const ClipVertex& e = ring[(k + 1) % ring.size()];
             const bool aOut = (a.flags & plane.mask) != 0, eOut = (e.flags & plane.mask) != 0;
-            if (!aOut) {
-                next.push_back(a);
-                any |= a.flags;
-            }
+            if (!aOut) push(a);
             if (aOut == eOut) continue;
             // The intersection: (e * dA - a * dE) / (dA - dE), with dA, dE the distances on this plane.
             const VuF da = (plane.plus ? a.plus : a.minus)[plane.lane], de = (plane.plus ? e.plus : e.minus)[plane.lane];
@@ -340,46 +375,85 @@ void clipPolygon(Batch& b, const ClipVertex triangle[3], uint32_t& pending, cons
                 st[i] = e.st[i] * da - a.st[i] * de;
                 colour[i] = e.colour[i] * da - a.colour[i] * de;
             }
-            const VuVec g = (pos * guard) * q;
-            next.push_back(clipVertex(pos * q, g, st * q, colour * q));
-            any |= next.back().flags;
+            if (allocated + 5u > 1024u) return false;
+            ClipVertex v = clipVertex(pos * q, (pos * guard) * q, st * q, colour * q);
+            v.address = allocated;
+            allocated = static_cast<uint16_t>(allocated + 5);
+            storeRecord(m, v);
+            push(v);
         }
+        setWord(m, 932, 3, previous);   // in the branch's delay slot: written even when the polygon vanished
         ring.swap(next);
-        if (ring.size() < 3) return;   // nothing left
+        if (ring.size() < 3) return true;   // nothing left
+        setWord(m, previous + 3u, 3, ring.front().address);
     }
+    // The strip, from both ends of the ring: first, last, second, second to last, ... (reads and writes in
+    // the program's order: the packet can overrun the records it reads).
     if (pending) b.vu.kick(pending);
-    Batch absolute{b.vu, 0};
-    uint32_t slot;
-    std::memcpy(&slot, absolute.qword(870) + 4, 4);
-    slot = (25u - slot) & 0xFFFF;
-    std::memcpy(absolute.qword(870) + 4, &slot, 4);
-    const uint32_t packet = (slot + 878) & 0xFFFF;
-    pending = packet;
-    // The tag: the batch's, with NLOOP = the vertex count and EOP.
-    uint32_t q = packet;
-    VuVec header = tag;
-    header.x.u = static_cast<uint32_t>(ring.size()) | 0x8000u;
-    absolute.store(q++, header);
-    // A strip from the two ends of the ring: first, last, second, second to last, ...
+    uint16_t left = m.word(931, 3);
+    const uint16_t slot = static_cast<uint16_t>(25 - m.word(870, 1));
+    VuVec leftPos = m.load(left);
+    setWord(m, 870, 1, slot);
+    uint16_t right = m.word(932, 3);
+    VuVec leftSt = {VuF{}, VuF{}, (VuF{} - VuF{}) + kVuOne, kVuOne - kVuOne};
+    VuVec rightSt = leftSt;
+    auto loadSt = [&](VuVec& st, uint16_t record) {
+        const VuVec v = m.load(record + 1u);
+        st.x = v.x;
+        st.y = v.y;
+    };
+    loadSt(leftSt, left);
+    VuVec leftColour = m.load(left + 2u);
+    const uint16_t packet = static_cast<uint16_t>(slot + 878);
+    VuVec rightPos = m.load(right);
+    uint32_t out = packet;
+    setWord(m, out, 0, static_cast<uint16_t>(ring.size() | 0x8000u));
+    storeLanes(m, out++, tag, 0xE);
     const VuF half = VuF::bits(0x3F000000u);
-    size_t left = 0, right = ring.size() - 1;
-    bool fromLeft = true, first = true;
-    for (size_t emitted = 0; emitted < ring.size(); ++emitted) {
-        const ClipVertex& v = ring[fromLeft ? left : right];
-        const VuF w = vdiv(kVuOne, v.pos.w);
-        const VuVec st = {v.st.x * w, v.st.y * w, ((VuF{} - VuF{}) + kVuOne) * w, (kVuOne - kVuOne) * w};
-        absolute.store(q++, st);
-        storeIntegers(absolute, q++, {v.colour.x + half, v.colour.y + half, v.colour.z + half, v.colour.w + half});
-        const VuVec s = vmin(v.pos, c.clamp) * w;
-        const VuVec& base = first ? adc : c.offset;
-        VuVec xyzf;
-        for (int i = 0; i < 4; ++i) xyzf[i] = base[i] * kVuOne + s[i] * c.scale[i];
-        storeFixed4(absolute, q++, xyzf);
-        if (fromLeft) ++left;
-        else --right;
-        fromLeft = !fromLeft;
+    // One output qword of a vertex: 0 ST times q, 1 the colour rounded, 2 XYZF2.
+    auto emit = [&](const VuVec& pos, const VuVec& st, const VuVec& colour, bool adcBase, int part) {
+        const VuF w = vdiv(kVuOne, pos.w);
+        if (part == 0) {
+            m.store(out++, st * w);
+        } else if (part == 1) {
+            storeIntegers(m, out++, {colour.x + half, colour.y + half, colour.z + half, colour.w + half});
+        } else {
+            const VuVec s = vmin(pos, c.clamp) * w;
+            const VuVec& base = adcBase ? adc : c.offset;
+            VuVec xyzf;
+            for (int i = 0; i < 4; ++i) xyzf[i] = base[i] * kVuOne + s[i] * c.scale[i];
+            storeFixed4(m, out++, xyzf);
+        }
+    };
+    bool first = true;
+    for (;;) {
+        const uint16_t emitted = right;
+        const uint16_t leftNext = m.word(left + 3u, 3);
+        loadSt(rightSt, emitted);
+        const VuVec rightColour = m.load(emitted + 2u);
+        emit(leftPos, leftSt, leftColour, first, 0);
+        const VuVec leftNextPos = m.load(leftNext);
+        emit(leftPos, leftSt, leftColour, first, 1);
+        bool done = left == emitted;
+        emit(leftPos, leftSt, leftColour, first, 2);
         first = false;
+        if (done) break;
+        left = leftNext;
+        leftPos = leftNextPos;
+        const uint16_t rightPrevious = m.word(emitted + 4u, 3);
+        loadSt(leftSt, left);
+        leftColour = m.load(left + 2u);
+        emit(rightPos, rightSt, rightColour, false, 0);
+        const VuVec rightPreviousPos = m.load(rightPrevious);
+        emit(rightPos, rightSt, rightColour, false, 1);
+        done = left == emitted;
+        emit(rightPos, rightSt, rightColour, false, 2);
+        if (done) break;
+        right = rightPrevious;
+        rightPos = rightPreviousPos;
     }
+    pending = packet;
+    return true;
 }
 
 // `pending`: the packet the next XGKICK sends (the state packet, then the last clipped polygon).
@@ -438,7 +512,7 @@ bool clippedRenderer(Batch& b, Clipped kind, uint32_t& pending) {
                             triangle[t] = clipVertex(p[t], p[t] * guard, b.load(kSt + v - 2 + t),
                                                      {itof0(colour.w[0]), itof0(colour.w[1]), itof0(colour.w[2]), itof0(colour.w[3])});
                         }
-                        clipPolygon(b, triangle, pending, b.load(kTag), adc, c);
+                        if (!clipPolygon(b, triangle, pending, b.load(kTag), adc, c)) return false;
                     }
                     hidden = true;
                 }
@@ -616,6 +690,79 @@ void reflectiveLighting(Batch& b) {
     }
 }
 
+// 0x0CA8: as 0x0EA0, with the reflection normalised before the dot product and a lower power:
+// s = max(L . (r * rsqrt(v.v)), 0)^8.
+void specularNormalisedLighting(Batch& b) {
+    const VuVec eye = b.load(204), coefficient = b.load(205);
+    const VuF lx = b.load(201).x, ly = b.load(202).x, lz = b.load(203).x;
+    for (uint32_t k = 0, n = vertexCount(b); k < n; ++k) {
+        const VuVec position = b.load(kPositions + k), normal = b.load(kColors + k);
+        const VuF vx = position.x - eye.x, vy = position.y - eye.y, vz = position.z - eye.z;
+        const VuF tx = vx * normal.x, ty = vy * normal.y, tz = vz * normal.z;
+        const VuF twoX = tx + tx, twoY = ty + ty, twoZ = tz + tz;
+        const VuF inverseLength{vufp::rsqrt(kVuOne.u, (((vx * vx) + (vy * vy)) + (vz * vz)).u).value};
+        const VuF rx = (((vx * kVuOne - normal.x * twoX) - normal.x * twoY) - normal.x * twoZ) * inverseLength;
+        const VuF ry = (((vy * kVuOne - normal.y * twoX) - normal.y * twoY) - normal.y * twoZ) * inverseLength;
+        const VuF rz = (((vz * kVuOne - normal.z * twoX) - normal.z * twoY) - normal.z * twoZ) * inverseLength;
+        const VuF s = power(vmax(((lx * rx) + (ly * ry)) + (lz * rz), VuF{}), 3);
+        storeIntegers(b, kColors + k, {coefficient.x * s, coefficient.y * s, coefficient.z * s, kVuOne + VuF::bits(0x42FE0000u)});
+    }
+}
+
+// 0x12C8: an environment map by quadrant (normals in the ST slot). The colour is 0x10A8's; the reflection
+// r (v - n d - n d, rotated by qwords 201..203) picks a quadrant by the signs of r.x - r.z and r.x + r.z (the
+// program reads them as MAC flags), u = quadrant (0, 2, 4, 6) + a / b with (a, b) = (r.z, r.x) or (-r.x, r.z),
+// v = t^3 + 2t with t = r.y / |v|; ST = (202.w + 201.w u, 204.w + 203.w v).
+void quadrantMapLighting(Batch& b) {
+    const VuVec eye = b.load(204), base = b.load(205), rim = b.load(206);
+    const VuVec m[3] = {b.load(201), b.load(202), b.load(203)};
+    const VuF uScale = VuF{} + m[0].w, uOffset = VuF{} + m[1].w, vScale = VuF{} + m[2].w, vOffset = VuF{} + eye.w;
+    for (uint32_t k = 0, n = vertexCount(b); k < n; ++k) {
+        const VuVec position = b.load(kPositions + k), normal = b.load(kSt + k);
+        const VuF vx = position.x - eye.x, vy = position.y - eye.y, vz = position.z - eye.z;
+        const VuF d = ((vx * normal.x) + (vy * normal.y)) + (vz * normal.z);
+        const VuF e{vufp::efu_length(vx.u, vy.u, vz.u, 3)};
+        const Words given = loadWords(b, kColors + k);
+        const VuF t0 = vmin(d, VuF{}) * e;
+        VuVec colour;
+        for (int i = 0; i < 4; ++i) colour[i] = itof0(given.w[i]) * (base[i] * kVuOne + rim[i] * t0);
+        storeIntegers(b, kColors + k, colour);
+        const VuF ox = normal.x * d, oy = normal.y * d, oz = normal.z * d;
+        const VuF rx = (vx * kVuOne - ox) - ox, ry = (vy * kVuOne - oy) - oy, rz = (vz * kVuOne - oz) - oz;
+        const VuF sx = (m[0].x * rx + m[1].x * ry) + m[2].x * rz;
+        const VuF sy = (m[0].y * rx + m[1].y * ry) + m[2].y * rz;
+        const VuF sz = (m[0].z * rx + m[1].z * ry) + m[2].z * rz;
+        const bool a = ((sx - sz).u & 0x80000000u) != 0, c = ((sx + sz).u & 0x80000000u) != 0;
+        VuF numerator, denominator;
+        uint32_t quadrant;
+        if (a == c) {
+            numerator = VuF{} + sz;
+            denominator = VuF{} + sx;
+            quadrant = a ? 0x40800000u : 0;   // 4 or 0
+        } else {
+            numerator = VuF{} - sx;
+            denominator = VuF{} + sz;
+            quadrant = a ? 0x40000000u : 0x40C00000u;   // 2 or 6
+        }
+        const VuF u = (VuF{} + VuF::bits(quadrant)) + vdiv(numerator, denominator);
+        const VuF t = e * sy;
+        const VuF v = ((t * t) * t) + (t + t);
+        storeLanes(b, kSt + k, {uOffset * kVuOne + uScale * u, vOffset * kVuOne + vScale * v, VuF{}, VuF{}}, kXy);
+    }
+}
+
+// 0x1608: a planar projection: colour = c205, ST = c204 + c201 x + c202 y + c203 z.
+void planarMapLighting(Batch& b) {
+    const VuVec m[3] = {b.load(201), b.load(202), b.load(203)}, offset = b.load(204), colour = b.load(205);
+    for (uint32_t k = 0, n = vertexCount(b); k < n; ++k) {
+        const VuVec p = b.load(kPositions + k);
+        storeIntegers(b, kColors + k, colour);
+        VuVec st;
+        for (int i = 0; i < 2; ++i) st[i] = ((offset[i] * kVuOne + m[0][i] * p.x) + m[1][i] * p.y) + m[2][i] * p.z;
+        storeLanes(b, kSt + k, st, kXy);
+    }
+}
+
 // 0x1508: prelit colours: clamp(c203 + itof(colour) * c201, 0, c202).
 void modulateColours(Batch& b) {
     const VuVec scale = b.load(201), clamp = b.load(202), offset = b.load(203);
@@ -680,7 +827,7 @@ ChainPlan planChain(uint32_t itop) {
     case 0x788: plan.model = {0, true, 3, false}; break;    // ... to the 8th power
     case 0x960: plan.model = {0, true, 4, false}; break;    // ... to the 16th power
     case 0xB48: plan.model = {0, false, 0, false}; break;   // four linear terms
-    case 0x0B0: case 0xEA0: case 0x10A8: case 0x1508: case 0x16F8: plan.dot = false; break;
+    case 0x0B0: case 0xCA8: case 0xEA0: case 0x10A8: case 0x12C8: case 0x1508: case 0x1608: case 0x16F8: plan.dot = false; break;
     default: return plan;   // not ported (or ITOP outside the blocks)
     }
     plan.ported = true;
@@ -698,7 +845,10 @@ bool runChain(Batch& b, const ChainPlan& plan) {
     default: break;
     }
     if (plan.dot) dotLighting(b, plan.model);
+    else if (plan.body == 0xCA8) specularNormalisedLighting(b);
     else if (plan.body == 0xEA0) specularLighting(b);
+    else if (plan.body == 0x12C8) quadrantMapLighting(b);
+    else if (plan.body == 0x1608) planarMapLighting(b);
     else if (plan.body == 0x10A8) reflectiveLighting(b);
     else if (plan.body == 0x1508) modulateColours(b);
     else if (plan.body == 0x16F8) return fadeColours(b);
@@ -818,20 +968,31 @@ bool Vu1Native::run(Vu1& vu, uint32_t pc) {
         ++stats.interpreted;
         return false;
     }
-    const bool renderer = true;   // all six renderers are ported (the polygon clipper is not: see clippedRenderer)
     ChainPlan chain;
     if (entry.lighting) chain = planChain(vu.itop);
-    if (!renderer || (entry.lighting && !chain.ported)) {
+    if (entry.lighting && !chain.ported) {
         ++stats.interpreted;
         return false;
     }
     Batch b{vu, vu.top};
-    // The batch area and the clipper's start word, to undo the run when a triangle needs the polygon clipper.
+    // A renderer that clips can still give up (the clipper's record allocator overflowing, see clipPolygon):
+    // keep the batch area and qword 870 to undo the run, and hold its packets until it completes.
+    struct Held final : GifSink {
+        GifSink* next = nullptr;
+        std::vector<std::vector<uint8_t>> packets;
+        void gif(uint32_t path, const uint8_t* data, size_t bytes) override {
+            if (path == 1) packets.emplace_back(data, data + bytes);
+            else if (next) next->gif(path, data, bytes);
+        }
+    };
     static uint8_t saved[kSnapshotQwords * 16], savedStart[16];
+    Held held;
     const bool clipping = entry.renderer == Renderer::R2300 || entry.renderer == Renderer::R27A8 || entry.renderer == Renderer::R2AD8;
     if (clipping) {
         for (uint32_t q = 0; q < kSnapshotQwords; ++q) std::memcpy(saved + q * 16, b.qword(q), 16);
         std::memcpy(savedStart, vu.data + 870 * 16, 16);
+        held.next = vu.sink();
+        vu.setGifSink(&held);
     }
     ++stats.parts[static_cast<uint32_t>(entry.renderer)];
     if (entry.lighting) {
@@ -841,6 +1002,7 @@ bool Vu1Native::run(Vu1& vu, uint32_t pc) {
     }
     if (entry.setup) setup(b);
     if (entry.lighting && !runChain(b, chain)) {   // an empty batch: the program ends in the lighting body
+        if (clipping) vu.setGifSink(held.next);
         if (entry.header) vu.kick(b.top + kHeader);
         vu.kick(b.top + kOutput);
         vu.tpc = 0x1810 / 8;
@@ -860,12 +1022,18 @@ bool Vu1Native::run(Vu1& vu, uint32_t pc) {
     if (!complete) {   // undo; the interpreter runs the whole program (setup and lighting included)
         for (uint32_t q = 0; q < kSnapshotQwords; ++q) std::memcpy(b.qword(q), saved + q * 16, 16);
         std::memcpy(vu.data + 870 * 16, savedStart, 16);
+        vu.setGifSink(held.next);
         ++stats.clipperFallbacks;
         ++stats.interpreted;
         return false;
     }
     if (pending) vu.kick(pending);
     vu.kick(b.top + kOutput);
+    if (clipping) {
+        vu.setGifSink(held.next);
+        if (held.next)
+            for (const auto& packet : held.packets) held.next->gif(1, packet.data(), packet.size());
+    }
     static const std::pair<Renderer, uint32_t> ends[6] = {{Renderer::Strip, 0x2058}, {Renderer::CulledBack, 0x22D0}, {Renderer::CulledFront, 0x22D0},
                                                           {Renderer::R2300, 0x25C0}, {Renderer::R27A8, 0x2A28}, {Renderer::R2AD8, 0x2D58}};
     for (const auto& [r, end] : ends)

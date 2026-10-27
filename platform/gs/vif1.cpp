@@ -135,14 +135,18 @@ void runWithDiff(VuDiff& d, Vu1& vu, uint32_t address, uint64_t& cycles) {
         if (vu.vi[k] != d.ref->vi[k]) std::fprintf(stderr, "[vu1 diff] %04X vi%d: ours %04X, reference %04X\n", address * 8, k, vu.vi[k], d.ref->vi[k]);
 }
 
-// GT4_VU1=native: GT4's microprograms run in C++ (vu1_native.cpp); the interpreter runs what is not ported.
-// GT4_VU1_DIFF=native: every program the native code handles also runs in the interpreter, from the same
-// state; the PATH1 packets and the data memory must be identical (a table per entry at exit).
+// GT4's microprograms run in C++ (vu1_native.cpp) by default; the interpreter runs what the native code
+// leaves (another game's micro image, the clipper's rare record overflow). GT4_VU1=interp: everything in
+// the interpreter; GT4_VU1=ref: in the reference interpreter. GT4_VU1_DIFF=native: every program the native
+// code handles also runs in the reference interpreter, from the same state; the PATH1 packets and the data
+// memory must be identical (a table per entry at exit).
 Vu1Native* vuNative() {
     static Vu1Native* native = [] {
         const char* mode = std::getenv("GT4_VU1");
         const char* diff = std::getenv("GT4_VU1_DIFF");
-        return (mode && !std::strcmp(mode, "native")) || (diff && !std::strcmp(diff, "native")) ? new Vu1Native : nullptr;
+        if (diff && !std::strcmp(diff, "native")) return new Vu1Native;
+        if (diff || (mode && (!std::strcmp(mode, "interp") || !std::strcmp(mode, "ref")))) return static_cast<Vu1Native*>(nullptr);
+        return new Vu1Native;
     }();
     return native;
 }
@@ -365,6 +369,8 @@ void Vif1::execute(uint32_t address) {
         dbf = true;
     }
     lastProgram = address * 8;
+    ++stats.microprograms;
+    Vu1Native* native = vuNative();
 #if GT4_VU1_INTERPRETER
     Vu1Inventory* inventory = Vu1Inventory::get();
     const uint64_t cyclesBefore = stats.vuCycles;
@@ -373,7 +379,6 @@ void Vif1::execute(uint32_t address) {
         const char* mode = std::getenv("GT4_VU1");
         return mode && !std::strcmp(mode, "ref") ? new Vu1Ref : nullptr;
     }();
-    Vu1Native* native = vuNative();
     if (NativeDiff* nd = nativeDiff(); nd && runNativeDiff(*nd, *native, vu, address, stats.vuCycles)) {
     } else if (native && !nd && native->run(vu, address)) {
     } else if (reference) {   // GT4_VU1=ref: the reference interpreter runs the program
@@ -387,13 +392,16 @@ void Vif1::execute(uint32_t address) {
         stats.vuCycles += vu.run(address);
     }
     if (inventory) inventory->after(vu, stats.vuCycles - cyclesBefore);
-    ++stats.microprograms;
     if (vu.runaway()) {
         ++stats.runaways;
         lastWarning = "VU1 program at " + std::to_string(address) + " did not end";
     }
 #else
-    (void)address;
+    // Without the interpreter only GT4's native programs run; anything else draws nothing.
+    if (!native || !native->run(vu, address)) {
+        ++stats.skippedPrograms;
+        lastWarning = "VU1 program at " + std::to_string(address * 8) + " has no native version";
+    }
 #endif
 }
 

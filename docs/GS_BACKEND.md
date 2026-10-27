@@ -147,12 +147,14 @@ The task allowed a minimal GS of our own if paraLLEl-GS proved unsuitable. It di
 GPL-compatible (LGPL-3.0+, not MIT as first assumed; see `THIRD_PARTY_NOTICES.md`), it builds on 64-bit
 Windows with MSVC 14.44 and on Linux, and it passes the pixel tests. No own GS was written.
 
-## VIF1 + VU1: development scaffold
+## VIF1 + VU1
 
-**Status: temporary scaffold, CMake option `GT4_VU1_INTERPRETER` (ON by default for development; not for
-releases).** GT4's 3D runs through VU1 microprograms the game uploads with VIF1 `MPG`; until those are
-translated to native code, the host interprets them. With the option OFF the VIF1 still unpacks and sends
-DIRECT data, but `MSCAL`/`MSCNT` do not run anything (no 3D).
+GT4's 3D runs through VU1 microprograms the game uploads with VIF1 `MPG`. They run natively, in C++
+(`platform/gs/vu1_native.cpp`, described in `docs/VU1_PROGRAMS.md`), bit for bit as the reference
+interpreter computes them. The interpreters stay behind the CMake option `GT4_VU1_INTERPRETER` (ON by
+default): development tools (`GT4_VU1=interp|ref`, `GT4_VU1_DIFF=1|native`, `GT4_VU1_TRACE`,
+`GT4_VU1_INVENTORY`) and the native code's fallback for the polygon clipper's rare record overflow. With the
+option OFF only GT4's native programs run.
 
 - **VIF1** (`platform/gs/vif1.*`): NOP, STCYCL, OFFSET, BASE, ITOP, STMOD (offset, difference, mode 3),
   MSKPATH3 (GT4 emits it, `004A1950`: PATH3 records that arrive while it is set are held and sent at the

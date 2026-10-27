@@ -41,6 +41,7 @@ public:
     struct Stats {
         uint64_t codes = 0, unpacks = 0, microprograms = 0, vuCycles = 0, directQwords = 0, mpgInstructions = 0;
         uint64_t runaways = 0, unknownCodes = 0;
+        uint64_t skippedPrograms = 0;   // built without the interpreter: programs with no native version
     } stats;
     std::string lastWarning;
     uint32_t lastProgram = 0;   // byte address of the last microprogram started (statistics)

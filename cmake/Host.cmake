@@ -153,8 +153,11 @@ endif()
 # PS2 graphics (docs/GS_BACKEND.md). gt4_ps2gfx is plain C++ (no GPU): the game link and capture
 # replay, the graphics stream, and VIF1 + VU1. gt4_gs adds the GS back end, paraLLEl-GS on its own
 # Vulkan device, and the host that runs them on a worker thread.
+# GT4's VU1 microprograms run natively (platform/gs/vu1_native.cpp); GT4_VU1_INTERPRETER keeps the VU1
+# interpreters for development (diffs, other micro images) and as the fallback the native code uses for
+# the polygon clipper's rare record overflow.
 option(GT4_VU1_INTERPRETER
-  "Development scaffold, not for releases: run the game's VU1 microprograms in a CPU interpreter" ON)
+  "Keep the VU1 interpreters (development tools and the native code's rare fallback)" ON)
 find_package(Threads REQUIRED)
 add_library(gt4_ps2gfx STATIC
     platform/gs/vu1.cpp
@@ -230,6 +233,12 @@ if(BUILD_TESTING)
   add_executable(gt4_ps2gfx_test tests/ps2gfx.cpp)
   target_link_libraries(gt4_ps2gfx_test PRIVATE gt4_ps2gfx)
   add_test(NAME ps2gfx COMMAND gt4_ps2gfx_test)
+  # The native VU1 programs against the reference interpreter on random batches; needs GT4's micro image
+  # (game data, GT4_VU1_IMAGE=path), skipped (exit code 77) without it.
+  add_executable(gt4_vu1_native_fuzz tests/vu1_native_fuzz.cpp)
+  target_link_libraries(gt4_vu1_native_fuzz PRIVATE gt4_ps2gfx)
+  add_test(NAME vu1_native_fuzz COMMAND gt4_vu1_native_fuzz)
+  set_tests_properties(vu1_native_fuzz PROPERTIES SKIP_RETURN_CODE 77)
   # The GS back end checked by pixel, and a capture replayed through gt4_host (headless, "original"
   # preset, compared by pixel): need a Vulkan GPU that meets paraLLEl-GS's requirements; skipped (exit
   # code 77) where there is none, as on CI. Outputs go to the build directory.
@@ -242,7 +251,7 @@ if(BUILD_TESTING)
       -DCHECKER=$<TARGET_FILE:gt4_gs_backend_test> -DOUTPUT=${GT4_GS_TEST_OUTPUT}
       -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/host_replay.cmake)
   set_tests_properties(host_replay PROPERTIES SKIP_RETURN_CODE 77 FIXTURES_REQUIRED gs_replay_capture)
-  foreach(test_target IN ITEMS gt4_ps2gfx_test gt4_gs_backend_test)
+  foreach(test_target IN ITEMS gt4_ps2gfx_test gt4_gs_backend_test gt4_vu1_native_fuzz)
     if(MSVC)
       target_compile_options(${test_target} PRIVATE /UNDEBUG /W4)
     else()
