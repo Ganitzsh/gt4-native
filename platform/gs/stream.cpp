@@ -15,6 +15,55 @@ GraphicsStream::GraphicsStream(GsTarget& target) : gs(target), vif1(unit) {
     vif1.setGifSink(&sink);
     vif1.onPath3Mask = [this](bool masked) { if (!masked) releasePath3(); };
     path1Stats = std::getenv("GT4_PATH1_STATS") != nullptr;
+    if (const char* e = std::getenv("GT4_VRAM_DUMP")) {
+        dumpFrame = static_cast<uint32_t>(std::strtoul(e, nullptr, 10));
+        if (const char* list = std::strchr(e, ':'))
+            for (const char* p = list + 1; *p; ++p) {
+                if (std::strncmp(p, "end", 3) == 0) dumpAtEnd = true;
+                else dumpAt.push_back(static_cast<uint32_t>(std::strtoul(p, nullptr, 10)));
+                p = std::strchr(p, ',');
+                if (!p) break;
+            }
+    }
+    if (const char* e = std::getenv("GT4_GIF_LOG")) logFrame = static_cast<uint32_t>(std::strtoul(e, nullptr, 10));
+}
+
+void GraphicsStream::dumpVram(const char* tag) {
+    std::vector<uint8_t> vram(4u << 20);
+    gs.readVram(vram.data());
+    char name[64];
+    std::snprintf(name, sizeof name, "vram_%u_%s.bin", frameIndex, tag);
+    if (FILE* f = std::fopen(name, "wb")) {
+        std::fwrite(vram.data(), 1, vram.size(), f);
+        std::fclose(f);
+        std::printf("GS memory written to %s\n", name);
+    }
+}
+
+void GraphicsStream::sendGif(uint32_t path, const uint8_t* data, size_t bytes) {
+    if (frameIndex == dumpFrame && std::find(dumpAt.begin(), dumpAt.end(), packetIndex) != dumpAt.end())
+        dumpVram(std::to_string(packetIndex).c_str());
+    if (frameIndex == logFrame) {
+        uint64_t tag[2] = {};
+        if (bytes >= 16) std::memcpy(tag, data, 16);
+        std::printf("GIF %u: path %u, %zu bytes, tag %016llx %016llx\n", packetIndex, path, bytes,
+                    static_cast<unsigned long long>(tag[1]), static_cast<unsigned long long>(tag[0]));
+        // and the packets themselves, to gif_FRAME.bin: u32 path, u32 bytes, data
+        static FILE* out = nullptr;
+        if (!out) {
+            char name[64];
+            std::snprintf(name, sizeof name, "gif_%u.bin", frameIndex);
+            out = std::fopen(name, "wb");
+        }
+        if (out) {
+            const uint32_t head[2] = {path, static_cast<uint32_t>(bytes)};
+            std::fwrite(head, 4, 2, out);
+            std::fwrite(data, 1, bytes, out);
+            std::fflush(out);
+        }
+    }
+    ++packetIndex;
+    gs.gif(path, data, bytes);
 }
 
 // PACKED RGBAQ (register 1) values of a PATH1 packet, counted by colour (debugging aid).
@@ -85,7 +134,7 @@ void GraphicsStream::releasePath3() {
     if (heldPath3.empty()) return;
     std::vector<uint8_t> data;
     data.swap(heldPath3);
-    gs.gif(3, data.data(), data.size());
+    sendGif(3, data.data(), data.size());
 }
 
 void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload) {
@@ -105,7 +154,7 @@ void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload)
             ++counters.path3Held;
             break;
         }
-        gs.gif(path, payload + 4, bytes);
+        sendGif(path, payload + 4, bytes);
         break;
     }
     case GT4_REC_VIF1:
@@ -135,7 +184,10 @@ void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload)
             ++counters.path3ForcedAtVsync;
             releasePath3();
         }
+        if (frameIndex == dumpFrame && dumpAtEnd) dumpVram("end");
         gs.vsync(field, count);
+        ++frameIndex;
+        packetIndex = 0;
         break;
     }
     case GT4_REC_GS_READ: {

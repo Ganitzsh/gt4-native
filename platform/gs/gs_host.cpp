@@ -39,6 +39,7 @@ public:
         else ++blankFrames;
     }
     void readTransfer(void* out, uint32_t qwc) override { backend.readTransfer(out, qwc); }
+    void readVram(void* out) override { backend.readVram(0, out, 4u << 20); }
     uint64_t blankFrames = 0;
 private:
     Backend& backend;

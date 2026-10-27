@@ -22,6 +22,8 @@ public:
     virtual void vsync(uint32_t field, uint32_t count) = 0;
     // GS -> EE transfer data (after TRXDIR = 1), `qwc` qwords into `out`.
     virtual void readTransfer(void* out, uint32_t qwc) = 0;
+    // The whole 4 MiB of GS local memory (debugging: GT4_VRAM_DUMP).
+    virtual void readVram(void* out) { (void)out; }
 };
 
 // Host -> game records (pad, GS events, image data, commands); the live link writes them to its ring.
@@ -59,9 +61,18 @@ private:
         void gif(uint32_t path, const uint8_t* data, size_t bytes) override {
             ++owner->counters.gifPackets[path & 3];
             if (path == 1 && owner->path1Stats) owner->countColours(data, bytes);
-            owner->gs.gif(path, data, bytes);
+            owner->sendGif(path, data, bytes);
         }
     };
+    // Every GIF packet goes to the GS through this (GT4_VRAM_DUMP counts them).
+    void sendGif(uint32_t path, const uint8_t* data, size_t bytes);
+    // GT4_VRAM_DUMP=FRAME:N1,N2,...: write GS memory to vram_FRAME_N.bin before GIF packet N of that
+    // frame (packets counted from 0 after the previous VSYNC; "end" = at the VSYNC). GT4_GIF_LOG=FRAME
+    // prints that frame's packets (index, path, size, first registers).
+    uint32_t dumpFrame = ~0u, logFrame = ~0u, frameIndex = 0, packetIndex = 0;
+    std::vector<uint32_t> dumpAt;
+    bool dumpAtEnd = false;
+    void dumpVram(const char* tag);
     // GT4_PATH1_STATS: the most frequent vertex colours (RGBAQ) of VU1's PATH1 packets, per frame
     bool path1Stats = false;
     std::vector<std::pair<uint32_t, uint32_t>> colourCounts;   // colour, count
