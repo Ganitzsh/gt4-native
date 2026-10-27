@@ -109,9 +109,12 @@ aspect ratio, which is how the pipeline already treats the test scene.
   0x003AFD78; 0.9 keeps the PS2's own inset ratio, 96 / 106.67); the minimap -107 / 854 -> 320 -/+ 240 A
   (0x003A1970, 0x003D8518); 853.33 -> 480 A (0x003DA150); the font scale 0.75 -> (4/3) / A (0x0039F498). The
   `aspect.safe_area` inset applies on top.
-- **Menus** (0..640 orthographic): either keep them in a centred 4:3 area (pillarboxed, like `aspect.hud =
-  centered`) or give 0x00214FB0 the wide orthographic projection and anchor the menu's edge elements; 0x00215FE0's
-  rectangle mapping must follow. Centred is the safe first step.
+- **Menus** (0..640 orthographic): done the centred way. `game_src/func_00214FB0.cpp` gives the menus'
+  orthographic projection 320 -/+ 240 x aspect in the wide mode, so their 640 x 480 layout keeps its shape in a
+  centred 4:3 area (`--menus centered`, the default; gt4_host passes `--menus stretched` for `aspect.hud =
+  stretched`, the PS2's look). Full-screen backgrounds drawn another way still fill the width; the menu models
+  keep the game's own 0.75 squeeze, which is right for that frame. 0x00215FE0's rectangle mapping is untouched
+  and nothing looked clipped in the title, mode, course and car menus (2026-10-27).
 - **Direct GS sprites** (0x004A6668 / 0x004A6498 -> 0x004A6538: copies and post effects in framebuffer pixels) are
   full-screen passes; they scale with the canvas.
 - **Fallback for anything not patched**: at the packet level R1 can tell 2D from 3D by the matrix in the

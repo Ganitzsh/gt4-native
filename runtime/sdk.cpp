@@ -7,6 +7,7 @@
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 
 using namespace gt4::rt;
 
@@ -75,6 +76,13 @@ extern "C" int gt4_display_aspect_milli() {
     double w = 0, h = 1;
     if (std::sscanf(a, "%lf:%lf", &w, &h) < 1 || w <= 0 || h <= 0) return 0;
     return static_cast<int>(w / h * 1000.0 + 0.5);
+}
+
+// For game_src/func_00214FB0.cpp: 1 when the menus' 2D keeps a centred 4:3 area in the wide mode
+// (--menus centered, the default), 0 when it is stretched as on the PS2 (--menus stretched).
+extern "C" int gt4_menus_centered() {
+    const char *m = gt4::rt::g_config.menus;
+    return !(m && std::strcmp(m, "stretched") == 0);
 }
 
 // The VBlank counter, for game-side debugging checks (game_src copies).
