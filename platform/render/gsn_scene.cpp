@@ -23,15 +23,15 @@ constexpr VkFormat kDepth = VK_FORMAT_D32_SFLOAT_S8_UINT;
 // The draw constants (gsn_common.glsl).
 struct DrawConstants {
     float targetSize[2];
-    float scale;
-    uint32_t flags;
+    float scale[2];
     float textureSize[2];
     float sourceOffset[2];
     float sourceSize[2];
+    uint32_t flags;
     uint32_t tex, fogColour, alphaTest, blend;
     uint32_t clampU, clampV;   // WMS/WMT (0-1), MINU/MINV (2-11), MAXU/MAXV (12-21): CLAMP
 };
-static_assert(sizeof(DrawConstants) == 64);
+static_assert(sizeof(DrawConstants) == 68);
 
 enum : uint32_t {
     kTextured = 1, kUv = 2, kFog = 4, kBlend = 8, kPabe = 16, kFba = 32, kFromTarget = 64, kTarget24 = 128, kDestAlphaBlend = 256,
@@ -72,7 +72,8 @@ struct GsnScene::Impl {
     SceneFormats formats;
     gsn::FrameList frame;
     bool fresh = false, any = false;
-    uint32_t scaleSetting = 0, scale = 1;
+    // Render pixels per GS pixel, per axis: the anamorphic 16:9 frame gets more across than down.
+    uint32_t scaleSetting = 0, sx = 1, sy = 1;
 
     struct GpuTarget {
         vk::Image image;
@@ -211,7 +212,8 @@ struct GsnScene::Impl {
     void ensureTarget(const gsn::Target& t) {
         GpuTarget& g = targets[t.id];
         const uint32_t width = std::max<uint32_t>(64, t.bw * 64), height = std::max<uint32_t>(32, t.height);
-        if (g.image.valid() && g.width >= width && g.height >= height && g.image.extent.width == g.width * scale) {
+        if (g.image.valid() && g.width >= width && g.height >= height && g.image.extent.width == g.width * sx &&
+            g.image.extent.height == g.height * sy) {
             g.psm = t.psm;
             return;
         }
@@ -225,7 +227,7 @@ struct GsnScene::Impl {
         g.psm = t.psm;
         vk::ImageDesc desc;
         desc.format = t.depth ? kDepth : kColour;
-        desc.extent = {g.width * scale, g.height * scale};
+        desc.extent = {g.width * sx, g.height * sy};
         desc.usage = t.depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
                              : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                                    VK_IMAGE_USAGE_TRANSFER_DST_BIT;
@@ -335,6 +337,20 @@ struct GsnScene::Impl {
     }
 
     void execute(VkCommandBuffer command, uint32_t slot);
+
+    // The GS pixels the display shows: DISPLAY's size over MAGH; interlaced with FFMD = 1 (field mode) each
+    // field shows every line of a half-height buffer.
+    static void displayedSize(const gsn::Display& d, uint32_t& w, uint32_t& h) {
+        const uint64_t disp = d.target2 ? d.display2 : d.display1;
+        const uint32_t magh = static_cast<uint32_t>((disp >> 23) & 0xF) + 1;
+        w = (static_cast<uint32_t>((disp >> 32) & 0xFFF) + 1) / magh;
+        h = static_cast<uint32_t>((disp >> 44) & 0x7FF) + 1;
+        if ((d.smode2 & 3) == 3) h /= 2;
+        if (!w || !h || w > 1024 || h > 1024) {
+            w = 640;
+            h = 448;
+        }
+    }
 };
 
 void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
@@ -451,11 +467,11 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
     reinterpretImages.assign(count, nullptr);
     auto imageFor = [&](uint32_t index) -> vk::Image& {
         const gsn::Reinterpretation& r = frame.reinterpretations[index];
-        Pool& pool = reinterpretPool[(uint64_t(r.width * scale) << 32) | (r.height * scale)];
+        Pool& pool = reinterpretPool[(uint64_t(r.width * sx) << 32) | (r.height * sy)];
         if (pool.used == pool.images.size()) {
             vk::ImageDesc desc;
             desc.format = VK_FORMAT_R8G8B8A8_UNORM;
-            desc.extent = {r.width * scale, r.height * scale};   // scale x scale per GS texel
+            desc.extent = {r.width * sx, r.height * sy};   // sx x sy per GS texel
             desc.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
             desc.name = "gsn reinterpreted";
             pool.images.push_back(std::make_unique<vk::Image>(vk::createImage(device, desc)));
@@ -509,15 +525,15 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
             GpuTarget* source = sourceOf(r);
             GpuTarget* palette = paletteOf(r);
             struct {
-                uint32_t targetBp, targetBw, targetHeight, scale, tbp, tbw, psm, width, height, cpsm, csa, texa;
+                uint32_t targetBp, targetBw, targetHeight, scaleX, tbp, tbw, psm, width, height, cpsm, csa, texa;
                 uint32_t clutTargetBp, clutBw, clutHeight, cbp;
-                uint32_t indexStart, pad[3];
-            } k{r.targetBp, source ? r.targetBw : 0, source ? source->height : 0, scale, static_cast<uint32_t>(r.tex0 & 0x3FFF),
+                uint32_t indexStart, scaleY, pad[2];
+            } k{r.targetBp, source ? r.targetBw : 0, source ? source->height : 0, sx, static_cast<uint32_t>(r.tex0 & 0x3FFF),
                 static_cast<uint32_t>((r.tex0 >> 14) & 0x3F), static_cast<uint32_t>((r.tex0 >> 20) & 0x3F), r.width, r.height,
                 static_cast<uint32_t>((r.tex0 >> 51) & 0xF), static_cast<uint32_t>((r.tex0 >> 56) & 0x1F),
                 static_cast<uint32_t>(r.texa & 0xFF) | (static_cast<uint32_t>((r.texa >> 32) & 0xFF) << 8) | (static_cast<uint32_t>((r.texa >> 15) & 1) << 16),
                 palette ? r.clutTargetBp : 0, palette ? r.clutTargetBw : 0, palette ? palette->height : 0,
-                static_cast<uint32_t>((r.tex0 >> 37) & 0x3FFF), source ? 0 : indexStart[i], {}};
+                static_cast<uint32_t>((r.tex0 >> 37) & 0x3FFF), source ? 0 : indexStart[i], sy, {}};
             const VkImageView fallback = source ? source->image.view : palette ? palette->image.view : blank.view;
             vk::Descriptors()
                 .sampled(0, fallback, samplers[0])
@@ -527,7 +543,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
                 .storageBuffer(4, indexBuffer.buffer, 0, indexWords * 4)
                 .push(command, reinterpret);
             vk::pushConstants(command, reinterpret, k);
-            vk::dispatch2D(command, r.width * scale, r.height * scale);
+            vk::dispatch2D(command, r.width * sx, r.height * sy);
             built[i] = true;
         }
         for (const uint32_t i : batch) vk::toSampled(b, *reinterpretImages[i], vk::kFragment);
@@ -551,7 +567,8 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         GpuTarget& colourTarget = targetIt->second;
         k.targetSize[0] = static_cast<float>(colourTarget.image.extent.width);
         k.targetSize[1] = static_cast<float>(colourTarget.image.extent.height);
-        k.scale = static_cast<float>(scale);
+        k.scale[0] = static_cast<float>(sx);
+        k.scale[1] = static_cast<float>(sy);
         // The texture.
         VkImageView view = blank.view;
         VkSampler sampler = samplers[0];
@@ -593,11 +610,11 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
                         copy.extent = {image->extent.width, image->extent.height, 1};
                         vkCmdCopyImage(command, image->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, feedback.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
                         image = &feedback;
-                        k.sourceSize[0] = static_cast<float>(feedback.extent.width) / scale;
-                        k.sourceSize[1] = static_cast<float>(feedback.extent.height) / scale;
+                        k.sourceSize[0] = static_cast<float>(feedback.extent.width) / sx;
+                        k.sourceSize[1] = static_cast<float>(feedback.extent.height) / sy;
                     } else {
-                        k.sourceSize[0] = static_cast<float>(source->second.image.extent.width) / scale;
-                        k.sourceSize[1] = static_cast<float>(source->second.image.extent.height) / scale;
+                        k.sourceSize[0] = static_cast<float>(source->second.image.extent.width) / sx;
+                        k.sourceSize[1] = static_cast<float>(source->second.image.extent.height) / sy;
                     }
                     if (image->layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
                         end();
@@ -706,9 +723,9 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         const uint32_t x0 = static_cast<uint32_t>(s.scissor & 0x7FF), x1 = static_cast<uint32_t>((s.scissor >> 16) & 0x7FF);
         const uint32_t y0 = static_cast<uint32_t>((s.scissor >> 32) & 0x7FF), y1 = static_cast<uint32_t>((s.scissor >> 48) & 0x7FF);
         VkRect2D scissor{};
-        scissor.offset = {static_cast<int32_t>(x0 * scale), static_cast<int32_t>(y0 * scale)};
-        const uint32_t right = std::min((x1 + 1) * scale, colourTarget.image.extent.width), bottom = std::min((y1 + 1) * scale, colourTarget.image.extent.height);
-        scissor.extent = {right > x0 * scale ? right - x0 * scale : 0, bottom > y0 * scale ? bottom - y0 * scale : 0};
+        scissor.offset = {static_cast<int32_t>(x0 * sx), static_cast<int32_t>(y0 * sy)};
+        const uint32_t right = std::min((x1 + 1) * sx, colourTarget.image.extent.width), bottom = std::min((y1 + 1) * sy, colourTarget.image.extent.height);
+        scissor.extent = {right > x0 * sx ? right - x0 * sx : 0, bottom > y0 * sy ? bottom - y0 * sy : 0};
         if (!scissor.extent.width || !scissor.extent.height) continue;
         vkCmdSetScissor(command, 0, 1, &scissor);
         // The alpha test: pixels that pass are drawn as usual; those that fail, under AFAIL, update only the
@@ -750,14 +767,10 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
     auto shown = targets.find(displayTarget);
     if (shown != targets.end()) {
         const uint64_t dispfb = frame.display.target2 ? frame.display.dispfb2 : frame.display.dispfb1;
-        const uint64_t disp = frame.display.target2 ? frame.display.display2 : frame.display.display1;
         const uint32_t dbx = static_cast<uint32_t>((dispfb >> 32) & 0x7FF), dby = static_cast<uint32_t>((dispfb >> 43) & 0x7FF);
-        const uint32_t magh = static_cast<uint32_t>((disp >> 23) & 0xF) + 1;
-        const uint32_t w = (static_cast<uint32_t>((disp >> 32) & 0xFFF) + 1) / magh;
-        uint32_t h = static_cast<uint32_t>((disp >> 44) & 0x7FF) + 1;
-        // Interlaced with FFMD = 1 (field mode): each field shows every line of a half-height buffer.
-        if ((frame.display.smode2 & 3) == 3) h /= 2;
-        const float tw = static_cast<float>(shown->second.image.extent.width) / scale, th = static_cast<float>(shown->second.image.extent.height) / scale;
+        uint32_t w, h;
+        displayedSize(frame.display, w, h);
+        const float tw = static_cast<float>(shown->second.image.extent.width) / sx, th = static_cast<float>(shown->second.image.extent.height) / sy;
         displayRect[0] = dbx / tw;
         displayRect[1] = dby / th;
         displayRect[2] = (w ? w : 640) / tw;
@@ -867,13 +880,23 @@ void GsnScene::recordPrepass(VkCommandBuffer command, const SceneView& view) {
     Impl& s = *impl;
     if (!s.fresh) return;   // the same frame list is not executed twice (its blends would apply again)
     s.fresh = false;
-    const uint32_t wanted = s.scaleSetting ? s.scaleSetting
-                                           : std::clamp<uint32_t>(static_cast<uint32_t>(std::lround(view.renderExtent.height / 448.0)), 1, 8);
-    if (wanted != s.scale) {
+    // The nearest whole scale to the render extent per axis, from what the display shows (640 x 448, or 224
+    // lines per field: GT4's race draws each field whole, so its lines get the full height).
+    uint32_t shownWidth, shownHeight;
+    Impl::displayedSize(s.frame.display, shownWidth, shownHeight);
+    // GT4_GSN_SCALE=N (comparisons with the GS back end): that scale on both axes.
+    static const uint32_t forced = std::getenv("GT4_GSN_SCALE") ? static_cast<uint32_t>(std::strtoul(std::getenv("GT4_GSN_SCALE"), nullptr, 10)) : 0;
+    if (forced) s.scaleSetting = forced;
+    const uint32_t wantedX = s.scaleSetting ? s.scaleSetting
+                                            : std::clamp<uint32_t>(static_cast<uint32_t>(std::lround(view.renderExtent.width / double(shownWidth))), 1, 10);
+    const uint32_t wantedY = s.scaleSetting ? s.scaleSetting
+                                            : std::clamp<uint32_t>(static_cast<uint32_t>(std::lround(view.renderExtent.height / double(shownHeight))), 1, 10);
+    if (wantedX != s.sx || wantedY != s.sy) {
         vkDeviceWaitIdle(s.device.device);
         for (auto& [id, t] : s.targets) vk::destroy(s.device, t.image);
         s.targets.clear();
-        s.scale = wanted;
+        s.sx = wantedX;
+        s.sy = wantedY;
     }
     vk::beginLabel(command, "gsn frame");
     {

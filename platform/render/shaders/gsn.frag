@@ -38,13 +38,13 @@ vec4 nearestTexel(vec2 position) {
     const ivec2 size = ivec2(draw.textureSize);
     const ivec2 i = ivec2(wrap(int(cell.x), draw.clampU, size.x), wrap(int(cell.y), draw.clampV, size.y));
     if ((draw.flags & kSnap) != 0u) {   // a reinterpreted texture: this render pixel's sub-texel
-        const ivec2 sub = ivec2(gl_FragCoord.xy) % int(draw.scale);
-        return texelFetch(source, i * int(draw.scale) + sub, 0) * 255.0;
+        const ivec2 sub = ivec2(gl_FragCoord.xy) % ivec2(draw.scale);
+        return texelFetch(source, i * ivec2(draw.scale) + sub, 0) * 255.0;
     }
     if ((draw.flags & kFromTarget) != 0u) {
         const vec2 within = clamp(position - cell, 0.0, 0.999);
         const vec4 t = texelFetch(source, ivec2((draw.sourceOffset + vec2(i) + within) * draw.scale), 0);
-        return vec4(t.rgb * 255.0, t.a * 128.0);
+        return min(vec4(t.rgb * 255.0, t.a * 128.0), 255.0);   // the GS clamps what blends write (COLCLAMP)
     }
     return texelFetch(source, i, 0) * 255.0;
 }
@@ -52,7 +52,7 @@ vec4 nearestTexel(vec2 position) {
 // Filtering inside a sprite's texture rectangle: at a higher resolution the samples near its edges would
 // otherwise mix in the texels around it (atlas neighbours, as dotted lines under GT4's menu logos).
 vec2 insideSprite(vec2 coordinate) {
-    if ((draw.flags & kNearest) != 0u || inBounds.x > inBounds.z || draw.scale <= 1.0) return coordinate;
+    if ((draw.flags & kNearest) != 0u || inBounds.x > inBounds.z || atNativeScale()) return coordinate;
     const vec2 toNormal = (draw.flags & kUv) != 0u ? 1.0 / draw.textureSize : vec2(1.0);
     const vec2 lo = inBounds.xy * toNormal + 0.5 / draw.textureSize, hi = inBounds.zw * toNormal - 0.5 / draw.textureSize;
     const vec2 middle = (lo + hi) * 0.5;
@@ -65,7 +65,7 @@ vec4 bilinearTexel(vec2 position) {
     const vec2 base = position - 0.5;
     const vec2 cell = floor(base);
     vec2 f = base - cell;
-    if (draw.scale <= 1.0) f = floor(f * 16.0) / 16.0;
+    if (atNativeScale()) f = floor(f * 16.0) / 16.0;
     const ivec2 size = ivec2(draw.textureSize);
     const int u0 = wrap(int(cell.x), draw.clampU, size.x), u1 = wrap(int(cell.x) + 1, draw.clampU, size.x);
     const int v0 = wrap(int(cell.y), draw.clampV, size.y), v1 = wrap(int(cell.y) + 1, draw.clampV, size.y);
@@ -89,7 +89,7 @@ vec4 texel(vec2 coordinate) {
     if ((draw.flags & kFromTarget) != 0u) {
         const vec2 gsPixel = draw.sourceOffset + coordinate * draw.textureSize;
         const vec4 t = texture(source, gsPixel / draw.sourceSize);
-        vec4 c = vec4(t.rgb * 255.0, t.a * 128.0);
+        vec4 c = min(vec4(t.rgb * 255.0, t.a * 128.0), 255.0);   // COLCLAMP, as above
         if ((draw.flags & kTarget24) != 0u) {
             const bool black = all(lessThan(c.rgb, vec3(0.5)));
             c.a = ((draw.tex >> 24) & 1u) != 0u && black ? 0.0 : float((draw.tex >> 8) & 0xFFu);
@@ -117,7 +117,7 @@ bool alphaPasses(float a) {
 // An interpolated value moved from this render pixel's centre to its GS pixel's sample point (exact for the
 // affine sprites that reinterpretation effects draw).
 vec3 atGsPoint(vec3 value) {
-    if ((draw.flags & kSnap) == 0u || draw.scale <= 1.0) return value;
+    if ((draw.flags & kSnap) == 0u || atNativeScale()) return value;
     const vec2 offset = floor(gl_FragCoord.xy / draw.scale) * draw.scale + 0.5 - gl_FragCoord.xy;
     return value + dFdx(value) * offset.x + dFdy(value) * offset.y;
 }

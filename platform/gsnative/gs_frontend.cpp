@@ -130,7 +130,10 @@ void GsFrontend::write(uint32_t r, uint64_t value) {
         reg[r] = value;
         Vertex& v = queue[std::min<uint32_t>(queued, 2)];
         const uint32_t prim = primValue();
-        const uint64_t offset = reg[XYOFFSET_1 + ((prim >> 9) & 1)];
+        // GT4 moves XYOFFSET by a quarter pixel every other frame (its field jitter); drawn at a higher
+        // resolution that shakes the picture, so offsets keep half-pixel steps (GT4_GSN_JITTER=keep: as is).
+        static const bool keepJitter = [] { const char* e = std::getenv("GT4_GSN_JITTER"); return e && !std::strcmp(e, "keep"); }();
+        const uint64_t offset = reg[XYOFFSET_1 + ((prim >> 9) & 1)] & (keepJitter ? ~0ull : ~0x0000000700000007ull);
         const uint32_t x = static_cast<uint32_t>(value & 0xFFFF), y = static_cast<uint32_t>((value >> 16) & 0xFFFF);
         v.x = (static_cast<float>(x) - static_cast<float>(offset & 0xFFFF)) / 16.0f;
         v.y = (static_cast<float>(y) - static_cast<float>((offset >> 32) & 0xFFFF)) / 16.0f;
@@ -166,6 +169,11 @@ void GsFrontend::write(uint32_t r, uint64_t value) {
         if (imageActive) mem.write(reinterpret_cast<const uint8_t*>(&value), 8);
         return;
     default:
+        if (r == XYOFFSET_1 || r == XYOFFSET_2) {   // GT4_GSN_XFER (debugging): offset changes
+            static const bool logOffsets = std::getenv("GT4_GSN_XFER") != nullptr;
+            if (logOffsets && reg[r] != value)
+                std::printf("[gsn offset] %u: %llX\n", r - XYOFFSET_1 + 1, static_cast<unsigned long long>(value));
+        }
         reg[r] = value;
         return;
     }
@@ -429,13 +437,15 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
     // A target that starts at the texture's own base page wins: textures are declared at powers of two, so
     // their extent often runs past the buffer they read into later targets.
     // Several targets can start at one page (GT4 draws a 128-wide environment map and its 640-wide scene at
-    // the same address): the most recently written one of the texture's width.
+    // the same address): the most recently written one of the texture's width, as long as nothing wrote that
+    // page after it (a menu's old 128-wide target at the race's frame buffer).
     if (!(t.tbp % 32)) {
         uint64_t best = 0;
+        const uint64_t baseWritten = pages[(t.tbp / 32) & 511].serial;
         for (const Target& candidate : targets) {
             if (candidate.depth || candidate.bp != t.tbp || candidate.bw != t.tbw) continue;
             const uint64_t written = candidate.id < targetWritten.size() ? targetWritten[candidate.id] : 0;
-            if (written && written >= best) {
+            if (written && written >= baseWritten && written >= best) {
                 best = written;
                 owner = candidate.id;
             }
