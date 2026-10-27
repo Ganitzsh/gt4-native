@@ -294,8 +294,8 @@ GsMemory::Tex0 GsMemory::Tex0::decode(uint64_t v) {
     return t;
 }
 
-void GsMemory::tex0Written(const Tex0& t) {
-    if (!indexed(t.psm)) return;
+bool GsMemory::tex0Written(const Tex0& t) {
+    if (!indexed(t.psm)) return false;
     bool load = false;
     switch (t.cld) {
     case 1: load = true; break;
@@ -306,6 +306,7 @@ void GsMemory::tex0Written(const Tex0& t) {
     default: break;
     }
     if (load) loadClut(t);
+    return load;
 }
 
 // The CLUT buffer holds 512 halfwords: a CT32 entry i keeps its low half at i and its high half at 256 + i;
@@ -381,6 +382,11 @@ void GsMemory::decode(const Tex0& t, const Texa& texa, uint32_t u0, uint32_t v0,
             }
             out[y * w + x] = c;
         }
+}
+
+void GsMemory::indices(const Tex0& t, uint32_t w, uint32_t h, uint8_t* out) const {
+    for (uint32_t y = 0; y < h; ++y)
+        for (uint32_t x = 0; x < w; ++x) out[y * w + x] = static_cast<uint8_t>(readPixel(t.psm, t.tbp, t.tbw, x, y));
 }
 
 }  // namespace gt4::gsn

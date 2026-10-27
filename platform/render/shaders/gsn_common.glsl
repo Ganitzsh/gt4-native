@@ -10,6 +10,7 @@ layout(push_constant) uniform Draw {
     uint fogColour;      // FOGCOL, R in the low byte
     uint alphaTest;      // ATE (0), ATST (1-3), AREF (4-11), AFAIL (12-13)
     uint blend;          // A (0-1), B (2-3), C (4-5), D (6-7), FIX (8-15): ALPHA
+    uint clampU, clampV; // WMS/WMT (0-1), MINU/MINV (2-11), MAXU/MAXV (12-21): CLAMP
 } draw;
 
 // flags
@@ -22,3 +23,5 @@ const uint kFba = 32u;            // FBA: alpha |= 0x80 when written
 const uint kFromTarget = 64u;     // the texture is a render target (colour / 255, alpha / 128)
 const uint kTarget24 = 128u;      // ... in a 24-bit format: alpha from TEXA
 const uint kDestAlphaBlend = 256u;// C = Ad: the pipeline's fixed-function factors do the blend
+const uint kNearest = 512u;       // point sampling: the GS's texel, its wrap modes, by texel fetch
+const uint kSnap = 1024u;         // coordinates at the GS pixel's sample point, not the render pixel's

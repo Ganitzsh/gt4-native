@@ -2,7 +2,8 @@
 // A texture read from a 32-bit render target through an indexed format (docs/NATIVE_RENDERER.md): for each
 // texel, its address in GS memory in the texture's format, the target's pixel and byte that address holds
 // (the inverse of the 32-bit layout), the byte read back from the target (at the GS pixel's centre sample),
-// then the CLUT. Writes RGBA8 with the GS's alpha (0x80 = 1.0), as the decoded memory textures.
+// then the CLUT: the CLUT buffer the front end loaded, or, for a palette loaded from a target, that target's
+// pixels. Writes RGBA8 with the GS's alpha (0x80 = 1.0), as the decoded memory textures.
 #extension GL_GOOGLE_include_directive : require
 #include "gsn_swizzle.glsl"
 
@@ -10,10 +11,14 @@ layout(local_size_x = 8, local_size_y = 8) in;
 layout(set = 0, binding = 0) uniform sampler2D target;            // colour / 255, alpha / 128
 layout(set = 0, binding = 1, rgba8) uniform writeonly image2D result;
 layout(set = 0, binding = 2, std430) readonly buffer Clut { uint words[256]; } clut;   // the 1 KiB CLUT buffer
+layout(set = 0, binding = 3) uniform sampler2D clutTarget;        // the palette's target, when clutBw != 0
+layout(set = 0, binding = 4, std430) readonly buffer Indices { uint words[]; } indices;   // when targetBw == 0
 layout(push_constant) uniform Reinterpret {
     uint targetBp, targetBw, targetHeight, scale;
     uint tbp, tbw, psm, width;
     uint height, cpsm, csa, texa;   // texa: TA0 (0-7), TA1 (8-15), AEM (16)
+    uint clutTargetBp, clutBw, clutHeight, cbp;
+    uint indexStart;                // targetBw == 0: the indices from GS memory, one byte per texel, from this word
 } p;
 
 const uint kMask = (4u << 20) - 1u;
@@ -32,6 +37,21 @@ uint address4(uint bp, uint bw, uint x, uint y) {   // nibbles
     const uint page = (x >> 7) + (y >> 7) * (bw >> 1);
     const uint block = bp + page * 32u + gsBlock4[((y >> 4) & 7u) * 4u + ((x >> 5) & 3u)];
     return (block * 512u + gsColumn4[(y & 15u) * 32u + (x & 31u)]) & ((kMask << 1) | 1u);
+}
+
+// The 32-bit word at a word address of a target that starts at page bp (bw pages wide, height pixels):
+// the inverse of the 32-bit layout to the target pixel, at its centre sample. False outside the target.
+bool targetWord(sampler2D image, uint bp, uint bw, uint height, uint word, out uvec4 bytes) {
+    const int relative = int(word >> 11) - int(bp >> 5);
+    if (relative < 0 || bw == 0u) return false;
+    const uint page = uint(relative);
+    const uint blockPosition = gsBlock32Position[(word >> 6) & 31u], columnPosition = gsColumn32Position[word & 63u];
+    const uint x = (page % bw) * 64u + (blockPosition & 7u) * 8u + (columnPosition & 7u);
+    const uint y = (page / bw) * 32u + (blockPosition >> 3) * 8u + (columnPosition >> 3);
+    if (y >= height) return false;
+    const vec4 c = texelFetch(image, ivec2(x * p.scale + p.scale / 2u, y * p.scale + p.scale / 2u), 0);
+    bytes = uvec4(clamp(round(vec4(c.rgb * 255.0, c.a * 128.0)), 0.0, 255.0));
+    return true;
 }
 
 uint half16(uint i) { return (clut.words[(i >> 1) & 255u] >> ((i & 1u) * 16u)) & 0xFFFFu; }
@@ -60,24 +80,32 @@ void main() {
         shift = p.psm == 0x2Cu ? 4u : 0u;
     }
     // The target pixel holding that byte.
-    const uint word = byteAddress >> 2, lane = byteAddress & 3u;
-    const int relative = int(word >> 11) - int(p.targetBp >> 5);
     uint index = 0u;
-    if (relative >= 0 && p.targetBw != 0u) {
-        const uint page = uint(relative);
-        const uint blockPosition = gsBlock32Position[(word >> 6) & 31u], columnPosition = gsColumn32Position[word & 63u];
-        const uint x = (page % p.targetBw) * 64u + (blockPosition & 7u) * 8u + (columnPosition & 7u);
-        const uint y = (page / p.targetBw) * 32u + (blockPosition >> 3) * 8u + (columnPosition >> 3);
-        if (y < p.targetHeight) {
-            const vec4 c = texelFetch(target, ivec2(x * p.scale + p.scale / 2u, y * p.scale + p.scale / 2u), 0);
-            const uvec4 bytes = uvec4(clamp(round(vec4(c.rgb * 255.0, c.a * 128.0)), 0.0, 255.0));
-            index = bytes[lane];
-            if (four || p.psm == 0x24u || p.psm == 0x2Cu) index = (index >> shift) & 15u;
-        }
+    uvec4 bytes;
+    if (p.targetBw == 0u) {
+        const uint i = t.y * p.width + t.x;
+        index = (indices.words[p.indexStart + (i >> 2)] >> ((i & 3u) * 8u)) & 0xFFu;
+    } else if (targetWord(target, p.targetBp, p.targetBw, p.targetHeight, byteAddress >> 2, bytes)) {
+        index = bytes[byteAddress & 3u];
+        if (four || p.psm == 0x24u || p.psm == 0x2Cu) index = (index >> shift) & 15u;
     }
     // The CLUT buffer: a 32-bit entry's halves at e and 256 + e; a 16-bit entry is halfword e.
     uint colour;
-    if (p.cpsm == 0u || p.cpsm == 1u) {
+    if (p.clutBw != 0u) {
+        // CSM1 from the target: 16 x 16 pixels with entries 8-15 and 16-23 of each 32 swapped, or 8 x 2.
+        uint x, y;
+        if (four) {
+            x = index & 7u;
+            y = index >> 3;
+        } else {
+            const uint e = (index & ~0x18u) | ((index & 0x08u) << 1) | ((index & 0x10u) >> 1);
+            x = e & 15u;
+            y = e >> 4;
+        }
+        colour = 0u;
+        if (targetWord(clutTarget, p.clutTargetBp, p.clutBw, p.clutHeight, address32(p.cbp, 1u, x, y) >> 2, bytes))
+            colour = bytes.r | (bytes.g << 8) | (bytes.b << 16) | (bytes.a << 24);
+    } else if (p.cpsm == 0u || p.cpsm == 1u) {
         const uint e = four ? ((p.csa & 15u) * 16u + index) & 255u : index & 255u;
         colour = half16(e) | (half16(256u + e) << 16);
     } else {

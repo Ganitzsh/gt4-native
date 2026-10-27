@@ -2,7 +2,10 @@
 #include "gs_frontend.h"
 
 #include <algorithm>
+#include <cmath>
 #include <bit>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace gt4::gsn {
@@ -126,14 +129,14 @@ void GsFrontend::write(uint32_t r, uint64_t value) {
     }
     case TEX0_1: case TEX0_2:
         reg[r] = value;
-        mem.tex0Written(GsMemory::Tex0::decode(value));
+        clutWritten(value);
         return;
     case TEX2_1: case TEX2_2: {
         // TEX2: PSM and the CLUT fields of TEX0.
         const uint64_t mask = (0x3Full << 20) | (~0ull << 37);
         uint64_t& tex0 = reg[TEX0_1 + (r - TEX2_1)];
         tex0 = (tex0 & ~mask) | (value & mask);
-        mem.tex0Written(GsMemory::Tex0::decode(tex0));
+        clutWritten(tex0);
         return;
     }
     case TRXDIR:
@@ -147,6 +150,19 @@ void GsFrontend::write(uint32_t r, uint64_t value) {
         reg[r] = value;
         return;
     }
+}
+
+// A TEX0/TEX2 write. A CLUT loaded from a page a 32-bit target owns holds what was drawn there, which only
+// the GPU has: the reinterpretations of draws with this TEX0 read their palette from that target.
+void GsFrontend::clutWritten(uint64_t tex0) {
+    const GsMemory::Tex0 t = GsMemory::Tex0::decode(tex0);
+    if (!mem.tex0Written(t)) return;
+    clutSource = {};
+    const PageOwner& page = pages[(t.cbp / 32) & 511];
+    if (!page.target || (t.cpsm != PSMCT32 && t.cpsm != PSMCT24)) return;
+    const Target& c = targets[page.target - 1];
+    if (c.depth || !layout32(c.psm)) return;
+    clutSource = {page.target, tex0 & kClutFields};
 }
 
 void GsFrontend::transferStarted(uint32_t dir) {
@@ -166,6 +182,11 @@ void GsFrontend::transferStarted(uint32_t dir) {
     t.rrw = s & 0xFFF;
     t.rrh = (s >> 32) & 0xFFF;
     imageActive = false;
+    // GT4_GSN_XFER (debugging): every transfer.
+    static const bool logTransfers = std::getenv("GT4_GSN_XFER") != nullptr;
+    if (logTransfers)
+        std::printf("[gsn xfer] dir %u src %X/%u psm %X (%u,%u) dst %X/%u psm %X (%u,%u) %ux%u\n", dir, t.sbp, t.sbw, t.spsm, t.ssax, t.ssay,
+                    t.dbp, t.dbw, t.dpsm, t.dsax, t.dsay, t.rrw, t.rrh);
     if (dir == 0) {
         mem.beginWrite(t);
         imageActive = true;
@@ -262,24 +283,30 @@ void GsFrontend::emit(const Vertex* v, uint32_t n, Topology topology) {
         if (!((prim >> 3) & 1)) out[k].rgba = v[n - 1].rgba;
     }
     // Targets: the frame buffer and, when the depth test is on, the Z buffer.
-    float y0 = out[0].y, y1 = out[0].y;
+    float x0 = out[0].x, x1 = out[0].x, y0 = out[0].y, y1 = out[0].y;
     for (uint32_t k = 1; k < n; ++k) {
+        x0 = std::min(x0, out[k].x);
+        x1 = std::max(x1, out[k].x);
         y0 = std::min(y0, out[k].y);
         y1 = std::max(y1, out[k].y);
     }
+    const uint32_t scissorX0 = static_cast<uint32_t>(s.scissor & 0x7FF), scissorX1 = static_cast<uint32_t>((s.scissor >> 16) & 0x7FF);
+    const uint32_t left = static_cast<uint32_t>(std::clamp(x0, static_cast<float>(scissorX0), static_cast<float>(scissorX1)));
+    // The last pixel covered: an edge on a pixel boundary covers the pixel before it.
+    const uint32_t right = static_cast<uint32_t>(std::clamp(std::max(x0, std::ceil(x1) - 1.0f), static_cast<float>(scissorX0), static_cast<float>(scissorX1)));
     const uint32_t scissorY0 = static_cast<uint32_t>((s.scissor >> 32) & 0x7FF), scissorY1 = static_cast<uint32_t>((s.scissor >> 48) & 0x7FF);
     const uint32_t top = static_cast<uint32_t>(std::clamp(y0, static_cast<float>(scissorY0), static_cast<float>(scissorY1)));
-    const uint32_t bottom = static_cast<uint32_t>(std::clamp(y1, static_cast<float>(scissorY0), static_cast<float>(scissorY1)));
+    const uint32_t bottom = static_cast<uint32_t>(std::clamp(std::max(y0, std::ceil(y1) - 1.0f), static_cast<float>(scissorY0), static_cast<float>(scissorY1)));
     const uint32_t width = static_cast<uint32_t>((s.frame >> 16) & 0x3F);
     const uint32_t colour = targetFor(s.frame, false, scissorY1 + 1, width);
     const bool zte = (s.test >> 16) & 1;
     const uint32_t depth = zte ? targetFor(s.zbuf, true, scissorY1 + 1, width) : 0;
     const uint32_t fbmsk = static_cast<uint32_t>(s.frame >> 32);
     if (fbmsk != 0xFFFFFFFFu) markWritten(colour, static_cast<uint32_t>(s.frame & 0x1FF) * 32, static_cast<uint32_t>((s.frame >> 16) & 0x3F),
-                                          static_cast<uint32_t>((s.frame >> 24) & 0x3F), top, bottom);
+                                          static_cast<uint32_t>((s.frame >> 24) & 0x3F), left, right, top, bottom);
     if (depth && !((s.zbuf >> 32) & 1))
         markWritten(depth, static_cast<uint32_t>(s.zbuf & 0x1FF) * 32, static_cast<uint32_t>((s.frame >> 16) & 0x3F),
-                    static_cast<uint32_t>(((s.zbuf >> 24) & 0xF) | 0x30), top, bottom);
+                    static_cast<uint32_t>(((s.zbuf >> 24) & 0xF) | 0x30), left, right, top, bottom);
     const TextureSource texture = ((prim >> 4) & 1) ? textureFor(s) : TextureSource{};
     // Batch with the previous draw when nothing changed.
     if (!frame.commands.empty() && frame.commands.back().kind == FrameList::Command::Kind::Draw) {
@@ -330,12 +357,16 @@ uint32_t GsFrontend::targetFor(uint64_t frameReg, bool depth, uint32_t heightNee
     return t.id;
 }
 
-void GsFrontend::markWritten(uint32_t targetId, uint32_t bp, uint32_t bw, uint32_t psm, uint32_t y0, uint32_t y1) {
+// The pages under the rectangle (x0, y0)-(x1, y1) (inclusive): GT4 keeps palettes and index ramps beside the
+// small areas it draws in, in the same buffer.
+void GsFrontend::markWritten(uint32_t targetId, uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x0, uint32_t x1, uint32_t y0,
+                             uint32_t y1) {
     uint32_t pw, ph;
     pageSize(psm, pw, ph);
     const uint32_t perRow = std::max<uint32_t>(1, bw);
+    const uint32_t first = std::min(x0 / pw, perRow - 1), last = std::min(x1 / pw, perRow - 1);
     for (uint32_t py = y0 / ph; py <= y1 / ph; ++py)
-        for (uint32_t px = 0; px < perRow; ++px) pages[(bp / 32 + py * perRow + px) & 511] = {targetId, ++serial};
+        for (uint32_t px = first; px <= last; ++px) pages[(bp / 32 + py * perRow + px) & 511] = {targetId, ++serial};
     if (targetWritten.size() <= targetId) targetWritten.resize(targetId + 1, 0);
     targetWritten[targetId] = serial;
 }
@@ -363,10 +394,18 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
             }
     // A target that starts at the texture's own base page wins: textures are declared at powers of two, so
     // their extent often runs past the buffer they read into later targets.
-    const PageOwner& base = pages[(t.tbp / 32) & 511];
-    if (base.target && !(t.tbp % 32)) {
-        const Target& candidate = targets[base.target - 1];
-        if (!candidate.depth && candidate.bp == t.tbp) owner = base.target;
+    // Several targets can start at one page (GT4 draws a 128-wide environment map and its 640-wide scene at
+    // the same address): the most recently written one of the texture's width.
+    if (!(t.tbp % 32)) {
+        uint64_t best = 0;
+        for (const Target& candidate : targets) {
+            if (candidate.depth || candidate.bp != t.tbp || candidate.bw != t.tbw) continue;
+            const uint64_t written = candidate.id < targetWritten.size() ? targetWritten[candidate.id] : 0;
+            if (written && written >= best) {
+                best = written;
+                owner = candidate.id;
+            }
+        }
     }
     TextureSource src;
     if (owner) {
@@ -395,13 +434,20 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
             r.width = w;
             r.height = h;
             std::memcpy(r.clut.data(), mem.clutBuffer(), r.clut.size());
+            if (clutSource.target && clutSource.tex0 == (s.tex0 & kClutFields)) {
+                const Target& c = targets[clutSource.target - 1];
+                r.clutTarget = c.id;
+                r.clutTargetBp = c.bp;
+                r.clutTargetBw = c.bw;
+            }
             src.kind = TextureSource::Kind::Reinterpreted;
             // The same as the previous one while the target has not been drawn into since: reused.
             const LastReinterpretation& last = lastReinterpretation;
             if (last.index < frame.reinterpretations.size()) {
                 const Reinterpretation& p = frame.reinterpretations[last.index];
                 const uint64_t written = owner < targetWritten.size() ? targetWritten[owner] : 0;
-                if (p.target == r.target && p.tex0 == r.tex0 && p.texa == r.texa && p.clut == r.clut && written <= last.serial) {
+                if (p.target == r.target && p.tex0 == r.tex0 && p.texa == r.texa && p.clut == r.clut && p.clutTarget == r.clutTarget &&
+                    written <= last.serial && (!r.clutTarget || r.clutTarget >= targetWritten.size() || targetWritten[r.clutTarget] <= last.serial)) {
                     src.id = last.index;
                     return src;
                 }
@@ -415,10 +461,30 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
         src.reinterpreted = true;
         ++stats.reinterpreted;
     }
+    const bool indexed = t.psm == PSMT8 || t.psm == PSMT4 || t.psm == PSMT8H || t.psm == PSMT4HL || t.psm == PSMT4HH;
+    // Indices in memory, palette drawn on the GPU (GT4 writes its colour-graded pixels back this way).
+    if (indexed && clutSource.target && clutSource.tex0 == (s.tex0 & kClutFields)) {
+        const Target& c = targets[clutSource.target - 1];
+        Reinterpretation r;
+        r.tex0 = s.tex0;
+        r.texa = s.texa;
+        r.width = w;
+        r.height = h;
+        r.indices.resize(size_t(w) * h);
+        mem.indices(t, w, h, r.indices.data());
+        std::memcpy(r.clut.data(), mem.clutBuffer(), r.clut.size());
+        r.clutTarget = c.id;
+        r.clutTargetBp = c.bp;
+        r.clutTargetBw = c.bw;
+        src.kind = TextureSource::Kind::Reinterpreted;
+        src.id = static_cast<uint32_t>(frame.reinterpretations.size());
+        frame.reinterpretations.push_back(std::move(r));
+        ++stats.reinterpreted;
+        return src;
+    }
     // GS memory, decoded once per content: the texture's fields, TEXA for 16/24-bit, the palette in use.
     uint64_t key = mix(mix(mix(0, t.tbp), t.tbw), t.psm);
     key = mix(mix(key, t.tw), t.th);
-    const bool indexed = t.psm == PSMT8 || t.psm == PSMT4 || t.psm == PSMT8H || t.psm == PSMT4HL || t.psm == PSMT4HH;
     uint64_t clutHash = 0;
     if (indexed) {
         clutHash = mix(mix(0, t.cpsm), t.csa);
@@ -461,76 +527,82 @@ void GsFrontend::privileged(uint32_t offset, uint64_t value) {
     if (offset < 0x100 * 16 && !(offset & 0xF)) priv[offset >> 4] = value;
 }
 
+void GsFrontend::packed(uint32_t r, uint64_t a, uint64_t b) {
+    switch (r) {
+    case PRIM: write(PRIM, a & 0x7FF); break;
+    case RGBAQ: {
+        const uint64_t rgba = (a & 0xFF) | (((a >> 32) & 0xFF) << 8) | ((b & 0xFF) << 16) | (((b >> 32) & 0xFF) << 24);
+        write(RGBAQ, rgba | (static_cast<uint64_t>(std::bit_cast<uint32_t>(q)) << 32));
+        break;
+    }
+    case ST:
+        write(ST, a);
+        q = asFloat(static_cast<uint32_t>(b));
+        break;
+    case UV: write(UV, (a & 0x3FFF) | (((a >> 32) & 0x3FFF) << 16)); break;
+    case XYZF2: case XYZF3: {
+        const uint64_t v = (a & 0xFFFF) | (((a >> 32) & 0xFFFF) << 16) | (((b >> 4) & 0xFFFFFF) << 32) | (((b >> 36) & 0xFF) << 56);
+        const bool adc = (b >> 47) & 1;
+        write(r == XYZF3 || adc ? XYZF3 : XYZF2, v);
+        break;
+    }
+    case XYZ2: case XYZ3: {
+        const uint64_t v = (a & 0xFFFF) | (((a >> 32) & 0xFFFF) << 16) | ((b & 0xFFFFFFFF) << 32);
+        const bool adc = (b >> 47) & 1;
+        write(r == XYZ3 || adc ? XYZ3 : XYZ2, v);
+        break;
+    }
+    case FOG: write(FOG, ((b >> 36) & 0xFF) << 56); break;
+    case AD: write(static_cast<uint32_t>(b & 0x7F), a); break;
+    case NOP: break;
+    default: write(r, a); break;   // TEX0, CLAMP, ...: the low 64 bits are the register
+    }
+}
+
 void GsFrontend::gif(uint32_t path, const uint8_t* data, size_t bytes) {
-    (void)path;
+    GifPath& g = gifPaths[path & 3];
     size_t q16 = 0;
     const size_t total = bytes / 16;
     while (q16 < total) {
         uint64_t lo, hi;
         std::memcpy(&lo, data + q16 * 16, 8);
         std::memcpy(&hi, data + q16 * 16 + 8, 8);
-        ++q16;
-        const uint32_t nloop = static_cast<uint32_t>(lo & 0x7FFF);
-        const bool eop = (lo >> 15) & 1;
-        const bool pre = (lo >> 46) & 1;
-        const uint32_t flg = static_cast<uint32_t>(lo >> 58) & 3;
-        uint32_t nreg = static_cast<uint32_t>(lo >> 60) & 0xF;
-        if (!nreg) nreg = 16;
-        if (pre && flg == 0) write(PRIM, (lo >> 47) & 0x7FF);
-        if (flg == 0) {   // PACKED
-            for (uint32_t loop = 0; loop < nloop; ++loop)
-                for (uint32_t k = 0; k < nreg && q16 < total; ++k, ++q16) {
-                    uint64_t a, b;
-                    std::memcpy(&a, data + q16 * 16, 8);
-                    std::memcpy(&b, data + q16 * 16 + 8, 8);
-                    const uint32_t r = static_cast<uint32_t>(hi >> (4 * k)) & 0xF;
-                    switch (r) {
-                    case PRIM: write(PRIM, a & 0x7FF); break;
-                    case RGBAQ: {
-                        const uint64_t rgba = (a & 0xFF) | (((a >> 32) & 0xFF) << 8) | ((b & 0xFF) << 16) | (((b >> 32) & 0xFF) << 24);
-                        write(RGBAQ, rgba | (static_cast<uint64_t>(std::bit_cast<uint32_t>(q)) << 32));
-                        break;
-                    }
-                    case ST:
-                        write(ST, a);
-                        q = asFloat(static_cast<uint32_t>(b));
-                        break;
-                    case UV: write(UV, (a & 0x3FFF) | (((a >> 32) & 0x3FFF) << 16)); break;
-                    case XYZF2: case XYZF3: {
-                        const uint64_t v = (a & 0xFFFF) | (((a >> 32) & 0xFFFF) << 16) | (((b >> 4) & 0xFFFFFF) << 32) | (((b >> 36) & 0xFF) << 56);
-                        const bool adc = (b >> 47) & 1;
-                        write(r == XYZF3 || adc ? XYZF3 : XYZF2, v);
-                        break;
-                    }
-                    case XYZ2: case XYZ3: {
-                        const uint64_t v = (a & 0xFFFF) | (((a >> 32) & 0xFFFF) << 16) | ((b & 0xFFFFFFFF) << 32);
-                        const bool adc = (b >> 47) & 1;
-                        write(r == XYZ3 || adc ? XYZ3 : XYZ2, v);
-                        break;
-                    }
-                    case FOG: write(FOG, ((b >> 36) & 0xFF) << 56); break;
-                    case AD: write(static_cast<uint32_t>(b & 0x7F), a); break;
-                    case NOP: break;
-                    default: write(r, a); break;   // TEX0, CLAMP, ...: the low 64 bits are the register
-                    }
-                }
-        } else if (flg == 1) {   // REGLIST: 64-bit register values
-            const uint64_t count = uint64_t(nloop) * nreg;
-            for (uint64_t i = 0; i < count; ++i) {
-                const size_t word = (q16 * 2) + i;
-                if (word / 2 >= total) break;
-                uint64_t v;
-                std::memcpy(&v, data + word * 8, 8);
-                const uint32_t r = static_cast<uint32_t>(hi >> (4 * (i % nreg))) & 0xF;
-                if (r != AD && r != NOP) write(r, v);
+        if (!g.loops) {   // a tag
+            ++q16;
+            g.loops = static_cast<uint32_t>(lo & 0x7FFF);
+            g.flg = static_cast<uint32_t>(lo >> 58) & 3;
+            g.nreg = static_cast<uint32_t>(lo >> 60) & 0xF;
+            if (!g.nreg) g.nreg = 16;
+            g.regs = hi;
+            g.reg = 0;
+            if (((lo >> 46) & 1) && g.flg == 0) write(PRIM, (lo >> 47) & 0x7FF);
+            if (g.flg == 3) g.flg = 2;   // FLG 3 is IMAGE too
+            continue;
+        }
+        if (g.flg == 0) {   // PACKED: one register per qword
+            packed(static_cast<uint32_t>(g.regs >> (4 * g.reg)) & 0xF, lo, hi);
+            ++q16;
+            if (++g.reg == g.nreg) {
+                g.reg = 0;
+                --g.loops;
             }
-            q16 += (count + 1) / 2;
+        } else if (g.flg == 1) {   // REGLIST: two 64-bit register values per qword (the last one padded)
+            for (const uint64_t v : {lo, hi}) {
+                if (!g.loops) break;
+                const uint32_t r = static_cast<uint32_t>(g.regs >> (4 * g.reg)) & 0xF;
+                if (r != AD && r != NOP) write(r, v);
+                if (++g.reg == g.nreg) {
+                    g.reg = 0;
+                    --g.loops;
+                }
+            }
+            ++q16;
         } else {   // IMAGE
-            const size_t n = std::min<size_t>(nloop, total - q16);
+            const size_t n = std::min<size_t>(g.loops, total - q16);
             if (imageActive) mem.write(data + q16 * 16, n * 16);
             q16 += n;
+            g.loops -= static_cast<uint32_t>(n);
         }
-        if (eop && q16 >= total) break;
     }
 }
 

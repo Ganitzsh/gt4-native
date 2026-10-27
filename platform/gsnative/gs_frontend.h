@@ -63,11 +63,16 @@ struct TextureImage {
 // A texture read from a render target through another pixel format (the PS2's channel-shuffle and palette
 // tricks: a 32-bit frame read as 8-bit indices through a CLUT): the back end builds it on the GPU, from the
 // target as it is at that point of the frame, with the CLUT buffer as it was when the draw was made.
+// target = 0: the indices are in GS memory (`indices`, one byte per texel) and only the palette is a target's.
 struct Reinterpretation {
     uint32_t target = 0, targetBp = 0, targetBw = 0, targetPsm = 0;
+    std::vector<uint8_t> indices;
     uint64_t tex0 = 0, texa = 0;
     uint32_t width = 0, height = 0;
     std::array<uint8_t, 1024> clut{};
+    // When the CLUT was loaded from a 32-bit target (GT4 renders palettes and then uses them): that target,
+    // read on the GPU instead of `clut`.
+    uint32_t clutTarget = 0, clutTargetBp = 0, clutTargetBw = 0;
 };
 
 // A render target: a frame or Z buffer at FBP (blocks) / FBW (64-pixel units) / PSM, as tall as drawn.
@@ -121,6 +126,15 @@ private:
     std::array<Vertex, 3> queue;
     uint32_t queued = 0, stripParity = 0;
     float st[2] = {}, q = 1;   // ST and Q as set by ST/RGBAQ
+    // Each GIF path's tag in progress: its data may continue in the next transfer (an IMAGE tag in one DMA
+    // packet, its pixels in the next).
+    struct GifPath {
+        uint64_t regs = 0;
+        uint32_t loops = 0;    // loops left (IMAGE: qwords left)
+        uint32_t flg = 0, nreg = 0;
+        uint32_t reg = 0;      // the register within the loop (PACKED), or the 64-bit word (REGLIST)
+    } gifPaths[4];
+    void packed(uint32_t r, uint64_t a, uint64_t b);
     // PACKED/REGLIST state that spans calls is not kept: GT4's packets are whole per call.
 
     // Image transfer (HOST -> LOCAL) in progress.
@@ -140,6 +154,13 @@ private:
         uint32_t index = ~0u;
         uint64_t serial = 0;
     } lastReinterpretation;
+    // The target the CLUT buffer was last loaded from (0: memory), and the TEX0 fields of that load.
+    static constexpr uint64_t kClutFields = (0x3Full << 20) | (0xFFFFFFull << 37);
+    struct ClutSource {
+        uint32_t target = 0;
+        uint64_t tex0 = 0;
+    } clutSource;
+    void clutWritten(uint64_t tex0);
 
     // Decoded textures, by what they were decoded from.
     struct Cached {
@@ -156,7 +177,7 @@ private:
     DrawState currentState(uint32_t prim) const;
     uint32_t primValue() const;
     uint32_t targetFor(uint64_t frameReg, bool depth, uint32_t heightNeeded, uint32_t bw);
-    void markWritten(uint32_t targetId, uint32_t bp, uint32_t bw, uint32_t psm, uint32_t y0, uint32_t y1);
+    void markWritten(uint32_t targetId, uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x0, uint32_t x1, uint32_t y0, uint32_t y1);
     TextureSource textureFor(const DrawState& s);
     void transferStarted(uint32_t dir);
     void memoryWritten(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y, uint32_t w, uint32_t h);

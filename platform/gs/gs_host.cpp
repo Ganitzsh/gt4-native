@@ -67,18 +67,50 @@ public:
                 else ++untextured;
             }
             // GT4_GSN_DRAWS=BP: the draws into the target at that block address (hex), with their vertices.
-            static const long drawsAt = std::getenv("GT4_GSN_DRAWS") ? std::strtol(std::getenv("GT4_GSN_DRAWS"), nullptr, 16) : -1;
+            // GT4_GSN_DRAWS=all: one line per draw batch of every target (texture fields decoded, extents).
+            static const char* drawsEnv = std::getenv("GT4_GSN_DRAWS");
+            static const long drawsAt = drawsEnv ? std::strtol(drawsEnv, nullptr, 16) : -1;
+            if (drawsEnv && !std::strcmp(drawsEnv, "all")) {
+                for (const auto& d : list.draws) {
+                    const gsn::Target* t = nullptr;
+                    for (const auto& x : list.targets) if (x.id == d.target) t = &x;
+                    float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f, u0 = 1e9f, v0 = 1e9f, u1 = -1e9f, v1 = -1e9f;
+                    for (uint32_t k = 0; k < d.count; ++k) {
+                        const auto& v = list.vertices[d.first + k];
+                        x0 = std::min(x0, v.x); x1 = std::max(x1, v.x); y0 = std::min(y0, v.y); y1 = std::max(y1, v.y);
+                        u0 = std::min(u0, v.u); u1 = std::max(u1, v.u); v0 = std::min(v0, v.v); v1 = std::max(v1, v.v);
+                    }
+                    const uint64_t t0 = d.state.tex0;
+                    std::printf("[gsn all] t%u bp %X frame %llX prim %03X | tbp %llX tbw %llu psm %llX %ux%u tfx %llu cbp %llX cpsm %llX csa %llu cld %llu | src %d:%u | alpha %llX test %llX | n %u xy %.0f,%.0f-%.0f,%.0f uv %.0f,%.0f-%.0f,%.0f rgba %08X",
+                                d.target, t ? t->bp : 0, (unsigned long long)d.state.frame, d.state.prim,
+                                (unsigned long long)(t0 & 0x3FFF), (unsigned long long)((t0 >> 14) & 0x3F), (unsigned long long)((t0 >> 20) & 0x3F),
+                                1u << ((t0 >> 26) & 0xF), 1u << ((t0 >> 30) & 0xF), (unsigned long long)((t0 >> 35) & 3),
+                                (unsigned long long)((t0 >> 37) & 0x3FFF), (unsigned long long)((t0 >> 51) & 0xF), (unsigned long long)((t0 >> 56) & 0x1F),
+                                (unsigned long long)(t0 >> 61), static_cast<int>(d.texture.kind), d.texture.id,
+                                (unsigned long long)d.state.alpha, (unsigned long long)d.state.test, d.count, x0, y0, x1, y1, u0, v0, u1, v1,
+                                d.count ? list.vertices[d.first].rgba : 0u);
+                    if (d.texture.kind == gsn::TextureSource::Kind::Reinterpreted && d.texture.id < list.reinterpretations.size()) {
+                        const auto& r = list.reinterpretations[d.texture.id];
+                        std::printf(" | from t%u clut t%u", r.target, r.clutTarget);
+                        if (!r.indices.empty()) {
+                            std::printf(" indices");
+                            for (size_t k = 0; k < std::min<size_t>(r.indices.size(), 16); ++k) std::printf(" %u", r.indices[k]);
+                        }
+                    }
+                    std::printf("\n");
+                }
+            }
             for (const auto& d : list.draws) {
                 const gsn::Target* t = nullptr;
                 for (const auto& x : list.targets) if (x.id == d.target) t = &x;
                 if (!t || static_cast<long>(t->bp) != drawsAt) continue;
-                std::printf("[gsn draw] prim %03X tex0 %016llX src kind %d id %u off %d,%d clamp %llX tex1 %llX alpha %llX, %u vertices\n", d.state.prim,
+                std::printf("[gsn draw] test %llX zbuf %llX frame %llX prim %03X tex0 %016llX src kind %d id %u off %d,%d clamp %llX tex1 %llX alpha %llX, %u vertices\n", (unsigned long long)d.state.test, (unsigned long long)d.state.zbuf, (unsigned long long)d.state.frame, d.state.prim,
                             static_cast<unsigned long long>(d.state.tex0), static_cast<int>(d.texture.kind), d.texture.id, d.texture.offsetX,
                             d.texture.offsetY, static_cast<unsigned long long>(d.state.clamp), static_cast<unsigned long long>(d.state.tex1),
                             static_cast<unsigned long long>(d.state.alpha), d.count);
                 for (uint32_t k = 0; k < std::min<uint32_t>(d.count, 6); ++k) {
                     const auto& v = list.vertices[d.first + k];
-                    std::printf("    xy %.2f %.2f uv %.2f %.2f stq %.4f %.4f %.4f rgba %08X\n", v.x, v.y, v.u, v.v, v.s, v.t, v.q, v.rgba);
+                    std::printf("    z %08X xy %.2f %.2f uv %.2f %.2f stq %.4f %.4f %.4f rgba %08X\n", v.z, v.x, v.y, v.u, v.v, v.s, v.t, v.q, v.rgba);
                 }
             }
             uint32_t reinterpreted = 0;

@@ -18,8 +18,42 @@ layout(location = 3) in float inFog;
 layout(location = 0, index = 0) out vec4 outColour;
 layout(location = 0, index = 1) out vec4 outFactor;
 
+// One axis of a texel index under CLAMP's mode: REPEAT, CLAMP, REGION_CLAMP (MIN, MAX), REGION_REPEAT
+// (MSK, FIX).
+int wrap(int i, uint mode, int size) {
+    const int lo = int((mode >> 2) & 0x3FFu), hi = int((mode >> 12) & 0x3FFu);
+    switch (mode & 3u) {
+    case 0u: return i & (size - 1);
+    case 1u: return clamp(i, 0, size - 1);
+    case 2u: return clamp(i, lo, hi);
+    default: return (i & lo) | hi;
+    }
+}
+
+// Point sampling as the GS: the texel under the coordinate (in texels; a small bias keeps exact integers
+// from rounding down), wrapped. From a target at a higher scale, the render pixel within that texel.
+vec4 nearestTexel(vec2 position) {
+    const vec2 cell = floor(position + 1.0 / 64.0);
+    const ivec2 size = ivec2(draw.textureSize);
+    const ivec2 i = ivec2(wrap(int(cell.x), draw.clampU, size.x), wrap(int(cell.y), draw.clampV, size.y));
+    if ((draw.flags & kFromTarget) != 0u) {
+        const vec2 within = clamp(position - cell, 0.0, 0.999);
+        const vec4 t = texelFetch(source, ivec2((draw.sourceOffset + vec2(i) + within) * draw.scale), 0);
+        return vec4(t.rgb * 255.0, t.a * 128.0);
+    }
+    return texelFetch(source, i, 0) * 255.0;
+}
+
 vec4 texel(vec2 coordinate) {
     // coordinate: normalised over the texture (2^TW x 2^TH).
+    if ((draw.flags & kNearest) != 0u) {
+        vec4 c = nearestTexel(coordinate * draw.textureSize);
+        if ((draw.flags & (kFromTarget | kTarget24)) == (kFromTarget | kTarget24)) {
+            const bool black = all(lessThan(c.rgb, vec3(0.5)));
+            c.a = ((draw.tex >> 24) & 1u) != 0u && black ? 0.0 : float((draw.tex >> 8) & 0xFFu);
+        }
+        return floor(c + 0.5);
+    }
     if ((draw.flags & kFromTarget) != 0u) {
         const vec2 gsPixel = draw.sourceOffset + coordinate * draw.textureSize;
         const vec4 t = texture(source, gsPixel / draw.sourceSize);
@@ -48,11 +82,21 @@ bool alphaPasses(float a) {
     }
 }
 
+// An interpolated value moved from this render pixel's centre to its GS pixel's sample point (exact for the
+// affine sprites that reinterpretation effects draw).
+vec3 atGsPoint(vec3 value) {
+    if ((draw.flags & kSnap) == 0u || draw.scale <= 1.0) return value;
+    const vec2 offset = floor(gl_FragCoord.xy / draw.scale) * draw.scale + 0.5 - gl_FragCoord.xy;
+    return value + dFdx(value) * offset.x + dFdy(value) * offset.y;
+}
+
 void main() {
     const vec4 cv = floor(inColour * 255.0 + 0.5);
     vec4 c = cv;
     if ((draw.flags & kTextured) != 0u) {
-        const vec2 coordinate = (draw.flags & kUv) != 0u ? inUv / draw.textureSize : inStq.xy / inStq.z;
+        const vec3 stq = atGsPoint(inStq);
+        const vec2 uv = atGsPoint(vec3(inUv, 0.0)).xy;
+        const vec2 coordinate = (draw.flags & kUv) != 0u ? uv / draw.textureSize : stq.xy / stq.z;
         const vec4 ct = texel(coordinate);
         const uint tfx = draw.tex & 3u;
         const bool tcc = (draw.tex & 4u) != 0u;

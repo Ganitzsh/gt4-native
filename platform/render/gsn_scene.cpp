@@ -28,11 +28,13 @@ struct DrawConstants {
     float sourceOffset[2];
     float sourceSize[2];
     uint32_t tex, fogColour, alphaTest, blend;
+    uint32_t clampU, clampV;   // WMS/WMT (0-1), MINU/MINV (2-11), MAXU/MAXV (12-21): CLAMP
 };
-static_assert(sizeof(DrawConstants) == 56);
+static_assert(sizeof(DrawConstants) == 64);
 
 enum : uint32_t {
     kTextured = 1, kUv = 2, kFog = 4, kBlend = 8, kPabe = 16, kFba = 32, kFromTarget = 64, kTarget24 = 128, kDestAlphaBlend = 256,
+    kNearest = 512, kSnap = 1024,
 };
 
 // A fixed-function blend for C = Ad: the coefficients of Cs and Cd as (a * Ad + b), mapped onto factors.
@@ -86,7 +88,7 @@ struct GsnScene::Impl {
     vk::Image blank;                     // 1 x 1 for untextured draws
     vk::Image feedback;                  // a copy of a target a draw samples while drawing into it
     vk::Image scratchDepth;              // stencil for destination-alpha tests without a Z buffer
-    std::array<vk::Buffer, kSlots> vertexBuffers{}, staging{}, clutBuffers{};
+    std::array<vk::Buffer, kSlots> vertexBuffers{}, staging{}, clutBuffers{}, indexBuffers{};
     std::vector<vk::Image> reinterpreted;   // per reinterpretation of the frame (gs_frontend.h)
     std::vector<bool> built;
     vk::Pipeline reinterpret;
@@ -122,6 +124,7 @@ struct GsnScene::Impl {
         for (auto& b : vertexBuffers) vk::destroy(device, b);
         for (auto& b : staging) vk::destroy(device, b);
         for (auto& b : clutBuffers) vk::destroy(device, b);
+        for (auto& b : indexBuffers) vk::destroy(device, b);
         for (auto& i : reinterpreted) vk::destroy(device, i);
         vk::destroy(device, reinterpret);
         for (auto& [key, p] : pipelines) vk::destroy(device, p);
@@ -371,10 +374,26 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
     if (reinterpreted.size() < count) reinterpreted.resize(count);
     vk::Buffer& cluts = buffer(clutBuffers, slot, std::max<VkDeviceSize>(count * 1024, 1024), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     for (size_t i = 0; i < count; ++i) std::memcpy(static_cast<uint8_t*>(cluts.mapped) + i * 1024, frame.reinterpretations[i].clut.data(), 1024);
+    // Indices from GS memory (target 0), one buffer for the frame: each one's start in words.
+    std::vector<uint32_t> indexStart(count, 0);
+    size_t indexWords = 1;
+    for (size_t i = 0; i < count; ++i) {
+        indexStart[i] = static_cast<uint32_t>(indexWords);
+        indexWords += (frame.reinterpretations[i].indices.size() + 3) / 4;
+    }
+    vk::Buffer& indexBuffer = buffer(indexBuffers, slot, indexWords * 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    for (size_t i = 0; i < count; ++i) {
+        const auto& indices = frame.reinterpretations[i].indices;
+        if (!indices.empty()) std::memcpy(static_cast<uint8_t*>(indexBuffer.mapped) + indexStart[i] * 4, indices.data(), indices.size());
+    }
     auto build = [&](uint32_t index) -> vk::Image* {
         const gsn::Reinterpretation& r = frame.reinterpretations[index];
-        auto source = targets.find(r.target);
-        if (source == targets.end() || !source->second.image.valid() || source->second.depth) return nullptr;
+        GpuTarget* source = nullptr;
+        if (r.target) {
+            auto it = targets.find(r.target);
+            if (it == targets.end() || !it->second.image.valid() || it->second.depth) return nullptr;
+            source = &it->second;
+        }
         vk::Image& out = reinterpreted[index];
         if (!built[index]) {
             end();
@@ -390,20 +409,34 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
                 desc.name = "gsn reinterpreted";
                 out = vk::createImage(device, desc);
             }
-            vk::toSampled(b, source->second.image, vk::kCompute);
+            // A palette drawn into a target: read there (gs_frontend.cpp, clutWritten).
+            GpuTarget* palette = nullptr;
+            if (r.clutTarget) {
+                auto it = targets.find(r.clutTarget);
+                if (it != targets.end() && it->second.image.valid() && !it->second.depth) palette = &it->second;
+            }
+            if (source) vk::toSampled(b, source->image, vk::kCompute);
+            if (palette && palette != source) vk::toSampled(b, palette->image, vk::kCompute);
             vk::toStorage(b, out, true);
             b.flush(command);
             struct {
                 uint32_t targetBp, targetBw, targetHeight, scale, tbp, tbw, psm, width, height, cpsm, csa, texa;
-            } k{r.targetBp, r.targetBw, source->second.height, scale, static_cast<uint32_t>(r.tex0 & 0x3FFF),
+                uint32_t clutTargetBp, clutBw, clutHeight, cbp;
+                uint32_t indexStart, pad[3];
+            } k{r.targetBp, source ? r.targetBw : 0, source ? source->height : 0, scale, static_cast<uint32_t>(r.tex0 & 0x3FFF),
                 static_cast<uint32_t>((r.tex0 >> 14) & 0x3F), static_cast<uint32_t>((r.tex0 >> 20) & 0x3F), r.width, r.height,
                 static_cast<uint32_t>((r.tex0 >> 51) & 0xF), static_cast<uint32_t>((r.tex0 >> 56) & 0x1F),
-                static_cast<uint32_t>(r.texa & 0xFF) | (static_cast<uint32_t>((r.texa >> 32) & 0xFF) << 8) | (static_cast<uint32_t>((r.texa >> 15) & 1) << 16)};
+                static_cast<uint32_t>(r.texa & 0xFF) | (static_cast<uint32_t>((r.texa >> 32) & 0xFF) << 8) | (static_cast<uint32_t>((r.texa >> 15) & 1) << 16),
+                palette ? r.clutTargetBp : 0, palette ? r.clutTargetBw : 0, palette ? palette->height : 0,
+                static_cast<uint32_t>((r.tex0 >> 37) & 0x3FFF), source ? 0 : indexStart[index], {}};
+            const VkImageView fallback = source ? source->image.view : palette ? palette->image.view : blank.view;
             vk::bind(command, reinterpret);
             vk::Descriptors()
-                .sampled(0, source->second.image.view, samplers[0])
+                .sampled(0, fallback, samplers[0])
                 .storage(1, out.view)
                 .storageBuffer(2, cluts.buffer, VkDeviceSize(index) * 1024, 1024)
+                .sampled(3, palette ? palette->image.view : fallback, samplers[0])
+                .storageBuffer(4, indexBuffer.buffer, 0, indexWords * 4)
                 .push(command, reinterpret);
             vk::pushConstants(command, reinterpret, k);
             vk::dispatch2D(command, r.width, r.height);
@@ -414,8 +447,12 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         return &out;
     };
 
+    // GT4_GSN_LIMIT=K (debugging): only the first K draws of each frame.
+    static const long limit = std::getenv("GT4_GSN_LIMIT") ? std::strtol(std::getenv("GT4_GSN_LIMIT"), nullptr, 10) : -1;
+    long executed = 0;
     for (const auto& cmd : frame.commands) {
         if (cmd.kind != gsn::FrameList::Command::Kind::Draw) continue;
+        if (limit >= 0 && executed++ >= limit) break;
         const gsn::Draw& d = frame.draws[cmd.index];
         auto targetIt = targets.find(d.target);
         if (targetIt == targets.end()) continue;
@@ -437,6 +474,11 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
             k.textureSize[1] = static_cast<float>(1u << std::min(th, 10u));
             const bool linear = (s.tex1 >> 5) & 1;
             const bool repeat = (s.clamp & 3) == 0;
+            if (!linear) k.flags |= kNearest;
+            k.clampU = static_cast<uint32_t>(s.clamp & 3) | (static_cast<uint32_t>((s.clamp >> 4) & 0x3FF) << 2) |
+                       (static_cast<uint32_t>((s.clamp >> 14) & 0x3FF) << 12);
+            k.clampV = static_cast<uint32_t>((s.clamp >> 2) & 3) | (static_cast<uint32_t>((s.clamp >> 24) & 0x3FF) << 2) |
+                       (static_cast<uint32_t>((s.clamp >> 34) & 0x3FF) << 12);
             sampler = samplers[(linear ? 2 : 0) + (repeat ? 1 : 0)];
             if (d.texture.kind == gsn::TextureSource::Kind::Target) {
                 auto source = targets.find(d.texture.id);
@@ -484,7 +526,9 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
                 auto t = textures.find(d.texture.id);
                 if (t != textures.end()) view = t->second.image.view;
             } else if (d.texture.kind == gsn::TextureSource::Kind::Reinterpreted && d.texture.id < count) {
+                // Bytes of a target read as indices: sampled once per GS pixel, as the effect expects.
                 if (vk::Image* image = build(d.texture.id)) view = image->view;
+                k.flags |= kSnap;
             }
             k.tex = static_cast<uint32_t>((s.tex0 >> 35) & 3) | (static_cast<uint32_t>((s.tex0 >> 34) & 1) << 2) |
                     (static_cast<uint32_t>(s.texa & 0xFF) << 8) | (static_cast<uint32_t>((s.texa >> 32) & 0xFF) << 16) |
@@ -679,8 +723,9 @@ void GsnScene::prepare(const SceneFormats& formats) {
     s.stencilPrep = vk::createGraphics(s.device, stencil);
     if (!s.reinterpret.valid())
         s.reinterpret = vk::createCompute(s.device, shaders::gsn_reinterpret_comp(),
-                                          {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
-                                          48, "gsn reinterpret");
+                                          {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                           VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+                                          80, "gsn reinterpret");
     if (!s.blank.valid()) {
         vk::ImageDesc b;
         b.format = VK_FORMAT_R8G8B8A8_UNORM;
