@@ -166,6 +166,13 @@ struct NativeDiff final : GifSink {
         for (const auto& [address, c] : entries)
             std::fprintf(stderr, "[vu1 native] %04X: %llu %llu %llu\n", address * 8, (unsigned long long)c.runs, (unsigned long long)c.kick,
                          (unsigned long long)c.mem);
+        if (Vu1Native* native = vuNative())
+            std::fprintf(stderr, "[vu1 native] %llu native, %llu interpreted (%llu needed the polygon clipper)\n",
+                         (unsigned long long)native->stats.native, (unsigned long long)native->stats.interpreted,
+                         (unsigned long long)native->stats.clipperFallbacks);
+        if (Vu1Native* native = vuNative())
+            for (const auto& [part, runs] : native->stats.parts)
+                std::fprintf(stderr, "[vu1 native] part %04X: %llu runs\n", part, (unsigned long long)runs);
     }
 };
 
@@ -195,7 +202,9 @@ bool runNativeDiff(NativeDiff& d, Vu1Native& native, Vu1& vu, uint32_t address, 
     NativeDiff::Count& c = d.entries[address];
     ++c.runs;
     const bool kick = nativeKicks.kicks != interpreted.kicks;
-    const bool mem = std::memcmp(d.scratch.data, d.ref->data, sizeof vu.data) != 0;
+    // Qwords 871..1023 (and 870's z, w) are the clipper's scratch area, beyond both VIF buffers (TOP 0 and
+    // 435): every program writes what it reads there, so only the packet start in 870 x, y is compared.
+    const bool mem = std::memcmp(d.scratch.data, d.ref->data, 870 * 16 + 8) != 0;
     c.kick += kick;
     c.mem += mem;
     if ((kick || mem) && c.kick + c.mem <= 6) {

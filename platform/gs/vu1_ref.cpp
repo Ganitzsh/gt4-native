@@ -358,16 +358,9 @@ struct Machine {
             case 0x68: store_vi(it, r.top); break;
             case 0x69: store_vi(it, r.itop); break;
             case 0x6C: xgkick(r.vi[is]); break;
-            case 0x70: case 0x71: case 0x72: case 0x73: {
-                const float x = u2f(r.vf[fs].u[0]), y = u2f(r.vf[fs].u[1]), z = u2f(r.vf[fs].u[2]);
-                const float sum = x * x + y * y + z * z;
-                float p = sum;
-                if (index == 0x71) p = sum != 0.0f ? 1.0f / sum : 3.4e38f;
-                if (index == 0x72) p = std::sqrt(sum);
-                if (index == 0x73) p = sum != 0.0f ? 1.0f / std::sqrt(sum) : 3.4e38f;
-                r.p = f2u(p);
+            case 0x70: case 0x71: case 0x72: case 0x73:
+                r.p = fp::efu_length(r.vf[fs].u[0], r.vf[fs].u[1], r.vf[fs].u[2], static_cast<int>(index - 0x70));
                 break;
-            }
             case 0x74: r.p = f2u(std::atan2(u2f(r.vf[fs].u[1]), u2f(r.vf[fs].u[0]))); break;
             case 0x75: r.p = f2u(std::atan2(u2f(r.vf[fs].u[2]), u2f(r.vf[fs].u[0]))); break;
             case 0x76: r.p = f2u(u2f(r.vf[fs].u[0]) + u2f(r.vf[fs].u[1]) + u2f(r.vf[fs].u[2]) + u2f(r.vf[fs].u[3])); break;
@@ -496,6 +489,7 @@ void Vu1Ref::run(uint32_t address) {
         npc = (npc + 8u) & 16383u;
         ++m.pipe.t;
         if (trace) std::fprintf(trace, "%04x t%u clip %06x mac %04x vi1 %04x\n", current, m.pipe.t, m.pipe.clip(), m.pipe.mac(), vi[1]);
+        if (trace) traceRegs(trace, vf, acc);
         const UpperOut out = upper(*this, hi);
         if (hi & 0x80000000u) {
             i = lo;

@@ -137,6 +137,25 @@ inline uint32_t to_fixed(uint32_t x, int fraction) {
 
 inline uint32_t from_fixed(int32_t v, int fraction) { return from_double(static_cast<double>(v) / static_cast<double>(1u << fraction)); }
 
+// A VU word as a host float: denormals flush to signed zero, the exponent-255 patterns to +-max.
+inline float to_host(uint32_t v) {
+    if (!(v & 0x7F800000u)) v &= 0x80000000u;
+    if ((v & 0x7F800000u) == 0x7F800000u) v = (v & 0x80000000u) | 0x7F7FFFFFu;
+    return std::bit_cast<float>(v);
+}
+
+// ESADD / ERSADD / ELENG / ERLENG (index 0..3) of x, y, z: computed in host single precision, as the
+// reference interpreter does (the EFU's own rounding is not modelled).
+inline uint32_t efu_length(uint32_t x, uint32_t y, uint32_t z, int index) {
+    const float fx = to_host(x), fy = to_host(y), fz = to_host(z);
+    const float sum = fx * fx + fy * fy + fz * fz;
+    float p = sum;
+    if (index == 1) p = sum != 0.0f ? 1.0f / sum : 3.4e38f;
+    if (index == 2) p = std::sqrt(sum);
+    if (index == 3) p = sum != 0.0f ? 1.0f / std::sqrt(sum) : 3.4e38f;
+    return std::bit_cast<uint32_t>(p);
+}
+
 }  // namespace gt4::ps2::vufp
 
 namespace gt4::ps2 {

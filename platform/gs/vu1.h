@@ -20,6 +20,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 
@@ -38,6 +39,21 @@ union VuVector {
     int32_t s[4];
 };
 
+// Debugging: after each traced instruction pair, the VF registers listed in GT4_VU1_TRACE_REGS (comma-
+// separated numbers, 32 = ACC) as hex words.
+inline void traceRegs(std::FILE* trace, const VuVector* vf, const VuVector& acc) {
+    static const char* list = std::getenv("GT4_VU1_TRACE_REGS");
+    if (!list) return;
+    for (const char* p = list; *p;) {
+        char* end = nullptr;
+        const long r = std::strtol(p, &end, 10);
+        if (end == p) break;
+        const VuVector& v = r == 32 ? acc : vf[r & 31];
+        std::fprintf(trace, "   %s%ld %08X %08X %08X %08X\n", r == 32 ? "acc" : "vf", r == 32 ? 0L : r, v.u[0], v.u[1], v.u[2], v.u[3]);
+        p = *end == ',' ? end + 1 : end;
+    }
+}
+
 class Vu1 {
 public:
     static constexpr uint32_t kMicroBytes = 16384;   // 2048 instruction pairs
@@ -53,6 +69,8 @@ public:
     uint64_t run(uint32_t pc, uint64_t maxCycles = 50'000'000);
     bool runaway() const { return stoppedRunaway; }
     uint32_t pc() const { return tpc; }   // where MSCNT continues
+    // XGKICK: sends the GIF packet at `qword` (PATH1); used by the native microprograms (vu1_native.cpp).
+    void kick(uint32_t qword) { xgkick(qword); }
 
     // VIF1 double-buffer pointers (XTOP / XITOP read them).
     uint32_t top = 0, itop = 0;

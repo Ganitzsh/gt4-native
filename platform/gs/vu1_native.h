@@ -13,6 +13,7 @@
 #include "vu1.h"
 
 #include <cstdint>
+#include <map>
 #include <string>
 
 namespace gt4::ps2 {
@@ -28,6 +29,8 @@ public:
 
     struct Stats {
         uint64_t native = 0, interpreted = 0;
+        uint64_t clipperFallbacks = 0;   // batches interpreted because a triangle needed the polygon clipper
+        std::map<uint32_t, uint64_t> parts;   // native runs per renderer, lighting body and unpack routine (byte address)
     } stats;
 
 private:

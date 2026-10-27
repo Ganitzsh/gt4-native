@@ -726,6 +726,7 @@ uint64_t Vu1::run(uint32_t startPc, uint64_t maxCycles) {
             viBackupCycles -= static_cast<int>(std::min<uint64_t>(cycle - before, static_cast<uint64_t>(viBackupCycles)));
         flushPipes();
         if (trace) std::fprintf(trace, "%04x c%llu clip %06x mac %04x vi1 %04x\n", ((tpc - 1) & 0x7FF) * 8, static_cast<unsigned long long>(cycle - begin), clip, mac, vi[1]);
+        if (trace) traceRegs(trace, vf, acc);
 
         UpperResult up = exec.upper(upperWord);
         bool fsset = false, fcset = false;
