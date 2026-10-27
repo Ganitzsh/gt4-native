@@ -16,6 +16,9 @@ enum class AspectRatio : uint8_t { Window, R4_3, R16_9, R16_10, R21_9, R32_9 };
 enum class HudLayout : uint8_t { Anchored, Centered, Stretched };
 enum class QualityMode : uint8_t { Native, UltraQuality, Quality, Balanced, Performance, UltraPerformance, Custom };
 enum class Upscaler : uint8_t { Bilinear, Bicubic, Lanczos, Fsr1, Fsr2 };
+// How GT4's GS commands become pixels: the GS emulated at 640 x 448 (paraLLEl-GS), or drawn by the native
+// renderer at the render resolution (docs/NATIVE_RENDERER.md).
+enum class GsRenderer : uint8_t { Emulated, Native };
 enum class AntiAliasing : uint8_t { Off, Fxaa, Smaa, SmaaT2x, Taa };
 enum class TextureFilter : uint8_t { Point, Bilinear, Trilinear };
 enum class Tonemapper : uint8_t { Original, Reinhard, Aces, AgX, AgXPunchy, PbrNeutral };
@@ -45,6 +48,7 @@ struct Settings {
     float safeArea = 0.0f;            // HUD inset, fraction of the content height
 
     // [render]
+    GsRenderer gsRenderer = GsRenderer::Native;
     QualityMode quality = QualityMode::Native;
     int renderScale = 100;            // percent of the output resolution, used by quality = custom
     Upscaler upscaler = Upscaler::Fsr1;

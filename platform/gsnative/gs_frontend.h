@@ -22,12 +22,16 @@ struct Vertex {
     float s = 0, t = 0, q = 1;   // STQ (FST = 0)
     float u = 0, v = 0;      // UV in texels (FST = 1)
     uint32_t fog = 0;        // F, 0..255
+    // A sprite's texture rectangle (UV in texels, or S/Q and T/Q): filtering at a higher resolution stays
+    // inside it. minU > maxU for other primitives.
+    float minU = 1, minV = 1, maxU = 0, maxV = 0;
 };
 
 // The registers a draw's result depends on, for the context it uses.
 struct DrawState {
     uint32_t prim = 0;   // TYPE (low 3 bits), IIP, TME, FGE, ABE, AA1, FST, CTXT, FIX as in PRIM
     uint64_t frame = 0, zbuf = 0, tex0 = 0, tex1 = 0, clamp = 0, test = 0, alpha = 0, scissor = 0, texa = 0;
+    uint64_t miptbp1 = 0, miptbp2 = 0;   // mipmap levels 1-3 and 4-6, when TEX1 mipmaps
     uint32_t fba = 0, pabe = 0, dthe = 0, colclamp = 1, fogcol = 0;
     bool operator==(const DrawState&) const = default;
 };
@@ -57,7 +61,8 @@ struct Draw {
 // A decoded texture the back end must (re)upload: RGBA8, R in the low byte, the GS's alpha (0x80 = 1.0).
 struct TextureImage {
     uint32_t id = 0, version = 0, width = 0, height = 0;
-    std::vector<uint32_t> pixels;
+    uint32_t levels = 1;             // mipmap levels, each half the size of the one before (at least 1 x 1)
+    std::vector<uint32_t> pixels;    // level 0, then each further level
 };
 
 // A texture read from a render target through another pixel format (the PS2's channel-shuffle and palette
@@ -98,6 +103,7 @@ struct FrameList {
     std::vector<TextureImage> textures;   // new or changed this frame
     std::vector<Reinterpretation> reinterpretations;
     std::vector<uint32_t> retiredTextures;   // texture ids no longer used after this frame
+    bool resetTextures = false;              // every earlier texture is gone (GsFrontend::resetTextures)
     std::vector<Target> targets;          // every target known (created or grown this frame included)
     Display display;
     uint64_t vblank = 0;
@@ -115,6 +121,9 @@ public:
     // Ends the frame: `out` receives it (swapped, so its buffers are reused).
     void vsync(uint64_t vblank, FrameList& out);
     const GsMemory& memory() const { return mem; }
+    // Forgets every decoded texture (after frames that were not drawn: their uploads never happened); the
+    // next frame says so with resetTextures.
+    void resetTextures();
 
     struct Stats {
         uint64_t primitives = 0, draws = 0, uploads = 0, copies = 0, decoded = 0, targetReads = 0, reinterpreted = 0;

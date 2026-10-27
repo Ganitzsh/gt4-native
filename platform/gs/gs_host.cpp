@@ -120,14 +120,25 @@ public:
                         "%zu targets, display %u/%u\n", count, list.draws.size(), untextured, memory, targets, list.vertices.size(),
                         list.textures.size(), list.targets.size(), list.display.target1, list.display.target2);
         }
-        if (native && publishNative) publishNative(list);
+        if (native && publishNative) {
+            if (!nativeWanted.load(std::memory_order_relaxed)) {
+                resetPending = true;
+            } else if (resetPending) {   // the frames in between were not drawn: start the textures again
+                native->resetTextures();
+                resetPending = false;
+            } else {
+                publishNative(list);
+            }
+        }
         if (backend.vsync(field, count, frame)) publish(frame);
         else ++blankFrames;
     }
     void readTransfer(void* out, uint32_t qwc) override { backend.readTransfer(out, qwc); }
     void readVram(void* out) override { backend.readVram(0, out, 4u << 20); }
     uint64_t blankFrames = 0;
+    std::atomic<bool> nativeWanted{true};
 private:
+    bool resetPending = false;
     Backend& backend;
     std::function<void(gsn::FrameList&)> publishNative;
     std::unique_ptr<gsn::GsFrontend> native;
@@ -252,6 +263,11 @@ GsHost::~GsHost() {
     if (impl->worker.joinable()) impl->worker.join();
     impl->link.reset();   // asks the game to quit
     std::printf("GS: %s\n", summary().c_str());
+    std::fflush(stdout);
+    impl->stream.reset();
+    impl->target.reset();
+    impl->backend.reset();
+    std::fprintf(stderr, "GS: stopped\n");
 }
 
 std::unique_ptr<GsHost> GsHost::create(const Options& options, std::string& error) {
@@ -322,6 +338,8 @@ bool GsHost::takeFrame(DisplayFrame& frame, uint64_t& serial) {
     serial = impl->serial;
     return true;
 }
+
+void GsHost::setNativeFrames(bool wanted) { impl->target->nativeWanted.store(wanted, std::memory_order_relaxed); }
 
 bool GsHost::takeNativeFrame(gsn::FrameList& list, uint64_t& serial) {
     std::lock_guard<std::mutex> lock(impl->frameMutex);

@@ -11,11 +11,13 @@ layout(location = 2) in vec4 inColour;   // R8G8B8A8_UNORM: the GS's 0..255 over
 layout(location = 3) in vec3 inStq;
 layout(location = 4) in vec2 inUv;
 layout(location = 5) in uint inFog;
+layout(location = 6) in vec4 inBounds;   // a sprite's texture rectangle (min U, min V, max U, max V)
 
 layout(location = 0) out vec4 outColour;
 layout(location = 1) out vec3 outStq;
 layout(location = 2) out vec2 outUv;
 layout(location = 3) out float outFog;
+layout(location = 4) flat out vec4 outBounds;
 
 void main() {
     const vec2 p = (inPosition * draw.scale + 0.5) / draw.targetSize * 2.0 - 1.0;
@@ -25,4 +27,5 @@ void main() {
     outStq = inStq;
     outUv = inUv;
     outFog = float(inFog);
+    outBounds = inBounds;
 }

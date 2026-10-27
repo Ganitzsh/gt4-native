@@ -46,6 +46,33 @@ Back end (Vulkan, recorded by the display pipeline as a scene source):
   exceed 255 (COLCLAMP).
 - **Display**: PMODE / DISPFB / DISPLAY of both circuits composed into the scene's colour target.
 
+## GT4's tricks, and how the native renderer follows them
+
+Found frame by frame against paraLLEl-GS (`GT4_VRAM_DUMP` for its memory, `GT4_GSN_DUMP` for the targets,
+`GT4_GSN_DRAWS=all` and `GT4_GSN_XFER` for the front end's view):
+
+- **Colour grading through palettes (race).** After the 3D frame is composited into the 24-bit display
+  buffer, each 64 x 32 block is read as 8-bit indices (`T8` over the 32-bit pixels: one byte, one channel)
+  through a palette that holds the grading curve, three sprites per block summing R, G and B into a scratch
+  target; the block is then written back by drawing an uploaded index ramp (8 x 32, `T8` at 0x38E4)
+  through palettes loaded from the scratch target. So palettes can live in a render target: a CLUT load from
+  a page a 32-bit target owns is read on the GPU (`clutWritten`, `gsn_reinterpret.comp`), and an index
+  texture in memory with such a palette is a reinterpretation too. Page ownership follows the drawn
+  rectangle, not whole rows: the ramp and the curve sit in the scratch target's second page, which is never
+  drawn.
+- **Sub-pixel reinterpretation.** Those tricks move whole GS pixels; at a render scale above 1 a
+  reinterpreted texture has scale x scale texels per GS texel, each reading the same sub-pixel of the pixels
+  it comes from, and the draws that sample it (`kSnap`) take their GS pixel's texel and their own
+  sub-texel. The colour grading thus applies at full resolution, as the game meant it, with no
+  GT4-specific detection.
+- **GIF tags across transfers.** An IMAGE tag can end one DMA packet and its pixels arrive in the next (the
+  ramp's upload): each path keeps its tag in progress.
+- **Z only.** The mirror and the scene clear Z inside a rectangle with a sprite whose alpha test always fails
+  with AFAIL = ZB_ONLY; every AFAIL mode is a second pass with the test inverted and the masks it allows.
+- **One index image, several palettes.** Road textures are a 4-bit image loaded with an 8-bit CLUT and drawn
+  with different CSA; a texture is cached per palette, and content that changes within a frame gets a new
+  id (the back end uploads before the frame's draws).
+
 ## Order of work and acceptance
 
 1. Memory model and transfers; every format round-trips and matches paraLLEl-GS's memory.

@@ -39,6 +39,9 @@ public:
     bool takeFrame(DisplayFrame& frame, uint64_t& serial);
     // The newest native frame list when it is newer than `serial` (swapped into `list`).
     bool takeNativeFrame(gsn::FrameList& list, uint64_t& serial);
+    // Whether native frame lists are wanted (Options::nativeRenderer): while not, the front end keeps
+    // following the stream but its frames are dropped.
+    void setNativeFrames(bool wanted);
     // Host -> game pad state (libpad2 layout, 18 bytes). Ignored without a live game.
     void sendPad(uint32_t port, bool connected, const uint8_t data[18]);
 

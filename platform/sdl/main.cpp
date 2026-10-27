@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -25,6 +26,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -515,9 +517,9 @@ int run(const Options& options) {
         gt4::gs::GsHost::Options gsOptions;
         gsOptions.gamePath = options.game;
         gsOptions.gameArgs = options.gameArgs;
-        // GT4_GSN=render: draw with the native renderer instead of the GS back end's frame (in progress,
-        // docs/NATIVE_RENDERER.md).
-        if (const char* gsn = std::getenv("GT4_GSN"); gsn && !std::strcmp(gsn, "render")) gsOptions.nativeRenderer = true;
+        // The native renderer's front end follows the stream whenever the game runs, so that render.gs can
+        // change at any time (docs/NATIVE_RENDERER.md); GT4_GSN=off leaves it out.
+        if (const char* gsn = std::getenv("GT4_GSN"); !gsn || std::strcmp(gsn, "off")) gsOptions.nativeRenderer = true;
         // A wide content shape switches on the game's own 16:9 mode, generalised to that aspect (the
         // game's --aspect: Hor+ 3D in the anamorphic 640 x 448 frame, which the host presents at the
         // aspect). Read at start-up: changing aspect.ratio later needs a restart of the game.
@@ -657,7 +659,12 @@ int run(const Options& options) {
         if (gs) {
             if (lockstep) gs->advance();
             if (gs->takeFrame(gsFrame, gsSerial)) renderer->setGameFrame(gsFrame.width, gsFrame.height, gsFrame.rgba.data());
-            if (gs->takeNativeFrame(nativeFrame, nativeSerial)) renderer->setNativeFrame(nativeFrame);
+            // render.gs = native (GT4_GSN=render forces it): the native renderer's frames.
+            static const bool forceNative = [] { const char* e = std::getenv("GT4_GSN"); return e && !std::strcmp(e, "render"); }();
+            const bool wantNative = forceNative || settings.gsRenderer == gt4::GsRenderer::Native;
+            gs->setNativeFrames(wantNative);
+            renderer->useNativeFrames(wantNative);
+            if (wantNative && gs->takeNativeFrame(nativeFrame, nativeSerial)) renderer->setNativeFrame(nativeFrame);
             if (gs->live()) {
                 uint8_t pad[18];
                 gt4::ps2::encodePad(readPad(gamepad), pad);
@@ -788,6 +795,14 @@ int run(const Options& options) {
     std::printf("%s %u frames on %s (%s); %s; GPU %.3f ms/frame%s\n", windowed ? "Presented" : "Rendered", frames,
                 renderer->gpu().name.c_str(), renderer->gpu().type.c_str(), renderer->pipelineDescription().c_str(),
                 renderer->averageGpuMilliseconds(), options.smoke ? "; resize/minimize/restore smoke test OK" : "");
+    std::fflush(stdout);
+    // A teardown that hangs (seen after long headless runs of the game) must not keep scripts waiting.
+    std::thread([] {
+        std::this_thread::sleep_for(std::chrono::seconds(30));
+        std::fprintf(stderr, "Shutdown did not finish in 30 s; exiting\n");
+        std::fflush(nullptr);
+        std::_Exit(4);
+    }).detach();
     save();
     // A game that ended by itself with an error makes the host fail too (scripts and sessions see it).
     if (gameExited && gs && gs->gameExitCode() != 0) {

@@ -234,7 +234,7 @@ struct Renderer::Impl {
     std::unique_ptr<gt4::TestScene> scene;
     std::unique_ptr<gt4::GsScene> gsScene;
     std::unique_ptr<gt4::GsnScene> gsnScene;   // the native renderer, once it sends frames
-    bool native = false;
+    bool native = false, shownNative = false;   // native frames wanted; shown (one has arrived)
     bool gameFrame = false;
     std::unique_ptr<gt4::FramePipeline> pipeline;
     std::unique_ptr<gt4::Overlay> overlay;
@@ -698,9 +698,13 @@ struct Renderer::Impl {
             target.stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
             target.access = VK_ACCESS_2_NONE;
         }
-        gt4::SceneSource& active = !gameFrame ? static_cast<gt4::SceneSource&>(*scene)
-                                   : native   ? static_cast<gt4::SceneSource&>(*gsnScene)
-                                              : static_cast<gt4::SceneSource&>(*gsScene);
+        if (const bool show = native && gsnScene->hasFrame(); show != shownNative) {
+            shownNative = show;
+            sceneSwitched = true;   // between the GS back end's frame and the native renderer
+        }
+        gt4::SceneSource& active = !gameFrame   ? static_cast<gt4::SceneSource&>(*scene)
+                                   : shownNative ? static_cast<gt4::SceneSource&>(*gsnScene)
+                                                 : static_cast<gt4::SceneSource&>(*gsScene);
         if (sceneSwitched) { vkDeviceWaitIdle(device.device); pipeline.reset(); pipeline = std::make_unique<gt4::FramePipeline>(device, pool);
                              pipeline->prepareOutput(format, srgbFormat, static_cast<uint32_t>(presentedBits)); sceneSwitched = false; }
         pipeline->configure(settings, extent, active);
@@ -809,9 +813,8 @@ void Renderer::useGameFrame(bool enabled) {
 void Renderer::setGameFrame(uint32_t width, uint32_t height, const uint32_t* rgba) { impl->gsScene->setFrame(width, height, rgba); }
 void Renderer::setNativeFrame(gt4::gsn::FrameList& list) {
     impl->gsnScene->setFrame(list);
-    if (!impl->native) impl->sceneSwitched = true;   // from the GS back end's frame to the native renderer
-    impl->native = true;
 }
+void Renderer::useNativeFrames(bool enabled) { impl->native = enabled; }
 void Renderer::reloadVulkanFunctions() {
     volkLoadInstanceOnly(impl->instance);
     volkLoadDevice(impl->device.device);

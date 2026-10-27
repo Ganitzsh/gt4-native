@@ -34,7 +34,7 @@ static_assert(sizeof(DrawConstants) == 64);
 
 enum : uint32_t {
     kTextured = 1, kUv = 2, kFog = 4, kBlend = 8, kPabe = 16, kFba = 32, kFromTarget = 64, kTarget24 = 128, kDestAlphaBlend = 256,
-    kNearest = 512, kSnap = 1024, kAlphaInvert = 2048,
+    kNearest = 512, kSnap = 1024, kAlphaInvert = 2048, kMipmapped = 4096,
 };
 
 // A fixed-function blend for C = Ad: the coefficients of Cs and Cd as (a * Ad + b), mapped onto factors.
@@ -82,7 +82,7 @@ struct GsnScene::Impl {
     std::unordered_map<uint32_t, GpuTarget> targets;
     struct GpuTexture {
         vk::Image image;
-        uint32_t version = 0, width = 0, height = 0;
+        uint32_t version = 0, width = 0, height = 0, levels = 1;
     };
     std::unordered_map<uint32_t, GpuTexture> textures;
     // Retired textures, destroyed once the frames that may still sample them are done.
@@ -107,6 +107,7 @@ struct GsnScene::Impl {
     std::unordered_map<uint32_t, vk::Pipeline> pipelines;
     vk::Pipeline display, stencilPrep;
     VkSampler samplers[4] = {};   // [linear][repeat]
+    VkSampler mipSamplers[4] = {};   // [repeat U * 2 + repeat V]: mipmapped textures, trilinear, anisotropic
     uint32_t displayTarget = 0;
     float displayRect[4] = {0, 0, 1, 1};
     bool warnedBlend = false;
@@ -116,6 +117,19 @@ struct GsnScene::Impl {
             for (int repeat = 0; repeat < 2; ++repeat)
                 samplers[linear * 2 + repeat] = vk::createSampler(device, linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST, VK_SAMPLER_MIPMAP_MODE_NEAREST,
                                                                   repeat ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+        for (int uv = 0; uv < 4; ++uv) {   // the address mode per axis (WMS, WMT)
+            VkSamplerCreateInfo info{};
+            info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+            info.magFilter = info.minFilter = VK_FILTER_LINEAR;
+            info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+            info.addressModeU = (uv & 2) ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            info.addressModeV = (uv & 1) ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            info.anisotropyEnable = device.anisotropy ? VK_TRUE : VK_FALSE;
+            info.maxAnisotropy = std::min(16.0f, device.maxAnisotropy);
+            info.maxLod = VK_LOD_CLAMP_NONE;
+            vk::check(vkCreateSampler(device.device, &info, nullptr, &mipSamplers[uv]), "vkCreateSampler");
+        }
     }
     ~Impl() {
         vkDeviceWaitIdle(device.device);
@@ -135,6 +149,8 @@ struct GsnScene::Impl {
         vk::destroy(device, display);
         vk::destroy(device, stencilPrep);
         for (VkSampler s : samplers)
+            if (s) vkDestroySampler(device.device, s, nullptr);
+        for (VkSampler s : mipSamplers)
             if (s) vkDestroySampler(device.device, s, nullptr);
     }
 
@@ -158,7 +174,8 @@ struct GsnScene::Impl {
                                     {2, 0, VK_FORMAT_R8G8B8A8_UNORM, offsetof(gsn::Vertex, rgba)},
                                     {3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(gsn::Vertex, s)},
                                     {4, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(gsn::Vertex, u)},
-                                    {5, 0, VK_FORMAT_R32_UINT, offsetof(gsn::Vertex, fog)}};
+                                    {5, 0, VK_FORMAT_R32_UINT, offsetof(gsn::Vertex, fog)},
+                                    {6, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(gsn::Vertex, minU)}};
         desc.types = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER};
         desc.pushSize = sizeof(DrawConstants);
         VkPipelineColorBlendAttachmentState blend{};
@@ -238,6 +255,10 @@ struct GsnScene::Impl {
 
     void uploadTextures(VkCommandBuffer command, uint32_t slot) {
         ++uploads;
+        if (frame.resetTextures) {
+            for (auto& [id, t] : textures) graveyard.emplace_back(uploads, t.image);
+            textures.clear();
+        }
         for (auto it = graveyard.begin(); it != graveyard.end();) {
             if (it->first + kSlots + 1 <= uploads) {
                 vk::destroy(device, it->second);
@@ -247,14 +268,14 @@ struct GsnScene::Impl {
             }
         }
         VkDeviceSize bytes = 4;
-        for (const auto& t : frame.textures) bytes += VkDeviceSize(t.width) * t.height * 4;
+        for (const auto& t : frame.textures) bytes += VkDeviceSize(t.pixels.size()) * 4;
         vk::Buffer& stage = buffer(staging, slot, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
         VkDeviceSize offset = 0;
         vk::Barriers b;
         std::vector<std::pair<gsn::TextureImage*, VkDeviceSize>> copies;
         for (auto& t : frame.textures) {
             GpuTexture& g = textures[t.id];
-            if (!g.image.valid() || g.width != t.width || g.height != t.height) {
+            if (!g.image.valid() || g.width != t.width || g.height != t.height || g.levels != t.levels) {
                 if (g.image.valid()) {
                     vkDeviceWaitIdle(device.device);
                     vk::destroy(device, g.image);
@@ -262,25 +283,35 @@ struct GsnScene::Impl {
                 vk::ImageDesc desc;
                 desc.format = VK_FORMAT_R8G8B8A8_UNORM;
                 desc.extent = {t.width, t.height};
+                desc.mips = t.levels;
                 desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
                 desc.name = "gsn texture";
                 g.image = vk::createImage(device, desc);
                 g.width = t.width;
                 g.height = t.height;
+                g.levels = t.levels;
             }
             g.version = t.version;
             std::memcpy(static_cast<uint8_t*>(stage.mapped) + offset, t.pixels.data(), t.pixels.size() * 4);
             copies.emplace_back(&t, offset);
             b.image(g.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_WRITE_BIT, true);
-            offset += VkDeviceSize(t.width) * t.height * 4;
+            offset += VkDeviceSize(t.pixels.size()) * 4;
         }
         b.flush(command);
         for (const auto& [t, at] : copies) {
-            VkBufferImageCopy copy{};
-            copy.bufferOffset = at;
-            copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            copy.imageExtent = {t->width, t->height, 1};
-            vkCmdCopyBufferToImage(command, stage.buffer, textures[t->id].image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+            VkBufferImageCopy regions[7]{};
+            VkDeviceSize offsetInImage = at;
+            uint32_t w = t->width, h = t->height;
+            for (uint32_t level = 0; level < t->levels && level < 7; ++level) {
+                regions[level].bufferOffset = offsetInImage;
+                regions[level].imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0, 1};
+                regions[level].imageExtent = {w, h, 1};
+                offsetInImage += VkDeviceSize(w) * h * 4;
+                w = std::max(w / 2, 1u);
+                h = std::max(h / 2, 1u);
+            }
+            vkCmdCopyBufferToImage(command, stage.buffer, textures[t->id].image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                   std::min(t->levels, 7u), regions);
         }
         for (const auto& [t, at] : copies) vk::toSampled(b, textures[t->id].image, vk::kFragment);
         b.flush(command);
@@ -420,14 +451,14 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         vk::Image& out = reinterpreted[index];
         if (!built[index]) {
             end();
-            if (!out.valid() || out.extent.width != r.width || out.extent.height != r.height) {
+            if (!out.valid() || out.extent.width != r.width * scale || out.extent.height != r.height * scale) {
                 if (out.valid()) {
                     vkDeviceWaitIdle(device.device);
                     vk::destroy(device, out);
                 }
                 vk::ImageDesc desc;
                 desc.format = VK_FORMAT_R8G8B8A8_UNORM;
-                desc.extent = {r.width, r.height};
+                desc.extent = {r.width * scale, r.height * scale};   // scale x scale per GS texel
                 desc.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
                 desc.name = "gsn reinterpreted";
                 out = vk::createImage(device, desc);
@@ -462,7 +493,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
                 .storageBuffer(4, indexBuffer.buffer, 0, indexWords * 4)
                 .push(command, reinterpret);
             vk::pushConstants(command, reinterpret, k);
-            vk::dispatch2D(command, r.width, r.height);
+            vk::dispatch2D(command, r.width * scale, r.height * scale);
             vk::toSampled(b, out, vk::kFragment);
             b.flush(command);
             built[index] = true;
@@ -547,7 +578,13 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
                 }
             } else if (d.texture.kind == gsn::TextureSource::Kind::Memory) {
                 auto t = textures.find(d.texture.id);
-                if (t != textures.end()) view = t->second.image.view;
+                if (t != textures.end()) {
+                    view = t->second.image.view;
+                    if (t->second.levels > 1) {   // the GS's mipmaps, sampled as a modern GPU does
+                        k.flags = (k.flags & ~kNearest) | kMipmapped;
+                        sampler = mipSamplers[((s.clamp & 3) == 0 ? 2 : 0) + (((s.clamp >> 2) & 3) == 0 ? 1 : 0)];
+                    }
+                }
             } else if (d.texture.kind == gsn::TextureSource::Kind::Reinterpreted && d.texture.id < count) {
                 // Bytes of a target read as indices: sampled once per GS pixel, as the effect expects.
                 if (vk::Image* image = build(d.texture.id)) view = image->view;

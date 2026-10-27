@@ -14,6 +14,7 @@ layout(location = 0) in vec4 inColour;
 layout(location = 1) in vec3 inStq;
 layout(location = 2) in vec2 inUv;
 layout(location = 3) in float inFog;
+layout(location = 4) flat in vec4 inBounds;   // a sprite's texture rectangle; min > max for other primitives
 
 layout(location = 0, index = 0) out vec4 outColour;
 layout(location = 0, index = 1) out vec4 outFactor;
@@ -36,6 +37,10 @@ vec4 nearestTexel(vec2 position) {
     const vec2 cell = floor(position + 1.0 / 64.0);
     const ivec2 size = ivec2(draw.textureSize);
     const ivec2 i = ivec2(wrap(int(cell.x), draw.clampU, size.x), wrap(int(cell.y), draw.clampV, size.y));
+    if ((draw.flags & kSnap) != 0u) {   // a reinterpreted texture: this render pixel's sub-texel
+        const ivec2 sub = ivec2(gl_FragCoord.xy) % int(draw.scale);
+        return texelFetch(source, i * int(draw.scale) + sub, 0) * 255.0;
+    }
     if ((draw.flags & kFromTarget) != 0u) {
         const vec2 within = clamp(position - cell, 0.0, 0.999);
         const vec4 t = texelFetch(source, ivec2((draw.sourceOffset + vec2(i) + within) * draw.scale), 0);
@@ -44,8 +49,35 @@ vec4 nearestTexel(vec2 position) {
     return texelFetch(source, i, 0) * 255.0;
 }
 
+// Filtering inside a sprite's texture rectangle: at a higher resolution the samples near its edges would
+// otherwise mix in the texels around it (atlas neighbours, as dotted lines under GT4's menu logos).
+vec2 insideSprite(vec2 coordinate) {
+    if ((draw.flags & kNearest) != 0u || inBounds.x > inBounds.z || draw.scale <= 1.0) return coordinate;
+    const vec2 toNormal = (draw.flags & kUv) != 0u ? 1.0 / draw.textureSize : vec2(1.0);
+    const vec2 lo = inBounds.xy * toNormal + 0.5 / draw.textureSize, hi = inBounds.zw * toNormal - 0.5 / draw.textureSize;
+    const vec2 middle = (lo + hi) * 0.5;
+    return clamp(coordinate, min(lo, middle), max(hi, middle));
+}
+
+// Bilinear filtering as the GS: the four texels around (position - 0.5), each wrapped by CLAMP's modes
+// (per axis, including the region modes), weighted by the fraction (4 bits at 1x, as the GS).
+vec4 bilinearTexel(vec2 position) {
+    const vec2 base = position - 0.5;
+    const vec2 cell = floor(base);
+    vec2 f = base - cell;
+    if (draw.scale <= 1.0) f = floor(f * 16.0) / 16.0;
+    const ivec2 size = ivec2(draw.textureSize);
+    const int u0 = wrap(int(cell.x), draw.clampU, size.x), u1 = wrap(int(cell.x) + 1, draw.clampU, size.x);
+    const int v0 = wrap(int(cell.y), draw.clampV, size.y), v1 = wrap(int(cell.y) + 1, draw.clampV, size.y);
+    const vec4 top = mix(texelFetch(source, ivec2(u0, v0), 0), texelFetch(source, ivec2(u1, v0), 0), f.x);
+    const vec4 bottom = mix(texelFetch(source, ivec2(u0, v1), 0), texelFetch(source, ivec2(u1, v1), 0), f.x);
+    return mix(top, bottom, f.y) * 255.0;
+}
+
 vec4 texel(vec2 coordinate) {
     // coordinate: normalised over the texture (2^TW x 2^TH).
+    coordinate = insideSprite(coordinate);
+    if ((draw.flags & (kNearest | kFromTarget | kMipmapped | kSnap)) == 0u) return floor(bilinearTexel(coordinate * draw.textureSize) + 0.5);
     if ((draw.flags & kNearest) != 0u) {
         vec4 c = nearestTexel(coordinate * draw.textureSize);
         if ((draw.flags & (kFromTarget | kTarget24)) == (kFromTarget | kTarget24)) {

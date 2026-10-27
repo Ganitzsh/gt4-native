@@ -25,4 +25,5 @@ const uint kTarget24 = 128u;      // ... in a 24-bit format: alpha from TEXA
 const uint kDestAlphaBlend = 256u;// C = Ad: the pipeline's fixed-function factors do the blend
 const uint kNearest = 512u;       // point sampling: the GS's texel, its wrap modes, by texel fetch
 const uint kAlphaInvert = 2048u;  // the alpha test's failing pixels (AFAIL's pass)
-const uint kSnap = 1024u;         // coordinates at the GS pixel's sample point, not the render pixel's
+const uint kSnap = 1024u;
+const uint kMipmapped = 4096u;    // the GS's mipmap levels: the sampler's trilinear filtering         // coordinates at the GS pixel's sample point, not the render pixel's

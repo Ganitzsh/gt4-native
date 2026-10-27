@@ -4,6 +4,9 @@
 // (the inverse of the 32-bit layout), the byte read back from the target (at the GS pixel's centre sample),
 // then the CLUT: the CLUT buffer the front end loaded, or, for a palette loaded from a target, that target's
 // pixels. Writes RGBA8 with the GS's alpha (0x80 = 1.0), as the decoded memory textures.
+// At a render scale above 1 the result has scale x scale texels per GS texel: texel (u, v)'s sub-texel
+// (i, j) reads sub-pixel (i, j) of the GS pixels involved, so that byte and palette tricks, which move
+// whole GS pixels around, keep the detail inside them (gsn.frag samples it with kSnap).
 #extension GL_GOOGLE_include_directive : require
 #include "gsn_swizzle.glsl"
 
@@ -41,6 +44,8 @@ uint address4(uint bp, uint bw, uint x, uint y) {   // nibbles
 
 // The 32-bit word at a word address of a target that starts at page bp (bw pages wide, height pixels):
 // the inverse of the 32-bit layout to the target pixel, at its centre sample. False outside the target.
+uvec2 sub;   // this invocation's sub-texel
+
 bool targetWord(sampler2D image, uint bp, uint bw, uint height, uint word, out uvec4 bytes) {
     const int relative = int(word >> 11) - int(bp >> 5);
     if (relative < 0 || bw == 0u) return false;
@@ -49,7 +54,7 @@ bool targetWord(sampler2D image, uint bp, uint bw, uint height, uint word, out u
     const uint x = (page % bw) * 64u + (blockPosition & 7u) * 8u + (columnPosition & 7u);
     const uint y = (page / bw) * 32u + (blockPosition >> 3) * 8u + (columnPosition >> 3);
     if (y >= height) return false;
-    const vec4 c = texelFetch(image, ivec2(x * p.scale + p.scale / 2u, y * p.scale + p.scale / 2u), 0);
+    const vec4 c = texelFetch(image, ivec2(x * p.scale + sub.x, y * p.scale + sub.y), 0);
     bytes = uvec4(clamp(round(vec4(c.rgb * 255.0, c.a * 128.0)), 0.0, 255.0));
     return true;
 }
@@ -64,8 +69,10 @@ uint expand16(uint c) {
 }
 
 void main() {
-    const uvec2 t = gl_GlobalInvocationID.xy;
-    if (t.x >= p.width || t.y >= p.height) return;
+    const uvec2 texel = gl_GlobalInvocationID.xy;
+    if (texel.x >= p.width * p.scale || texel.y >= p.height * p.scale) return;
+    const uvec2 t = texel / p.scale;
+    sub = texel % p.scale;
     // The texel's byte (and nibble) in GS memory.
     uint byteAddress, shift = 0u;
     const bool four = p.psm == 0x14u || p.psm == 0x24u || p.psm == 0x2Cu;
@@ -112,5 +119,5 @@ void main() {
         const uint e = four ? (p.csa * 16u + index) & 511u : index & 255u;
         colour = expand16(half16(e));
     }
-    imageStore(result, ivec2(t), unpackUnorm4x8(colour));
+    imageStore(result, ivec2(texel), unpackUnorm4x8(colour));
 }

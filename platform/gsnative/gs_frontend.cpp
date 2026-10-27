@@ -16,7 +16,7 @@ namespace {
 enum Reg : uint32_t {
     PRIM = 0x00, RGBAQ = 0x01, ST = 0x02, UV = 0x03, XYZF2 = 0x04, XYZ2 = 0x05, TEX0_1 = 0x06, TEX0_2 = 0x07,
     CLAMP_1 = 0x08, CLAMP_2 = 0x09, FOG = 0x0A, XYZF3 = 0x0C, XYZ3 = 0x0D, AD = 0x0E, NOP = 0x0F,
-    TEX1_1 = 0x14, TEX1_2 = 0x15, TEX2_1 = 0x16, TEX2_2 = 0x17, XYOFFSET_1 = 0x18, XYOFFSET_2 = 0x19,
+    TEX1_1 = 0x14, TEX1_2 = 0x15, MIPTBP1_1 = 0x34, MIPTBP1_2 = 0x35, MIPTBP2_1 = 0x36, MIPTBP2_2 = 0x37, TEX2_1 = 0x16, TEX2_2 = 0x17, XYOFFSET_1 = 0x18, XYOFFSET_2 = 0x19,
     PRMODECONT = 0x1A, PRMODE = 0x1B, TEXCLUT = 0x1C, TEXA = 0x3B, FOGCOL = 0x3D, TEXFLUSH = 0x3F,
     SCISSOR_1 = 0x40, ALPHA_1 = 0x42, DTHE = 0x45, COLCLAMP = 0x46, TEST_1 = 0x47, PABE = 0x49, FBA_1 = 0x4A,
     FRAME_1 = 0x4C, ZBUF_1 = 0x4E, BITBLTBUF = 0x50, TRXPOS = 0x51, TRXREG = 0x52, TRXDIR = 0x53, HWREG = 0x54,
@@ -52,6 +52,7 @@ void FrameList::clear() {
     textures.clear();
     reinterpretations.clear();
     retiredTextures.clear();
+    resetTextures = false;
     targets.clear();
 }
 
@@ -61,6 +62,7 @@ void carryOver(FrameList& dropped, FrameList& into) {
         into.textures = std::move(dropped.textures);
     }
     into.retiredTextures.insert(into.retiredTextures.end(), dropped.retiredTextures.begin(), dropped.retiredTextures.end());
+    into.resetTextures = into.resetTextures || dropped.resetTextures;
     dropped.textures.clear();
     dropped.retiredTextures.clear();
 }
@@ -90,13 +92,18 @@ DrawState GsFrontend::currentState(uint32_t prim) const {
     s.alpha = reg[ALPHA_1 + c];
     s.scissor = reg[SCISSOR_1 + c];
     s.texa = reg[TEXA];
+    // Mipmapping: MXL levels beyond the first with a MMIN that uses them.
+    if (((s.tex1 >> 2) & 7) && ((s.tex1 >> 6) & 7) >= 2) {
+        s.miptbp1 = reg[MIPTBP1_1 + c];
+        s.miptbp2 = reg[MIPTBP2_1 + c];
+    }
     s.fba = static_cast<uint32_t>(reg[FBA_1 + c] & 1);
     s.pabe = static_cast<uint32_t>(reg[PABE] & 1);
     s.dthe = static_cast<uint32_t>(reg[DTHE] & 1);
     s.colclamp = static_cast<uint32_t>(reg[COLCLAMP] & 1);
     s.fogcol = static_cast<uint32_t>(reg[FOGCOL] & 0xFFFFFF);
     // Fields that do not matter for the draw are cleared, so that equal draws batch.
-    if (!((prim >> 4) & 1)) s.tex0 = s.tex1 = s.clamp = s.texa = 0;
+    if (!((prim >> 4) & 1)) s.tex0 = s.tex1 = s.clamp = s.texa = s.miptbp1 = s.miptbp2 = 0;
     if (!((prim >> 6) & 1)) s.alpha = 0;
     if (!((prim >> 5) & 1)) s.fogcol = 0;
     return s;
@@ -274,12 +281,20 @@ void GsFrontend::kick(bool draw) {
                 out.u = right ? b.u : a.u;
                 out.v = bottom ? b.v : a.v;
             };
+            const bool fst = (primValue() >> 8) & 1;
+            const float au = fst ? a.u : a.s / b.q, bu = fst ? b.u : b.s / b.q, av = fst ? a.v : a.t / b.q, bv = fst ? b.v : b.t / b.q;
             corner(c[0], false, false);
             corner(c[1], true, false);
             corner(c[2], false, true);
             corner(c[3], true, false);
             corner(c[4], true, true);
             corner(c[5], false, true);
+            for (Vertex& k : c) {
+                k.minU = std::min(au, bu);
+                k.maxU = std::max(au, bu);
+                k.minV = std::min(av, bv);
+                k.maxV = std::max(av, bv);
+            }
             emit(c, 3, Topology::Triangles);
             emit(c + 3, 3, Topology::Triangles);
         }
@@ -500,9 +515,42 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
         ++stats.reinterpreted;
         return src;
     }
+    // Mipmap levels (TEX1 MXL, MIPTBP1/2, or with MTBA levels 1-3 placed after each other), each half the
+    // size of the one before.
+    struct Level {
+        uint32_t tbp, tbw, w, h;
+    };
+    std::array<Level, 7> levels{};
+    levels[0] = {t.tbp, t.tbw, w, h};
+    uint32_t levelCount = 1;
+    if (s.miptbp1 || s.miptbp2 || ((s.tex1 >> 9) & 1)) {
+        const uint32_t mxl = std::min<uint32_t>((s.tex1 >> 2) & 7, 6);
+        for (uint32_t i = 1; i <= mxl; ++i) {
+            const Level& prev = levels[i - 1];
+            if (prev.w == 1 && prev.h == 1) break;
+            Level& l = levels[i];
+            l.w = std::max<uint32_t>(prev.w / 2, 1);
+            l.h = std::max<uint32_t>(prev.h / 2, 1);
+            if (((s.tex1 >> 9) & 1) && i <= 3) {   // MTBA
+                l.tbp = prev.tbp + prev.w * prev.h * psmBits(t.psm) / 8 / 256;
+                l.tbw = std::max<uint32_t>(prev.tbw / 2, 1);
+            } else {
+                const uint64_t m = i <= 3 ? s.miptbp1 : s.miptbp2;
+                const uint32_t k = (i - 1) % 3;
+                l.tbp = static_cast<uint32_t>((m >> (20 * k)) & 0x3FFF);
+                l.tbw = static_cast<uint32_t>((m >> (20 * k + 14)) & 0x3F);
+            }
+            const uint32_t lrows = (l.h + ph - 1) / ph, lperRow = std::max<uint32_t>(1, (t.psm == PSMT8 || t.psm == PSMT4) ? l.tbw / 2 : l.tbw);
+            for (uint32_t py = 0; py < lrows; ++py)
+                for (uint32_t px = 0; px < std::max<uint32_t>(1, std::min<uint32_t>(lperRow, (l.w + pw - 1) / pw)); ++px)
+                    generation += pageGeneration[(l.tbp / 32 + py * lperRow + px) & 511] * (i * 512 + py * lperRow + px + 1);
+            levelCount = i + 1;
+        }
+    }
     // GS memory, decoded once per content: the texture's fields, TEXA for 16/24-bit, the palette in use.
     uint64_t key = mix(mix(mix(0, t.tbp), t.tbw), t.psm);
     key = mix(mix(key, t.tw), t.th);
+    for (uint32_t i = 1; i < levelCount; ++i) key = mix(mix(key, levels[i].tbp), levels[i].tbw);
     uint64_t clutHash = 0;
     if (indexed) {
         clutHash = mix(mix(0, t.cpsm), t.csa);
@@ -535,12 +583,22 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
         image.version = c.version;
         image.width = w;
         image.height = h;
-        image.pixels.resize(size_t(w) * h);
+        image.levels = levelCount;
+        size_t texels = 0;
+        for (uint32_t i = 0; i < levelCount; ++i) texels += size_t(levels[i].w) * levels[i].h;
+        image.pixels.resize(texels);
         Texa texa;
         texa.ta0 = static_cast<uint8_t>(s.texa & 0xFF);
         texa.aem = (s.texa >> 15) & 1;
         texa.ta1 = static_cast<uint8_t>((s.texa >> 32) & 0xFF);
-        mem.decode(t, texa, 0, 0, w, h, image.pixels.data());
+        size_t at = 0;
+        for (uint32_t i = 0; i < levelCount; ++i) {
+            GsMemory::Tex0 lt = t;
+            lt.tbp = levels[i].tbp;
+            lt.tbw = levels[i].tbw;
+            mem.decode(lt, texa, 0, 0, levels[i].w, levels[i].h, image.pixels.data() + at);
+            at += size_t(levels[i].w) * levels[i].h;
+        }
         // GT4_GSN_TEXDUMP=TBP (hex, debugging): decoded textures at that address, as gsn_tex_TBP_N.ppm.
         static const long dumpTbp = std::getenv("GT4_GSN_TEXDUMP") ? std::strtol(std::getenv("GT4_GSN_TEXDUMP"), nullptr, 16) : -1;
         if (static_cast<long>(t.tbp) == dumpTbp) {
@@ -548,10 +606,16 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
             const std::string name = "gsn_tex_" + std::to_string(t.tbp) + "_" + std::to_string(dumped++) + ".ppm";
             if (FILE* f = std::fopen(name.c_str(), "wb")) {
                 std::fprintf(f, "P6\n%u %u\n255\n", w, h);
-                for (const uint32_t p : image.pixels) {
+                for (size_t k = 0; k < size_t(w) * h; ++k) {
+                    const uint32_t p = image.pixels[k];
                     const uint8_t rgb[3] = {static_cast<uint8_t>(p), static_cast<uint8_t>(p >> 8), static_cast<uint8_t>(p >> 16)};
                     std::fwrite(rgb, 1, 3, f);
                 }
+                std::fclose(f);
+            }
+            if (FILE* f = std::fopen((name.substr(0, name.size() - 4) + "_a.pgm").c_str(), "wb")) {   // alpha
+                std::fprintf(f, "P5\n%u %u\n255\n", w, h);
+                for (size_t k = 0; k < size_t(w) * h; ++k) std::fputc(static_cast<int>(image.pixels[k] >> 24), f);
                 std::fclose(f);
             }
         }
@@ -648,6 +712,12 @@ void GsFrontend::gif(uint32_t path, const uint8_t* data, size_t bytes) {
             g.loops -= static_cast<uint32_t>(n);
         }
     }
+}
+
+void GsFrontend::resetTextures() {
+    textureCache.clear();
+    frame.textures.clear();
+    frame.resetTextures = true;
 }
 
 void GsFrontend::vsync(uint64_t vblank, FrameList& out) {
