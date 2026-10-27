@@ -1,9 +1,33 @@
 # The native renderer (R1)
 
-`gt4_host` shows GT4 two ways. The `original` preset keeps paraLLEl-GS: the PS2's GS emulated bit for bit at
-640 x 448, its frame handed to the display pipeline. Every other preset will use the native renderer: the
-same GS command stream drawn by Vulkan at the host's resolution, with the pipeline's anti-aliasing,
-upscaling and post-processing on top. This page is its design and its state.
+`gt4_host` shows GT4 two ways, chosen by `render.gs`. The `original` preset keeps paraLLEl-GS (`emulated`):
+the PS2's GS emulated bit for bit at 640 x 448, its frame handed to the display pipeline. Every other preset
+uses the native renderer (`native`): the same GS command stream drawn by Vulkan at the host's resolution,
+with the pipeline's anti-aliasing, upscaling and post-processing on top. The setting can change at any time:
+the front end always follows the stream. This page is its design and its state.
+
+## State (2026-10-27)
+
+Menus, car select, the pre-race screens and the race (mirror, colour grading, HUD) render from the live game
+at any resolution and aspect (the game's own Hor+ 16:9 mode, 2560 x 1440 in about 8 ms of GPU time with the
+high preset). At 1x a race frame has 92% of its pixels within 16 of paraLLEl-GS (64% within 4); the rest is
+mostly the field lines, which the native renderer does not jitter.
+
+- **Scale per axis** from what the display shows: the race draws 224-line fields (SMODE2 FFMD), so its
+  lines get the output's full height (sy = output height / 224), and the anamorphic 16:9 frame gets more
+  across than down. GT4's quarter-pixel XYOFFSET jitter between fields is dropped (it shook the picture);
+  `GT4_GSN_SCALE=1 GT4_GSN_JITTER=keep` gives the comparable 1x picture.
+- **Textures**: GS bilinear (four taps, each wrapped by CLAMP's modes, 4-bit weights at 1x); MIPTBP mipmaps
+  and, above 1x, blit-made mip chains for 3D draws, sampled trilinear and anisotropic; sprite filtering kept
+  inside the sprite's texels above 1x. Uploads that leave memory unchanged keep the decodes.
+- **No motion vectors yet**: the pipeline uses SMAA and FSR 1 in place of TAA and FSR 2 for these frames.
+- Debugging: `GT4_GSN=stats`, `GT4_GSN_DRAWS=BP|all`, `GT4_GSN_XFER` (transfers, CLUT loads, XYOFFSET),
+  `GT4_GSN_TEXDUMP=TBP`, `GT4_GSN_DUMP=VBLANK` (targets), `GT4_GSN_LIMIT=K`, `GT4_GSN_VRAM=N` (front-end memory),
+  and paraLLEl-GS's `GT4_VRAM_DUMP=FRAME:PACKET,...|end` for the reference.
+
+Open: the 2D of the menus in 16:9 (stretched as on the PS2; WIDESCREEN.md has the game-code plan), motion
+vectors, COLCLAMP = 0 (wrapping), Z formats as frames and textures (GT4's Z24 pass), dithering, the GPU cost of
+the colour grading (one dispatch per batch would do).
 
 ## What GT4 asks of the GS
 
