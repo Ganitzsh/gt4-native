@@ -214,7 +214,9 @@ struct GsnScene::Impl {
 
     void ensureTarget(const gsn::Target& t) {
         GpuTarget& g = targets[t.id];
-        const uint32_t width = std::max<uint32_t>(64, t.bw * 64), height = std::max<uint32_t>(32, t.height);
+        // Within Vulkan's guaranteed image size at this scale (a 2048-line target at 8x is 16384 tall).
+        const uint32_t width = std::min(std::max<uint32_t>(64, t.bw * 64), 16384 / sx),
+                       height = std::min(std::max<uint32_t>(32, t.height), 16384 / sy);
         if (g.image.valid() && g.width >= width && g.height >= height && g.image.extent.width == g.width * sx &&
             g.image.extent.height == g.height * sy) {
             g.psm = t.psm;
@@ -947,9 +949,9 @@ void GsnScene::recordPrepass(VkCommandBuffer command, const SceneView& view) {
     static const uint32_t forced = std::getenv("GT4_GSN_SCALE") ? static_cast<uint32_t>(std::strtoul(std::getenv("GT4_GSN_SCALE"), nullptr, 10)) : 0;
     if (forced) s.scaleSetting = forced;
     const uint32_t wantedX = s.scaleSetting ? s.scaleSetting
-                                            : std::clamp<uint32_t>(static_cast<uint32_t>(std::lround(view.renderExtent.width / double(shownWidth))), 1, 10);
+                                            : std::clamp<uint32_t>(static_cast<uint32_t>(std::lround(view.renderExtent.width / double(shownWidth))), 1, 8);
     const uint32_t wantedY = s.scaleSetting ? s.scaleSetting
-                                            : std::clamp<uint32_t>(static_cast<uint32_t>(std::lround(view.renderExtent.height / double(shownHeight))), 1, 10);
+                                            : std::clamp<uint32_t>(static_cast<uint32_t>(std::lround(view.renderExtent.height / double(shownHeight))), 1, 8);
     if (wantedX != s.sx || wantedY != s.sy) {
         vkDeviceWaitIdle(s.device.device);
         for (auto& [id, t] : s.targets) vk::destroy(s.device, t.image);

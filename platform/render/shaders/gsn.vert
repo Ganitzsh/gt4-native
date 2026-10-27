@@ -28,4 +28,7 @@ void main() {
     outUv = inUv;
     outFog = float(inFog);
     outBounds = inBounds;
+    // GS points cover one GS pixel: scale x scale render pixels (point lists must write the size; undefined
+    // otherwise, which lost the device in GT mode's map).
+    gl_PointSize = max(draw.scale.x, draw.scale.y);
 }

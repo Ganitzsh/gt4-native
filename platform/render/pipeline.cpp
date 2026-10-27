@@ -106,6 +106,7 @@ struct FramePipeline::Impl {
     uint32_t historyIndex = 0;
     bool resetPending = true;
     bool exposureReset = true;
+    bool gameImage = false;   // the scene is the game's displayed frame (SceneSource::drawsOriginalEffects)
     Vec2 jitter;
     SceneFormats sceneFormats;
     bool scenePrepared = false;
@@ -537,7 +538,7 @@ struct FramePipeline::Impl {
         vk::Descriptors().storageBuffer(0, histogram.buffer, 0, VK_WHOLE_SIZE).storageBuffer(1, exposureState.buffer, 0, VK_WHOLE_SIZE)
             .storage(2, exposure.view).push(command, adapt);
         struct { float minLog2, range, dt, compensation, automatic, reset; } adaptPush{kExposureMinLog2, kExposureRangeLog2,
-            std::clamp(deltaSeconds, 0.0f, 0.25f), settings.exposure, settings.autoExposure ? 1.0f : 0.0f, exposureReset ? 1.0f : 0.0f};
+            std::clamp(deltaSeconds, 0.0f, 0.25f), settings.exposure, settings.autoExposure && !gameImage ? 1.0f : 0.0f, exposureReset ? 1.0f : 0.0f};
         vk::pushConstants(command, adapt, adaptPush);
         vkCmdDispatch(command, 1, 1, 1);
         vk::toSampled(b, exposure, vk::kCompute | vk::kFragment);
@@ -634,8 +635,8 @@ struct FramePipeline::Impl {
     // Returns the number of accumulated levels (0 = no bloom).
     uint32_t bloomPass(VkCommandBuffer command, vk::Image* hdr, bool gameDrawsOriginal) {
         if (settings.bloom == EffectQuality::Off) return 0;
-        // The game's own image already contains its glare: "original" adds nothing on top.
-        if (settings.bloom == EffectQuality::Original && gameDrawsOriginal) return 0;
+        // The game's own image already contains its glare: nothing is added on top.
+        if (gameDrawsOriginal) return 0;
         vk::beginLabel(command, "bloom");
         const bool original = settings.bloom == EffectQuality::Original;
         const uint32_t wanted[4] = {4, 5, 6, 8};
@@ -684,6 +685,8 @@ struct FramePipeline::Impl {
     }
 
     void record(VkCommandBuffer command, SceneSource& scene, const SceneView& view, vk::Image& target, Overlay& overlay, float dt) {
+        // The game's frames are already graded for display: no tone mapping, automatic exposure or extra bloom.
+        gameImage = scene.drawsOriginalEffects();
         renderScene(command, scene, view);
         const SceneCamera camera = scene.camera();   // the camera this frame was rendered with
         const bool reset = resetPending || camera.cut;
@@ -754,7 +757,7 @@ struct FramePipeline::Impl {
         vk::Descriptors().sampled(0, hdr->view, pointClamp).sampled(1, bloomImage->mipViews[0], linearClamp)
             .sampled(2, exposure.view, pointClamp).storage(3, ldrA.view).push(command, tonemap);
         struct { int32_t w, h, tonemapper; float intensity, scale, additive; } tonePush{static_cast<int32_t>(config.post.width),
-            static_cast<int32_t>(config.post.height), tonemapperIndex(settings.tonemapper), settings.bloomIntensity,
+            static_cast<int32_t>(config.post.height), gameImage ? 0 : tonemapperIndex(settings.tonemapper), settings.bloomIntensity,
             bloomLevels ? 1.0f / static_cast<float>(bloomLevels) : 0.0f, settings.bloom == EffectQuality::Original ? 1.0f : 0.0f};
         vk::pushConstants(command, tonemap, tonePush);
         vk::dispatch2D(command, config.post.width, config.post.height);
