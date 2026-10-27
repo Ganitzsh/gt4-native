@@ -264,8 +264,11 @@ GsHost::~GsHost() {
     impl->link.reset();   // asks the game to quit
     std::printf("GS: %s\n", summary().c_str());
     std::fflush(stdout);
+    // Markers for the teardown hang seen after long live runs (main.cpp's watchdog ends the process).
     impl->stream.reset();
+    std::fprintf(stderr, "GS: stream stopped\n");
     impl->target.reset();
+    std::fprintf(stderr, "GS: front end stopped\n");
     impl->backend.reset();
     std::fprintf(stderr, "GS: stopped\n");
 }

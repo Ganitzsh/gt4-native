@@ -207,12 +207,16 @@ void GsMemory::beginWrite(const Transfer& t) {
     xferActive = t.rrw && t.rrh && psmKnown(t.dpsm);
 }
 
-void GsMemory::write(const uint8_t* bytes, size_t size) {
-    if (!xferActive) return;
+bool GsMemory::write(const uint8_t* bytes, size_t size) {
+    if (!xferActive) return false;
     const uint32_t bits = psmBits(xfer.dpsm);
+    const uint32_t mask = bits >= 32 ? ~0u : (1u << bits) - 1;
+    bool changed = false;
     auto next = [&](uint32_t value) {
         if (xferY >= xfer.rrh) return;
-        writePixel(xfer.dpsm, xfer.dbp, xfer.dbw, xfer.dsax + xferX, xfer.dsay + xferY, value);
+        const uint32_t x = xfer.dsax + xferX, y = xfer.dsay + xferY;
+        if (!changed && readPixel(xfer.dpsm, xfer.dbp, xfer.dbw, x, y) != (value & mask)) changed = true;
+        writePixel(xfer.dpsm, xfer.dbp, xfer.dbw, x, y, value);
         if (++xferX == xfer.rrw) {
             xferX = 0;
             ++xferY;
@@ -228,7 +232,7 @@ void GsMemory::write(const uint8_t* bytes, size_t size) {
         size_t k = 0;
         if (!xferPartial.empty()) {   // a 24-bit pixel split across calls
             while (xferPartial.size() < step && k < size) xferPartial.push_back(bytes[k++]);
-            if (xferPartial.size() < step) return;
+            if (xferPartial.size() < step) return changed;
             uint32_t v = 0;
             std::memcpy(&v, xferPartial.data(), step);
             next(v);
@@ -242,6 +246,7 @@ void GsMemory::write(const uint8_t* bytes, size_t size) {
         while (k < size) xferPartial.push_back(bytes[k++]);
     }
     if (xferY >= xfer.rrh) xferActive = false;
+    return changed;
 }
 
 void GsMemory::copy(const Transfer& t) {

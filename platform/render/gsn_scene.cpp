@@ -4,6 +4,7 @@
 #include "gt4_shaders.h"
 
 #include <algorithm>
+#include <bit>
 #include <memory>
 #include <array>
 #include <cmath>
@@ -85,6 +86,7 @@ struct GsnScene::Impl {
     struct GpuTexture {
         vk::Image image;
         uint32_t version = 0, width = 0, height = 0, levels = 1;
+        uint32_t generated = 1;   // mip levels made from level 0 for a texture without GS mipmaps (3D draws)
     };
     std::unordered_map<uint32_t, GpuTexture> textures;
     // Retired textures, destroyed once the frames that may still sample them are done.
@@ -292,8 +294,9 @@ struct GsnScene::Impl {
                 vk::ImageDesc desc;
                 desc.format = VK_FORMAT_R8G8B8A8_UNORM;
                 desc.extent = {t.width, t.height};
-                desc.mips = t.levels;
-                desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+                g.generated = t.levels == 1 && std::max(t.width, t.height) >= 8 ? std::bit_width(std::max(t.width, t.height)) : 1;
+                desc.mips = t.levels > 1 ? t.levels : g.generated;
+                desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
                 desc.name = "gsn texture";
                 g.image = vk::createImage(device, desc);
                 g.width = t.width;
@@ -322,8 +325,55 @@ struct GsnScene::Impl {
             vkCmdCopyBufferToImage(command, stage.buffer, textures[t->id].image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                    std::min(t->levels, 7u), regions);
         }
-        for (const auto& [t, at] : copies) vk::toSampled(b, textures[t->id].image, vk::kFragment);
+        for (const auto& [t, at] : copies) {
+            GpuTexture& g = textures[t->id];
+            if (g.generated > 1) generateMips(command, g.image, g.generated);
+            else vk::toSampled(b, g.image, vk::kFragment);
+        }
         b.flush(command);
+    }
+
+    // The mip chain of an image whose level 0 was just written (all levels in TRANSFER_DST), by halving
+    // blits; leaves every level sampled.
+    static void generateMips(VkCommandBuffer command, vk::Image& image, uint32_t levels) {
+        auto barrier = [&](uint32_t level, VkImageLayout from, VkImageLayout to, VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
+                           VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess) {
+            VkImageMemoryBarrier2 m{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+            m.srcStageMask = srcStage;
+            m.srcAccessMask = srcAccess;
+            m.dstStageMask = dstStage;
+            m.dstAccessMask = dstAccess;
+            m.oldLayout = from;
+            m.newLayout = to;
+            m.srcQueueFamilyIndex = m.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            m.image = image.image;
+            m.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, level, 1, 0, 1};
+            VkDependencyInfo d{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+            d.imageMemoryBarrierCount = 1;
+            d.pImageMemoryBarriers = &m;
+            vkCmdPipelineBarrier2(command, &d);
+        };
+        int32_t w = static_cast<int32_t>(image.extent.width), h = static_cast<int32_t>(image.extent.height);
+        for (uint32_t level = 1; level < levels; ++level) {
+            barrier(level - 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk::kTransfer,
+                    VK_ACCESS_2_TRANSFER_WRITE_BIT, vk::kTransfer, VK_ACCESS_2_TRANSFER_READ_BIT);
+            VkImageBlit blit{};
+            blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level - 1, 0, 1};
+            blit.srcOffsets[1] = {w, h, 1};
+            w = std::max(w / 2, 1);
+            h = std::max(h / 2, 1);
+            blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0, 1};
+            blit.dstOffsets[1] = {w, h, 1};
+            vkCmdBlitImage(command, image.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
+                           VK_FILTER_LINEAR);
+            barrier(level - 1, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, vk::kTransfer,
+                    VK_ACCESS_2_TRANSFER_READ_BIT, vk::kFragment, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        }
+        barrier(levels - 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, vk::kTransfer,
+                VK_ACCESS_2_TRANSFER_WRITE_BIT, vk::kFragment, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+        image.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        image.stage = vk::kFragment;
+        image.access = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
     }
 
     // After the frame's draws are recorded: its retired textures go to the graveyard.
@@ -632,7 +682,10 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
                 auto t = textures.find(d.texture.id);
                 if (t != textures.end()) {
                     view = t->second.image.view;
-                    if (t->second.levels > 1) {   // the GS's mipmaps, sampled as a modern GPU does
+                    // The GS's mipmaps, sampled as a modern GPU does; above 1x, a 3D draw's bilinear texture
+                    // without them gets the levels made from it (the GS shows such textures aliased).
+                    const bool perspective = !((prim >> 8) & 1);
+                    if (t->second.levels > 1 || (t->second.generated > 1 && perspective && linear && (sx > 1 || sy > 1))) {
                         k.flags = (k.flags & ~kNearest) | kMipmapped;
                         sampler = mipSamplers[((s.clamp & 3) == 0 ? 2 : 0) + (((s.clamp >> 2) & 3) == 0 ? 1 : 0)];
                     }

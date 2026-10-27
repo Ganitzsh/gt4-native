@@ -166,7 +166,7 @@ void GsFrontend::write(uint32_t r, uint64_t value) {
         transferStarted(static_cast<uint32_t>(value & 3));
         return;
     case HWREG:
-        if (imageActive) mem.write(reinterpret_cast<const uint8_t*>(&value), 8);
+        if (imageActive) imageWritten(reinterpret_cast<const uint8_t*>(&value), 8);
         return;
     default:
         if (r == XYOFFSET_1 || r == XYOFFSET_2) {   // GT4_GSN_XFER (debugging): offset changes
@@ -223,7 +223,9 @@ void GsFrontend::transferStarted(uint32_t dir) {
     if (dir == 0) {
         mem.beginWrite(t);
         imageActive = true;
-        memoryWritten(t.dbp, t.dbw, t.dpsm, t.dsax, t.dsay, t.rrw, t.rrh);
+        // The pages' generation moves only if the pixels change (imageWritten): GT4 sends the same
+        // textures every frame, and they need not be decoded again.
+        memoryWritten(t.dbp, t.dbw, t.dpsm, t.dsax, t.dsay, t.rrw, t.rrh, false);
         ++stats.uploads;
     } else if (dir == 2) {
         mem.copy(t);   // a copy out of a render target is stale here (the target lives on the GPU)
@@ -232,7 +234,16 @@ void GsFrontend::transferStarted(uint32_t dir) {
     }
 }
 
-void GsFrontend::memoryWritten(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+void GsFrontend::imageWritten(const uint8_t* bytes, size_t size) {
+    if (!mem.write(bytes, size)) return;
+    static const bool logChanges = std::getenv("GT4_GSN_XFER") != nullptr;
+    if (logChanges) std::printf("[gsn changed] %zu bytes, %zu pages\n", size, uploadPages.size());
+    for (const uint32_t page : uploadPages) ++pageGeneration[page];
+    ++uploads;
+}
+
+void GsFrontend::memoryWritten(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y, uint32_t w, uint32_t h, bool changed) {
+    if (!changed) uploadPages.clear();
     uint32_t pw, ph;
     pageSize(psm, pw, ph);
     const uint32_t perRow = std::max<uint32_t>(1, (psm == PSMT8 || psm == PSMT4) ? bw / 2 : bw);
@@ -241,8 +252,12 @@ void GsFrontend::memoryWritten(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t 
             for (uint32_t extra = 0; extra < 2; ++extra) {   // a base that is not page-aligned spills into the next page
                 const uint32_t page = (bp / 32 + py * perRow + px + extra) & 511;
                 if (extra && !(bp % 32)) break;
-                ++pageGeneration[page];
-                ++uploads;
+                if (changed) {
+                    ++pageGeneration[page];
+                    ++uploads;
+                } else {
+                    uploadPages.push_back(page);
+                }
                 pages[page] = {0, ++serial};
             }
         }
@@ -729,7 +744,7 @@ void GsFrontend::gif(uint32_t path, const uint8_t* data, size_t bytes) {
             ++q16;
         } else {   // IMAGE
             const size_t n = std::min<size_t>(g.loops, total - q16);
-            if (imageActive) mem.write(data + q16 * 16, n * 16);
+            if (imageActive) imageWritten(data + q16 * 16, n * 16);
             static const bool logImages = std::getenv("GT4_GSN_XFER") != nullptr;
             if (logImages) std::printf("[gsn image] path %u: %zu of %u qwords%s\n", path, n, g.loops, imageActive ? "" : " (no transfer)");
             q16 += n;

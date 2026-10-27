@@ -197,7 +197,11 @@ private:
     void markWritten(uint32_t targetId, uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x0, uint32_t x1, uint32_t y0, uint32_t y1);
     TextureSource textureFor(const DrawState& s);
     void transferStarted(uint32_t dir);
-    void memoryWritten(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y, uint32_t w, uint32_t h);
+    // GS memory written by a transfer (changed: its pixels are known to differ; uploads say so as their
+    // data arrives, imageWritten): the pages' owners and generations.
+    void memoryWritten(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y, uint32_t w, uint32_t h, bool changed = true);
+    void imageWritten(const uint8_t* bytes, size_t size);
+    std::vector<uint32_t> uploadPages;   // the pages of the upload in progress
 };
 
 }  // namespace gt4::gsn

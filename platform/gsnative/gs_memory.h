@@ -57,7 +57,8 @@ public:
     };
     // HOST -> LOCAL: `bytes` of packed pixel data (continuing where the last call stopped; begin() resets).
     void beginWrite(const Transfer& t);
-    void write(const uint8_t* bytes, size_t size);
+    // True when it changed any pixel (GT4 uploads the same textures every frame: decodes are kept then).
+    bool write(const uint8_t* bytes, size_t size);
     // LOCAL -> LOCAL.
     void copy(const Transfer& t);
     // LOCAL -> HOST: the whole rectangle, packed.
