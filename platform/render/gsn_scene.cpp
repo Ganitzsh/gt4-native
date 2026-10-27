@@ -31,12 +31,13 @@ struct DrawConstants {
     uint32_t flags;
     uint32_t tex, fogColour, alphaTest, blend;
     uint32_t clampU, clampV;   // WMS/WMT (0-1), MINU/MINV (2-11), MAXU/MAXV (12-21): CLAMP
+    uint32_t lod;              // LCM (0), L (1-2), K (3-14, signed 7.4), MXL (16-18): TEX1
 };
-static_assert(sizeof(DrawConstants) == 68);
+static_assert(sizeof(DrawConstants) == 72);
 
 enum : uint32_t {
     kTextured = 1, kUv = 2, kFog = 4, kBlend = 8, kPabe = 16, kFba = 32, kFromTarget = 64, kTarget24 = 128, kDestAlphaBlend = 256,
-    kNearest = 512, kSnap = 1024, kAlphaInvert = 2048, kMipmapped = 4096,
+    kNearest = 512, kSnap = 1024, kAlphaInvert = 2048, kMipmapped = 4096, kGeneratedMips = 8192,
 };
 
 // A fixed-function blend for C = Ad: the coefficients of Cs and Cd as (a * Ad + b), mapped onto factors.
@@ -635,6 +636,8 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
                        (static_cast<uint32_t>((s.clamp >> 14) & 0x3FF) << 12);
             k.clampV = static_cast<uint32_t>((s.clamp >> 2) & 3) | (static_cast<uint32_t>((s.clamp >> 24) & 0x3FF) << 2) |
                        (static_cast<uint32_t>((s.clamp >> 34) & 0x3FF) << 12);
+            k.lod = static_cast<uint32_t>(s.tex1 & 1) | (static_cast<uint32_t>((s.tex1 >> 19) & 3) << 1) |
+                    (static_cast<uint32_t>((s.tex1 >> 32) & 0xFFF) << 3) | (static_cast<uint32_t>((s.tex1 >> 2) & 7) << 16);
             sampler = samplers[(linear ? 2 : 0) + (repeat ? 1 : 0)];
             if (d.texture.kind == gsn::TextureSource::Kind::Target) {
                 auto source = targets.find(d.texture.id);
@@ -684,9 +687,12 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
                     view = t->second.image.view;
                     // The GS's mipmaps, sampled as a modern GPU does; above 1x, a 3D draw's bilinear texture
                     // without them gets the levels made from it (the GS shows such textures aliased).
+                    // (With made levels, gsn.frag takes the alpha the alpha test sees from level 0, as the GS
+                    // without mipmaps: averaged levels would make cut-outs such as fences and foliage solid.)
                     const bool perspective = !((prim >> 8) & 1);
-                    if (t->second.levels > 1 || (t->second.generated > 1 && perspective && linear && (sx > 1 || sy > 1))) {
-                        k.flags = (k.flags & ~kNearest) | kMipmapped;
+                    const bool made = t->second.levels == 1 && t->second.generated > 1 && perspective && linear && (sx > 1 || sy > 1);
+                    if (t->second.levels > 1 || made) {
+                        k.flags = (k.flags & ~kNearest) | kMipmapped | (made ? kGeneratedMips : 0u);
                         sampler = mipSamplers[((s.clamp & 3) == 0 ? 2 : 0) + (((s.clamp >> 2) & 3) == 0 ? 1 : 0)];
                     }
                 }
