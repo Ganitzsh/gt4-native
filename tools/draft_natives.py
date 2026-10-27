@@ -94,7 +94,7 @@ def main():
     # since then falls back to a draft)
     last_curated = os.path.join(a.game, "curated_list.txt")
     if os.path.exists(last_curated):
-        drafted |= set(re.findall(r"func_([0-9A-F]{8})\.", open(last_curated).read().upper()))
+        drafted |= set(re.findall(r"FUNC_([0-9A-F]{8})\.", open(last_curated).read().upper()))
     missing = [x.lower() for x in image if x not in natives or x in drafted]
     store = os.path.join(a.decomp, "drafts")
     swarm = os.path.join(a.decomp, "build", "swarm")
