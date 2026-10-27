@@ -60,7 +60,12 @@ struct Backend::Impl {
 
 Backend::Backend() : impl(std::make_unique<Impl>()) {}
 Backend::~Backend() {
-    if (impl) impl->device.wait_idle();
+    if (!impl) return;
+    // A live game stops the worker mid-frame: paraLLEl-GS can hold a requested command buffer, and Granite's
+    // wait_idle waits for every requested one to be submitted (it hung the exit). Submit it first.
+    Util::register_thread_index(0);
+    impl->gs.flush();
+    impl->device.wait_idle();
 }
 
 std::unique_ptr<Backend> Backend::create(const BackendOptions& options, std::string& error) {

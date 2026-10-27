@@ -526,6 +526,9 @@ int run(const Options& options) {
         if (const float a = gt4::aspectValue(settings.aspect); !options.game.empty() && a >= 1.5f) {
             gsOptions.gameArgs.push_back("--aspect");
             gsOptions.gameArgs.push_back(std::to_string(a));
+            // The menus' 2D: in a centred 4:3 area, or stretched as on the PS2 (aspect.hud = stretched).
+            gsOptions.gameArgs.push_back("--menus");
+            gsOptions.gameArgs.push_back(settings.hud == gt4::HudLayout::Stretched ? "stretched" : "centered");
         }
         gsOptions.replayPath = options.replay;
         gsOptions.lockstep = lockstep;
