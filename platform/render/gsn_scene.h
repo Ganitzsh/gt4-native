@@ -29,6 +29,7 @@ public:
     void recordMain(VkCommandBuffer command, const SceneView& view) override;
     SceneCamera camera() const override;
     bool drawsOriginalEffects() const override { return true; }   // the game draws its own glare and fog
+    bool hasMotionVectors() const override { return false; }      // not yet (the GS stream has no history)
 
 private:
     struct Impl;

@@ -60,6 +60,9 @@ public:
     // True when the frame is the game's own displayed image (the GS output): the effects it draws itself
     // (glare, fog, ...) are already in it, so the pipeline adds nothing for effects set to `original`.
     virtual bool drawsOriginalEffects() const { return false; }
+    // False when the velocity target stays zero (the game's frames): temporal anti-aliasing and FSR 2 would
+    // smear moving pictures, so the pipeline uses SMAA and FSR 1 instead.
+    virtual bool hasMotionVectors() const { return true; }
 };
 
 }  // namespace gt4

@@ -28,6 +28,7 @@ public:
     void recordMain(VkCommandBuffer command, const SceneView& view) override;
     SceneCamera camera() const override;
     bool drawsOriginalEffects() const override { return true; }
+    bool hasMotionVectors() const override { return false; }
 
 private:
     struct Impl;
