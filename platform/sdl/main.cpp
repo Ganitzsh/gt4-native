@@ -508,11 +508,16 @@ int run(const Options& options) {
     const bool lockstep = !options.replay.empty() && options.fixedStep;
     gt4::gs::DisplayFrame gsFrame;
     uint64_t gsSerial = 0;
+    gt4::gsn::FrameList nativeFrame;
+    uint64_t nativeSerial = 0;
     bool gameExited = false;
     if (gsMode) {
         gt4::gs::GsHost::Options gsOptions;
         gsOptions.gamePath = options.game;
         gsOptions.gameArgs = options.gameArgs;
+        // GT4_GSN=render: draw with the native renderer instead of the GS back end's frame (in progress,
+        // docs/NATIVE_RENDERER.md).
+        if (const char* gsn = std::getenv("GT4_GSN"); gsn && !std::strcmp(gsn, "render")) gsOptions.nativeRenderer = true;
         // A wide content shape switches on the game's own 16:9 mode, generalised to that aspect (the
         // game's --aspect: Hor+ 3D in the anamorphic 640 x 448 frame, which the host presents at the
         // aspect). Read at start-up: changing aspect.ratio later needs a restart of the game.
@@ -652,6 +657,7 @@ int run(const Options& options) {
         if (gs) {
             if (lockstep) gs->advance();
             if (gs->takeFrame(gsFrame, gsSerial)) renderer->setGameFrame(gsFrame.width, gsFrame.height, gsFrame.rgba.data());
+            if (gs->takeNativeFrame(nativeFrame, nativeSerial)) renderer->setNativeFrame(nativeFrame);
             if (gs->live()) {
                 uint8_t pad[18];
                 gt4::ps2::encodePad(readPad(gamepad), pad);

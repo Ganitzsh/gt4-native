@@ -1,0 +1,561 @@
+// The native renderer's front end (see gs_frontend.h). Register layouts from the public GS documentation.
+#include "gs_frontend.h"
+
+#include <algorithm>
+#include <bit>
+#include <cstring>
+
+namespace gt4::gsn {
+
+namespace {
+
+enum Reg : uint32_t {
+    PRIM = 0x00, RGBAQ = 0x01, ST = 0x02, UV = 0x03, XYZF2 = 0x04, XYZ2 = 0x05, TEX0_1 = 0x06, TEX0_2 = 0x07,
+    CLAMP_1 = 0x08, CLAMP_2 = 0x09, FOG = 0x0A, XYZF3 = 0x0C, XYZ3 = 0x0D, AD = 0x0E, NOP = 0x0F,
+    TEX1_1 = 0x14, TEX1_2 = 0x15, TEX2_1 = 0x16, TEX2_2 = 0x17, XYOFFSET_1 = 0x18, XYOFFSET_2 = 0x19,
+    PRMODECONT = 0x1A, PRMODE = 0x1B, TEXCLUT = 0x1C, TEXA = 0x3B, FOGCOL = 0x3D, TEXFLUSH = 0x3F,
+    SCISSOR_1 = 0x40, ALPHA_1 = 0x42, DTHE = 0x45, COLCLAMP = 0x46, TEST_1 = 0x47, PABE = 0x49, FBA_1 = 0x4A,
+    FRAME_1 = 0x4C, ZBUF_1 = 0x4E, BITBLTBUF = 0x50, TRXPOS = 0x51, TRXREG = 0x52, TRXDIR = 0x53, HWREG = 0x54,
+};
+
+float asFloat(uint32_t bits) { return std::bit_cast<float>(bits); }
+
+uint64_t mix(uint64_t h, uint64_t v) {
+    h ^= v + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2);
+    return h * 0xFF51AFD7ED558CCDull;
+}
+
+// Page dimensions of a format (pixels).
+void pageSize(uint32_t psm, uint32_t& w, uint32_t& h) {
+    switch (psm) {
+    case PSMCT16: case PSMCT16S: case PSMZ16: case PSMZ16S: w = 64; h = 64; break;
+    case PSMT8: w = 128; h = 64; break;
+    case PSMT4: w = 128; h = 128; break;
+    default: w = 64; h = 32; break;   // 32-bit layouts, including T8H/T4HL/T4HH
+    }
+}
+
+bool layout32(uint32_t psm) {
+    return psm == PSMCT32 || psm == PSMCT24 || psm == PSMT8H || psm == PSMT4HL || psm == PSMT4HH;
+}
+
+}  // namespace
+
+void FrameList::clear() {
+    vertices.clear();
+    draws.clear();
+    commands.clear();
+    textures.clear();
+    reinterpretations.clear();
+    targets.clear();
+}
+
+GsFrontend::GsFrontend() : pages(512), pageGeneration(512, 0) {
+    reg[PRMODECONT] = 1;
+    reg[COLCLAMP] = 1;
+}
+
+uint32_t GsFrontend::primValue() const {
+    // With PRMODECONT = 0 the attributes (everything but the type) come from PRMODE.
+    const uint64_t p = reg[PRIM];
+    if (reg[PRMODECONT] & 1) return static_cast<uint32_t>(p & 0x7FF);
+    return static_cast<uint32_t>((p & 7) | (reg[PRMODE] & 0x7F8));
+}
+
+DrawState GsFrontend::currentState(uint32_t prim) const {
+    const uint32_t c = (prim >> 9) & 1;
+    DrawState s;
+    s.prim = prim;
+    s.frame = reg[FRAME_1 + c];
+    s.zbuf = reg[ZBUF_1 + c];
+    s.tex0 = reg[TEX0_1 + c];
+    s.tex1 = reg[TEX1_1 + c];
+    s.clamp = reg[CLAMP_1 + c];
+    s.test = reg[TEST_1 + c];
+    s.alpha = reg[ALPHA_1 + c];
+    s.scissor = reg[SCISSOR_1 + c];
+    s.texa = reg[TEXA];
+    s.fba = static_cast<uint32_t>(reg[FBA_1 + c] & 1);
+    s.pabe = static_cast<uint32_t>(reg[PABE] & 1);
+    s.dthe = static_cast<uint32_t>(reg[DTHE] & 1);
+    s.colclamp = static_cast<uint32_t>(reg[COLCLAMP] & 1);
+    s.fogcol = static_cast<uint32_t>(reg[FOGCOL] & 0xFFFFFF);
+    // Fields that do not matter for the draw are cleared, so that equal draws batch.
+    if (!((prim >> 4) & 1)) s.tex0 = s.tex1 = s.clamp = s.texa = 0;
+    if (!((prim >> 6) & 1)) s.alpha = 0;
+    if (!((prim >> 5) & 1)) s.fogcol = 0;
+    return s;
+}
+
+void GsFrontend::write(uint32_t r, uint64_t value) {
+    r &= 0x7F;
+    switch (r) {
+    case PRIM:
+        reg[PRIM] = value;
+        queued = 0;
+        stripParity = 0;
+        return;
+    case RGBAQ:
+        reg[RGBAQ] = value;
+        q = asFloat(static_cast<uint32_t>(value >> 32));
+        return;
+    case ST:
+        reg[ST] = value;
+        st[0] = asFloat(static_cast<uint32_t>(value));
+        st[1] = asFloat(static_cast<uint32_t>(value >> 32));
+        return;
+    case XYZF2: case XYZ2: case XYZF3: case XYZ3: {
+        reg[r] = value;
+        Vertex& v = queue[std::min<uint32_t>(queued, 2)];
+        const uint32_t prim = primValue();
+        const uint64_t offset = reg[XYOFFSET_1 + ((prim >> 9) & 1)];
+        const uint32_t x = static_cast<uint32_t>(value & 0xFFFF), y = static_cast<uint32_t>((value >> 16) & 0xFFFF);
+        v.x = (static_cast<float>(x) - static_cast<float>(offset & 0xFFFF)) / 16.0f;
+        v.y = (static_cast<float>(y) - static_cast<float>((offset >> 32) & 0xFFFF)) / 16.0f;
+        const bool f = r == XYZF2 || r == XYZF3;
+        v.z = f ? static_cast<uint32_t>((value >> 32) & 0xFFFFFF) : static_cast<uint32_t>(value >> 32);
+        v.fog = f ? static_cast<uint32_t>(value >> 56) : static_cast<uint32_t>(reg[FOG] >> 56);
+        v.rgba = static_cast<uint32_t>(reg[RGBAQ]);
+        v.s = st[0];
+        v.t = st[1];
+        v.q = q;
+        v.u = static_cast<float>(reg[UV] & 0x3FFF) / 16.0f;
+        v.v = static_cast<float>((reg[UV] >> 16) & 0x3FFF) / 16.0f;
+        kick(r == XYZF2 || r == XYZ2);
+        return;
+    }
+    case TEX0_1: case TEX0_2:
+        reg[r] = value;
+        mem.tex0Written(GsMemory::Tex0::decode(value));
+        return;
+    case TEX2_1: case TEX2_2: {
+        // TEX2: PSM and the CLUT fields of TEX0.
+        const uint64_t mask = (0x3Full << 20) | (~0ull << 37);
+        uint64_t& tex0 = reg[TEX0_1 + (r - TEX2_1)];
+        tex0 = (tex0 & ~mask) | (value & mask);
+        mem.tex0Written(GsMemory::Tex0::decode(tex0));
+        return;
+    }
+    case TRXDIR:
+        reg[r] = value;
+        transferStarted(static_cast<uint32_t>(value & 3));
+        return;
+    case HWREG:
+        if (imageActive) mem.write(reinterpret_cast<const uint8_t*>(&value), 8);
+        return;
+    default:
+        reg[r] = value;
+        return;
+    }
+}
+
+void GsFrontend::transferStarted(uint32_t dir) {
+    const uint64_t b = reg[BITBLTBUF], p = reg[TRXPOS], s = reg[TRXREG];
+    GsMemory::Transfer t;
+    t.sbp = b & 0x3FFF;
+    t.sbw = (b >> 16) & 0x3F;
+    t.spsm = (b >> 24) & 0x3F;
+    t.dbp = (b >> 32) & 0x3FFF;
+    t.dbw = (b >> 48) & 0x3F;
+    t.dpsm = (b >> 56) & 0x3F;
+    t.ssax = p & 0x7FF;
+    t.ssay = (p >> 16) & 0x7FF;
+    t.dsax = (p >> 32) & 0x7FF;
+    t.dsay = (p >> 48) & 0x7FF;
+    t.dir = (p >> 59) & 3;
+    t.rrw = s & 0xFFF;
+    t.rrh = (s >> 32) & 0xFFF;
+    imageActive = false;
+    if (dir == 0) {
+        mem.beginWrite(t);
+        imageActive = true;
+        memoryWritten(t.dbp, t.dbw, t.dpsm, t.dsax, t.dsay, t.rrw, t.rrh);
+        ++stats.uploads;
+    } else if (dir == 2) {
+        mem.copy(t);   // a copy out of a render target is stale here (the target lives on the GPU)
+        memoryWritten(t.dbp, t.dbw, t.dpsm, t.dsax, t.dsay, t.rrw, t.rrh);
+        ++stats.copies;
+    }
+}
+
+void GsFrontend::memoryWritten(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+    uint32_t pw, ph;
+    pageSize(psm, pw, ph);
+    const uint32_t perRow = std::max<uint32_t>(1, (psm == PSMT8 || psm == PSMT4) ? bw / 2 : bw);
+    for (uint32_t py = y / ph; py <= (y + std::max<uint32_t>(h, 1) - 1) / ph; ++py)
+        for (uint32_t px = x / pw; px <= (x + std::max<uint32_t>(w, 1) - 1) / pw; ++px) {
+            for (uint32_t extra = 0; extra < 2; ++extra) {   // a base that is not page-aligned spills into the next page
+                const uint32_t page = (bp / 32 + py * perRow + px + extra) & 511;
+                if (extra && !(bp % 32)) break;
+                ++pageGeneration[page];
+                pages[page] = {0, ++serial};
+            }
+        }
+}
+
+void GsFrontend::kick(bool draw) {
+    const uint32_t prim = primValue();
+    const uint32_t type = prim & 7;
+    const uint32_t need = type == 0 ? 1 : (type == 1 || type == 2 || type == 6) ? 2 : 3;
+    ++queued;
+    if (queued < need) return;
+    Vertex v[3] = {queue[0], queue[1], queue[2]};
+    switch (type) {
+    case 0: if (draw) emit(v, 1, Topology::Points); queued = 0; break;
+    case 1: if (draw) emit(v, 2, Topology::Lines); queued = 0; break;
+    case 2:   // line strip: the second vertex starts the next line
+        if (draw) emit(v, 2, Topology::Lines);
+        queue[0] = queue[1];
+        queued = 1;
+        break;
+    case 3: if (draw) emit(v, 3, Topology::Triangles); queued = 0; break;
+    case 4:   // triangle strip
+        if (draw) emit(v, 3, Topology::Triangles);
+        queue[0] = queue[1];
+        queue[1] = queue[2];
+        queued = 2;
+        break;
+    case 5:   // triangle fan: the first vertex stays
+        if (draw) emit(v, 3, Topology::Triangles);
+        queue[1] = queue[2];
+        queued = 2;
+        break;
+    case 6: {   // sprite: two corners, the second's colour, Z and fog
+        if (draw) {
+            const Vertex& a = v[0];
+            const Vertex& b = v[1];
+            Vertex c[6];
+            auto corner = [&](Vertex& out, bool right, bool bottom) {
+                out = b;
+                out.x = right ? b.x : a.x;
+                out.y = bottom ? b.y : a.y;
+                out.s = right ? b.s : a.s;
+                out.t = bottom ? b.t : a.t;
+                out.q = b.q;
+                out.u = right ? b.u : a.u;
+                out.v = bottom ? b.v : a.v;
+            };
+            corner(c[0], false, false);
+            corner(c[1], true, false);
+            corner(c[2], false, true);
+            corner(c[3], true, false);
+            corner(c[4], true, true);
+            corner(c[5], false, true);
+            emit(c, 3, Topology::Triangles);
+            emit(c + 3, 3, Topology::Triangles);
+        }
+        queued = 0;
+        break;
+    }
+    default: queued = 0; break;
+    }
+}
+
+void GsFrontend::emit(const Vertex* v, uint32_t n, Topology topology) {
+    const uint32_t prim = primValue();
+    ++stats.primitives;
+    DrawState s = currentState(prim);
+    // Flat shading: the last vertex's colour for the whole primitive.
+    Vertex out[3];
+    for (uint32_t k = 0; k < n; ++k) {
+        out[k] = v[k];
+        if (!((prim >> 3) & 1)) out[k].rgba = v[n - 1].rgba;
+    }
+    // Targets: the frame buffer and, when the depth test is on, the Z buffer.
+    float y0 = out[0].y, y1 = out[0].y;
+    for (uint32_t k = 1; k < n; ++k) {
+        y0 = std::min(y0, out[k].y);
+        y1 = std::max(y1, out[k].y);
+    }
+    const uint32_t scissorY0 = static_cast<uint32_t>((s.scissor >> 32) & 0x7FF), scissorY1 = static_cast<uint32_t>((s.scissor >> 48) & 0x7FF);
+    const uint32_t top = static_cast<uint32_t>(std::clamp(y0, static_cast<float>(scissorY0), static_cast<float>(scissorY1)));
+    const uint32_t bottom = static_cast<uint32_t>(std::clamp(y1, static_cast<float>(scissorY0), static_cast<float>(scissorY1)));
+    const uint32_t width = static_cast<uint32_t>((s.frame >> 16) & 0x3F);
+    const uint32_t colour = targetFor(s.frame, false, scissorY1 + 1, width);
+    const bool zte = (s.test >> 16) & 1;
+    const uint32_t depth = zte ? targetFor(s.zbuf, true, scissorY1 + 1, width) : 0;
+    const uint32_t fbmsk = static_cast<uint32_t>(s.frame >> 32);
+    if (fbmsk != 0xFFFFFFFFu) markWritten(colour, static_cast<uint32_t>(s.frame & 0x1FF) * 32, static_cast<uint32_t>((s.frame >> 16) & 0x3F),
+                                          static_cast<uint32_t>((s.frame >> 24) & 0x3F), top, bottom);
+    if (depth && !((s.zbuf >> 32) & 1))
+        markWritten(depth, static_cast<uint32_t>(s.zbuf & 0x1FF) * 32, static_cast<uint32_t>((s.frame >> 16) & 0x3F),
+                    static_cast<uint32_t>(((s.zbuf >> 24) & 0xF) | 0x30), top, bottom);
+    const TextureSource texture = ((prim >> 4) & 1) ? textureFor(s) : TextureSource{};
+    // Batch with the previous draw when nothing changed.
+    if (!frame.commands.empty() && frame.commands.back().kind == FrameList::Command::Kind::Draw) {
+        Draw& last = frame.draws[frame.commands.back().index];
+        if (last.topology == topology && last.state == s && last.target == colour && last.depth == depth &&
+            last.texture.kind == texture.kind && last.texture.id == texture.id && last.texture.version == texture.version &&
+            last.first + last.count == frame.vertices.size()) {
+            frame.vertices.insert(frame.vertices.end(), out, out + n);
+            last.count += n;
+            return;
+        }
+    }
+    Draw d;
+    d.state = s;
+    d.topology = topology;
+    d.first = static_cast<uint32_t>(frame.vertices.size());
+    d.count = n;
+    d.target = colour;
+    d.depth = depth;
+    d.texture = texture;
+    frame.vertices.insert(frame.vertices.end(), out, out + n);
+    frame.commands.push_back({FrameList::Command::Kind::Draw, static_cast<uint32_t>(frame.draws.size())});
+    frame.draws.push_back(d);
+    ++stats.draws;
+}
+
+uint32_t GsFrontend::targetFor(uint64_t frameReg, bool depth, uint32_t heightNeeded, uint32_t bw) {
+    const uint32_t bp = static_cast<uint32_t>(frameReg & 0x1FF) * 32;
+    const uint32_t psm = depth ? static_cast<uint32_t>(((frameReg >> 24) & 0xF) | 0x30) : static_cast<uint32_t>((frameReg >> 24) & 0x3F);
+    const bool wide = !depth && layout32(psm);
+    for (Target& t : targets) {
+        if (t.depth != depth || t.bp != bp) continue;
+        if (t.bw != bw) continue;
+        if (!depth && layout32(t.psm) != wide) continue;
+        if (depth && (t.psm & 2) != (psm & 2)) continue;
+        if (heightNeeded > t.height) t.height = (heightNeeded + 31) & ~31u;
+        if (!depth) t.psm = psm;   // CT24 and CT32 share the layout; the last write tells which alpha is valid
+        return t.id;
+    }
+    Target t;
+    t.id = static_cast<uint32_t>(targets.size()) + 1;
+    t.bp = bp;
+    t.bw = bw;
+    t.psm = psm;
+    t.depth = depth;
+    t.height = (std::max<uint32_t>(heightNeeded, 32) + 31) & ~31u;
+    targets.push_back(t);
+    return t.id;
+}
+
+void GsFrontend::markWritten(uint32_t targetId, uint32_t bp, uint32_t bw, uint32_t psm, uint32_t y0, uint32_t y1) {
+    uint32_t pw, ph;
+    pageSize(psm, pw, ph);
+    const uint32_t perRow = std::max<uint32_t>(1, bw);
+    for (uint32_t py = y0 / ph; py <= y1 / ph; ++py)
+        for (uint32_t px = 0; px < perRow; ++px) pages[(bp / 32 + py * perRow + px) & 511] = {targetId, ++serial};
+    if (targetWritten.size() <= targetId) targetWritten.resize(targetId + 1, 0);
+    targetWritten[targetId] = serial;
+}
+
+TextureSource GsFrontend::textureFor(const DrawState& s) {
+    const GsMemory::Tex0 t = GsMemory::Tex0::decode(s.tex0);
+    const uint32_t w = 1u << std::min<uint32_t>(t.tw, 10), h = 1u << std::min<uint32_t>(t.th, 10);
+    uint32_t pw, ph;
+    pageSize(t.psm, pw, ph);
+    const uint32_t perRow = std::max<uint32_t>(1, (t.psm == PSMT8 || t.psm == PSMT4) ? t.tbw / 2 : t.tbw);
+    // The most recent writer of the pages the texture covers.
+    uint32_t owner = 0;
+    uint64_t newest = 0, generation = 0;
+    const uint32_t rows = (h + ph - 1) / ph, columns = std::min<uint32_t>(perRow, (w + pw - 1) / pw);
+    for (uint32_t py = 0; py < rows; ++py)
+        for (uint32_t px = 0; px < std::max<uint32_t>(columns, 1); ++px)
+            for (uint32_t extra = 0; extra < 2; ++extra) {
+                if (extra && !(t.tbp % 32)) break;
+                const uint32_t page = (t.tbp / 32 + py * perRow + px + extra) & 511;
+                generation += pageGeneration[page] * (page + 1);
+                if (pages[page].target && pages[page].serial > newest) {
+                    newest = pages[page].serial;
+                    owner = pages[page].target;
+                }
+            }
+    // A target that starts at the texture's own base page wins: textures are declared at powers of two, so
+    // their extent often runs past the buffer they read into later targets.
+    const PageOwner& base = pages[(t.tbp / 32) & 511];
+    if (base.target && !(t.tbp % 32)) {
+        const Target& candidate = targets[base.target - 1];
+        if (!candidate.depth && candidate.bp == t.tbp) owner = base.target;
+    }
+    TextureSource src;
+    if (owner) {
+        const Target& target = targets[owner - 1];
+        const bool sameLayout = !target.depth && layout32(target.psm) == layout32(t.psm) &&
+                                (t.psm == PSMCT32 || t.psm == PSMCT24 || t.psm == PSMCT16 || t.psm == PSMCT16S);
+        if (sameLayout && target.bw == t.tbw && t.tbp >= target.bp && (t.tbp - target.bp) % 32 == 0) {
+            const uint32_t page = (t.tbp - target.bp) / 32;
+            src.kind = TextureSource::Kind::Target;
+            src.id = owner;
+            src.offsetX = static_cast<int32_t>((page % std::max<uint32_t>(1, target.bw)) * pw);
+            src.offsetY = static_cast<int32_t>((page / std::max<uint32_t>(1, target.bw)) * ph);
+            ++stats.targetReads;
+            return src;
+        }
+        // Another format over a 32-bit frame: built on the GPU from the target (indexed formats).
+        const bool indexedRead = t.psm == PSMT8 || t.psm == PSMT4 || t.psm == PSMT8H || t.psm == PSMT4HL || t.psm == PSMT4HH;
+        if (!target.depth && layout32(target.psm) && indexedRead) {
+            Reinterpretation r;
+            r.target = owner;
+            r.targetBp = target.bp;
+            r.targetBw = target.bw;
+            r.targetPsm = target.psm;
+            r.tex0 = s.tex0;
+            r.texa = s.texa;
+            r.width = w;
+            r.height = h;
+            std::memcpy(r.clut.data(), mem.clutBuffer(), r.clut.size());
+            src.kind = TextureSource::Kind::Reinterpreted;
+            // The same as the previous one while the target has not been drawn into since: reused.
+            const LastReinterpretation& last = lastReinterpretation;
+            if (last.index < frame.reinterpretations.size()) {
+                const Reinterpretation& p = frame.reinterpretations[last.index];
+                const uint64_t written = owner < targetWritten.size() ? targetWritten[owner] : 0;
+                if (p.target == r.target && p.tex0 == r.tex0 && p.texa == r.texa && p.clut == r.clut && written <= last.serial) {
+                    src.id = last.index;
+                    return src;
+                }
+            }
+            src.id = static_cast<uint32_t>(frame.reinterpretations.size());
+            frame.reinterpretations.push_back(r);
+            lastReinterpretation = {src.id, serial};
+            ++stats.reinterpreted;
+            return src;
+        }
+        src.reinterpreted = true;
+        ++stats.reinterpreted;
+    }
+    // GS memory, decoded once per content: the texture's fields, TEXA for 16/24-bit, the palette in use.
+    uint64_t key = mix(mix(mix(0, t.tbp), t.tbw), t.psm);
+    key = mix(mix(key, t.tw), t.th);
+    const bool indexed = t.psm == PSMT8 || t.psm == PSMT4 || t.psm == PSMT8H || t.psm == PSMT4HL || t.psm == PSMT4HH;
+    uint64_t clutHash = 0;
+    if (indexed) {
+        clutHash = mix(mix(0, t.cpsm), t.csa);
+        const uint8_t* clut = mem.clutBuffer();
+        for (uint32_t k = 0; k < 1024; k += 8) {
+            uint64_t v;
+            std::memcpy(&v, clut + k, 8);
+            clutHash = mix(clutHash, v);
+        }
+    } else if (t.psm != PSMCT32) {
+        key = mix(key, s.texa);
+    }
+    Cached& c = textureCache[key];
+    if (!c.id) c.id = nextTexture++;
+    if (!c.version || c.generation != generation || c.clutHash != clutHash) {
+        ++c.version;
+        c.generation = generation;
+        c.clutHash = clutHash;
+        TextureImage image;
+        image.id = c.id;
+        image.version = c.version;
+        image.width = w;
+        image.height = h;
+        image.pixels.resize(size_t(w) * h);
+        Texa texa;
+        texa.ta0 = static_cast<uint8_t>(s.texa & 0xFF);
+        texa.aem = (s.texa >> 15) & 1;
+        texa.ta1 = static_cast<uint8_t>((s.texa >> 32) & 0xFF);
+        mem.decode(t, texa, 0, 0, w, h, image.pixels.data());
+        frame.textures.push_back(std::move(image));
+        ++stats.decoded;
+    }
+    src.kind = TextureSource::Kind::Memory;
+    src.id = c.id;
+    src.version = c.version;
+    return src;
+}
+
+void GsFrontend::privileged(uint32_t offset, uint64_t value) {
+    if (offset < 0x100 * 16 && !(offset & 0xF)) priv[offset >> 4] = value;
+}
+
+void GsFrontend::gif(uint32_t path, const uint8_t* data, size_t bytes) {
+    (void)path;
+    size_t q16 = 0;
+    const size_t total = bytes / 16;
+    while (q16 < total) {
+        uint64_t lo, hi;
+        std::memcpy(&lo, data + q16 * 16, 8);
+        std::memcpy(&hi, data + q16 * 16 + 8, 8);
+        ++q16;
+        const uint32_t nloop = static_cast<uint32_t>(lo & 0x7FFF);
+        const bool eop = (lo >> 15) & 1;
+        const bool pre = (lo >> 46) & 1;
+        const uint32_t flg = static_cast<uint32_t>(lo >> 58) & 3;
+        uint32_t nreg = static_cast<uint32_t>(lo >> 60) & 0xF;
+        if (!nreg) nreg = 16;
+        if (pre && flg == 0) write(PRIM, (lo >> 47) & 0x7FF);
+        if (flg == 0) {   // PACKED
+            for (uint32_t loop = 0; loop < nloop; ++loop)
+                for (uint32_t k = 0; k < nreg && q16 < total; ++k, ++q16) {
+                    uint64_t a, b;
+                    std::memcpy(&a, data + q16 * 16, 8);
+                    std::memcpy(&b, data + q16 * 16 + 8, 8);
+                    const uint32_t r = static_cast<uint32_t>(hi >> (4 * k)) & 0xF;
+                    switch (r) {
+                    case PRIM: write(PRIM, a & 0x7FF); break;
+                    case RGBAQ: {
+                        const uint64_t rgba = (a & 0xFF) | (((a >> 32) & 0xFF) << 8) | ((b & 0xFF) << 16) | (((b >> 32) & 0xFF) << 24);
+                        write(RGBAQ, rgba | (static_cast<uint64_t>(std::bit_cast<uint32_t>(q)) << 32));
+                        break;
+                    }
+                    case ST:
+                        write(ST, a);
+                        q = asFloat(static_cast<uint32_t>(b));
+                        break;
+                    case UV: write(UV, (a & 0x3FFF) | (((a >> 32) & 0x3FFF) << 16)); break;
+                    case XYZF2: case XYZF3: {
+                        const uint64_t v = (a & 0xFFFF) | (((a >> 32) & 0xFFFF) << 16) | (((b >> 4) & 0xFFFFFF) << 32) | (((b >> 36) & 0xFF) << 56);
+                        const bool adc = (b >> 47) & 1;
+                        write(r == XYZF3 || adc ? XYZF3 : XYZF2, v);
+                        break;
+                    }
+                    case XYZ2: case XYZ3: {
+                        const uint64_t v = (a & 0xFFFF) | (((a >> 32) & 0xFFFF) << 16) | ((b & 0xFFFFFFFF) << 32);
+                        const bool adc = (b >> 47) & 1;
+                        write(r == XYZ3 || adc ? XYZ3 : XYZ2, v);
+                        break;
+                    }
+                    case FOG: write(FOG, ((b >> 36) & 0xFF) << 56); break;
+                    case AD: write(static_cast<uint32_t>(b & 0x7F), a); break;
+                    case NOP: break;
+                    default: write(r, a); break;   // TEX0, CLAMP, ...: the low 64 bits are the register
+                    }
+                }
+        } else if (flg == 1) {   // REGLIST: 64-bit register values
+            const uint64_t count = uint64_t(nloop) * nreg;
+            for (uint64_t i = 0; i < count; ++i) {
+                const size_t word = (q16 * 2) + i;
+                if (word / 2 >= total) break;
+                uint64_t v;
+                std::memcpy(&v, data + word * 8, 8);
+                const uint32_t r = static_cast<uint32_t>(hi >> (4 * (i % nreg))) & 0xF;
+                if (r != AD && r != NOP) write(r, v);
+            }
+            q16 += (count + 1) / 2;
+        } else {   // IMAGE
+            const size_t n = std::min<size_t>(nloop, total - q16);
+            if (imageActive) mem.write(data + q16 * 16, n * 16);
+            q16 += n;
+        }
+        if (eop && q16 >= total) break;
+    }
+}
+
+void GsFrontend::vsync(uint64_t vblank, FrameList& out) {
+    lastReinterpretation = {};
+    frame.vblank = vblank;
+    frame.targets = targets;
+    Display& d = frame.display;
+    d.pmode = priv[0x00];
+    d.smode2 = priv[0x02];
+    d.dispfb1 = priv[0x07];
+    d.display1 = priv[0x08];
+    d.dispfb2 = priv[0x09];
+    d.display2 = priv[0x0A];
+    d.bgcolor = priv[0x0E];
+    auto displayed = [&](uint64_t dispfb) -> uint32_t {
+        const uint32_t bp = static_cast<uint32_t>(dispfb & 0x1FF) * 32, bw = static_cast<uint32_t>((dispfb >> 9) & 0x3F);
+        for (const Target& t : targets)
+            if (!t.depth && t.bp == bp && t.bw == bw) return t.id;
+        return 0;
+    };
+    d.target1 = displayed(d.dispfb1);
+    d.target2 = displayed(d.dispfb2);
+    std::swap(out, frame);
+    frame.clear();
+}
+
+}  // namespace gt4::gsn

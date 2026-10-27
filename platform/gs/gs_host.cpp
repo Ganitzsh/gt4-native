@@ -1,6 +1,8 @@
 // PS2 graphics host: link / replay -> graphics stream -> GS back end, on a worker thread (see gs_host.h).
 #include "gs_host.h"
 
+#include "gs_frontend.h"
+
 #include "link_host.h"
 #include "stream.h"
 
@@ -12,6 +14,7 @@
 #include <cstring>
 #include <mutex>
 #include <sstream>
+#include <string>
 #include <thread>
 
 namespace gt4::gs {
@@ -21,8 +24,18 @@ namespace {
 // The stream's GS, implemented by the back end.
 class BackendTarget final : public ps2::GsTarget {
 public:
-    BackendTarget(Backend& gs, std::function<void(DisplayFrame&)> present) : backend(gs), publish(std::move(present)) {}
-    void gif(uint32_t path, const uint8_t* data, size_t bytes) override { backend.gif(path, data, bytes); }
+    BackendTarget(Backend& gs, std::function<void(DisplayFrame&)> present, std::function<void(gsn::FrameList&)> presentNative)
+        : backend(gs), publish(std::move(present)), publishNative(std::move(presentNative)) {
+        // The native renderer's front end reads the stream too when its frames are wanted; GT4_GSN=stats
+        // prints a line per frame.
+        const char* mode = std::getenv("GT4_GSN");
+        stats = mode && !std::strcmp(mode, "stats");
+        if (stats || publishNative) native = std::make_unique<gsn::GsFrontend>();
+    }
+    void gif(uint32_t path, const uint8_t* data, size_t bytes) override {
+        backend.gif(path, data, bytes);
+        if (native) native->gif(path, data, bytes);
+    }
     void privileged(uint32_t offset, uint64_t value) override {
         // GT4_DISPFB=FBP[,FBW[,PSM]] (hex FBP): scan out that frame buffer instead (debugging: look at
         // an intermediate render target, e.g. the 3D before the post passes)
@@ -33,8 +46,49 @@ public:
             value = (value & ~0xFFFFFull) | fbp | (fbw << 9) | (static_cast<uint64_t>(psm) << 15);
         }
         backend.writePrivileged(offset, value);
+        if (native) native->privileged(offset, value);
     }
     void vsync(uint32_t field, uint32_t count) override {
+        if (native) {
+            // GT4_GSN_VRAM=N: the front end's GS memory at the end of the frame before VBlank N (gsn_vram_N.bin).
+            static const long dumpAt = std::getenv("GT4_GSN_VRAM") ? std::strtol(std::getenv("GT4_GSN_VRAM"), nullptr, 10) : -1;
+            if (static_cast<long>(count) == dumpAt)
+                if (FILE* f = std::fopen(("gsn_vram_" + std::to_string(count) + ".bin").c_str(), "wb")) {
+                    std::fwrite(native->memory().data(), 1, gsn::GsMemory::kBytes, f);
+                    std::fclose(f);
+                }
+            native->vsync(count, list);
+        }
+        if (native && stats) {
+            uint32_t memory = 0, targets = 0, untextured = 0;
+            for (const auto& d : list.draws) {
+                if (d.texture.kind == gsn::TextureSource::Kind::Memory) ++memory;
+                else if (d.texture.kind == gsn::TextureSource::Kind::Target) ++targets;
+                else ++untextured;
+            }
+            // GT4_GSN_DRAWS=BP: the draws into the target at that block address (hex), with their vertices.
+            static const long drawsAt = std::getenv("GT4_GSN_DRAWS") ? std::strtol(std::getenv("GT4_GSN_DRAWS"), nullptr, 16) : -1;
+            for (const auto& d : list.draws) {
+                const gsn::Target* t = nullptr;
+                for (const auto& x : list.targets) if (x.id == d.target) t = &x;
+                if (!t || static_cast<long>(t->bp) != drawsAt) continue;
+                std::printf("[gsn draw] prim %03X tex0 %016llX src kind %d id %u off %d,%d clamp %llX tex1 %llX alpha %llX, %u vertices\n", d.state.prim,
+                            static_cast<unsigned long long>(d.state.tex0), static_cast<int>(d.texture.kind), d.texture.id, d.texture.offsetX,
+                            d.texture.offsetY, static_cast<unsigned long long>(d.state.clamp), static_cast<unsigned long long>(d.state.tex1),
+                            static_cast<unsigned long long>(d.state.alpha), d.count);
+                for (uint32_t k = 0; k < std::min<uint32_t>(d.count, 6); ++k) {
+                    const auto& v = list.vertices[d.first + k];
+                    std::printf("    xy %.2f %.2f uv %.2f %.2f stq %.4f %.4f %.4f rgba %08X\n", v.x, v.y, v.u, v.v, v.s, v.t, v.q, v.rgba);
+                }
+            }
+            uint32_t reinterpreted = 0;
+            for (const auto& d : list.draws) reinterpreted += d.texture.reinterpreted ? 1 : 0;
+            std::printf("[gsn] vblank %u: %u draws read a target in another format\n", count, reinterpreted);
+            std::printf("[gsn] vblank %u: %zu draws (%u untextured, %u from memory, %u from targets), %zu vertices, %zu textures decoded, "
+                        "%zu targets, display %u/%u\n", count, list.draws.size(), untextured, memory, targets, list.vertices.size(),
+                        list.textures.size(), list.targets.size(), list.display.target1, list.display.target2);
+        }
+        if (native && publishNative) publishNative(list);
         if (backend.vsync(field, count, frame)) publish(frame);
         else ++blankFrames;
     }
@@ -43,6 +97,10 @@ public:
     uint64_t blankFrames = 0;
 private:
     Backend& backend;
+    std::function<void(gsn::FrameList&)> publishNative;
+    std::unique_ptr<gsn::GsFrontend> native;
+    gsn::FrameList list;
+    bool stats = false;
     std::function<void(DisplayFrame&)> publish;
     DisplayFrame frame;
 };
@@ -71,6 +129,14 @@ struct GsHost::Impl {
     std::atomic<uint64_t> vsyncs{0}, events{0};
     uint64_t replayFrame = 0;
     std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
+
+    gsn::FrameList nativeLatest;
+    uint64_t nativeSerial = 0;
+    void publishNative(gsn::FrameList& list) {
+        std::lock_guard<std::mutex> lock(frameMutex);
+        std::swap(nativeLatest, list);
+        ++nativeSerial;
+    }
 
     void publish(DisplayFrame& frame) {
         {
@@ -175,7 +241,9 @@ std::unique_ptr<GsHost> GsHost::create(const Options& options, std::string& erro
     }
     std::printf("GS: paraLLEl-GS on %s, %ux super-sampling\n", h.backend->deviceName().c_str(), options.backend.superSampling);
     Impl* raw = &h;
-    h.target = std::make_unique<BackendTarget>(*h.backend, [raw](DisplayFrame& f) { raw->publish(f); });
+    std::function<void(gsn::FrameList&)> native;
+    if (options.nativeRenderer) native = [raw](gsn::FrameList& list) { raw->publishNative(list); };
+    h.target = std::make_unique<BackendTarget>(*h.backend, [raw](DisplayFrame& f) { raw->publish(f); }, native);
     h.stream = std::make_unique<ps2::GraphicsStream>(*h.target);
     if (options.audio)
         h.stream->setAudioWriter([sink = options.audio](uint32_t stream, uint32_t rate, const int16_t* frames, size_t count) {
@@ -219,6 +287,14 @@ bool GsHost::takeFrame(DisplayFrame& frame, uint64_t& serial) {
     if (impl->serial == serial || impl->latest.rgba.empty()) return false;
     frame = impl->latest;
     serial = impl->serial;
+    return true;
+}
+
+bool GsHost::takeNativeFrame(gsn::FrameList& list, uint64_t& serial) {
+    std::lock_guard<std::mutex> lock(impl->frameMutex);
+    if (impl->nativeSerial == serial) return false;
+    std::swap(list, impl->nativeLatest);
+    serial = impl->nativeSerial;
     return true;
 }
 

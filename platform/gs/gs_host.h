@@ -3,6 +3,7 @@
 // GIF paths, privileged registers) into the GS back end on a worker thread, and the displayed frames
 // handed to the renderer. See docs/GS_BACKEND.md.
 #include "gs_backend.h"
+#include "gs_frontend.h"
 
 #include <cstdint>
 #include <functional>
@@ -21,6 +22,7 @@ public:
         bool lockstep = false;               // replay: one VBlank per host frame (deterministic captures)
         bool loop = false;                   // replay: start again at the end
         BackendOptions backend;
+        bool nativeRenderer = false;         // also build the native renderer's frame lists (takeNativeFrame)
         // The game's sound (stereo s16 frames at `rate` Hz), called on the worker thread as it arrives.
         std::function<void(uint32_t rate, const int16_t* frames, size_t count)> audio;
     };
@@ -35,6 +37,8 @@ public:
     bool advance();
     // The newest displayed frame when it is newer than `serial` (which is updated).
     bool takeFrame(DisplayFrame& frame, uint64_t& serial);
+    // The newest native frame list when it is newer than `serial` (swapped into `list`).
+    bool takeNativeFrame(gsn::FrameList& list, uint64_t& serial);
     // Host -> game pad state (libpad2 layout, 18 bytes). Ignored without a live game.
     void sendPad(uint32_t port, bool connected, const uint8_t data[18]);
 

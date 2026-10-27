@@ -62,6 +62,7 @@ Image createImage(const Device& device, const ImageDesc& desc) {
     image.layers = desc.cube ? 6 : desc.layers;
     image.samples = desc.samples;
     image.aspect = isDepth(desc.format) ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+    if (hasStencil(desc.format)) image.aspect |= VK_IMAGE_ASPECT_STENCIL_BIT;   // barriers cover both planes
     VkImageCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     info.flags = desc.cube ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0;
@@ -209,7 +210,9 @@ void toColor(Barriers& b, Image& image, bool discard) {
             VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, discard);
 }
 void toDepth(Barriers& b, Image& image, bool discard) {
-    b.image(image, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, kDepthTests,
+    const VkImageLayout layout = (image.aspect & VK_IMAGE_ASPECT_STENCIL_BIT) ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+                                                                             : VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    b.image(image, layout, kDepthTests,
             VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, discard);
 }
 
@@ -307,7 +310,7 @@ Pipeline createGraphics(const Device& device, const GraphicsDesc& desc) {
     }
     VkPipelineInputAssemblyStateCreateInfo assembly{};
     assembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    assembly.topology = desc.topology;
     VkPipelineViewportStateCreateInfo viewport{};
     viewport.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
     viewport.viewportCount = 1;
@@ -359,10 +362,12 @@ Pipeline createGraphics(const Device& device, const GraphicsDesc& desc) {
     }
     VkPipelineColorBlendStateCreateInfo blend{};
     blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    if (!desc.blendStates.empty()) attachments = desc.blendStates;
     blend.attachmentCount = static_cast<uint32_t>(attachments.size());
     blend.pAttachments = attachments.data();
     std::vector<VkDynamicState> dynamics{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
     if (desc.depthBias) dynamics.push_back(VK_DYNAMIC_STATE_DEPTH_BIAS);
+    dynamics.insert(dynamics.end(), desc.dynamics.begin(), desc.dynamics.end());
     VkPipelineDynamicStateCreateInfo dynamic{};
     dynamic.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
     dynamic.dynamicStateCount = static_cast<uint32_t>(dynamics.size());
@@ -372,6 +377,7 @@ Pipeline createGraphics(const Device& device, const GraphicsDesc& desc) {
     rendering.colorAttachmentCount = static_cast<uint32_t>(desc.colors.size());
     rendering.pColorAttachmentFormats = desc.colors.data();
     rendering.depthAttachmentFormat = desc.depth;
+    rendering.stencilAttachmentFormat = desc.stencil;
     VkGraphicsPipelineCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
     info.pNext = &rendering;

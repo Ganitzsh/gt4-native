@@ -24,6 +24,7 @@ struct Device {
     float maxAnisotropy = 1.0f;
     VkSampleCountFlags sampleCounts = VK_SAMPLE_COUNT_1_BIT;  // color & depth framebuffer support
     bool anisotropy = false;
+    bool dualSourceBlend = false;   // VkPhysicalDeviceFeatures::dualSrcBlend, enabled when supported
     uint32_t memoryType(uint32_t bits, VkMemoryPropertyFlags flags) const;
     uint32_t maxSamples(uint32_t requested) const;
 };
@@ -133,6 +134,12 @@ struct GraphicsDesc {
     std::vector<VkDescriptorType> types;
     uint32_t pushSize = 0;
     const char* name = "";
+    // Optional: the primitive topology, a stencil attachment format, blend states replacing `blend` (one per
+    // colour attachment), and dynamic states beyond viewport and scissor.
+    VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    VkFormat stencil = VK_FORMAT_UNDEFINED;
+    std::vector<VkPipelineColorBlendAttachmentState> blendStates;
+    std::vector<VkDynamicState> dynamics;
 };
 Pipeline createGraphics(const Device& device, const GraphicsDesc& desc);
 

@@ -1,5 +1,7 @@
 #include "renderer.h"
 
+#include "gsn_scene.h"
+
 #include "display.h"
 
 #include "gs_scene.h"
@@ -231,6 +233,8 @@ struct Renderer::Impl {
 
     std::unique_ptr<gt4::TestScene> scene;
     std::unique_ptr<gt4::GsScene> gsScene;
+    std::unique_ptr<gt4::GsnScene> gsnScene;   // the native renderer, once it sends frames
+    bool native = false;
     bool gameFrame = false;
     std::unique_ptr<gt4::FramePipeline> pipeline;
     std::unique_ptr<gt4::Overlay> overlay;
@@ -246,6 +250,7 @@ struct Renderer::Impl {
         pipeline.reset();
         scene.reset();
         gsScene.reset();
+        gsnScene.reset();
         if (!device.device) {
             if (surface) SDL_Vulkan_DestroySurface(instance, surface, nullptr);
             return;
@@ -297,6 +302,8 @@ struct Renderer::Impl {
         features.features.shaderStorageImageReadWithoutFormat = supported.shaderStorageImageReadWithoutFormat;
         features.features.shaderStorageImageWriteWithoutFormat = supported.shaderStorageImageWriteWithoutFormat;
         features.features.shaderImageGatherExtended = supported.shaderImageGatherExtended;
+        features.features.dualSrcBlend = supported.dualSrcBlend;   // the native GS renderer's blends
+        device.dualSourceBlend = supported.dualSrcBlend == VK_TRUE;
         device.anisotropy = supported.samplerAnisotropy == VK_TRUE;
         device.maxAnisotropy = device.anisotropy ? chosen.properties.limits.maxSamplerAnisotropy : 1.0f;
         device.sampleCounts = chosen.properties.limits.framebufferColorSampleCounts &
@@ -353,6 +360,7 @@ struct Renderer::Impl {
         }
         scene = std::make_unique<gt4::TestScene>(device, pool);
         gsScene = std::make_unique<gt4::GsScene>(device, pool);
+        gsnScene = std::make_unique<gt4::GsnScene>(device, pool);
         pipeline = std::make_unique<gt4::FramePipeline>(device, pool);
         overlay = std::make_unique<gt4::Overlay>(device, pool);
     }
@@ -690,7 +698,9 @@ struct Renderer::Impl {
             target.stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
             target.access = VK_ACCESS_2_NONE;
         }
-        gt4::SceneSource& active = gameFrame ? static_cast<gt4::SceneSource&>(*gsScene) : *scene;
+        gt4::SceneSource& active = !gameFrame ? static_cast<gt4::SceneSource&>(*scene)
+                                   : native   ? static_cast<gt4::SceneSource&>(*gsnScene)
+                                              : static_cast<gt4::SceneSource&>(*gsScene);
         if (sceneSwitched) { vkDeviceWaitIdle(device.device); pipeline.reset(); pipeline = std::make_unique<gt4::FramePipeline>(device, pool);
                              pipeline->prepareOutput(format, srgbFormat, static_cast<uint32_t>(presentedBits)); sceneSwitched = false; }
         pipeline->configure(settings, extent, active);
@@ -797,6 +807,11 @@ void Renderer::useGameFrame(bool enabled) {
     impl->gameFrame = enabled;
 }
 void Renderer::setGameFrame(uint32_t width, uint32_t height, const uint32_t* rgba) { impl->gsScene->setFrame(width, height, rgba); }
+void Renderer::setNativeFrame(gt4::gsn::FrameList& list) {
+    impl->gsnScene->setFrame(list);
+    if (!impl->native) impl->sceneSwitched = true;   // from the GS back end's frame to the native renderer
+    impl->native = true;
+}
 void Renderer::reloadVulkanFunctions() {
     volkLoadInstanceOnly(impl->instance);
     volkLoadDevice(impl->device.device);

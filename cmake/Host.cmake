@@ -45,6 +45,12 @@ gt4_shader(envfilter_comp ${S}/envfilter.comp comp)
 gt4_shader(fullscreen_vert ${S}/fullscreen.vert vert)
 # The PS2's displayed frame (GS back end) as the scene.
 gt4_shader(gs_frame_frag ${S}/gs_frame.frag frag)
+# The native renderer (docs/NATIVE_RENDERER.md).
+gt4_shader(gsn_vert ${S}/gsn.vert vert)
+gt4_shader(gsn_frag ${S}/gsn.frag frag)
+gt4_shader(gsn_display_frag ${S}/gsn_display.frag frag)
+gt4_shader(gsn_stencil_frag ${S}/gsn_stencil.frag frag)
+gt4_shader(gsn_reinterpret_comp ${S}/gsn_reinterpret.comp comp)
 # Post-processing and output.
 gt4_shader(msaa_resolve_comp ${S}/msaa_resolve.comp comp)
 gt4_shader(exposure_histogram_comp ${S}/exposure_histogram.comp comp)
@@ -172,7 +178,7 @@ target_link_libraries(gt4_ps2gfx PUBLIC gt4_guest_abi Threads::Threads)
 target_compile_definitions(gt4_ps2gfx PUBLIC GT4_VU1_INTERPRETER=$<BOOL:${GT4_VU1_INTERPRETER}>
     $<$<BOOL:${WIN32}>:_CRT_SECURE_NO_WARNINGS>)
 # The native renderer (docs/NATIVE_RENDERER.md): the GS memory model and front end on the CPU.
-add_library(gt4_gsnative STATIC platform/gsnative/gs_memory.cpp)
+add_library(gt4_gsnative STATIC platform/gsnative/gs_memory.cpp platform/gsnative/gs_frontend.cpp)
 target_include_directories(gt4_gsnative PUBLIC platform/gsnative)
 if(MSVC)
   target_compile_options(gt4_gsnative PRIVATE /W4)
@@ -181,7 +187,7 @@ else()
 endif()
 add_library(gt4_gs STATIC platform/gs/gs_backend.cpp platform/gs/gs_host.cpp)
 target_include_directories(gt4_gs PUBLIC platform/gs)
-target_link_libraries(gt4_gs PUBLIC gt4_ps2gfx PRIVATE parallel-gs)
+target_link_libraries(gt4_gs PUBLIC gt4_ps2gfx gt4_gsnative PRIVATE parallel-gs)
 if(MSVC)
   target_compile_options(gt4_ps2gfx PRIVATE /W4)
   target_compile_options(gt4_gs PRIVATE /W3 /wd4267 /wd4244)
@@ -199,6 +205,7 @@ add_executable(gt4_host
     platform/render/pipeline.cpp
     platform/render/test_scene.cpp
     platform/render/gs_scene.cpp
+    platform/render/gsn_scene.cpp
     platform/render/overlay.cpp
     platform/render/fsr2.cpp
     platform/render/smaa_textures.cpp
