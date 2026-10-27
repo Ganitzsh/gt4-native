@@ -77,6 +77,7 @@ private:
     bool path1Stats = false;
     std::vector<std::pair<uint32_t, uint32_t>> colourCounts;   // colour, count
     std::vector<std::pair<uint32_t, uint32_t>> texCounts;      // TEX0 psm/cpsm/tfx/tcc, count
+    std::vector<std::pair<uint32_t, std::pair<uint32_t, uint32_t>>> programCounts;  // program: black, all
     void countColours(const uint8_t* data, size_t bytes);
     void reportColours(uint32_t frame);
     GsTarget& gs;

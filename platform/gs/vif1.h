@@ -43,6 +43,7 @@ public:
         uint64_t runaways = 0, unknownCodes = 0;
     } stats;
     std::string lastWarning;
+    uint32_t lastProgram = 0;   // byte address of the last microprogram started (statistics)
 
 private:
     Vu1& vu;

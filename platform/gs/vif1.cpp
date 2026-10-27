@@ -141,6 +141,7 @@ void Vif1::execute(uint32_t address) {
         tops = base + ofst;
         dbf = true;
     }
+    lastProgram = address * 8;
 #if GT4_VU1_INTERPRETER
     stats.vuCycles += vu.run(address);
     ++stats.microprograms;

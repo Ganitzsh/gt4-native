@@ -46,9 +46,11 @@ void GraphicsStream::sendGif(uint32_t path, const uint8_t* data, size_t bytes) {
     if (frameIndex == logFrame) {
         uint64_t tag[2] = {};
         if (bytes >= 16) std::memcpy(tag, data, 16);
-        std::printf("GIF %u: path %u, %zu bytes, tag %016llx %016llx\n", packetIndex, path, bytes,
-                    static_cast<unsigned long long>(tag[1]), static_cast<unsigned long long>(tag[0]));
-        // and the packets themselves, to gif_FRAME.bin: u32 path, u32 bytes, data
+        std::printf("GIF %u: path %u, %zu bytes, tag %016llx %016llx, program %#x\n", packetIndex, path, bytes,
+                    static_cast<unsigned long long>(tag[1]), static_cast<unsigned long long>(tag[0]),
+                    path == 1 ? vif1.lastProgram : 0);
+        // and the packets themselves, to gif_FRAME.bin: u32 path (and the VU1 program << 8 for
+        // PATH1), u32 bytes, data
         static FILE* out = nullptr;
         if (!out) {
             char name[64];
@@ -56,7 +58,7 @@ void GraphicsStream::sendGif(uint32_t path, const uint8_t* data, size_t bytes) {
             out = std::fopen(name, "wb");
         }
         if (out) {
-            const uint32_t head[2] = {path, static_cast<uint32_t>(bytes)};
+            const uint32_t head[2] = {path | (path == 1 ? vif1.lastProgram << 8 : 0), static_cast<uint32_t>(bytes)};
             std::fwrite(head, 4, 2, out);
             std::fwrite(data, 1, bytes, out);
             std::fflush(out);
@@ -105,6 +107,13 @@ void GraphicsStream::countColours(const uint8_t* data, size_t bytes) {
                 }
                 if (reg != 1) continue;
                 const uint32_t c = (w[0] & 0xFF) | (w[1] & 0xFF) << 8 | (w[2] & 0xFF) << 16 | (w[3] & 0xFF) << 24;
+                {
+                    const uint32_t prog = vif1.lastProgram;
+                    auto pc = std::find_if(programCounts.begin(), programCounts.end(), [prog](const auto& e) { return e.first == prog; });
+                    if (pc == programCounts.end()) { programCounts.push_back({prog, {0, 0}}); pc = programCounts.end() - 1; }
+                    if ((c & 0xFFFFFF) == 0) ++pc->second.first;
+                    ++pc->second.second;
+                }
                 auto it = std::find_if(colourCounts.begin(), colourCounts.end(), [c](const auto& e) { return e.first == c; });
                 if (it != colourCounts.end()) ++it->second;
                 else if (colourCounts.size() < 4096) colourCounts.push_back({c, 1});
@@ -125,7 +134,10 @@ void GraphicsStream::reportColours(uint32_t frame) {
         if (k & 0x80000000u) std::printf(" (%#x %#x %u %u)x%u", k & 0x3F, (k >> 8) & 0xF, (k >> 12) & 3, (k >> 14) & 1, count);
         else std::printf(" FRAME(fbp %#x psm %#x)x%u", k & 0x1FF, (k >> 12) & 0x3F, count);
     }
+    std::printf("\n  programs (black/all vertices):");
+    for (const auto& [prog, c] : programCounts) std::printf(" %#x %u/%u", prog, c.first, c.second);
     std::printf("\n");
+    programCounts.clear();
     colourCounts.clear();
     texCounts.clear();
 }
