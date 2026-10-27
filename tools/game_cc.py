@@ -31,8 +31,10 @@ census.jsonl, census_summary.txt. Never writes in the decomp tree.
 import argparse
 import collections
 import concurrent.futures
+import fractions
 import io
 import json
+import math
 import os
 import re
 import shlex
@@ -97,6 +99,81 @@ def hex_float_decimal(m):
     if "e" not in text and "." not in text and "inf" not in text:
         text += ".0"
     return text.encode() + suffix
+
+
+# Decimal floating constants. ee-gcc 2.96 converts them toward zero (0.1f is 0x3DCCCCCC, 1.02 is
+# 0x3FF051EB851EB851), gcc 2.9 for x86 to nearest (0x3DCCCCCD, ...852): every inexact constant would be one
+# ulp off natively. Each one becomes the decimal that rounds, to nearest, to the EE's value.
+DEC_FLOAT = re.compile(rb"(?<![\w.])((?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?|\d+[eE][+-]?\d+)([fFlL]?)(?![\w.])")
+
+
+def _toward_zero(exact, single):
+    """The float (single) or double nearest `exact` (a positive Fraction) that is not above it."""
+    if single:
+        try:
+            value = struct.unpack("<f", struct.pack("<f", float(exact)))[0]
+        except OverflowError:   # past FLT_MAX: the largest float, toward zero
+            value = struct.unpack("<f", struct.pack("<I", 0x7F7FFFFF))[0]
+        if fractions.Fraction(value) > exact:
+            bits = struct.unpack("<I", struct.pack("<f", value))[0] - 1
+            value = struct.unpack("<f", struct.pack("<I", bits))[0]
+    else:
+        value = float(exact)
+        if fractions.Fraction(value) > exact:
+            value = math.nextafter(value, 0.0)
+    return value
+
+
+def ee_float_literal(m):
+    text, suffix = m.group(1).decode(), m.group(2)
+    if suffix in (b"l", b"L"):
+        return m.group(0)
+    single = suffix in (b"f", b"F")
+    exact = fractions.Fraction(text)
+    if exact == 0:
+        return m.group(0)
+    value = _toward_zero(exact, single)
+    if fractions.Fraction(value) == exact:
+        return m.group(0)
+    if single:
+        for digits in range(6, 12):
+            out = "%.*g" % (digits, value)
+            if struct.unpack("<f", struct.pack("<f", float(out)))[0] == value:
+                break
+    else:
+        out = repr(value)
+    if "e" not in out and "." not in out:
+        out += ".0"
+    return out.encode() + suffix
+
+
+def ee_float_constants(data):
+    """DEC_FLOAT applied outside comments, string and character literals and preprocessor lines'
+    #include."""
+    out, i, n = [], 0, len(data)
+    code_start = 0
+    while i < n:
+        c = data[i:i + 1]
+        two = data[i:i + 2]
+        if two == b"//" or two == b"/*" or c in (b'"', b"'"):
+            out.append(DEC_FLOAT.sub(ee_float_literal, data[code_start:i]))
+            if two == b"//":
+                j = data.find(b"\n", i)
+                j = n if j < 0 else j
+            elif two == b"/*":
+                j = data.find(b"*/", i + 2)
+                j = n if j < 0 else j + 2
+            else:
+                j = i + 1
+                while j < n and data[j:j + 1] != c:
+                    j += 2 if data[j:j + 1] == b"\\" else 1
+                j = min(j + 1, n)
+            out.append(data[i:j])
+            i = code_start = j
+            continue
+        i += 1
+    out.append(DEC_FLOAT.sub(ee_float_literal, data[code_start:]))
+    return b"".join(out)
 
 
 ASM_START = re.compile(rb"\b(?:__asm__|asm)\s*(?:(?:volatile|__volatile__)\s*)?\(")
@@ -306,6 +383,8 @@ def transform(data, name=None):
             names = b"|".join(re.escape(n) for n in ti)
             data = re.sub(rb"\(\s*(" + names + rb")\s*\)\s*0\b(?![.xX])",
                           lambda m: b"__gt4_zero_%s128 ()" % ti[m.group(1)], data)
+    if b"." in data or b"e" in data or b"E" in data:
+        data = ee_float_constants(data)
     if b"0x" in data or b"0X" in data:
         data = HEX_FLOAT.sub(hex_float_decimal, data)
     if b"__VA_ARGS__" in data:
