@@ -158,6 +158,7 @@ option(GT4_VU1_INTERPRETER
 find_package(Threads REQUIRED)
 add_library(gt4_ps2gfx STATIC
     platform/gs/vu1.cpp
+    platform/gs/vu1_ref.cpp
     platform/gs/vif1.cpp
     platform/gs/stream.cpp
     platform/gs/link_host.cpp)

@@ -1,12 +1,137 @@
 // VIF1 command decoding (development scaffold; see vif1.h).
 #include "vif1.h"
 
+#include "vu1_ref.h"
+
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <map>
+#include <memory>
 
 namespace gt4::ps2 {
 
 namespace {
+
+// GT4_VU1_DIFF=1: every microprogram also runs in the reference interpreter (vu1_ref.cpp) from the same
+// state; differences in the PATH1 packets, data memory and registers are reported per program
+// (the first ones in detail, a table at exit).
+struct VuDiff final : GifSink {
+    GifSink* next = nullptr;
+    std::vector<uint8_t> kicks;
+    void gif(uint32_t path, const uint8_t* data, size_t bytes) override {
+        if (path == 1) kicks.insert(kicks.end(), data, data + bytes);
+        if (next) next->gif(path, data, bytes);
+    }
+    std::unique_ptr<Vu1Ref> ref = std::make_unique<Vu1Ref>();
+    struct Count { uint64_t runs = 0, kick = 0, mem = 0, regs = 0; };
+    std::map<uint32_t, Count> programs;
+    ~VuDiff() override {
+        std::fprintf(stderr, "[vu1 diff] program: runs, PATH1 differs, data differs, registers differ\n");
+        for (const auto& [address, c] : programs)
+            std::fprintf(stderr, "[vu1 diff] %04X: %llu %llu %llu %llu\n", address * 8, (unsigned long long)c.runs,
+                         (unsigned long long)c.kick, (unsigned long long)c.mem, (unsigned long long)c.regs);
+    }
+};
+
+VuDiff* vuDiff() {
+    static VuDiff* diff = std::getenv("GT4_VU1_DIFF") ? new VuDiff : nullptr;
+    static struct Free { ~Free() { delete vuDiff(); } } freeAtExit;
+    return diff;
+}
+
+bool wordsDiffer(const uint8_t* a, const uint8_t* b, size_t bytes);
+
+void reportQwords(const char* what, uint32_t address, const uint8_t* ours, const uint8_t* theirs, size_t bytes) {
+    int shown = 0;
+    for (size_t q = 0; q * 16 < bytes && shown < 4; ++q) {
+        if (!wordsDiffer(ours + q * 16, theirs + q * 16, 16)) continue;
+        uint32_t a[4], b[4];
+        std::memcpy(a, ours + q * 16, 16);
+        std::memcpy(b, theirs + q * 16, 16);
+        std::fprintf(stderr, "[vu1 diff] %04X %s qword %zu: ours %08X %08X %08X %08X, reference %08X %08X %08X %08X\n",
+                     address * 8, what, q, a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3]);
+        ++shown;
+    }
+}
+
+// Words that differ by more than rounding: floats beyond a relative 1e-4, other words exactly
+// (integers within 16, the last bits of a fixed-point coordinate).
+bool wordsDiffer(const uint8_t* a, const uint8_t* b, size_t bytes) {
+    for (size_t k = 0; k + 4 <= bytes; k += 4) {
+        uint32_t x, y;
+        std::memcpy(&x, a + k, 4);
+        std::memcpy(&y, b + k, 4);
+        if (x == y) continue;
+        const uint32_t ex = (x >> 23) & 0xFF, ey = (y >> 23) & 0xFF;
+        if (ex > 0x40 && ex < 0xC0 && ey > 0x40 && ey < 0xC0) {
+            float fx, fy;
+            std::memcpy(&fx, &x, 4);
+            std::memcpy(&fy, &y, 4);
+            if (std::fabs(fx - fy) <= 1e-4f * std::max(std::fabs(fx), std::fabs(fy))) continue;
+            return true;
+        }
+        if (static_cast<uint32_t>(std::abs(static_cast<int32_t>(x - y))) <= 16) continue;
+        return true;
+    }
+    return false;
+}
+
+void runWithDiff(VuDiff& d, Vu1& vu, uint32_t address, uint64_t& cycles) {
+    // GT4_VU1_TRACE=ADDR (byte address): trace the first run of that program in both interpreters
+    // (vu1_trace_ours.txt, vu1_trace_ref.txt).
+    static const long traced = std::getenv("GT4_VU1_TRACE") ? std::strtol(std::getenv("GT4_VU1_TRACE"), nullptr, 16) : -1;
+    static bool traceDone = false;
+    const bool tracing = !traceDone && traced == static_cast<long>(address * 8);
+    if (tracing) {
+        traceDone = true;
+        d.ref->trace = std::fopen("vu1_trace_ref.txt", "w");
+        vu.trace = std::fopen("vu1_trace_ours.txt", "w");
+    }
+    d.ref->load(vu);
+    d.ref->run(address);
+    d.next = vu.sink();
+    d.kicks.clear();
+    vu.setGifSink(&d);
+    cycles += vu.run(address);
+    vu.setGifSink(d.next);
+    if (tracing) {
+        std::fclose(d.ref->trace);
+        std::fclose(vu.trace);
+        d.ref->trace = vu.trace = nullptr;
+    }
+    VuDiff::Count& c = d.programs[address];
+    ++c.runs;
+    const bool kick = d.kicks.size() != d.ref->kicks.size() || wordsDiffer(d.kicks.data(), d.ref->kicks.data(), d.kicks.size());
+    const bool mem = wordsDiffer(vu.data, d.ref->data, sizeof vu.data);
+    const bool regs = wordsDiffer(reinterpret_cast<const uint8_t*>(vu.vf), reinterpret_cast<const uint8_t*>(d.ref->vf), sizeof vu.vf) || std::memcmp(vu.vi, d.ref->vi, sizeof vu.vi) != 0;
+    c.kick += kick;
+    c.mem += mem;
+    c.regs += regs;
+    if (!(kick || mem || regs) || (c.kick + c.mem + c.regs) > 3 * (kick + mem + regs)) return;
+    std::fprintf(stderr, "[vu1 diff] %04X run %llu: PATH1 %zu/%zu bytes\n", address * 8, (unsigned long long)c.runs, d.kicks.size(),
+                 d.ref->kicks.size());
+    static bool dumped = false;
+    if (!dumped) {   // the micro memory, for disassembly
+        dumped = true;
+        if (FILE* f = std::fopen("vu1_micro.bin", "wb")) {
+            std::fwrite(vu.micro, 1, sizeof vu.micro, f);
+            std::fclose(f);
+        }
+    }
+    if (kick) reportQwords("PATH1", address, d.kicks.data(), d.ref->kicks.data(), std::min(d.kicks.size(), d.ref->kicks.size()));
+    if (mem) reportQwords("data", address, vu.data, d.ref->data, sizeof vu.data);
+    for (int k = 0; k < 32; ++k)
+        if (wordsDiffer(reinterpret_cast<const uint8_t*>(&vu.vf[k]), reinterpret_cast<const uint8_t*>(&d.ref->vf[k]), 16)) {
+            std::fprintf(stderr, "[vu1 diff] %04X vf%d: ours %08X %08X %08X %08X, reference %08X %08X %08X %08X\n", address * 8, k,
+                         vu.vf[k].u[0], vu.vf[k].u[1], vu.vf[k].u[2], vu.vf[k].u[3], d.ref->vf[k].u[0], d.ref->vf[k].u[1],
+                         d.ref->vf[k].u[2], d.ref->vf[k].u[3]);
+        }
+    for (int k = 1; k < 16; ++k)
+        if (vu.vi[k] != d.ref->vi[k]) std::fprintf(stderr, "[vu1 diff] %04X vi%d: ours %04X, reference %04X\n", address * 8, k, vu.vi[k], d.ref->vi[k]);
+}
 
 constexpr uint32_t cmdOf(uint32_t code) { return (code >> 24) & 0x7F; }
 
@@ -143,7 +268,20 @@ void Vif1::execute(uint32_t address) {
     }
     lastProgram = address * 8;
 #if GT4_VU1_INTERPRETER
-    stats.vuCycles += vu.run(address);
+    static Vu1Ref* reference = [] {
+        const char* mode = std::getenv("GT4_VU1");
+        return mode && !std::strcmp(mode, "ref") ? new Vu1Ref : nullptr;
+    }();
+    if (reference) {   // GT4_VU1=ref: the reference interpreter runs the program
+        reference->load(vu);
+        reference->sink = vu.sink();
+        reference->run(address);
+        reference->store(vu);
+    } else if (VuDiff* diff = vuDiff()) {
+        runWithDiff(*diff, vu, address, stats.vuCycles);
+    } else {
+        stats.vuCycles += vu.run(address);
+    }
     ++stats.microprograms;
     if (vu.runaway()) {
         ++stats.runaways;

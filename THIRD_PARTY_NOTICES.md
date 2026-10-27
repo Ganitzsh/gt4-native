@@ -63,3 +63,17 @@ Q/P pipeline latencies, the integer-branch read of the previous VI value, the sa
 instruction slots, UNPACK filling writes and V2/V3 field order, the double-buffer swap on MSCAL), PCSX2's
 interpreter (https://github.com/PCSX2/pcsx2, GPL-3.0-or-later, Copyright (c) 2002-2026 PCSX2 Dev Team) was
 consulted as a reference; no PCSX2 source is copied.
+
+**ps2-web-recomp (MIT).** `platform/gs/vu1_ref.*`, a second VU1 interpreter used only to check
+`vu1.cpp` (`GT4_VU1_DIFF`, `GT4_VU1=ref`), is adapted from the VU micro interpreter of ps2-web-recomp
+(`runtime/src/vu_micro.cpp`, `include/ps2/fpu.hpp`, `vu.hpp`, `vu_ops.hpp`), as vendored by gt4recomp.
+Copyright (c) 2026 Samir Nuri. Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute,
+sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to
+do so, subject to the following conditions: The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT
+WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

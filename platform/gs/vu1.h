@@ -8,7 +8,8 @@
 // previous value, the result of a VF write by both slots) follow PCSX2's interpreter (GPL-3.0-or-later),
 // which was consulted as a reference. See docs/GS_BACKEND.md.
 //
-// Model: one instruction pair per cycle; FMAC results ready 4 cycles after issue (dependent reads stall);
+// Model: one instruction pair per cycle; FMAC results ready 4 cycles after issue (dependent VF reads stall;
+// ACC is forwarded, so MULA/MADDA chains never stall: a stall there delays the flags GT4's culling reads);
 // MAC/status/clip flags become visible to the lower-slot flag instructions 4 cycles after the FMAC
 // instruction that produced them; Q (DIV 7, SQRT 7, RSQRT 13 cycles) and P (EFU latencies) are written
 // when their unit finishes, WAITQ/WAITP and a second DIV/EFU op wait for it; floats follow the VU's
@@ -18,6 +19,7 @@
 // packet at once (PATH1). The program ends after the instruction following the one with the E bit.
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <functional>
 
@@ -44,6 +46,7 @@ public:
     Vu1();
     void reset();
     void setGifSink(GifSink* sink) { gifSink = sink; }
+    GifSink* sink() const { return gifSink; }
 
     // Runs from instruction `pc` (8-byte units) until the program ends (E bit). Returns the cycles taken.
     // A program that never ends is stopped after `maxCycles` (reported by `runaway()`).
@@ -65,6 +68,7 @@ public:
     uint32_t mac = 0, status = 0, clip = 0;   // as the lower-slot flag instructions see them
 
     uint64_t instructions = 0;   // executed pairs since reset (statistics)
+    std::FILE* trace = nullptr;  // debugging: one line per instruction pair
 
 private:
     struct FmacEntry {
@@ -101,6 +105,7 @@ private:
     void xgkick(uint32_t address);
     uint32_t* mem(uint32_t qword) { return reinterpret_cast<uint32_t*>(data + (qword & 0x3FF) * 16); }
     friend struct VuExec;
+    friend struct Vu1Ref;
 };
 
 }  // namespace gt4::ps2

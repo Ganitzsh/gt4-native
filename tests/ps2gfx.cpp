@@ -178,6 +178,18 @@ void testFlags() {
     big.run(0);
     expect(dataWord(big, 1, 0) == 0x7F7FFFFFu, "overflow saturates to +max (no infinity)");
     expect((big.mac & 0x8000) != 0 && (big.status & 0x8) != 0, "overflow sets MAC Ox and status O");
+    // ACC is forwarded: a MULA/MADDA chain (a matrix multiply) runs one pair per cycle, like independent
+    // MULAs. A stall there shifts which FMAC's flags a later FMAND reads (GT4's car culling).
+    auto chainCycles = [](bool chained) {
+        Vu1 chain;
+        Program c;
+        c.up(MULAbc(0, XYZW, 4, 1));
+        for (uint32_t bc = 1; bc < 4; ++bc) c.up(chained ? MADDAbc(bc, XYZW, 4 + bc, 1) : MULAbc(bc, XYZW, 4 + bc, 1));
+        c.end(kNopUpper, kNopLower);
+        load(chain, c);
+        return chain.run(0);
+    };
+    expect(chainCycles(true) == chainCycles(false), "MULA/MADDA chain through ACC does not stall");
 }
 
 void testXgkick() {

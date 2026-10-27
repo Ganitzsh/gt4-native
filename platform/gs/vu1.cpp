@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <cstdlib>
 #include <vector>
 
 namespace gt4::ps2 {
@@ -606,7 +607,7 @@ void Vu1::reset() {
 }
 
 void Vu1::stallOn(uint32_t reg, uint32_t mask) {
-    if (reg == 0) return;
+    if (reg == 0 || reg == kAcc) return;   // ACC is forwarded: MULA/MADDA chains do not stall
     for (uint32_t c = 0; c < 4; ++c)
         if ((mask & (8u >> c)) && vfReady[reg][c] > cycle) cycle = vfReady[reg][c];
 }
@@ -723,6 +724,7 @@ uint64_t Vu1::run(uint32_t startPc, uint64_t maxCycles) {
         if (viBackupCycles > 0)
             viBackupCycles -= static_cast<int>(std::min<uint64_t>(cycle - before, static_cast<uint64_t>(viBackupCycles)));
         flushPipes();
+        if (trace) std::fprintf(trace, "%04x c%llu clip %06x mac %04x vi1 %04x\n", ((tpc - 1) & 0x7FF) * 8, static_cast<unsigned long long>(cycle - begin), clip, mac, vi[1]);
 
         UpperResult up = exec.upper(upperWord);
         bool fsset = false, fcset = false;
