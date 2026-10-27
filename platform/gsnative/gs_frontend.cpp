@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 
 namespace gt4::gsn {
 
@@ -50,7 +51,18 @@ void FrameList::clear() {
     commands.clear();
     textures.clear();
     reinterpretations.clear();
+    retiredTextures.clear();
     targets.clear();
+}
+
+void carryOver(FrameList& dropped, FrameList& into) {
+    if (!dropped.textures.empty()) {
+        for (auto& t : into.textures) dropped.textures.push_back(std::move(t));   // the later version wins
+        into.textures = std::move(dropped.textures);
+    }
+    into.retiredTextures.insert(into.retiredTextures.end(), dropped.retiredTextures.begin(), dropped.retiredTextures.end());
+    dropped.textures.clear();
+    dropped.retiredTextures.clear();
 }
 
 GsFrontend::GsFrontend() : pages(512), pageGeneration(512, 0) {
@@ -157,6 +169,12 @@ void GsFrontend::write(uint32_t r, uint64_t value) {
 void GsFrontend::clutWritten(uint64_t tex0) {
     const GsMemory::Tex0 t = GsMemory::Tex0::decode(tex0);
     if (!mem.tex0Written(t)) return;
+    static const bool logLoads = std::getenv("GT4_GSN_XFER") != nullptr;
+    if (logLoads) {
+        const uint16_t* c = reinterpret_cast<const uint16_t*>(mem.clutBuffer());
+        std::printf("[gsn clut] packet %u tex0 %016llX cbp %X cpsm %X csm %u csa %u psm %X, entry 64 %04X%04X\n", packetsThisFrame - 1,
+                    static_cast<unsigned long long>(tex0), t.cbp, t.cpsm, t.csm, t.csa, t.psm, c[256 + 64], c[64]);
+    }
     clutSource = {};
     const PageOwner& page = pages[(t.cbp / 32) & 511];
     if (!page.target || (t.cpsm != PSMCT32 && t.cpsm != PSMCT24)) return;
@@ -494,12 +512,21 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
             std::memcpy(&v, clut + k, 8);
             clutHash = mix(clutHash, v);
         }
+        key = mix(key, clutHash);   // one texture per palette: GT4 draws one index image with several
     } else if (t.psm != PSMCT32) {
         key = mix(key, s.texa);
     }
     Cached& c = textureCache[key];
     if (!c.id) c.id = nextTexture++;
+    c.lastUsed = frameCount;
     if (!c.version || c.generation != generation || c.clutHash != clutHash) {
+        // The back end uploads a frame's textures before its draws: content that changes within a frame
+        // needs a new id, the earlier draws keeping the old one.
+        if (c.version && c.decodedFrame == frameCount) {
+            frame.retiredTextures.push_back(c.id);
+            c.id = nextTexture++;
+        }
+        c.decodedFrame = frameCount;
         ++c.version;
         c.generation = generation;
         c.clutHash = clutHash;
@@ -514,6 +541,20 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
         texa.aem = (s.texa >> 15) & 1;
         texa.ta1 = static_cast<uint8_t>((s.texa >> 32) & 0xFF);
         mem.decode(t, texa, 0, 0, w, h, image.pixels.data());
+        // GT4_GSN_TEXDUMP=TBP (hex, debugging): decoded textures at that address, as gsn_tex_TBP_N.ppm.
+        static const long dumpTbp = std::getenv("GT4_GSN_TEXDUMP") ? std::strtol(std::getenv("GT4_GSN_TEXDUMP"), nullptr, 16) : -1;
+        if (static_cast<long>(t.tbp) == dumpTbp) {
+            static int dumped = 0;
+            const std::string name = "gsn_tex_" + std::to_string(t.tbp) + "_" + std::to_string(dumped++) + ".ppm";
+            if (FILE* f = std::fopen(name.c_str(), "wb")) {
+                std::fprintf(f, "P6\n%u %u\n255\n", w, h);
+                for (const uint32_t p : image.pixels) {
+                    const uint8_t rgb[3] = {static_cast<uint8_t>(p), static_cast<uint8_t>(p >> 8), static_cast<uint8_t>(p >> 16)};
+                    std::fwrite(rgb, 1, 3, f);
+                }
+                std::fclose(f);
+            }
+        }
         frame.textures.push_back(std::move(image));
         ++stats.decoded;
     }
@@ -561,6 +602,7 @@ void GsFrontend::packed(uint32_t r, uint64_t a, uint64_t b) {
 
 void GsFrontend::gif(uint32_t path, const uint8_t* data, size_t bytes) {
     GifPath& g = gifPaths[path & 3];
+    ++packetsThisFrame;
     size_t q16 = 0;
     const size_t total = bytes / 16;
     while (q16 < total) {
@@ -600,6 +642,8 @@ void GsFrontend::gif(uint32_t path, const uint8_t* data, size_t bytes) {
         } else {   // IMAGE
             const size_t n = std::min<size_t>(g.loops, total - q16);
             if (imageActive) mem.write(data + q16 * 16, n * 16);
+            static const bool logImages = std::getenv("GT4_GSN_XFER") != nullptr;
+            if (logImages) std::printf("[gsn image] path %u: %zu of %u qwords%s\n", path, n, g.loops, imageActive ? "" : " (no transfer)");
             q16 += n;
             g.loops -= static_cast<uint32_t>(n);
         }
@@ -607,6 +651,17 @@ void GsFrontend::gif(uint32_t path, const uint8_t* data, size_t bytes) {
 }
 
 void GsFrontend::vsync(uint64_t vblank, FrameList& out) {
+    packetsThisFrame = 0;
+    // Textures unused for ten seconds are dropped.
+    if (!(++frameCount % 64))
+        for (auto it = textureCache.begin(); it != textureCache.end();) {
+            if (it->second.lastUsed + 600 < frameCount) {
+                frame.retiredTextures.push_back(it->second.id);
+                it = textureCache.erase(it);
+            } else {
+                ++it;
+            }
+        }
     lastReinterpretation = {};
     frame.vblank = vblank;
     frame.targets = targets;

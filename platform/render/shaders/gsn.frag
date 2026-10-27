@@ -125,7 +125,8 @@ void main() {
         const float f = inFog;
         c.rgb = floor((f * c.rgb + (255.0 - f) * fog) / 256.0);
     }
-    if ((draw.alphaTest & 1u) != 0u && !alphaPasses(c.a)) discard;   // AFAIL KEEP (the other modes: TODO)
+    // The alpha test; AFAIL's pass of the failing pixels has it inverted (gsn_scene.cpp sets its masks).
+    if ((draw.alphaTest & 1u) != 0u && alphaPasses(c.a) == ((draw.flags & kAlphaInvert) != 0u)) discard;
 
     float written = c.a;
     if ((draw.flags & kFba) != 0u) written = mod(written, 128.0) + 128.0;

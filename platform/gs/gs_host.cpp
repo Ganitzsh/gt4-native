@@ -163,9 +163,10 @@ struct GsHost::Impl {
     std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
 
     gsn::FrameList nativeLatest;
-    uint64_t nativeSerial = 0;
+    uint64_t nativeSerial = 0, nativeTaken = 0;
     void publishNative(gsn::FrameList& list) {
         std::lock_guard<std::mutex> lock(frameMutex);
+        if (nativeTaken != nativeSerial) gsn::carryOver(nativeLatest, list);   // the frame not shown: keep its uploads
         std::swap(nativeLatest, list);
         ++nativeSerial;
     }
@@ -326,7 +327,7 @@ bool GsHost::takeNativeFrame(gsn::FrameList& list, uint64_t& serial) {
     std::lock_guard<std::mutex> lock(impl->frameMutex);
     if (impl->nativeSerial == serial) return false;
     std::swap(list, impl->nativeLatest);
-    serial = impl->nativeSerial;
+    serial = impl->nativeTaken = impl->nativeSerial;
     return true;
 }
 

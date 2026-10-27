@@ -34,7 +34,7 @@ static_assert(sizeof(DrawConstants) == 64);
 
 enum : uint32_t {
     kTextured = 1, kUv = 2, kFog = 4, kBlend = 8, kPabe = 16, kFba = 32, kFromTarget = 64, kTarget24 = 128, kDestAlphaBlend = 256,
-    kNearest = 512, kSnap = 1024,
+    kNearest = 512, kSnap = 1024, kAlphaInvert = 2048,
 };
 
 // A fixed-function blend for C = Ad: the coefficients of Cs and Cd as (a * Ad + b), mapped onto factors.
@@ -85,6 +85,9 @@ struct GsnScene::Impl {
         uint32_t version = 0, width = 0, height = 0;
     };
     std::unordered_map<uint32_t, GpuTexture> textures;
+    // Retired textures, destroyed once the frames that may still sample them are done.
+    std::vector<std::pair<uint64_t, vk::Image>> graveyard;
+    uint64_t uploads = 0;
     vk::Image blank;                     // 1 x 1 for untextured draws
     vk::Image feedback;                  // a copy of a target a draw samples while drawing into it
     vk::Image scratchDepth;              // stencil for destination-alpha tests without a Z buffer
@@ -118,6 +121,7 @@ struct GsnScene::Impl {
         vkDeviceWaitIdle(device.device);
         for (auto& [id, t] : targets) vk::destroy(device, t.image);
         for (auto& [id, t] : textures) vk::destroy(device, t.image);
+        for (auto& [when, image] : graveyard) vk::destroy(device, image);
         vk::destroy(device, blank);
         vk::destroy(device, feedback);
         vk::destroy(device, scratchDepth);
@@ -233,6 +237,15 @@ struct GsnScene::Impl {
     }
 
     void uploadTextures(VkCommandBuffer command, uint32_t slot) {
+        ++uploads;
+        for (auto it = graveyard.begin(); it != graveyard.end();) {
+            if (it->first + kSlots + 1 <= uploads) {
+                vk::destroy(device, it->second);
+                it = graveyard.erase(it);
+            } else {
+                ++it;
+            }
+        }
         VkDeviceSize bytes = 4;
         for (const auto& t : frame.textures) bytes += VkDeviceSize(t.width) * t.height * 4;
         vk::Buffer& stage = buffer(staging, slot, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
@@ -271,6 +284,16 @@ struct GsnScene::Impl {
         }
         for (const auto& [t, at] : copies) vk::toSampled(b, textures[t->id].image, vk::kFragment);
         b.flush(command);
+    }
+
+    // After the frame's draws are recorded: its retired textures go to the graveyard.
+    void retireTextures() {
+        for (const uint32_t id : frame.retiredTextures) {
+            auto it = textures.find(id);
+            if (it == textures.end()) continue;
+            graveyard.emplace_back(uploads, it->second.image);
+            textures.erase(it);
+        }
     }
 
     void execute(VkCommandBuffer command, uint32_t slot);
@@ -595,19 +618,12 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
             if (depthId == 0) stencilFresh = false;
         }
         const bool hasDepth = depthId != 0;
-        vk::Pipeline& p = pipeline(blendKey, mask, hasDepth, d.topology);
-        if (p.pipeline != boundPipeline) {
-            vk::bind(command, p);
-            const VkDeviceSize zero = 0;
-            vkCmdBindVertexBuffers(command, 0, 1, &vertices.buffer, &zero);
-            boundPipeline = p.pipeline;
-        }
         // Depth and stencil state.
         const bool zte = (s.test >> 16) & 1;
         const uint32_t ztst = (s.test >> 17) & 3;
         static const VkCompareOp zops[4] = {VK_COMPARE_OP_NEVER, VK_COMPARE_OP_ALWAYS, VK_COMPARE_OP_GREATER_OR_EQUAL, VK_COMPARE_OP_GREATER};
+        const bool zwrite = hasDepth && zte && d.depth && !((s.zbuf >> 32) & 1);
         vkCmdSetDepthTestEnable(command, hasDepth && zte && d.depth ? VK_TRUE : VK_FALSE);
-        vkCmdSetDepthWriteEnable(command, hasDepth && zte && d.depth && !((s.zbuf >> 32) & 1) ? VK_TRUE : VK_FALSE);
         vkCmdSetDepthCompareOp(command, zops[ztst]);
         vkCmdSetStencilTestEnable(command, date && hasDepth ? VK_TRUE : VK_FALSE);
         vkCmdSetStencilOp(command, VK_STENCIL_FACE_FRONT_AND_BACK, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP, VK_COMPARE_OP_EQUAL);
@@ -623,9 +639,38 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         scissor.extent = {right > x0 * scale ? right - x0 * scale : 0, bottom > y0 * scale ? bottom - y0 * scale : 0};
         if (!scissor.extent.width || !scissor.extent.height) continue;
         vkCmdSetScissor(command, 0, 1, &scissor);
-        vk::Descriptors().sampled(0, view, sampler).push(command, p);
-        vk::pushConstants(command, p, k);
-        vkCmdDraw(command, d.count, 1, d.first, 0);
+        // The alpha test: pixels that pass are drawn as usual; those that fail, under AFAIL, update only the
+        // frame buffer (FB_ONLY), only Z (ZB_ONLY) or only RGB (RGB_ONLY), or nothing (KEEP): a second pass
+        // with the test inverted.
+        const bool ate = s.test & 1;
+        const uint32_t atst = (s.test >> 1) & 7, afail = (s.test >> 12) & 3;
+        struct Pass {
+            uint32_t mask;
+            bool zwrite, inverted;
+        } passes[2];
+        uint32_t passCount = 0;
+        if (!ate || atst != 0) passes[passCount++] = {mask, zwrite, false};
+        if (ate && atst != 1 && afail != 0) {
+            const uint32_t rgb = mask & (VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT);
+            passes[passCount++] = afail == 1 ? Pass{mask, false, true} : afail == 2 ? Pass{0, zwrite, true} : Pass{rgb, false, true};
+        }
+        for (uint32_t pass = 0; pass < passCount; ++pass) {
+            const Pass& ps = passes[pass];
+            if (!ps.mask && !ps.zwrite) continue;
+            vk::Pipeline& p = pipeline(blendKey, ps.mask, hasDepth, d.topology);
+            if (p.pipeline != boundPipeline) {
+                vk::bind(command, p);
+                const VkDeviceSize zero = 0;
+                vkCmdBindVertexBuffers(command, 0, 1, &vertices.buffer, &zero);
+                boundPipeline = p.pipeline;
+            }
+            vkCmdSetDepthWriteEnable(command, ps.zwrite ? VK_TRUE : VK_FALSE);
+            DrawConstants pk = k;
+            if (ps.inverted) pk.flags |= kAlphaInvert;
+            vk::Descriptors().sampled(0, view, sampler).push(command, p);
+            vk::pushConstants(command, p, pk);
+            vkCmdDraw(command, d.count, 1, d.first, 0);
+        }
     }
     end();
     // The displayed buffer, for recordMain.
@@ -687,6 +732,7 @@ GsnScene::GsnScene(const vk::Device& device, VkCommandPool pool) : impl(std::mak
 GsnScene::~GsnScene() = default;
 
 void GsnScene::setFrame(gsn::FrameList& list) {
+    if (impl->fresh) gsn::carryOver(impl->frame, list);   // replaced before it was drawn
     std::swap(impl->frame, list);
     impl->fresh = true;
     impl->any = true;
@@ -771,6 +817,7 @@ void GsnScene::recordPrepass(VkCommandBuffer command, const SceneView& view) {
     s.uploadTextures(command, view.slot);
     s.writeDump();   // a dump recorded two frames ago is complete now
     s.execute(command, view.slot);
+    s.retireTextures();
     static const long dumpAt = std::getenv("GT4_GSN_DUMP") ? std::strtol(std::getenv("GT4_GSN_DUMP"), nullptr, 10) : -1;
     if (static_cast<long>(s.frame.vblank) == dumpAt) {
         s.dump.vblank = s.frame.vblank;

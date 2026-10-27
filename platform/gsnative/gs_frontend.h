@@ -97,11 +97,15 @@ struct FrameList {
     std::vector<Command> commands;
     std::vector<TextureImage> textures;   // new or changed this frame
     std::vector<Reinterpretation> reinterpretations;
+    std::vector<uint32_t> retiredTextures;   // texture ids no longer used after this frame
     std::vector<Target> targets;          // every target known (created or grown this frame included)
     Display display;
     uint64_t vblank = 0;
     void clear();
 };
+
+// A frame that will not be drawn: its texture uploads and retirements move to the next one, `into`.
+void carryOver(FrameList& dropped, FrameList& into);
 
 class GsFrontend {
 public:
@@ -135,6 +139,7 @@ private:
         uint32_t reg = 0;      // the register within the loop (PACKED), or the 64-bit word (REGLIST)
     } gifPaths[4];
     void packed(uint32_t r, uint64_t a, uint64_t b);
+    uint32_t packetsThisFrame = 0;   // GIF transfers since the last VSync (debugging logs)
     // PACKED/REGLIST state that spans calls is not kept: GT4's packets are whole per call.
 
     // Image transfer (HOST -> LOCAL) in progress.
@@ -167,9 +172,11 @@ private:
         uint32_t id = 0, version = 0;
         uint64_t generation = 0;   // sum of the covered pages' generations when decoded
         uint64_t clutHash = 0;
+        uint64_t decodedFrame = ~0ull, lastUsed = 0;
     };
     std::unordered_map<uint64_t, Cached> textureCache;
     uint32_t nextTexture = 1;
+    uint64_t frameCount = 0;
 
     void write(uint32_t r, uint64_t value);
     void kick(bool draw);
