@@ -69,6 +69,7 @@ public:
 
     uint64_t instructions = 0;   // executed pairs since reset (statistics)
     std::FILE* trace = nullptr;  // debugging: one line per instruction pair
+    uint8_t* coverage = nullptr; // statistics: 2048 bytes, set to 1 for each instruction executed
 
 private:
     struct FmacEntry {
@@ -106,6 +107,7 @@ private:
     uint32_t* mem(uint32_t qword) { return reinterpret_cast<uint32_t*>(data + (qword & 0x3FF) * 16); }
     friend struct VuExec;
     friend struct Vu1Ref;
+    friend class Vu1Native;
 };
 
 }  // namespace gt4::ps2

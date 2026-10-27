@@ -714,6 +714,7 @@ uint64_t Vu1::run(uint32_t startPc, uint64_t maxCycles) {
         uint32_t lowerWord = 0, upperWord = 0;
         std::memcpy(&lowerWord, micro + tpc * 8, 4);
         std::memcpy(&upperWord, micro + tpc * 8 + 4, 4);
+        if (coverage) coverage[tpc] = 1;
         tpc = (tpc + 1) & 0x7FF;
         ++instructions;
         if (upperWord & 0x40000000u) ebit = 2;

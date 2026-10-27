@@ -1,6 +1,8 @@
 // VIF1 command decoding (development scaffold; see vif1.h).
 #include "vif1.h"
 
+#include "vu1_inventory.h"
+#include "vu1_native.h"
 #include "vu1_ref.h"
 
 #include <algorithm>
@@ -133,6 +135,91 @@ void runWithDiff(VuDiff& d, Vu1& vu, uint32_t address, uint64_t& cycles) {
         if (vu.vi[k] != d.ref->vi[k]) std::fprintf(stderr, "[vu1 diff] %04X vi%d: ours %04X, reference %04X\n", address * 8, k, vu.vi[k], d.ref->vi[k]);
 }
 
+// GT4_VU1=native: GT4's microprograms run in C++ (vu1_native.cpp); the interpreter runs what is not ported.
+// GT4_VU1_DIFF=native: every program the native code handles also runs in the interpreter, from the same
+// state; the PATH1 packets and the data memory must be identical (a table per entry at exit).
+Vu1Native* vuNative() {
+    static Vu1Native* native = [] {
+        const char* mode = std::getenv("GT4_VU1");
+        const char* diff = std::getenv("GT4_VU1_DIFF");
+        return (mode && !std::strcmp(mode, "native")) || (diff && !std::strcmp(diff, "native")) ? new Vu1Native : nullptr;
+    }();
+    return native;
+}
+
+struct NativeDiff final : GifSink {
+    struct Collect final : GifSink {
+        std::vector<uint8_t> kicks;
+        GifSink* next = nullptr;
+        void gif(uint32_t path, const uint8_t* data, size_t bytes) override {
+            if (path == 1) kicks.insert(kicks.end(), data, data + bytes);
+            if (next) next->gif(path, data, bytes);
+        }
+    };
+    void gif(uint32_t, const uint8_t*, size_t) override {}
+    Vu1 scratch;
+    std::unique_ptr<Vu1Ref> ref = std::make_unique<Vu1Ref>();
+    struct Count { uint64_t runs = 0, kick = 0, mem = 0; };
+    std::map<uint32_t, Count> entries;
+    ~NativeDiff() override {
+        std::fprintf(stderr, "[vu1 native] entry: runs, PATH1 differs, data differs\n");
+        for (const auto& [address, c] : entries)
+            std::fprintf(stderr, "[vu1 native] %04X: %llu %llu %llu\n", address * 8, (unsigned long long)c.runs, (unsigned long long)c.kick,
+                         (unsigned long long)c.mem);
+    }
+};
+
+NativeDiff* nativeDiff() {
+    static NativeDiff* diff = [] {
+        const char* mode = std::getenv("GT4_VU1_DIFF");
+        return mode && !std::strcmp(mode, "native") ? new NativeDiff : nullptr;
+    }();
+    static struct Free { ~Free() { delete nativeDiff(); } } freeAtExit;
+    return diff;
+}
+
+// Runs the program natively when it can and compares with the reference interpreter (vu1_ref.cpp, whose
+// float arithmetic the native code shares); the frame itself still comes from vu1.cpp. False: not handled
+// natively (the caller interprets it).
+bool runNativeDiff(NativeDiff& d, Vu1Native& native, Vu1& vu, uint32_t address, uint64_t& cycles) {
+    d.scratch = vu;
+    NativeDiff::Collect nativeKicks;
+    d.scratch.setGifSink(&nativeKicks);
+    if (!native.run(d.scratch, address)) return false;
+    d.ref->load(vu);
+    d.ref->sink = nullptr;
+    d.ref->run(address);
+    cycles += vu.run(address);
+    NativeDiff::Collect interpreted;
+    interpreted.kicks = d.ref->kicks;
+    NativeDiff::Count& c = d.entries[address];
+    ++c.runs;
+    const bool kick = nativeKicks.kicks != interpreted.kicks;
+    const bool mem = std::memcmp(d.scratch.data, d.ref->data, sizeof vu.data) != 0;
+    c.kick += kick;
+    c.mem += mem;
+    if ((kick || mem) && c.kick + c.mem <= 6) {
+        std::fprintf(stderr, "[vu1 native] %04X run %llu: PATH1 %zu/%zu bytes\n", address * 8, (unsigned long long)c.runs,
+                     nativeKicks.kicks.size(), interpreted.kicks.size());
+        auto show = [&](const char* what, const uint8_t* ours, const uint8_t* theirs, size_t bytes, uint32_t base) {
+            int shown = 0;
+            for (size_t q = 0; q * 16 < bytes && shown < 6; ++q) {
+                if (!std::memcmp(ours + q * 16, theirs + q * 16, 16)) continue;
+                uint32_t a[4], b[4];
+                std::memcpy(a, ours + q * 16, 16);
+                std::memcpy(b, theirs + q * 16, 16);
+                std::fprintf(stderr, "[vu1 native] %s qword %zu: native %08X %08X %08X %08X, interpreter %08X %08X %08X %08X\n", what,
+                             base + q, a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3]);
+                ++shown;
+            }
+        };
+        if (kick) show("PATH1", nativeKicks.kicks.data(), interpreted.kicks.data(), std::min(nativeKicks.kicks.size(), interpreted.kicks.size()), 0);
+        if (mem) show("data", d.scratch.data, d.ref->data, sizeof vu.data, 0);
+        std::fprintf(stderr, "[vu1 native] TOP %u\n", vu.top);
+    }
+    return true;
+}
+
 constexpr uint32_t cmdOf(uint32_t code) { return (code >> 24) & 0x7F; }
 
 // Bytes of one UNPACK element: (32 >> vl) * (vn + 1) / 8; V4-5 is 2.
@@ -233,6 +320,8 @@ bool Vif1::step() {
             if (!need(num * 2)) { --stats.codes; return false; }
             for (uint32_t k = 0; k < num; ++k)
                 std::memcpy(vu.micro + ((imm + k) & 0x7FF) * 8, next + 2 * k, 8);
+            if (Vu1Inventory* inventory = Vu1Inventory::get()) inventory->microWritten();
+            if (Vu1Native* native = vuNative()) native->microWritten();
             stats.mpgInstructions += num;
             consumed += num * 2;
             break;
@@ -268,11 +357,17 @@ void Vif1::execute(uint32_t address) {
     }
     lastProgram = address * 8;
 #if GT4_VU1_INTERPRETER
+    Vu1Inventory* inventory = Vu1Inventory::get();
+    const uint64_t cyclesBefore = stats.vuCycles;
+    if (inventory) inventory->before(vu, address);
     static Vu1Ref* reference = [] {
         const char* mode = std::getenv("GT4_VU1");
         return mode && !std::strcmp(mode, "ref") ? new Vu1Ref : nullptr;
     }();
-    if (reference) {   // GT4_VU1=ref: the reference interpreter runs the program
+    Vu1Native* native = vuNative();
+    if (NativeDiff* nd = nativeDiff(); nd && runNativeDiff(*nd, *native, vu, address, stats.vuCycles)) {
+    } else if (native && !nd && native->run(vu, address)) {
+    } else if (reference) {   // GT4_VU1=ref: the reference interpreter runs the program
         reference->load(vu);
         reference->sink = vu.sink();
         reference->run(address);
@@ -282,6 +377,7 @@ void Vif1::execute(uint32_t address) {
     } else {
         stats.vuCycles += vu.run(address);
     }
+    if (inventory) inventory->after(vu, stats.vuCycles - cyclesBefore);
     ++stats.microprograms;
     if (vu.runaway()) {
         ++stats.runaways;
