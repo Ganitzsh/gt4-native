@@ -121,11 +121,14 @@ static __inline__ void __gt4_fpr_out (void *p, unsigned int n, float f)
 #define __GT4_SET32(d, v) ((d)->sd[0] = (int) (v))
 static __inline__ void __gt4_set64 (__gt4_reg *d, unsigned long long v) { d->d[0] = v; }
 
-/* memory */
+/* memory. The EE's lq/sq (and lqc2/sqc2) ignore the address's low 4 bits; natively they are kept:
+   data at its PS2 address is 16-aligned anyway, while an aligned(16) local or heap object of native
+   code is only 4-aligned (the i386 stack), and masking moved the access below it (ModelSet2::_render's
+   bounding-box test read its clip results 4 bytes off and culled every course object). */
 static __inline__ void __gt4_lq (__gt4_reg *d, const char *a)
-{ *d = *(const __gt4_reg *) ((unsigned int) a & ~15u); }
+{ *d = *(const __gt4_reg *) a; }
 static __inline__ void __gt4_sq (const __gt4_reg *s, char *a)
-{ *(__gt4_reg *) ((unsigned int) a & ~15u) = *s; }
+{ *(__gt4_reg *) a = *s; }
 
 /* ---- MMI (128 bits) ---------------------------------------------------------------------------- */
 

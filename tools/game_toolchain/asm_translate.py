@@ -519,7 +519,7 @@ def insn(st, mn, args):
     if mn in ("lqc2", "sqc2"):
         n(2)
         v = st.vf(a[0])[0]
-        p = "((__gt4_reg *) ((unsigned int) %s & ~15u))" % st.mem(a[1])
+        p = "((__gt4_reg *) (%s))" % st.mem(a[1])   # unmasked: see __gt4_lq in compat/game/gt4_asm.h
         B(("__gt4_qmtc2 (%s, %s);" % (v, p)) if mn == "lqc2" else ("__gt4_qmfc2 (%s, %s);" % (p, v)))
         return
     # ---- FPU ----
