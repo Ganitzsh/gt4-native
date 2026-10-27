@@ -614,6 +614,10 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
             c.id = nextTexture++;
         }
         c.decodedFrame = frameCount;
+        cachedTexels -= c.texels;
+        c.texels = 0;
+        for (uint32_t i = 0; i < levelCount; ++i) c.texels += uint64_t(levels[i].w) * levels[i].h;
+        cachedTexels += c.texels;
         ++c.version;
         c.generation = generation;
         c.clutHash = clutHash;
@@ -755,22 +759,40 @@ void GsFrontend::gif(uint32_t path, const uint8_t* data, size_t bytes) {
 
 void GsFrontend::resetTextures() {
     textureCache.clear();
+    cachedTexels = 0;
     frame.textures.clear();
     frame.resetTextures = true;
 }
 
 void GsFrontend::vsync(uint64_t vblank, FrameList& out) {
     packetsThisFrame = 0;
-    // Textures unused for ten seconds are dropped.
-    if (!(++frameCount % 64))
+    // Textures unused for two seconds are dropped, and the least recently used ones beyond a budget (GT4's
+    // menus animate palettes: every palette is a texture, and they piled up until the GPU ran out of
+    // memory).
+    constexpr uint64_t kBudget = 64ull << 20;   // texels (256 MiB of RGBA8)
+    if (!(++frameCount % 16) || cachedTexels > kBudget) {
         for (auto it = textureCache.begin(); it != textureCache.end();) {
-            if (it->second.lastUsed + 600 < frameCount) {
+            if (it->second.lastUsed + 120 < frameCount) {
                 frame.retiredTextures.push_back(it->second.id);
+                cachedTexels -= it->second.texels;
                 it = textureCache.erase(it);
             } else {
                 ++it;
             }
         }
+        if (cachedTexels > kBudget) {
+            std::vector<std::pair<uint64_t, uint64_t>> byAge;   // last use, key
+            for (const auto& [key, c] : textureCache) byAge.emplace_back(c.lastUsed, key);
+            std::sort(byAge.begin(), byAge.end());
+            for (const auto& [used, key] : byAge) {
+                if (cachedTexels <= kBudget / 2 || used + 1 >= frameCount) break;
+                auto it = textureCache.find(key);
+                frame.retiredTextures.push_back(it->second.id);
+                cachedTexels -= it->second.texels;
+                textureCache.erase(it);
+            }
+        }
+    }
     lastReinterpretation = {};
     lastMemoryReinterpretation = {};
     frame.vblank = vblank;

@@ -183,7 +183,9 @@ private:
         uint64_t generation = 0;   // sum of the covered pages' generations when decoded
         uint64_t clutHash = 0;
         uint64_t decodedFrame = ~0ull, lastUsed = 0;
+        uint64_t texels = 0;
     };
+    uint64_t cachedTexels = 0;   // of every cached texture
     std::unordered_map<uint64_t, Cached> textureCache;
     uint32_t nextTexture = 1;
     uint64_t frameCount = 0;
