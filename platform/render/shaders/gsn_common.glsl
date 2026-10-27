@@ -11,6 +11,7 @@ layout(push_constant) uniform Draw {
     uint alphaTest;      // ATE (0), ATST (1-3), AREF (4-11), AFAIL (12-13)
     uint blend;          // A (0-1), B (2-3), C (4-5), D (6-7), FIX (8-15): ALPHA
     uint clampU, clampV; // WMS/WMT (0-1), MINU/MINV (2-11), MAXU/MAXV (12-21): CLAMP
+    uint lod;            // LCM (0), L (1-2), K (3-14, signed 7.4), MXL (16-18): TEX1
 } draw;
 
 bool atNativeScale() { return draw.scale.x <= 1.0 && draw.scale.y <= 1.0; }
@@ -28,4 +29,5 @@ const uint kDestAlphaBlend = 256u;// C = Ad: the pipeline's fixed-function facto
 const uint kNearest = 512u;       // point sampling: the GS's texel, its wrap modes, by texel fetch
 const uint kAlphaInvert = 2048u;  // the alpha test's failing pixels (AFAIL's pass)
 const uint kSnap = 1024u;
-const uint kMipmapped = 4096u;    // the GS's mipmap levels: the sampler's trilinear filtering         // coordinates at the GS pixel's sample point, not the render pixel's
+const uint kMipmapped = 4096u;    // the GS's mipmap levels: the sampler's trilinear filtering
+const uint kGeneratedMips = 8192u;// ... levels made from level 0 (the GS has none): alpha from level 0         // coordinates at the GS pixel's sample point, not the render pixel's

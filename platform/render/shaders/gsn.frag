@@ -74,6 +74,17 @@ vec4 bilinearTexel(vec2 position) {
     return mix(top, bottom, f.y) * 255.0;
 }
 
+float pixelQ = 1.0;   // this pixel's Q (the GS's mipmap level comes from it)
+
+// The GS's level of detail for its own mipmaps: K, or (log2(1 / Q) << L) + K, then less by the render
+// scale's log2 so that a higher resolution keeps the same texels per pixel.
+float gsLevel() {
+    const float k = float(int(((draw.lod >> 3) & 0xFFFu) << 20) >> 20) / 16.0;
+    float lod = (draw.lod & 1u) != 0u ? k : log2(1.0 / max(abs(pixelQ), 1e-20)) * exp2(float((draw.lod >> 1) & 3u)) + k;
+    lod -= 0.5 * log2(draw.scale.x * draw.scale.y);
+    return clamp(lod, 0.0, float((draw.lod >> 16) & 7u));
+}
+
 vec4 texel(vec2 coordinate) {
     // coordinate: normalised over the texture (2^TW x 2^TH).
     coordinate = insideSprite(coordinate);
@@ -96,7 +107,12 @@ vec4 texel(vec2 coordinate) {
         }
         return floor(c + 0.5);
     }
-    return floor(texture(source, coordinate) * 255.0 + 0.5);
+    vec4 c = (draw.flags & (kMipmapped | kGeneratedMips)) == kMipmapped ? textureLod(source, coordinate, gsLevel())
+                                                                      : texture(source, coordinate);
+    // Made levels with the alpha test: the alpha of level 0, as the GS (without mipmaps) tests it; the levels
+    // would average cut-outs (fences, foliage) into solid texels.
+    if ((draw.flags & kGeneratedMips) != 0u && (draw.alphaTest & 1u) != 0u) c.a = textureLod(source, coordinate, 0.0).a;
+    return floor(c * 255.0 + 0.5);
 }
 
 bool alphaPasses(float a) {
@@ -127,6 +143,7 @@ void main() {
     vec4 c = cv;
     if ((draw.flags & kTextured) != 0u) {
         const vec3 stq = atGsPoint(inStq);
+        pixelQ = (draw.flags & kUv) != 0u ? 1.0 : stq.z;
         const vec2 uv = atGsPoint(vec3(inUv, 0.0)).xy;
         const vec2 coordinate = (draw.flags & kUv) != 0u ? uv / draw.textureSize : stq.xy / stq.z;
         const vec4 ct = texel(coordinate);
