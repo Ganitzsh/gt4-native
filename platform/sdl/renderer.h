@@ -13,12 +13,14 @@
 
 struct SDL_Window;
 
-namespace gt4 { class TestScene; }
+namespace gt4 { class TestScene; class GsScene; }
 
 struct GpuInfo {
     uint32_t index = 0;
     std::string name, type, driver, api;
 };
+
+namespace gt4::gsn { struct FrameList; }
 
 class Renderer {
 public:
@@ -44,6 +46,17 @@ public:
     void capture(const std::string& path);
     void setStatus(const std::string& text);  // extra lines for the on-screen readout
     gt4::TestScene& scene();
+    // The PS2's displayed frame (GS back end) replaces the test scene and its HUD (docs/GS_BACKEND.md).
+    void useGameFrame(bool enabled);
+    void setGameFrame(uint32_t width, uint32_t height, const uint32_t* rgba);
+    // The native renderer's frame list (docs/NATIVE_RENDERER.md), shown instead of the GS back end's frame
+    // while useNativeFrames is on and once one has arrived. Swapped (the caller gets an old list's buffers
+    // back).
+    void setNativeFrame(gt4::gsn::FrameList& list);
+    void useNativeFrames(bool enabled);
+    // Reloads volk's global Vulkan functions for this renderer's instance and device (after another
+    // component, such as the GS back end's own device, loaded its own).
+    void reloadVulkanFunctions();
     const GpuInfo& gpu() const;
     double gpuMilliseconds() const;          // GPU time of the last finished frame (0 if unknown)
     double averageGpuMilliseconds() const;   // mean GPU time over every timed frame so far

@@ -43,6 +43,23 @@ enum Gt4LinkRecordType {
     GT4_REC_HOST_CMD = 67,  /* u32 command (1 quit, 2 pause, 3 resume) */
 };
 
+/* Payload details as gt4_host consumes and produces them (docs/GS_BACKEND.md, "Link protocol"):
+ *
+ *   GT4_REC_GIF       u32 path, then the GIF qwords (they start 4 bytes into the payload, unaligned). A
+ *                     GIF packet may continue in the next GIF record of the same path (per-path state).
+ *   GT4_REC_VIF1      32-bit words in DMA order; with TTE the upper half of each DMA tag (two VIF codes)
+ *                     precedes its data. A VIF command and its data may span records.
+ *   GT4_REC_GS_PRIV   offset 0x00..0xE0 (PMODE..BGCOLOR) or 0x1000.. (CSR, IMR, BUSDIR, SIGLBLID). Zero
+ *                     writes of SMODE1/SRFSH/SYNCH1/SYNCH2/SYNCV are ignored: the kernel's SetGsCrt sets
+ *                     those, and the host keeps NTSC interlaced defaults.
+ *   GT4_REC_VSYNC     ends the frame: the host scans out the display (both read circuits) at this point.
+ *   GT4_REC_GS_READ   after the GIF data that set TRXDIR = 1 (local -> host): the host replies GS_IMAGE
+ *                     with the same id and qwc qwords of transfer data (zeros past the end of the area).
+ *   GT4_REC_GS_EVENT  host -> game for SIGNAL / FINISH / LABEL written by any path (PATH1/2 included):
+ *                     id = low 32 bits of the register value, value = the full 64-bit value.
+ *   GT4_REC_PAD       26 bytes: u32 port, u32 connected, 18 bytes of libpad2 data; sent every host frame.
+ *   GT4_REC_HOST_CMD  1 (quit) when the host closes; the host terminates the game 3 s later if needed. */
+
 typedef struct Gt4LinkRecord {
     uint32_t type;
     uint32_t size; /* payload bytes after this header */

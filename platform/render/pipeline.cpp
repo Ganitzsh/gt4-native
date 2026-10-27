@@ -232,7 +232,7 @@ struct FramePipeline::Impl {
         return vk::createImage(device, desc);
     }
 
-    Config resolveConfig(const Settings& s, VkExtent2D swapchain) {
+    Config resolveConfig(const Settings& s, VkExtent2D swapchain, bool motionVectors) {
         Config c;
         c.swapchain = swapchain;
         const float target = aspectValue(s.aspect);
@@ -248,11 +248,12 @@ struct FramePipeline::Impl {
         c.content.extent = {width, height};
         c.output = {width, height};
         float ratio = upscaleRatio(s);
-        c.upscaler = s.upscaler;
-        c.fsr2 = s.upscaler == Upscaler::Fsr2 && !fsr2Failed;
+        c.upscaler = !motionVectors && s.upscaler == Upscaler::Fsr2 ? Upscaler::Fsr1 : s.upscaler;
+        c.fsr2 = c.upscaler == Upscaler::Fsr2 && !fsr2Failed;
         if (c.fsr2 && ratio < 1.0f) ratio = 1.0f;   // FSR 2 does not downsample; supersampling uses the other paths
-        c.taa = !c.fsr2 && s.aa == AntiAliasing::Taa;
-        c.spatialAa = c.temporal() ? AntiAliasing::Off : s.aa;
+        const AntiAliasing aa = !motionVectors && (s.aa == AntiAliasing::Taa || s.aa == AntiAliasing::SmaaT2x) ? AntiAliasing::Smaa : s.aa;
+        c.taa = !c.fsr2 && aa == AntiAliasing::Taa;
+        c.spatialAa = c.temporal() ? AntiAliasing::Off : aa;
         c.render = {roundSize(static_cast<float>(width) / ratio), roundSize(static_cast<float>(height) / ratio)};
         c.msaa = device.maxSamples(static_cast<uint32_t>(std::max(1, s.msaa)));
         c.post = c.temporal() ? c.output : c.render;
@@ -290,7 +291,7 @@ struct FramePipeline::Impl {
                 if (!fsr2.create(c.output)) {
                     std::fprintf(stderr, "FSR 2 is unavailable on this device; using TAA instead\n");
                     fsr2Failed = true;
-                    config = resolveConfig(settings, c.swapchain);
+                    config = resolveConfig(settings, c.swapchain, scene.hasMotionVectors());
                     createTargets(scene);
                     return;
                 }
@@ -360,7 +361,7 @@ struct FramePipeline::Impl {
 
     void configure(const Settings& s, VkExtent2D swapchain, SceneSource& scene) {
         settings = s;
-        const Config next = resolveConfig(s, swapchain);
+        const Config next = resolveConfig(s, swapchain, scene.hasMotionVectors());
         const bool rebuild = !configured || !(next == config);
         config = next;   // fields that need no new targets (e.g. the spatial upscaler) apply directly
         if (rebuild) {
@@ -631,8 +632,10 @@ struct FramePipeline::Impl {
     }
 
     // Returns the number of accumulated levels (0 = no bloom).
-    uint32_t bloomPass(VkCommandBuffer command, vk::Image* hdr) {
+    uint32_t bloomPass(VkCommandBuffer command, vk::Image* hdr, bool gameDrawsOriginal) {
         if (settings.bloom == EffectQuality::Off) return 0;
+        // The game's own image already contains its glare: "original" adds nothing on top.
+        if (settings.bloom == EffectQuality::Original && gameDrawsOriginal) return 0;
         vk::beginLabel(command, "bloom");
         const bool original = settings.bloom == EffectQuality::Original;
         const uint32_t wanted[4] = {4, 5, 6, 8};
@@ -736,7 +739,7 @@ struct FramePipeline::Impl {
         // 2. HDR effects at the post resolution.
         if (enabled(settings.dof)) hdr = depthOfField(command, hdr, camera);
         if (enabled(settings.motionBlur)) hdr = motionBlurPass(command, hdr, camera);
-        const uint32_t bloomLevels = bloomPass(command, hdr);
+        const uint32_t bloomLevels = bloomPass(command, hdr, scene.drawsOriginalEffects());
 
         // 3. Display transform.
         vk::beginLabel(command, "tonemap");

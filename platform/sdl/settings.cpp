@@ -144,6 +144,7 @@ const std::vector<const char*> kHud{"anchored", "centered", "stretched"};
 const std::vector<const char*> kQuality{"native", "ultra_quality", "quality", "balanced", "performance",
                                         "ultra_performance", "custom"};
 const std::vector<const char*> kUpscalers{"bilinear", "bicubic", "lanczos", "fsr1", "fsr2"};
+const std::vector<const char*> kGsRenderers{"emulated", "native"};
 const std::vector<const char*> kAa{"off", "fxaa", "smaa", "smaa_t2x", "taa"};
 const std::vector<const char*> kFilters{"point", "bilinear", "trilinear"};
 const std::vector<const char*> kTonemappers{"original", "reinhard", "aces", "agx", "agx_punchy", "pbr_neutral"};
@@ -189,6 +190,10 @@ const std::vector<Option>& options() {
             "centred 4:3 area, stretched = the 4:3 layout is stretched (the PS2 on a widescreen TV)."));
         o.push_back(floatOption("aspect.safe_area", &Settings::safeArea, 0.0f, 0.15f,
             "HUD inset from the content edges, as a fraction of the content height."));
+        o.push_back(enumOption("render.gs", &Settings::gsRenderer, kGsRenderers,
+            "How the game's graphics are drawn: emulated = the PS2's graphics chip emulated at 640 x 448 "
+            "(paraLLEl-GS, the original look), native = the same commands drawn by the GPU at the render "
+            "resolution."));
         o.push_back(enumOption("render.quality", &Settings::quality, kQuality,
             "Render resolution relative to the output: native 1.0x, ultra_quality 1.3x, quality 1.5x, balanced "
             "1.7x, performance 2.0x, ultra_performance 3.0x smaller per axis; custom uses render.scale."));
@@ -287,7 +292,7 @@ const PresetTable& presetValues(Preset preset) {
     // Personal-taste effects (depth of field, motion blur, grain, vignette, aberration) belong only to the
     // PS2-faithful preset; the quality presets leave them as the player set them.
     static const PresetTable original{
-        {"render.quality", "native"}, {"render.upscaler", "bilinear"}, {"render.sharpness", "0"},
+        {"render.gs", "emulated"}, {"render.quality", "native"}, {"render.upscaler", "bilinear"}, {"render.sharpness", "0"},
         {"render.aa", "off"}, {"render.msaa", "1"}, {"texture.filter", "bilinear"}, {"texture.anisotropy", "1"},
         {"texture.lod_bias", "0"}, {"effects.shadows", "original"}, {"effects.reflections", "original"},
         {"effects.bloom", "original"}, {"effects.dof", "original"}, {"effects.motion_blur", "original"},
@@ -296,25 +301,25 @@ const PresetTable& presetValues(Preset preset) {
         {"post.exposure", "0"}, {"post.film_grain", "0"}, {"post.vignette", "0"},
         {"post.chromatic_aberration", "0"}, {"post.dither", "off"}};
     static const PresetTable low{
-        {"render.quality", "performance"}, {"render.upscaler", "fsr1"}, {"render.sharpness", "0.3"},
+        {"render.gs", "native"}, {"render.quality", "performance"}, {"render.upscaler", "fsr1"}, {"render.sharpness", "0.3"},
         {"render.aa", "fxaa"}, {"render.msaa", "1"}, {"texture.filter", "trilinear"}, {"texture.anisotropy", "4"},
         {"effects.shadows", "low"}, {"effects.reflections", "low"}, {"effects.bloom", "low"},
         {"effects.heat_haze", "low"}, {"effects.particles", "low"}, {"effects.sky_fog", "low"},
         {"effects.ambient_occlusion", "off"}, {"post.tonemapper", "agx_punchy"}, {"post.auto_exposure", "on"}};
     static const PresetTable medium{
-        {"render.quality", "quality"}, {"render.upscaler", "fsr2"}, {"render.sharpness", "0.25"},
+        {"render.gs", "native"}, {"render.quality", "quality"}, {"render.upscaler", "fsr2"}, {"render.sharpness", "0.25"},
         {"render.aa", "taa"}, {"render.msaa", "1"}, {"texture.filter", "trilinear"}, {"texture.anisotropy", "8"},
         {"effects.shadows", "medium"}, {"effects.reflections", "medium"}, {"effects.bloom", "medium"},
         {"effects.heat_haze", "medium"}, {"effects.particles", "medium"}, {"effects.sky_fog", "medium"},
         {"effects.ambient_occlusion", "low"}, {"post.tonemapper", "agx_punchy"}, {"post.auto_exposure", "on"}};
     static const PresetTable high{
-        {"render.quality", "native"}, {"render.upscaler", "fsr1"}, {"render.sharpness", "0.2"},
+        {"render.gs", "native"}, {"render.quality", "native"}, {"render.upscaler", "fsr1"}, {"render.sharpness", "0.2"},
         {"render.aa", "taa"}, {"render.msaa", "1"}, {"texture.filter", "trilinear"}, {"texture.anisotropy", "16"},
         {"effects.shadows", "high"}, {"effects.reflections", "high"}, {"effects.bloom", "high"},
         {"effects.heat_haze", "high"}, {"effects.particles", "high"}, {"effects.sky_fog", "high"},
         {"effects.ambient_occlusion", "medium"}, {"post.tonemapper", "agx_punchy"}, {"post.auto_exposure", "on"}};
     static const PresetTable ultra{
-        {"render.quality", "native"}, {"render.upscaler", "fsr2"}, {"render.sharpness", "0.15"},
+        {"render.gs", "native"}, {"render.quality", "native"}, {"render.upscaler", "fsr2"}, {"render.sharpness", "0.15"},
         {"render.aa", "taa"}, {"render.msaa", "1"}, {"texture.filter", "trilinear"}, {"texture.anisotropy", "16"},
         {"effects.shadows", "ultra"}, {"effects.reflections", "ultra"}, {"effects.bloom", "ultra"},
         {"effects.heat_haze", "ultra"}, {"effects.particles", "ultra"}, {"effects.sky_fog", "ultra"},

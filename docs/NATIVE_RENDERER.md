@@ -1,0 +1,107 @@
+# The native renderer (R1)
+
+`gt4_host` shows GT4 two ways, chosen by `render.gs`. The `original` preset keeps paraLLEl-GS (`emulated`):
+the PS2's GS emulated bit for bit at 640 x 448, its frame handed to the display pipeline. Every other preset
+uses the native renderer (`native`): the same GS command stream drawn by Vulkan at the host's resolution,
+with the pipeline's anti-aliasing, upscaling and post-processing on top. The setting can change at any time:
+the front end always follows the stream. This page is its design and its state.
+
+## State (2026-10-27)
+
+Menus, car select, the pre-race screens and the race (mirror, colour grading, HUD) render from the live game
+at any resolution and aspect (the game's own Hor+ 16:9 mode, 2560 x 1440 in about 8 ms of GPU time with the
+high preset). At 1x a race frame has 92% of its pixels within 16 of paraLLEl-GS (64% within 4); the rest is
+mostly the field lines, which the native renderer does not jitter.
+
+- **Scale per axis** from what the display shows: the race draws 224-line fields (SMODE2 FFMD), so its
+  lines get the output's full height (sy = output height / 224), and the anamorphic 16:9 frame gets more
+  across than down. GT4's quarter-pixel XYOFFSET jitter between fields is dropped (it shook the picture);
+  `GT4_GSN_SCALE=1 GT4_GSN_JITTER=keep` gives the comparable 1x picture.
+- **Textures**: GS bilinear (four taps, each wrapped by CLAMP's modes, 4-bit weights at 1x); MIPTBP mipmaps
+  and, above 1x, blit-made mip chains for 3D draws, sampled trilinear and anisotropic; sprite filtering kept
+  inside the sprite's texels above 1x. Uploads that leave memory unchanged keep the decodes.
+- **No motion vectors yet**: the pipeline uses SMAA and FSR 1 in place of TAA and FSR 2 for these frames.
+- Debugging: `GT4_GSN=stats`, `GT4_GSN_DRAWS=BP|all`, `GT4_GSN_XFER` (transfers, CLUT loads, XYOFFSET),
+  `GT4_GSN_TEXDUMP=TBP`, `GT4_GSN_DUMP=VBLANK` (targets), `GT4_GSN_LIMIT=K`, `GT4_GSN_VRAM=N` (front-end memory),
+  and paraLLEl-GS's `GT4_VRAM_DUMP=FRAME:PACKET,...|end` for the reference.
+
+Open: the 2D of the menus in 16:9 (stretched as on the PS2; WIDESCREEN.md has the game-code plan), motion
+vectors, COLCLAMP = 0 (wrapping), Z formats as frames and textures (GT4's Z24 pass), dithering, the GPU cost of
+the colour grading (one dispatch per batch would do).
+
+## What GT4 asks of the GS
+
+From the packets of whole frames (car select: 13,263 primitives in ~60 passes, `GT4_GIF_LOG`):
+
+- **Textures in GS memory, swizzled**: CLUT textures (4-bit and 8-bit indices, 32-bit palettes) uploaded as
+  32-bit blocks and read back in another format, so the renderer needs a model of GS memory with every
+  pixel format's swizzle, not a texture per upload.
+- **Render to texture**: an environment map rendered every frame into a 128 x 256 target, then drawn into a
+  256 x 256 texture the car paint samples; the 640 x 448 frame read back as a texture for glare (downsampled
+  into 320-wide targets, blurred with fixed-alpha blends) and composited.
+- **Destination alpha**: the car body writes its reflectivity into the frame's alpha; the reflection pass adds
+  `Cs * Ad` (blend factor = destination alpha) and is limited by the destination alpha test (DATE) so it is
+  applied once.
+- **Two 640-wide frames** (24-bit and 32-bit) combined at the end, and the display's two read circuits.
+- Alpha test (GREATER/GEQUAL, `keep`), depth GEQUAL, fog, modulate texturing, gouraud strips, sprites.
+
+## Design
+
+Front end (CPU, on the GS worker thread), `platform/gsnative/`:
+
+- `gs_memory`: 4 MiB of GS local memory; addresses of every format (PSMCT32/24/16/16S, T8, T4, T8H, T4HL,
+  T4HH, Z32/24/16/16S) from their page/block/column layouts; host-to-local, local-to-local and local-to-host
+  transfers; texture decoding (CLUT CSM1/CSM2 and CSA, TEXA for 16 and 24-bit alpha). Checked against
+  paraLLEl-GS's memory after the same transfers.
+- `gs_frontend`: the GIF parser (PACKED, REGLIST, IMAGE), both drawing contexts, the vertex queue (ADC,
+  strips and fans, sprites) and the register state, turned into a frame list: draws with their state,
+  uploads, copies, and the display registers at VSYNC.
+
+Back end (Vulkan, recorded by the display pipeline as a scene source):
+
+- **Targets**: one image per GS frame buffer (FBP, FBW, PSM) at the render scale, R16G16B16A16 float holding
+  colour / 255 and alpha / 128, so that blend factors such as `Ad` and `1 - As` keep the PS2's 0..2 range;
+  one depth image per Z buffer. Texture reads of memory a target owns sample the target.
+- **Textures**: decoded from the memory model into RGBA8 images, cached by address, format, palette and
+  upload generation.
+- **Pipelines** keyed by blend (dual-source for As and FIX), alpha test and its fail mode, depth test and mask,
+  colour mask, fog, primitive type; DATE through the stencil buffer (the alpha bit copied into stencil before
+  a DATE run, updated by the draw itself with shader stencil export); a clamp pass after blends that can
+  exceed 255 (COLCLAMP).
+- **Display**: PMODE / DISPFB / DISPLAY of both circuits composed into the scene's colour target.
+
+## GT4's tricks, and how the native renderer follows them
+
+Found frame by frame against paraLLEl-GS (`GT4_VRAM_DUMP` for its memory, `GT4_GSN_DUMP` for the targets,
+`GT4_GSN_DRAWS=all` and `GT4_GSN_XFER` for the front end's view):
+
+- **Colour grading through palettes (race).** After the 3D frame is composited into the 24-bit display
+  buffer, each 64 x 32 block is read as 8-bit indices (`T8` over the 32-bit pixels: one byte, one channel)
+  through a palette that holds the grading curve, three sprites per block summing R, G and B into a scratch
+  target; the block is then written back by drawing an uploaded index ramp (8 x 32, `T8` at 0x38E4)
+  through palettes loaded from the scratch target. So palettes can live in a render target: a CLUT load from
+  a page a 32-bit target owns is read on the GPU (`clutWritten`, `gsn_reinterpret.comp`), and an index
+  texture in memory with such a palette is a reinterpretation too. Page ownership follows the drawn
+  rectangle, not whole rows: the ramp and the curve sit in the scratch target's second page, which is never
+  drawn.
+- **Sub-pixel reinterpretation.** Those tricks move whole GS pixels; at a render scale above 1 a
+  reinterpreted texture has scale x scale texels per GS texel, each reading the same sub-pixel of the pixels
+  it comes from, and the draws that sample it (`kSnap`) take their GS pixel's texel and their own
+  sub-texel. The colour grading thus applies at full resolution, as the game meant it, with no
+  GT4-specific detection.
+- **GIF tags across transfers.** An IMAGE tag can end one DMA packet and its pixels arrive in the next (the
+  ramp's upload): each path keeps its tag in progress.
+- **Z only.** The mirror and the scene clear Z inside a rectangle with a sprite whose alpha test always fails
+  with AFAIL = ZB_ONLY; every AFAIL mode is a second pass with the test inverted and the masks it allows.
+- **One index image, several palettes.** Road textures are a 4-bit image loaded with an 8-bit CLUT and drawn
+  with different CSA; a texture is cached per palette, and content that changes within a frame gets a new
+  id (the back end uploads before the frame's draws).
+
+## Order of work and acceptance
+
+1. Memory model and transfers; every format round-trips and matches paraLLEl-GS's memory.
+2. Front end: the frame list of a captured frame matches `gsframe.py`'s decoding.
+3. Back end at 1x: each captured frame within a measured tolerance of paraLLEl-GS (per-pixel difference
+   statistics, the worst regions listed); the passes above one by one.
+4. Render scale, then widescreen (game code: the monitor matrix, docs/WIDESCREEN.md), MSAA and texture
+   filtering options, motion vectors for the temporal paths.
