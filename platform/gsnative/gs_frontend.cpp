@@ -234,6 +234,7 @@ void GsFrontend::memoryWritten(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t 
                 const uint32_t page = (bp / 32 + py * perRow + px + extra) & 511;
                 if (extra && !(bp % 32)) break;
                 ++pageGeneration[page];
+                ++uploads;
                 pages[page] = {0, ++serial};
             }
         }
@@ -510,8 +511,21 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
         r.clutTargetBp = c.bp;
         r.clutTargetBw = c.bw;
         src.kind = TextureSource::Kind::Reinterpreted;
+        // The same as the previous one (a sprite's second triangle) while neither the palette's target nor
+        // GS memory changed since: reused.
+        const LastReinterpretation& last = lastMemoryReinterpretation;
+        if (last.index < frame.reinterpretations.size()) {
+            const Reinterpretation& p = frame.reinterpretations[last.index];
+            const uint64_t written = c.id < targetWritten.size() ? targetWritten[c.id] : 0;
+            if (!p.target && p.tex0 == r.tex0 && p.texa == r.texa && p.clutTarget == r.clutTarget && written <= last.serial &&
+                uploads == last.uploads) {
+                src.id = last.index;
+                return src;
+            }
+        }
         src.id = static_cast<uint32_t>(frame.reinterpretations.size());
         frame.reinterpretations.push_back(std::move(r));
+        lastMemoryReinterpretation = {src.id, serial, uploads};
         ++stats.reinterpreted;
         return src;
     }
@@ -733,6 +747,7 @@ void GsFrontend::vsync(uint64_t vblank, FrameList& out) {
             }
         }
     lastReinterpretation = {};
+    lastMemoryReinterpretation = {};
     frame.vblank = vblank;
     frame.targets = targets;
     Display& d = frame.display;

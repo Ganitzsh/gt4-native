@@ -166,8 +166,9 @@ private:
     std::vector<uint64_t> targetWritten;   // per target id: the serial of its last write
     struct LastReinterpretation {
         uint32_t index = ~0u;
-        uint64_t serial = 0;
-    } lastReinterpretation;
+        uint64_t serial = 0, uploads = 0;
+    } lastReinterpretation, lastMemoryReinterpretation;
+    uint64_t uploads = 0;   // pages written by transfers, ever
     // The target the CLUT buffer was last loaded from (0: memory), and the TEX0 fields of that load.
     static constexpr uint64_t kClutFields = (0x3Full << 20) | (0xFFFFFFull << 37);
     struct ClutSource {
