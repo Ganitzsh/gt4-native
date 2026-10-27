@@ -82,6 +82,7 @@ public:
     ~CaptureWriter();
     bool ok() const { return out != nullptr; }
     void write(uint32_t type, const void* payload, uint32_t size, const void* extra = nullptr, uint32_t extraSize = 0);
+    void flush() { if (out) std::fflush(out); }
 private:
     std::FILE* out = nullptr;
     uint64_t seq = 0;

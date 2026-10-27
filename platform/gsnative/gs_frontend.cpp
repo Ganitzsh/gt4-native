@@ -358,6 +358,7 @@ void GsFrontend::emit(const Vertex* v, uint32_t n, Topology topology) {
     const uint32_t colour = targetFor(s.frame, false, scissorY1 + 1, width);
     const bool zte = (s.test >> 16) & 1;
     const uint32_t depth = zte ? targetFor(s.zbuf, true, scissorY1 + 1, width) : 0;
+    if (!colour || (zte && !depth)) return;   // past the target limit
     const uint32_t fbmsk = static_cast<uint32_t>(s.frame >> 32);
     if (fbmsk != 0xFFFFFFFFu) markWritten(colour, static_cast<uint32_t>(s.frame & 0x1FF) * 32, static_cast<uint32_t>((s.frame >> 16) & 0x3F),
                                           static_cast<uint32_t>((s.frame >> 24) & 0x3F), left, right, top, bottom);
@@ -402,6 +403,13 @@ uint32_t GsFrontend::targetFor(uint64_t frameReg, bool depth, uint32_t heightNee
         if (heightNeeded > t.height) t.height = (heightNeeded + 31) & ~31u;
         if (!depth) t.psm = psm;   // CT24 and CT32 share the layout; the last write tells which alpha is valid
         return t.id;
+    }
+    // GT4 uses about twenty; garbage registers (GT mode's map in the port) made thousands in one frame, each a
+    // GPU image at the render scale, and lost the device. Draws past the limit are left out.
+    constexpr size_t kMaxTargets = 96;
+    if (targets.size() >= kMaxTargets) {
+        ++stats.droppedDraws;
+        return 0;
     }
     Target t;
     t.id = static_cast<uint32_t>(targets.size()) + 1;
@@ -603,6 +611,9 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
     } else if (t.psm != PSMCT32) {
         key = mix(key, s.texa);
     }
+    // Garbage TEX0 registers decode a texture per draw; a frame keeps to a sane number (and GPU memory).
+    constexpr size_t kMaxDecodesPerFrame = 768;
+    if (frame.textures.size() >= kMaxDecodesPerFrame && !textureCache.count(key)) return TextureSource{};
     Cached& c = textureCache[key];
     if (!c.id) c.id = nextTexture++;
     c.lastUsed = frameCount;

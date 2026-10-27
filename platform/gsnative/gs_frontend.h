@@ -127,6 +127,7 @@ public:
 
     struct Stats {
         uint64_t primitives = 0, draws = 0, uploads = 0, copies = 0, decoded = 0, targetReads = 0, reinterpreted = 0;
+        uint64_t droppedDraws = 0;   // past the target limit (targetFor)
     } stats;
 
 private:
