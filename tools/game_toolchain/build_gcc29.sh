@@ -34,6 +34,23 @@ old = "  /* Lose any fake structure return argument.  */\n  if (aggregate_value_
 assert old in s, "i386_return_pops_args changed"
 open(p, "w").write(s.replace(old, "  /* gt4: the caller pops the struct-return pointer (see build_gcc29.sh).  */\n"))
 PYEOF
+# A pseudo is never given a memory equivalence of another mode. combine turns a parameter's
+# (set (reg:SI) (mem:SI slot)) into (set (reg:DI) (zero_extend:DI (mem:SI slot))) when the value is
+# only used widened, and keeps the REG_EQUIV note on the 4-byte slot; a pseudo that then gets no
+# hard register lives there in DImode and its 8-byte store overwrites the next argument (004A81A8:
+# the colour correction's green and blue were zeroed by the widened red).
+python3 - src/gcc/reload1.c <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = "\t  rtx note = find_reg_note (insn, REG_EQUIV, NULL_RTX);\n"
+assert old in s, "reload1.c REG_EQUIV scan changed"
+new = old + ("\t  /* gt4: a memory equivalence of another mode is not the pseudo's home.  */\n"
+             "\t  if (note && GET_CODE (XEXP (note, 0)) == MEM\n"
+             "\t      && GET_MODE (XEXP (note, 0)) != GET_MODE (SET_DEST (set)))\n"
+             "\t    note = 0;\n")
+open(p, "w").write(s.replace(old, new))
+PYEOF
 # Structs come back in registers exactly when the EE returns them in $v0 (mips.h: any type with a
 # scalar mode; MIPS's strict alignment gives a struct DImode only when it is 8-aligned): 1, 2 and 4
 # bytes in %eax, 8-aligned 8 bytes in %edx:%eax, everything else through memory. The decomp

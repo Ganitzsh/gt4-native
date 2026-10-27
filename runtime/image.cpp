@@ -41,6 +41,28 @@ void write_rel32(uint32_t at, uint8_t opcode, const void *target) {
 
 }  // namespace
 
+// Float constants of the image with an all-ones exponent. The EE's FPU has no NaN or infinity: it
+// reads 0x7FFFFFFF as its largest value (and 0xFFFFFFFF as the most negative), which the game uses
+// as "farther than anything" starting points; on the host they are NaNs, every comparison with them
+// is false, and (003E5FD8, the road surface query) no road was ever found. Each is a function's own
+// literal, read with lwc1 (found in the assembly: lwc1 of a D_ symbol whose word has exponent 0xFF).
+const uint32_t kEeMaxFloats[] = {
+    0x0069F3B8, 0x006A0110, 0x006A0344, 0x006A0348, 0x006A05D0, 0x006A14C0, 0x006A14C4, 0x006A14DC,
+    0x006A1628, 0x006A162C, 0x006A1630, 0x006A2364, 0x006A28A0, 0x006A2918, 0x006A29D4, 0x006A3620,
+    0x006A396C, 0x006A39F4, 0x006A39F8, 0x006AB060, 0x006AB064, 0x006AF790, 0x006AFC04, 0x006AFC08,
+    0x006CC938, 0x006CC93C,
+};
+
+void patch_ee_float_constants() {
+    int patched = 0;
+    for (uint32_t addr : kEeMaxFloats) {
+        uint32_t &w = guest_ref<uint32_t>(addr);
+        if (w == 0x7FFFFFFFu) w = 0x7F7FFFFFu, ++patched;       // FLT_MAX
+        else if (w == 0xFFFFFFFFu) w = 0xFF7FFFFFu, ++patched;  // -FLT_MAX
+    }
+    log_info("%d EE float constants made finite", patched);
+}
+
 bool load_elf(const char *path) {
     FILE *f = fopen(path, "rb");
     if (!f) {
@@ -74,6 +96,7 @@ bool load_elf(const char *path) {
         std::memset(static_cast<char *>(guest_ptr(ph.vaddr)) + ph.filesz, 0, ph.memsz - ph.filesz);
         log_info("loaded segment %08x-%08x", ph.vaddr, ph.vaddr + ph.memsz);
     }
+    patch_ee_float_constants();
     return true;
 }
 
