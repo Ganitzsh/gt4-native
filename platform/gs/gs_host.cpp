@@ -192,7 +192,39 @@ struct GsHost::Impl {
         frameReady.notify_all();
     }
 
-    void dispatch(const Gt4LinkRecord& header, const uint8_t* payload) { stream->record(header, payload); }
+    // GT4_HOST_RECORD=PATH[,FROM[,COUNT]] (debugging): the records the host receives, VBlanks FROM..FROM+COUNT,
+    // as a capture for --replay (what a live run saw, which a game-side --capture does not reproduce).
+    struct Recorder {
+        std::unique_ptr<ps2::CaptureWriter> out;
+        uint64_t from = 0, count = ~0ull, vsyncs = 0;
+    };
+    std::unique_ptr<Recorder> recorder = [] {
+        const char* e = std::getenv("GT4_HOST_RECORD");
+        if (!e) return std::unique_ptr<Recorder>();
+        auto r = std::make_unique<Recorder>();
+        std::string path = e;
+        const size_t comma = path.find(',');
+        if (comma != std::string::npos) {
+            unsigned long long from = 0, count = ~0ull;
+            std::sscanf(path.c_str() + comma + 1, "%llu,%llu", &from, &count);
+            r->from = from;
+            r->count = count;
+            path.resize(comma);
+        }
+        r->out = std::make_unique<ps2::CaptureWriter>(path);
+        return r;
+    }();
+    void dispatch(const Gt4LinkRecord& header, const uint8_t* payload) {
+        if (recorder) {
+            if (recorder->vsyncs >= recorder->from && recorder->vsyncs < recorder->from + recorder->count)
+                recorder->out->write(header.type, payload, header.size);
+            if (header.type == GT4_REC_VSYNC) {
+                ++recorder->vsyncs;
+                recorder->out->flush();   // a run that loses the device still leaves its frames
+            }
+        }
+        stream->record(header, payload);
+    }
 
     void runLive() {
         auto onRecord = [this](const Gt4LinkRecord& h, const uint8_t* p) { dispatch(h, p); };

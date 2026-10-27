@@ -23,11 +23,13 @@ layout(location = 0, index = 1) out vec4 outFactor;
 // (MSK, FIX).
 int wrap(int i, uint mode, int size) {
     const int lo = int((mode >> 2) & 0x3FFu), hi = int((mode >> 12) & 0x3FFu);
+    // The region modes can point past the texture (the GS reads on in memory): kept inside the image, as
+    // reads outside it are undefined (a device loss in GT mode's map).
     switch (mode & 3u) {
     case 0u: return i & (size - 1);
     case 1u: return clamp(i, 0, size - 1);
-    case 2u: return clamp(i, lo, hi);
-    default: return (i & lo) | hi;
+    case 2u: return clamp(clamp(i, lo, hi), 0, size - 1);
+    default: return ((i & lo) | hi) & (size - 1);
     }
 }
 
@@ -39,14 +41,15 @@ vec4 nearestTexel(vec2 position) {
     const ivec2 i = ivec2(wrap(int(cell.x), draw.clampU, size.x), wrap(int(cell.y), draw.clampV, size.y));
     if ((draw.flags & kSnap) != 0u) {   // a reinterpreted texture: this render pixel's sub-texel
         const ivec2 sub = ivec2(gl_FragCoord.xy) % ivec2(draw.scale);
-        return texelFetch(source, i * ivec2(draw.scale) + sub, 0) * 255.0;
+        return texelFetch(source, min(i * ivec2(draw.scale) + sub, textureSize(source, 0) - 1), 0) * 255.0;
     }
     if ((draw.flags & kFromTarget) != 0u) {
         const vec2 within = clamp(position - cell, 0.0, 0.999);
-        const vec4 t = texelFetch(source, ivec2((draw.sourceOffset + vec2(i) + within) * draw.scale), 0);
+        const ivec2 at = ivec2((draw.sourceOffset + vec2(i) + within) * draw.scale);
+        const vec4 t = texelFetch(source, clamp(at, ivec2(0), textureSize(source, 0) - 1), 0);
         return min(vec4(t.rgb * 255.0, t.a * 128.0), 255.0);   // the GS clamps what blends write (COLCLAMP)
     }
-    return texelFetch(source, i, 0) * 255.0;
+    return texelFetch(source, min(i, textureSize(source, 0) - 1), 0) * 255.0;
 }
 
 // Filtering inside a sprite's texture rectangle: at a higher resolution the samples near its edges would
