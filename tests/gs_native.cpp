@@ -19,6 +19,11 @@ namespace {
 
 int failures = 0;
 
+struct Gt4Texa {
+    uint8_t ta0, ta1;
+    bool aem;
+};
+
 struct Format {
     uint32_t psm;
     const char* name;
@@ -128,6 +133,73 @@ int main() {
         gs->gif(3, g.data(), g.bytes());
         model->copy(t);
         sameMemory(*gs, *model, ("copy " + std::to_string(pair[0]) + " -> " + std::to_string(pair[1])).c_str());
+    }
+    // Texture decoding: textures and palettes uploaded, drawn 1:1 by paraLLEl-GS as decal sprites (nearest
+    // filtering, UV coordinates) into a 32-bit frame, compared with the model's decode.
+    struct TextureCase {
+        const char* name;
+        uint32_t psm, cpsm, csa;
+        Gt4Texa texa;
+    };
+    const TextureCase cases[] = {
+        {"T8, CT32 palette", 0x13, 0x00, 0, {0, 0x80, false}},  {"T4, CT32 palette, CSA 3", 0x14, 0x00, 3, {0, 0x80, false}},
+        {"T8, CT16 palette", 0x13, 0x02, 0, {0x20, 0x90, false}}, {"T4, CT16 palette, CSA 9", 0x14, 0x02, 9, {0x10, 0x70, true}},
+        {"CT32", 0x00, 0, 0, {0, 0x80, false}},                   {"CT24, TEXA", 0x01, 0, 0, {0x33, 0x80, true}},
+        {"CT16, TEXA", 0x02, 0, 0, {0x11, 0x77, true}},           {"T8H, CT32 palette", 0x1B, 0x00, 0, {0, 0x80, false}},
+        {"T4HH, CT32 palette, CSA 5", 0x2C, 0x00, 5, {0, 0x80, false}}};
+    for (const TextureCase& c : cases) {
+        gs->writeVram(0, noise.data(), noise.size());
+        std::memcpy(model->data(), noise.data(), noise.size());
+        const uint32_t tw = 6, th = 5, w = 1u << tw, h = 1u << th, tbp = 0x1000, tbw = 2, cbp = 0x2000;
+        const uint32_t bits = gt4::gsn::psmBits(c.psm);
+        auto upload = [&](uint32_t bp, uint32_t bw, uint32_t psm, uint32_t uw, uint32_t uh) {
+            GsMemory::Transfer t;
+            t.dbp = bp;
+            t.dbw = bw;
+            t.dpsm = psm;
+            t.rrw = uw;
+            t.rrh = uh;
+            std::vector<uint8_t> data(size_t(uw) * uh * gt4::gsn::psmBits(psm) / 8);
+            for (auto& b : data) b = static_cast<uint8_t>(rng());
+            Gif g;
+            g.ad({{BITBLTBUF, bitbltbuf(bp, bw, psm)}, {TRXPOS, trxpos(0, 0)}, {TRXREG, trxreg(uw, uh)}, {TRXDIR, 0}}, false);
+            g.image(data.data(), data.size());
+            gs->gif(3, g.data(), g.bytes());
+            model->beginWrite(t);
+            model->write(data.data(), data.size());
+        };
+        upload(tbp, tbw, c.psm, w, h);
+        const bool indexedFormat = bits <= 8 || c.psm == 0x1B || c.psm == 0x24 || c.psm == 0x2C;
+        if (indexedFormat) upload(cbp, 1, c.cpsm, 16, 16);
+        const uint64_t texValue = tex0(tbp, tbw, c.psm, tw, th, true, 1, cbp, c.cpsm, 0, c.csa, 1);
+        const uint64_t texaValue = uint64_t(c.texa.ta0) | (uint64_t(c.texa.aem) << 15) | (uint64_t(c.texa.ta1) << 32);
+        Gif g;
+        g.ad({{FRAME_1, frame(0, 10, PSMCT32)}, {ZBUF_1, zbuf(0x100, PSMZ24, true)}, {SCISSOR_1, scissor(0, 639, 0, 447)},
+              {XYOFFSET_1, xyoffset(2048 << 4, 2048 << 4)}, {TEST_1, test(true, 1)}, {PRMODECONT, 1}, {DTHE, 0}, {COLCLAMP, 1},
+              {TEX1_1, 0}, {TEXA, texaValue}, {CLAMP_1, 0}, {TEXFLUSH, 0}, {TEX0_1, texValue}}, false);
+        g.reglist(prim(6, false, true, false, true), {UV, XYZ2, UV, XYZ2}, {uv(0, 0), xyz(0, 0), uv(w, h), xyz(w, h)});
+        gs->gif(2, g.data(), g.bytes());
+        model->tex0Written(GsMemory::Tex0::decode(texValue));
+        std::vector<uint32_t> expected(size_t(w) * h);
+        gt4::gsn::Texa texa;
+        texa.ta0 = c.texa.ta0;
+        texa.ta1 = c.texa.ta1;
+        texa.aem = c.texa.aem;
+        model->decode(GsMemory::Tex0::decode(texValue), texa, 0, 0, w, h, expected.data());
+        std::vector<uint8_t> vram(GsMemory::kBytes);
+        gs->readVram(0, vram.data(), vram.size());
+        int wrong = 0;
+        for (uint32_t y = 0; y < h; ++y)
+            for (uint32_t x = 0; x < w; ++x) {
+                uint32_t got;
+                std::memcpy(&got, &vram[GsMemory::address32(0, 10, x, y)], 4);
+                const uint32_t want = expected[size_t(y) * w + x];
+                if (got != want && wrong++ < 4) std::fprintf(stderr, "  %s: texel (%u, %u): paraLLEl-GS %08X, model %08X\n", c.name, x, y, got, want);
+            }
+        if (wrong) {
+            std::fprintf(stderr, "FAILED: decode %s (%d texels)\n", c.name, wrong);
+            ++failures;
+        }
     }
     std::printf("gs_native: %s\n", failures ? "FAILED" : "memory model matches paraLLEl-GS");
     return failures ? 1 : 0;
