@@ -2,9 +2,11 @@
 //
 // The game's graphics library starts every VIF0/VIF1/GIF transfer through two functions:
 // 004A1140(channel, address, qwc) (normal mode) and 004ABA50(channel, tag address) (source chain).
-// Their replacements do the transfer at once: walk the DMA chain in guest memory, send what the
-// channel would have delivered to gt4_host (VIF1 stream, VIF0 stream, GIF PATH3), clear the
-// channel's STR bit and raise its DMA-end interrupt so the game's handler (004AB6D8) advances.
+// Their replacements walk the DMA chain in guest memory and send what the channel would have
+// delivered to gt4_host (VIF1 stream, VIF0 stream, GIF PATH3), then clear the channel's STR bit and
+// raise its DMA-end interrupt so the game's handler (004AB6D8) advances. VIF1 and the GIF go in
+// step, stopping where the hardware would for the game's interrupt handshakes (see "VIF1 and GIF
+// (PATH3) in step" below); VIF0 and normal-mode transfers go at once.
 // At every VBlank the GS privileged registers the game wrote are sent with a frame marker, and
 // CSR.FIELD toggles as on an interlaced NTSC display.
 #include "audio.h"
@@ -16,6 +18,8 @@
 
 #include <windows.h>
 
+#include <algorithm>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <vector>
@@ -50,16 +54,30 @@ void append(std::vector<uint8_t> &out, const uint8_t *p, uint32_t qwc) { out.ins
 // Source-chain DMA (EE DMAC tag IDs): returns false on a malformed chain.
 bool g_chain_has_mpg = false;  // the last chain walked uploaded a VU1 microprogram
 
-bool walk_chain(uint32_t tadr, bool tte, std::vector<uint8_t> &out, bool &irq_stop) {
-    g_chain_has_mpg = false;
-    uint32_t asr[2];
+// A source chain in progress: where the next tag is, the call stack (ASR0/1).
+struct Chain {
+    uint32_t tadr = 0;
+    bool spr_tag = false;
+    uint32_t asr[2] = {};
     int sp = 0;
-    bool spr_tag = (tadr & 0x80000000) != 0;
-    tadr &= 0x7FFFFFFF;
+    bool tte = false;
+    uint32_t last_tag = 0;  // bits 0-31 of the last tag read (CHCR.TAG is its upper half)
+};
+
+// Walks a chain from c.tadr, appending what the channel delivers. With stop_irq, stops after the
+// data of a tag with its IRQ bit (CHCR.TIE): returns 1 and c.tadr is the next tag. With one, stops
+// after one tag: returns 2. Returns 0 at the chain's end, -1 if it does not end.
+int walk(Chain &c, std::vector<uint8_t> &out, bool stop_irq, bool one = false) {
+    uint32_t tadr = c.tadr & 0x7FFFFFFF;
     for (int guard = 0; guard < 1 << 20; ++guard) {
-        const uint8_t *tag = mem(tadr, spr_tag);
+        const uint8_t *tag = mem(tadr, c.spr_tag);
+        const bool tte = c.tte;
+        uint32_t *asr = c.asr;
+        int &sp = c.sp;
+        bool &spr_tag = c.spr_tag;
         uint64_t lo;
         std::memcpy(&lo, tag, 8);
+        c.last_tag = static_cast<uint32_t>(lo);
         const uint32_t qwc = static_cast<uint32_t>(lo & 0xFFFF);
         const uint32_t id = static_cast<uint32_t>(lo >> 28) & 7;
         const bool irq = (lo >> 31) & 1;
@@ -106,7 +124,7 @@ bool walk_chain(uint32_t tadr, bool tte, std::vector<uint8_t> &out, bool &irq_st
             break;
         case 5:  // call: QWC after the tag, push the address after the data, next tag at ADDR
             append(out, tag + 16, qwc);
-            if (sp >= 2) return false;
+            if (sp >= 2) return -1;
             asr[sp++] = tadr + 16 + qwc * 16;
             next = addr;
             break;
@@ -120,14 +138,35 @@ bool walk_chain(uint32_t tadr, bool tte, std::vector<uint8_t> &out, bool &irq_st
             end = true;
             break;
         }
-        (void)irq;  // tag interrupts: the library sets TIE but its chains are not expected to use them
-        (void)irq_stop;
-        if (end) return true;
+        if (end) {
+            c.tadr = tadr;
+            return 0;
+        }
         tadr = next;
+        if (irq && stop_irq) {  // the channel stops after this tag's data and interrupts
+            c.tadr = tadr | (spr_tag ? 0x80000000u : 0);
+            return 1;
+        }
+        if (one) {
+            c.tadr = tadr | (spr_tag ? 0x80000000u : 0);
+            return 2;
+        }
     }
     log_warn("gs: DMA chain did not end (1M tags)");
-    return false;
+    return -1;
 }
+
+// The whole chain at once (VIF0/VIF1, and GIF chains without tag interrupts).
+bool walk_chain(uint32_t tadr, bool tte, std::vector<uint8_t> &out) {
+    g_chain_has_mpg = false;
+    Chain c;
+    c.tadr = tadr & 0x7FFFFFFF;
+    c.spr_tag = (tadr & 0x80000000) != 0;
+    c.tte = tte;
+    return walk(c, out, false) == 0;
+}
+
+
 
 // GS events written by PATH3 packets: FINISH (0x61), SIGNAL (0x60), LABEL (0x62) through A+D.
 void scan_gif(const std::vector<uint8_t> &data, bool &finish, bool &signal) {
@@ -168,11 +207,10 @@ void raise_gs_events(bool finish, bool signal) {
 
 using WaitFn = int (*)(int);
 
-void finish_transfer(int channel, std::vector<uint8_t> &out) {
+// What a channel delivered, to the host.
+void send_out(int channel, const std::vector<uint8_t> &out) {
     if (!out.empty()) {
         if (channel == 1) {
-            if (g_chain_has_mpg) link_remember(GT4_REC_VIF1, out.data(), static_cast<uint32_t>(out.size()));
-            g_chain_has_mpg = false;
             link_send(GT4_REC_VIF1, out.data(), static_cast<uint32_t>(out.size()));
         } else if (channel == 0) {
             link_send(GT4_REC_VIF0, out.data(), static_cast<uint32_t>(out.size()));
@@ -186,10 +224,18 @@ void finish_transfer(int channel, std::vector<uint8_t> &out) {
             }
         }
     }
-    // the channel stops (STR clear) and interrupts at the end of the transfer
+}
+
+// The channel stops (STR clear) and interrupts at the end of the transfer.
+void end_transfer(int channel) {
     const uint32_t regs = guest_ref<uint32_t>(kDmaChanTable + 4 * channel);
     guest_ref<uint32_t>(regs) &= ~0x100u;
     kernel_raise_dmac(channel);
+}
+
+void finish_transfer(int channel, std::vector<uint8_t> &out) {
+    send_out(channel, out);
+    end_transfer(channel);
 }
 
 void start_flag(int channel) {
@@ -207,6 +253,11 @@ void on_vblank(uint32_t count) {
     auto &csr = guest_ref<uint32_t>(kGsCsr);
     csr = (csr & ~(1u << 13)) | (g_field << 13);
     audio_vblank();
+    if (link_capture_finished() && !link_connected()) {  // a standalone capture run ends with its window
+        link_capture_close();
+        log_info("capture window closed at VBlank %u: exiting", count);
+        ExitProcess(0);
+    }
     if (!link_active()) return;
     static bool capturing = false;
     if (link_capture_window() != capturing) {  // a capture window opens: resend every register
@@ -231,13 +282,256 @@ void on_vblank(uint32_t count) {
 
 }  // namespace
 
+// ---------------------------------------------------------------------------------------------
+// VIF1 and GIF (PATH3) in step. GT4 streams textures through PATH3 while VIF1 draws, several sets
+// into the same GS memory per frame, and keeps the two in step with interrupts: VIF1 FLUSH codes
+// with the interrupt bit (NUM 1: wait for the next texture set, NUM 2: the current set is used,
+// NUM 4) stop VIF1 until its handler (004AB548) resumes it, and GIF tags with IRQ (user bits 16:
+// wait for VIF1, 17: a set is uploaded, 18) stop the GIF until its handler (004AB6D8) restarts it.
+// Sending each stream whole drew every object with the frame's last texture set. Here both advance
+// in turn, each transfer stopping where the hardware's would, and the game's handlers run at those
+// points and say which stream goes on (D2_CHCR.STR, VIF1_FBRST.STC).
+
+constexpr uint32_t kVif1Stat = 0x10003C00, kVif1Fbrst = 0x10003C10, kVif1Code = 0x10003C80;
+
+// Length in 32-bit words of the VIF code at `w` with its data (STCYCL tracked for UNPACK).
+struct VifScan {
+    uint32_t cl = 1, wl = 1;
+    size_t length(const uint32_t *w, size_t left) {
+        const uint32_t code = w[0], cmd = (code >> 24) & 0x7F, num = (code >> 16) & 0xFF, imm = code & 0xFFFF;
+        size_t n = 1;
+        if (cmd == 0x01) {
+            cl = imm & 0xFF;
+            wl = (imm >> 8) & 0xFF;
+        } else if (cmd == 0x20) {
+            n = 2;
+        } else if (cmd == 0x30 || cmd == 0x31) {
+            n = 5;
+        } else if (cmd == 0x4A) {
+            n = 1 + 2 * (num ? num : 256);
+        } else if (cmd == 0x50 || cmd == 0x51) {
+            n = 1 + 4 * size_t(imm ? imm : 65536);
+        } else if (cmd >= 0x60) {
+            const uint32_t vn = (cmd >> 2) & 3, vl = cmd & 3, count0 = num ? num : 256;
+            const uint32_t count = wl <= cl ? count0 : cl * (count0 / wl) + std::min(count0 % wl, cl);
+            n = 1 + (size_t(count) * (32 >> vl) * (vn + 1) + 31) / 32;
+        }
+        return std::min(n, left);
+    }
+};
+
+// The GS events of a VIF1 stream's DIRECT packets (standalone runs: no host to report them).
+void scan_vif_direct(const std::vector<uint8_t> &part, bool &finish, bool &signal) {
+    const uint32_t *w = reinterpret_cast<const uint32_t *>(part.data());
+    const size_t nw = part.size() / 4;
+    VifScan scan;
+    for (size_t pos = 0; pos < nw;) {
+        const uint32_t cmd = (w[pos] >> 24) & 0x7F;
+        const size_t n = scan.length(w + pos, nw - pos);
+        if ((cmd == 0x50 || cmd == 0x51) && n > 1) {
+            std::vector<uint8_t> gif(part.begin() + (pos + 1) * 4, part.begin() + (pos + n) * 4);
+            scan_gif(gif, finish, signal);
+        }
+        pos += n;
+    }
+}
+
+struct DmaEngine {
+    std::vector<uint8_t> vif;  // the VIF1 transfer in flight: what the DMA has read and VIF1 not done
+    size_t vif_pos = 0;        // in words
+    VifScan scan;
+    Chain vif_chain;           // a source chain is read a tag at a time, as VIF1 takes it: a stalled
+    bool vif_chain_live = false;  // VIF1 stalls the DMA, and the game finishes the packets after it
+    bool vif_chain_paused = false;  // the DMA stopped after a tag with IRQ, until STR again
+    bool vif_irq_raised = false;    // and its handler has run
+    bool vif_mpg = false;      // the transfer uploads a VU1 microprogram (kept for capture windows)
+    bool vif_busy = false, vif_stalled = false;
+    Chain gif;  // the GIF chain in flight
+    bool gif_busy = false, gif_stopped = false;
+    bool running = false;
+} g_dma;
+
+uint32_t &chcr_of(int channel) { return guest_ref<uint32_t>(guest_ref<uint32_t>(kDmaChanTable + 4 * channel)); }
+uint32_t &tadr_of(int channel) { return guest_ref<uint32_t>(guest_ref<uint32_t>(kDmaChanTable + 4 * channel) + 0x30); }
+
+// GT4_DMA_TRACE=N: the first N handshakes (debugging)
+void dma_trace(const char *what, uint32_t value) {
+    static long left = getenv("GT4_DMA_TRACE") ? atol(getenv("GT4_DMA_TRACE")) : 0;
+    if (left <= 0) return;
+    --left;
+    const uint32_t s = kSprState + 0x50;
+    log_info("dma: %s %08x -> counters %d %d %d, FBRST %u, D2 STR %u (VBlank %u)", what, value,
+             guest_ref<int8_t>(s + 0x16), guest_ref<int8_t>(s + 0x17), guest_ref<int8_t>(s + 0x18),
+             guest_ref<uint32_t>(kVif1Fbrst), (chcr_of(2) >> 8) & 1, kernel_vblank_count());
+}
+
+// After a handler ran: what it restarted.
+void dma_after_handler() {
+    if (g_dma.vif_chain_paused && (chcr_of(1) & 0x100)) {  // VIF1's chain goes on from D1_TADR
+        g_dma.vif_chain_paused = false;
+        g_dma.vif_irq_raised = false;
+        g_dma.vif_chain.tadr = tadr_of(1) & 0x7FFFFFFF;
+        g_dma.vif_chain.spr_tag = (tadr_of(1) & 0x80000000) != 0;
+    }
+    if (g_dma.vif_stalled && guest_ref<uint32_t>(kVif1Fbrst) == 8) {
+        g_dma.vif_stalled = false;
+        guest_ref<uint32_t>(kVif1Stat) &= ~0xC00u;  // STC clears INT and VIS
+    }
+    if (chcr_of(2) & 0x100) {
+        if (g_dma.gif_busy && g_dma.gif_stopped) {
+            g_dma.gif_stopped = false;
+        } else if (!g_dma.gif_busy) {  // started by the handler: the chain at D2_TADR
+            g_dma.gif = Chain();
+            g_dma.gif.tadr = tadr_of(2) & 0x7FFFFFFF;
+            g_dma.gif.spr_tag = (tadr_of(2) & 0x80000000) != 0;
+            g_dma.gif.tte = (chcr_of(2) & 0x40) != 0;
+            g_dma.gif_busy = true;
+            g_dma.gif_stopped = false;
+        }
+    }
+}
+
+void dma_run() {
+    if (g_dma.running) return;  // a handler restarting a stream: the loop below goes on with it
+    g_dma.running = true;
+    for (int guard = 0; guard < 1 << 20; ++guard) {
+        if (g_dma.gif_busy && !g_dma.gif_stopped) {  // PATH3 first: textures as early as allowed
+            std::vector<uint8_t> out;
+            const int r = walk(g_dma.gif, out, (chcr_of(2) & 0x80) != 0);  // CHCR.TIE
+            send_out(2, out);
+            uint32_t &chcr = chcr_of(2);
+            chcr = (chcr & 0xFFFF) | (g_dma.gif.last_tag & 0xFFFF0000u);
+            tadr_of(2) = g_dma.gif.tadr;
+            if (r == 1) {  // stopped at an IRQ tag: the handler says whether it goes on
+                chcr &= ~0x100u;
+                g_dma.gif_stopped = true;
+                guest_ref<uint32_t>(kVif1Fbrst) = 0;
+                if (!kernel_interrupt_now(true, 2)) chcr |= 0x100u;  // masked: it goes on
+                dma_trace("GIF tag", g_dma.gif.last_tag);
+                dma_after_handler();
+            } else {
+                g_dma.gif_busy = false;
+                g_dma.gif_stopped = false;
+                end_transfer(2);
+            }
+            continue;
+        }
+        if (g_dma.vif_busy && !g_dma.vif_stalled && !g_dma.vif_irq_raised) {
+            auto fetch = [] {  // the DMA reads the next tag of the chain
+                if (!g_dma.vif_chain_live || g_dma.vif_chain_paused) return false;
+                g_chain_has_mpg = false;
+                const int r = walk(g_dma.vif_chain, g_dma.vif, (chcr_of(1) & 0x80) != 0, true);
+                if (r == 1) g_dma.vif_chain_paused = true;  // after a tag with IRQ (CHCR.TIE)
+                else if (r != 2) g_dma.vif_chain_live = false;
+                g_dma.vif_mpg |= g_chain_has_mpg;
+                return true;
+            };
+            size_t pos = g_dma.vif_pos;
+            uint32_t code = 0;
+            bool stop = false;
+            for (;;) {
+                const uint32_t *w = reinterpret_cast<const uint32_t *>(g_dma.vif.data());
+                const size_t nw = g_dma.vif.size() / 4;
+                if (pos >= nw) {
+                    if (fetch()) continue;
+                    break;
+                }
+                code = w[pos];
+                const size_t n = g_dma.scan.length(w + pos, SIZE_MAX);
+                if (pos + n > nw && fetch()) continue;  // the code's data is in the next tags
+                pos = std::min(pos + n, nw);
+                if ((code >> 31) != 0) {
+                    stop = true;
+                    break;
+                }
+            }
+            std::vector<uint8_t> part(g_dma.vif.begin() + g_dma.vif_pos * 4, g_dma.vif.begin() + pos * 4);
+            g_dma.vif.erase(g_dma.vif.begin(), g_dma.vif.begin() + pos * 4);
+            g_dma.vif_pos = 0;
+            if (g_dma.vif_mpg) link_remember(GT4_REC_VIF1, part.data(), static_cast<uint32_t>(part.size()));
+            send_out(1, part);
+            if (!link_connected()) {  // standalone: the GS events of the DIRECT packets (a live host reports them)
+                bool finish = false, signal = false;
+                scan_vif_direct(part, finish, signal);
+                raise_gs_events(finish, signal);
+            }
+            if (stop) {  // the interrupt bit: VIF1 stalls after this code until the handler resumes it
+                g_dma.vif_stalled = true;
+                guest_ref<uint32_t>(kVif1Stat) |= 0xC00u;  // INT, VIS
+                guest_ref<uint32_t>(kVif1Code) = code;
+                guest_ref<uint32_t>(kVif1Fbrst) = 0;
+                if (!kernel_interrupt_now(false, 5)) guest_ref<uint32_t>(kVif1Fbrst) = 8;  // masked: no stall
+                dma_trace("VIF1 code", code);
+                dma_after_handler();
+            } else if (g_dma.vif_chain_live && g_dma.vif_chain_paused) {
+                // the DMA stopped after a tag with IRQ and VIF1 has done its data: the handler
+                // (004AB6D8) counts it; with the GS FINISH too a GS -> EE download starts (004AB930),
+                // and 004AB9C0 restarts the chain afterwards (D1 STR, from D1_TADR)
+                uint32_t &chcr = chcr_of(1);
+                chcr = ((chcr & 0xFFFF) | (g_dma.vif_chain.last_tag & 0xFFFF0000u)) & ~0x100u;
+                tadr_of(1) = g_dma.vif_chain.tadr;
+                g_dma.vif_irq_raised = true;
+                kernel_interrupt_now(true, 1);
+                dma_trace("VIF1 tag", g_dma.vif_chain.last_tag);
+                dma_after_handler();
+            } else {
+                g_dma.vif_busy = false;
+                g_dma.vif.clear();
+                end_transfer(1);
+            }
+            continue;
+        }
+        break;
+    }
+    g_dma.running = false;
+}
+
+// After interrupts delivered asynchronously (the GS FINISH of a download, its DMA end): a handler
+// may have restarted a stream.
+void dma_poll() {
+    if (g_dma.running) return;
+    dma_after_handler();
+    dma_run();
+}
+
+// A VIF1 transfer starts: its data (normal mode), or a source chain read as VIF1 goes.
+void vif1_begin() {
+    if (g_dma.vif_busy) log_warn("gs: VIF1 started while a transfer is in flight (stalled at word %zu)", g_dma.vif_pos);
+    g_dma.vif.clear();
+    g_dma.vif_pos = 0;
+    g_dma.scan = VifScan();
+    g_dma.vif_chain_live = false;
+    g_dma.vif_chain_paused = false;
+    g_dma.vif_irq_raised = false;
+    g_dma.vif_mpg = false;
+    g_dma.vif_busy = true;
+    g_dma.vif_stalled = false;
+}
+
+void vif1_start(std::vector<uint8_t> &out) {
+    vif1_begin();
+    g_dma.vif.swap(out);
+    dma_run();
+}
+
+void vif1_start_chain(uint32_t address, bool spr, bool tte) {
+    vif1_begin();
+    g_dma.vif_chain = Chain();
+    g_dma.vif_chain.tadr = address;
+    g_dma.vif_chain.spr_tag = spr;
+    g_dma.vif_chain.tte = tte;
+    g_dma.vif_chain_live = true;
+    dma_run();
+}
+
 extern "C" void gt4_replace_func_004A1140(int channel, uint32_t address, int qwc) {
     reinterpret_cast<WaitFn>(guest_ptr(0x004A0F68))(channel);  // waits until the channel is free
     KernelScope ks;  // the DMA-end interrupt is delivered when this returns
     start_flag(channel);
     std::vector<uint8_t> out;
     append(out, mem(address, false), static_cast<uint32_t>(qwc));
-    finish_transfer(channel, out);
+    if (channel == 1) vif1_start(out);
+    else finish_transfer(channel, out);
 }
 
 extern "C" void gt4_replace_func_004ABA50(int channel, uint32_t address) {
@@ -245,10 +539,30 @@ extern "C" void gt4_replace_func_004ABA50(int channel, uint32_t address) {
     KernelScope ks;
     start_flag(channel);
     const uint32_t regs = guest_ref<uint32_t>(kDmaChanTable + 4 * channel);
+    // the registers as the original sets them: QWC 0, TADR (scratchpad: bit 31), CHCR source chain
+    // started, TTE/TIE kept (its handler reads the mode and the last tag)
+    // (the walk keeps the address as given: natively a chain can be on a host thread's stack)
+    const bool spr_start = (address & 0x70000000) == 0x70000000;
+    guest_ref<uint32_t>(regs + 0x20) = 0;
+    guest_ref<uint32_t>(regs + 0x30) = spr_start ? (address & 0x3FF0) | 0x80000000u : address;
+    guest_ref<uint32_t>(regs) = (guest_ref<uint32_t>(regs) & 0xFEC0) | 0x10000105;
     const uint32_t chcr = guest_ref<uint32_t>(regs);
+    if (channel == 2) {  // GIF: stops at its IRQ tags (CHCR.TIE) and goes on in step with VIF1
+        g_dma.gif = Chain();
+        g_dma.gif.tadr = address;
+        g_dma.gif.spr_tag = spr_start;
+        g_dma.gif.tte = (chcr & 0x40) != 0;
+        g_dma.gif_busy = true;
+        g_dma.gif_stopped = false;
+        dma_run();
+        return;
+    }
+    if (channel == 1) {
+        vif1_start_chain(address, spr_start, (chcr & 0x40) != 0);
+        return;
+    }
     std::vector<uint8_t> out;
-    bool irq = false;
-    walk_chain(address, (chcr & 0x40) != 0, out, irq);
+    walk_chain(address, (chcr & 0x40) != 0, out);
     finish_transfer(channel, out);
 }
 
@@ -313,6 +627,7 @@ namespace gt4::rt {
 
 void gs_init() {
     kernel_set_vblank_hook(on_vblank);
+    kernel_set_interrupt_hook(dma_poll);
     guest_ref<uint32_t>(kGsCsr) = 0;
 }
 

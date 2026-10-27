@@ -42,6 +42,12 @@ void kernel_post_callback(void (*fn)(uint32_t), uint32_t arg);  // runs fn(arg) 
 // Called on the interrupt thread at each VBlank start, before the INTC 2 handlers run.
 void kernel_set_vblank_hook(void (*fn)(uint32_t vblank_count));
 void kernel_raise_dmac(int channel);
+// Runs the handlers of one INTC cause (dmac false) or DMAC channel now, on the calling thread, as the
+// hardware would at that point of a transfer (a VIF interrupt code, a DMA tag's IRQ). Returns false
+// when the cause is masked (nothing ran).
+bool kernel_interrupt_now(bool dmac, int index);
+// Called after every delivery of interrupts, in interrupt context.
+void kernel_set_interrupt_hook(void (*fn)());
 
 // Ticks of the PS2 bus clock (147.456 MHz) since boot, from the host's monotonic clock.
 uint64_t kernel_bus_cycles();

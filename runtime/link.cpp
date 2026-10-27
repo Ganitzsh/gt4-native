@@ -122,6 +122,16 @@ bool link_capture_window() {
     return v >= g_capture_from && (!g_capture_frames || v - g_capture_from < g_capture_frames);
 }
 
+bool link_capture_finished() {
+    return g_capture && g_capture_frames && kernel_vblank_count() >= g_capture_from + g_capture_frames;
+}
+
+void link_capture_close() {
+    std::lock_guard<std::mutex> lock(g_send_mutex);
+    if (g_capture) fclose(g_capture);
+    g_capture = nullptr;
+}
+
 bool link_capture(const char *path) {
     if (const char *e = std::getenv("GT4_CAPTURE_FROM")) g_capture_from = static_cast<uint32_t>(std::strtoul(e, nullptr, 0));
     if (const char *e = std::getenv("GT4_CAPTURE_FRAMES")) g_capture_frames = static_cast<uint32_t>(std::strtoul(e, nullptr, 0));

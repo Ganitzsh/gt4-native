@@ -105,7 +105,8 @@ struct Callback {
     void (*fn)(uint32_t);
     uint32_t arg;
 };
-std::vector<Callback> g_callbacks;  // run in interrupt context (SIF completions...)
+std::vector<Callback> g_callbacks;
+void (*g_interrupt_hook)() = nullptr;  // run in interrupt context (SIF completions...)
 void (*g_vblank_hook)(uint32_t) = nullptr;
 
 struct Lock {
@@ -225,6 +226,7 @@ void deliver_pending() {
         g_pending_dmac &= g_dmac_mask;
         if (!intc && !dmac) break;
     }
+    if (g_interrupt_hook) g_interrupt_hook();
     std::vector<Callback> callbacks;
     callbacks.swap(g_callbacks);
     for (const Callback &c : callbacks) c.fn(c.arg);
@@ -420,6 +422,7 @@ void kernel_raise_intc(int cause) {
 }
 
 void kernel_set_vblank_hook(void (*fn)(uint32_t)) { g_vblank_hook = fn; }
+void kernel_set_interrupt_hook(void (*fn)()) { g_interrupt_hook = fn; }
 
 void kernel_post_callback(void (*fn)(uint32_t), uint32_t arg) {
     {
@@ -435,6 +438,20 @@ void kernel_raise_dmac(int channel) {
         g_pending_dmac |= 1u << channel;
     }
     SetEvent(g_irq_wake);
+}
+
+bool kernel_interrupt_now(bool dmac, int index) {
+    if (!((dmac ? g_dmac_mask : g_intc_mask) & (1u << index))) return false;
+    Thread *t = self();
+    EnterCriticalSection(&g_lock);
+    if (t) ++t->kernel_depth;  // a syscall or EI in the handler must not deliver other interrupts here
+    const bool was = g_in_interrupt;
+    g_in_interrupt = true;
+    run_handlers(dmac ? g_dmac[index] : g_intc[index], index);
+    g_in_interrupt = was;
+    if (t) --t->kernel_depth;
+    LeaveCriticalSection(&g_lock);
+    return true;
 }
 
 uint64_t kernel_bus_cycles() {

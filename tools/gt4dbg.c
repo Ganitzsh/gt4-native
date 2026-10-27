@@ -5,7 +5,7 @@
  *   gt4dbg [--map FILE.map] [--first] program.exe [args...]
  *
  * --first: also report first-chance exceptions (by default only the ones the program does not handle).
- * --watch-write ADDR [--watch-value V]: a hardware data breakpoint on the 4 bytes at ADDR in every
+ * --watch-write ADDR [--watch-value V] [--watch-after SECONDS]: a hardware data breakpoint on the 4 bytes at ADDR in every
  *   thread (only writes leaving V there are reported, with --watch-value); each write
  *   is reported with the writing instruction and the native functions on the stack (at most 40).
  * Build: C:\msys64\mingw32\bin\gcc -O1 tools/gt4dbg.c -o build/gt4dbg.exe
@@ -179,6 +179,7 @@ static void scan_memory(HANDLE proc) {
 
 static unsigned write_value;
 static int write_has_value;
+static unsigned watch_after, start_ticks; /* --watch-after SECONDS: ignore the writes before then */
 
 static void arm_write(HANDLE th) {
     CONTEXT c;
@@ -196,7 +197,8 @@ static void report_write(HANDLE proc, HANDLE th, DWORD tid) {
     unsigned v = 0;
     SIZE_T got;
     ReadProcessMemory(proc, (void *)(uintptr_t)write_addr, &v, 4, &got);
-    if (write_has_value && v != write_value) {  /* --watch-value: only that value is reported */
+    if ((write_has_value && v != write_value) || GetTickCount() - start_ticks < watch_after * 1000u) {
+        /* --watch-value: only that value is reported; --watch-after: nothing before that time */
         c.Dr6 = 0;
         c.ContextFlags = CONTEXT_DEBUG_REGISTERS;
         SetThreadContext(th, &c);
@@ -270,12 +272,14 @@ static int log_hit(HANDLE proc, HANDLE th, int tindex, DWORD tid, unsigned addr)
 
 int main(int argc, char **argv) {
     int i = 1, first = 0;
+    start_ticks = GetTickCount();
     for (; i < argc && argv[i][0] == '-' && argv[i][1] == '-'; ++i) {
         if (!strcmp(argv[i], "--map") && i + 1 < argc) load_map(argv[++i]);
         else if (!strcmp(argv[i], "--first")) first = 1;
         else if (!strcmp(argv[i], "--watch-call") && i + 1 < argc) watch_addr = (unsigned)strtoul(argv[++i], NULL, 16);
         else if (!strcmp(argv[i], "--watch-write") && i + 1 < argc) write_addr = (unsigned)strtoul(argv[++i], NULL, 16);
         else if (!strcmp(argv[i], "--watch-rw") && i + 1 < argc) write_addr = (unsigned)strtoul(argv[++i], NULL, 16), write_dr7 = 0x000F0001;
+        else if (!strcmp(argv[i], "--watch-after") && i + 1 < argc) watch_after = (unsigned)atoi(argv[++i]);
         else if (!strcmp(argv[i], "--watch-value") && i + 1 < argc) write_value = (unsigned)strtoul(argv[++i], NULL, 16), write_has_value = 1;
         else if (!strcmp(argv[i], "--log-at") && i + 1 < argc && nlog < 8) log_at[nlog++] = (unsigned)strtoul(argv[++i], NULL, 16);
         else if (!strcmp(argv[i], "--scan") && i + 1 < argc) scan_word = (unsigned)strtoul(argv[++i], NULL, 16);
