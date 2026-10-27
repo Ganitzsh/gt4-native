@@ -17,17 +17,23 @@ mostly the field lines, which the native renderer does not jitter.
   lines get the output's full height (sy = output height / 224), and the anamorphic 16:9 frame gets more
   across than down. GT4's quarter-pixel XYOFFSET jitter between fields is dropped (it shook the picture);
   `GT4_GSN_SCALE=1 GT4_GSN_JITTER=keep` gives the comparable 1x picture.
-- **Textures**: GS bilinear (four taps, each wrapped by CLAMP's modes, 4-bit weights at 1x); MIPTBP mipmaps
-  and, above 1x, blit-made mip chains for 3D draws, sampled trilinear and anisotropic; sprite filtering kept
-  inside the sprite's texels above 1x. Uploads that leave memory unchanged keep the decodes.
+- **Textures**: GS bilinear (four taps, each wrapped by CLAMP's modes, 4-bit weights at 1x); the GS's own
+  mipmaps (MIPTBP) at the GS's level of detail, (log2(1/Q) << L) + K, less the scale's log2 (New York's
+  railings are mipmapped cut-outs: screen-derivative levels aliased them); above 1x, blit-made mip chains
+  for other 3D textures, trilinear and anisotropic, with the alpha test reading level 0 (averaged levels make
+  fences solid); sprite filtering kept inside the sprite's texels above 1x. Uploads that leave memory
+  unchanged keep the decodes; the cache has a budget (animated menu palettes once filled the GPU).
+- **The pipeline** keeps the game's grading: no tone mapping, automatic exposure or extra bloom on these
+  frames (the game draws its own glare); sharpening, film grain and the like still apply.
 - **No motion vectors yet**: the pipeline uses SMAA and FSR 1 in place of TAA and FSR 2 for these frames.
 - Debugging: `GT4_GSN=stats`, `GT4_GSN_DRAWS=BP|all`, `GT4_GSN_XFER` (transfers, CLUT loads, XYOFFSET),
   `GT4_GSN_TEXDUMP=TBP`, `GT4_GSN_DUMP=VBLANK` (targets), `GT4_GSN_LIMIT=K`, `GT4_GSN_VRAM=N` (front-end memory),
   and paraLLEl-GS's `GT4_VRAM_DUMP=FRAME:PACKET,...|end` for the reference.
 
-Open: the 2D of the menus in 16:9 (stretched as on the PS2; WIDESCREEN.md has the game-code plan), motion
-vectors, COLCLAMP = 0 (wrapping), Z formats as frames and textures (GT4's Z24 pass), dithering, the GPU cost of
-the colour grading (one dispatch per batch would do).
+The menus' 2D keeps a centred 4:3 area in the game's 16:9 mode (game-side, gt4-native-game
+WIDESCREEN.md). Open: motion vectors, COLCLAMP = 0 (wrapping), Z formats as frames and textures (GT4's Z24
+pass), dithering, the GPU cost of the colour grading (one dispatch per batch would do). GT mode's map is
+broken in the game port itself (paraLLEl-GS shows the same shards): a game-side bug.
 
 ## What GT4 asks of the GS
 
