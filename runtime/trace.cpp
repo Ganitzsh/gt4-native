@@ -6,6 +6,7 @@
 
 #include <windows.h>
 
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -25,11 +26,42 @@ bool tracing() {
 
 extern "C" void gt4_trace_dump_entry(uint32_t fn, const uint32_t *args);
 
+// GT4_TRACE_HITS=PATH: the PS2 address of each instrumented function the first time it runs, appended to
+// PATH as it happens (the game is usually terminated, not exited): which functions a scene uses.
+namespace {
+std::atomic<uint32_t> g_hits[16384];
+FILE *g_hit_file = nullptr;
+int g_hits_on = -1;
+
+__attribute__((no_instrument_function)) void record_hit(uint32_t fn) {
+    if (g_hits_on < 0) {
+        const char *e = getenv("GT4_TRACE_HITS");
+        g_hit_file = e ? fopen(e, "a") : nullptr;
+        g_hits_on = g_hit_file != nullptr;
+    }
+    if (!g_hits_on) return;
+    uint32_t slot = (fn * 2654435761u) >> 18;   // 14 bits
+    for (int probes = 0; probes < 16384; ++probes, slot = (slot + 1) & 16383) {
+        uint32_t seen = g_hits[slot].load(std::memory_order_relaxed);
+        if (seen == fn) return;
+        if (seen == 0 && g_hits[slot].compare_exchange_strong(seen, fn)) {
+            uint32_t guest = 0;
+            const char *name = gt4::rt::native_name_for(fn, &guest);
+            fprintf(g_hit_file, "%08x %s\n", guest, name ? name : "?");
+            fflush(g_hit_file);
+            return;
+        }
+        if (seen == fn) return;
+    }
+}
+}  // namespace
+
 extern "C" __attribute__((no_instrument_function, optimize("no-omit-frame-pointer"))) void
 __cyg_profile_func_enter(void *fn, void *site) {
     {
         const auto *fr = static_cast<const uint32_t *>(__builtin_frame_address(1));
         gt4_trace_dump_entry(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(fn)), fr + 2);
+        record_hit(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(fn)));
     }
     if (!tracing()) return;
     --g_left;
