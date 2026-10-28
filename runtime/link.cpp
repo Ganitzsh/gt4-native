@@ -7,6 +7,7 @@
 
 #include <windows.h>
 
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -48,6 +49,8 @@ void ring_read(const uint8_t *data, uint32_t size, uint64_t pos, void *dst, uint
 // packet of any path writes those registers. SIGNAL and LABEL update SIGLBLID under the mask in
 // the value's upper half; SIGNAL and FINISH set their CSR bit and interrupt (INTC 0) unless IMR
 // masks them (bit 8 SIGMSK, bit 9 FINISHMSK).
+std::atomic<int> g_local_finish{0};  // FINISHes raised locally whose host report is still to come
+
 void gs_event(const uint8_t *p) {
     uint32_t kind, id;
     uint64_t value;
@@ -64,6 +67,10 @@ void gs_event(const uint8_t *p) {
         csr |= 1;
         if (!(imr & 0x100)) kernel_raise_intc(0);
     } else if (kind == 0) {
+        if (g_local_finish > 0) {  // already raised (link_local_finish)
+            --g_local_finish;
+            return;
+        }
         csr |= 2;
         if (!(imr & 0x200)) kernel_raise_intc(0);
     } else if (kind == 2) {
@@ -143,6 +150,12 @@ bool link_capture(const char *path) {
 
 bool link_active() { return g_hdr || g_capture; }
 bool link_connected() { return g_hdr != nullptr; }
+
+void link_local_finish() {
+    ++g_local_finish;
+    guest_ref<uint32_t>(0x12001000) |= 2;  // CSR.FINISH
+    if (!(kernel_gs_imr() & 0x200)) kernel_raise_intc(0);
+}
 
 void link_send(uint32_t type, const void *payload, uint32_t size, const void *extra, uint32_t extra_size) {
     if (!g_hdr && !g_capture) return;

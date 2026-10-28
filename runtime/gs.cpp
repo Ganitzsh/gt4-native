@@ -450,10 +450,11 @@ void dma_run() {
             g_dma.vif_pos = 0;
             if (g_dma.vif_mpg) link_remember(GT4_REC_VIF1, part.data(), static_cast<uint32_t>(part.size()));
             send_out(1, part);
-            if (!link_connected()) {  // standalone: the GS events of the DIRECT packets (a live host reports them)
+            {  // the GS events of the DIRECT packets (a live host reports SIGNAL itself, with its value)
                 bool finish = false, signal = false;
                 scan_vif_direct(part, finish, signal);
-                raise_gs_events(finish, signal);
+                if (!link_connected()) raise_gs_events(finish, signal);
+                else if (finish) link_local_finish();
             }
             if (stop) {  // the interrupt bit: VIF1 stalls after this code until the handler resumes it
                 g_dma.vif_stalled = true;
@@ -629,6 +630,7 @@ void gs_init() {
     kernel_set_vblank_hook(on_vblank);
     kernel_set_interrupt_hook(dma_poll);
     guest_ref<uint32_t>(kGsCsr) = 0;
+    guest_ref<uint64_t>(kGsPriv + 0x1010) = 0xFF00;  // IMR: every GS interrupt masked (the kernel's reset value)
 }
 
 }  // namespace gt4::rt

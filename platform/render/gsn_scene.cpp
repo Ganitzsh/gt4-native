@@ -82,6 +82,7 @@ struct GsnScene::Impl {
         uint32_t width = 0, height = 0;   // GS pixels
         uint32_t psm = 0;
         bool depth = false;
+        uint32_t generation = 0;
     };
     std::unordered_map<uint32_t, GpuTarget> targets;
     struct GpuTexture {
@@ -226,6 +227,12 @@ struct GsnScene::Impl {
 
     void ensureTarget(const gsn::Target& t) {
         GpuTarget& g = targets[t.id];
+        if (g.image.valid() && (g.generation != t.generation || g.depth != t.depth)) {   // the slot holds a new buffer
+            vkDeviceWaitIdle(device.device);
+            vk::destroy(device, g.image);
+            g = GpuTarget{};
+        }
+        g.generation = t.generation;
         // Within Vulkan's guaranteed image size at this scale (a 2048-line target at 8x is 16384 tall).
         const uint32_t width = std::min(std::max<uint32_t>(64, t.bw * 64), 16384 / sx),
                        height = std::min(std::max<uint32_t>(32, t.height), 16384 / sy);

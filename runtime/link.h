@@ -29,6 +29,11 @@ void link_poll();
 // false is returned.
 bool link_read_image(uint32_t qwc, void *dst);
 
+// A GS FINISH written by a VIF1 DIRECT packet, raised by the runtime as it sends the packet. The live host
+// reports the same FINISH much later (it draws behind the game; GT4 waits on it to start a GS -> EE download,
+// 004AB668), and that report is then dropped.
+void link_local_finish();
+
 // The pad state the host sent (18 bytes, libpad2 layout); false if none yet.
 bool link_pad(int port, uint8_t out[18]);
 

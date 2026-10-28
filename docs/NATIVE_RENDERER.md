@@ -67,7 +67,11 @@ Back end (Vulkan, recorded by the display pipeline as a scene source):
 
 - **Targets**: one image per GS frame buffer (FBP, FBW, PSM) at the render scale, R16G16B16A16 float holding
   colour / 255 and alpha / 128, so that blend factors such as `Ad` and `1 - As` keep the PS2's 0..2 range;
-  one depth image per Z buffer. Texture reads of memory a target owns sample the target.
+  one depth image per Z buffer. Texture reads of memory a target owns sample the target. At most 96 at once:
+  past that, the slot of the target unused for longest (not in this frame or the last) takes the new buffer
+  and the back end starts a new image for it (`Target::generation`). The loading screen's course photo
+  renders its tiles at a series of addresses; without the reuse, the race after it found every slot taken
+  and its draws were dropped.
 - **Textures**: decoded from the memory model into RGBA8 images, cached by address, format, palette and
   upload generation.
 - **Pipelines** keyed by blend (dual-source for As and FIX), alpha test and its fail mode, depth test and mask,

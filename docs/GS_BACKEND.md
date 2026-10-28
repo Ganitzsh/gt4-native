@@ -104,6 +104,13 @@ polls `PAD`/`HOST_CMD` at VBlank. Requests:
    `GS_EVENT {kind 0 FINISH / 1 SIGNAL / 2 LABEL, id = low 32 bits, value = register value}` for every one;
    the game should set CSR / SIGLBLID and raise INTC 0 from them (and not double-raise PATH3 ones; the
    host also reports PATH3 events). `link_poll()` currently ignores `GS_EVENT`.
+   Done since: `gs_event()` applies them, masked by the IMR register the game writes directly
+   (`0x12001010`: 004A0808 writes `~0x200` to unmask FINISH; the `GsPutIMR` syscall writes it too). FINISH
+   written by VIF1 DIRECT packets is raised by the runtime as it sends them (`link_local_finish`), and the
+   host's later report dropped: the host draws behind the game (0.8 s during a race load), and GT4 starts
+   its GS -> EE downloads on that FINISH (004AB668 and the DMA handler 004AB6D8 both count to 2). Reported
+   late, the download landed after the game had stopped waiting and reused the buffer (the loading
+   screen's course photo: noise, then a crash or a corrupted race).
 3. **GS -> EE downloads** (`004AB930`/`004AB9C0` write BUSDIR): send `GS_READ {id, qwc}` after the GIF data
    that set TRXDIR = 1, then wait for `GS_IMAGE {id, qwc, qwc x 16 bytes}`. `link_poll()` reads at most 256
    payload bytes per record today: it needs a larger buffer (or a direct copy into guest memory) for images.

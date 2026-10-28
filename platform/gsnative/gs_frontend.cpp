@@ -402,23 +402,41 @@ uint32_t GsFrontend::targetFor(uint64_t frameReg, bool depth, uint32_t heightNee
         if (depth && (t.psm & 2) != (psm & 2)) continue;
         if (heightNeeded > t.height) t.height = (heightNeeded + 31) & ~31u;
         if (!depth) t.psm = psm;   // CT24 and CT32 share the layout; the last write tells which alpha is valid
+        t.lastUsed = frameCount;
         return t.id;
     }
-    // GT4 uses about twenty; garbage registers (GT mode's map in the port) made thousands in one frame, each a
-    // GPU image at the render scale, and lost the device. Draws past the limit are left out.
+    // GT4 uses about twenty at a time, but some passes draw into many buffers once (the loading screen's photo
+    // renders its tiles at a series of addresses): past the limit, the slot of the target unused for longest
+    // (not in this frame or the last) is reused. Garbage registers (GT mode's map in the port, before a fix) made
+    // thousands in one frame, each a GPU image at the render scale, and lost the device: with no slot free, the
+    // draw is left out.
     constexpr size_t kMaxTargets = 96;
+    Target* slot = nullptr;
     if (targets.size() >= kMaxTargets) {
-        ++stats.droppedDraws;
-        return 0;
+        for (Target& candidate : targets)
+            if (candidate.lastUsed + 2 <= frameCount && (!slot || candidate.lastUsed < slot->lastUsed)) slot = &candidate;
+        if (!slot) {
+            ++stats.droppedDraws;
+            return 0;
+        }
+        // Forget what the old buffer owned: its pages are plain memory again.
+        for (PageOwner& page : pages)
+            if (page.target == slot->id) page = {};
+        if (slot->id < targetWritten.size()) targetWritten[slot->id] = 0;
+        if (clutSource.target == slot->id) clutSource = {};
+        ++stats.targetsReused;
     }
     Target t;
-    t.id = static_cast<uint32_t>(targets.size()) + 1;
+    t.id = slot ? slot->id : static_cast<uint32_t>(targets.size()) + 1;
+    t.generation = slot ? slot->generation + 1 : 0;
+    t.lastUsed = frameCount;
     t.bp = bp;
     t.bw = bw;
     t.psm = psm;
     t.depth = depth;
     t.height = (std::max<uint32_t>(heightNeeded, 32) + 31) & ~31u;
-    targets.push_back(t);
+    if (slot) *slot = t;
+    else targets.push_back(t);
     return t.id;
 }
 
@@ -476,7 +494,8 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
     }
     TextureSource src;
     if (owner) {
-        const Target& target = targets[owner - 1];
+        Target& target = targets[owner - 1];
+        target.lastUsed = frameCount;
         const bool sameLayout = !target.depth && layout32(target.psm) == layout32(t.psm) &&
                                 (t.psm == PSMCT32 || t.psm == PSMCT24 || t.psm == PSMCT16 || t.psm == PSMCT16S);
         if (sameLayout && target.bw == t.tbw && t.tbp >= target.bp && (t.tbp - target.bp) % 32 == 0) {
@@ -824,6 +843,8 @@ void GsFrontend::vsync(uint64_t vblank, FrameList& out) {
     };
     d.target1 = displayed(d.dispfb1);
     d.target2 = displayed(d.dispfb2);
+    for (Target& t : targets)
+        if (t.id == d.target1 || t.id == d.target2) t.lastUsed = frameCount;
     std::swap(out, frame);
     frame.clear();
 }

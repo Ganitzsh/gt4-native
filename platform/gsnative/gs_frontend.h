@@ -84,6 +84,8 @@ struct Reinterpretation {
 struct Target {
     uint32_t id = 0, bp = 0, bw = 0, psm = 0, height = 0;
     bool depth = false;
+    uint32_t generation = 0;   // a new buffer in this slot (the id is reused): the back end starts a new image
+    uint64_t lastUsed = 0;     // the front end's frame count when last drawn into, sampled or displayed
 };
 
 struct Display {
@@ -128,6 +130,7 @@ public:
     struct Stats {
         uint64_t primitives = 0, draws = 0, uploads = 0, copies = 0, decoded = 0, targetReads = 0, reinterpreted = 0;
         uint64_t droppedDraws = 0;   // past the target limit (targetFor)
+        uint64_t targetsReused = 0;  // slots given to a new buffer at the limit
     } stats;
 
 private:

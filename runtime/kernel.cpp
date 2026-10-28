@@ -101,7 +101,6 @@ Alarm g_alarms[64];
 LARGE_INTEGER g_qpc_freq, g_qpc_start;
 std::atomic<uint32_t> g_vblanks{0};
 HANDLE g_irq_wake = nullptr;
-uint32_t g_gs_imr = 0xFF00;
 struct Callback {
     void (*fn)(uint32_t);
     uint32_t arg;
@@ -1119,11 +1118,13 @@ SYSCALL int gt4_sys_SetGsCrt(int interlace, int mode, int field) {
     }
     return 0;
 }
-uint32_t kernel_gs_imr() { return g_gs_imr; }
-SYSCALL uint32_t gt4_sys_GsGetIMR() { return g_gs_imr; }
+// The GS interrupt mask lives in the guest's IMR register (0x12001010, 0xFF00 from gs_init): the game sets it
+// through GsPutIMR and also writes it directly (004A0808 unmasks FINISH for its GS -> EE downloads).
+uint32_t kernel_gs_imr() { return static_cast<uint32_t>(guest_ref<uint64_t>(0x12001010)); }
+SYSCALL uint32_t gt4_sys_GsGetIMR() { return kernel_gs_imr(); }
 SYSCALL uint32_t gt4_sys_GsPutIMR(uint32_t imr) {
-    const uint32_t old = g_gs_imr;
-    g_gs_imr = imr;
+    const uint32_t old = kernel_gs_imr();
+    guest_ref<uint64_t>(0x12001010) = imr;
     return old;
 }
 SYSCALL int gt4_sys_SetVSyncFlag(uint32_t, uint32_t) { return 0; }
