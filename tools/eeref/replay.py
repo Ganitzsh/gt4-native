@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""Replays every call recorded in a directory (GT4_RECORD) on the original code (eeref) and summarises.
+
+    py tools/eeref/replay.py --decomp C:\\path\\to\\gt4-decomp DIR [--all-lines] [--detail ADDR_N]
+
+Each function's parameters and return are read from the source the native link uses for it (game_src/, the
+matched source, else its draft; tools/abi_lint.py parses them), so floats reach the EE's float registers and
+the return value is compared. Prints one line per call, differing ones first (docs/DIFFERENTIAL_TESTING.md).
+"""
+import argparse
+import glob
+import os
+import re
+import subprocess
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(ROOT, 'tools'))
+import abi_lint  # noqa: E402
+
+
+def drafts(game):
+    out = {}
+    path = os.path.join(game, 'draft_natives.txt')
+    if os.path.exists(path):
+        for line in open(path, encoding='utf-8', errors='replace'):
+            parts = line.split()
+            if len(parts) >= 2 and not line.startswith('#'):
+                out[parts[0].upper()] = parts[1].replace('\\', '/')
+    return out
+
+
+def definition(addr, decomp, draft_paths):
+    """(kinds, ret, role) of the definition the native link compiles for addr, or None."""
+    cands = []
+    for ext in ('.c', '.cpp'):
+        p = os.path.join(ROOT, 'game_src', 'func_%s%s' % (addr, ext))
+        if os.path.exists(p):
+            cands.append((p, 'game_src'))
+    out = subprocess.run(['git', '-C', decomp, 'grep', '-l', 'func_%s' % addr, '--', 'src'], capture_output=True,
+                         text=True).stdout.split()
+    cands += [(os.path.join(decomp, p), 'src') for p in out]
+    if addr in draft_paths:
+        cands.append((os.path.join(decomp, draft_paths[addr]), 'draft'))
+    for path, role in cands:
+        try:
+            text = abi_lint.strip_comments(open(path, encoding='utf-8', errors='replace').read())
+        except OSError:
+            continue
+        for a, kinds, is_def, _line, _used, ret in abi_lint.scan(path, text):
+            if a == addr and is_def and kinds is not None:
+                return kinds, ret, role
+    return None
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--decomp', required=True)
+    ap.add_argument('--game', default=os.path.join(ROOT, 'build', 'game'))
+    ap.add_argument('--eeref', default=os.path.join(ROOT, 'build', 'eeref', 'eeref.exe'))
+    ap.add_argument('dir')
+    ap.add_argument('--detail', help='ADDR_N: print that call\'s differing words')
+    ap.add_argument('--max', default='40')
+    a = ap.parse_args()
+    elf = os.path.join(a.decomp, 'orig', 'SCUS-97328', 'CORE.GT4.elf')
+    syms = os.path.join(a.decomp, 'config', 'symbol_addrs.txt')
+    draft_paths = drafts(a.game)
+    pres = sorted(glob.glob(os.path.join(a.dir, '*.pre')))
+    if a.detail:
+        pres = [p for p in pres if os.path.basename(p).upper().startswith(a.detail.upper())]
+    rows = []
+    for pre in pres:
+        addr = os.path.basename(pre).split('_')[0].upper()
+        d = definition(addr, a.decomp, draft_paths)
+        cmd = [a.eeref, pre, '--elf', elf, '--syms', syms, '--max', a.max if a.detail else '0']
+        role = '?'
+        if d:
+            kinds, ret, role = d
+            kinds = [k if k in 'ifwq' else 'i' for k in kinds if k != '...']
+            cmd += ['--args', ','.join(kinds) or 'i', '--ret', {'s': 'v'}.get(ret, ret)]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        text = (r.stdout + r.stderr).strip()
+        if a.detail:
+            print(text)
+            continue
+        m = re.search(r'(\d+) words changed alike, (\d+) within float rounding, (\d+) differ', text)
+        verdict = 'agree' if r.returncode == 0 else 'DIFFER'
+        if 'did NOT return' in text:
+            verdict = 'STOPPED'
+        summary = ('alike %s, rounding %s, differ %s' % m.groups()) if m else text.splitlines()[-1][:80]
+        if 'RETURN DIFFERS' in text:
+            summary += ', return differs'
+        rows.append((verdict != 'agree', os.path.basename(pre)[:-4], role, verdict, summary))
+    for _bad, name, role, verdict, summary in sorted(rows, key=lambda r: (not r[0], r[1])):
+        print('%-14s %-8s %-7s %s' % (name, role, verdict, summary))
+
+
+if __name__ == '__main__':
+    main()

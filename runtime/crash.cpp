@@ -39,7 +39,8 @@ LONG WINAPI on_crash(EXCEPTION_POINTERS *ep) {
     if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_STACK_OVERFLOW && code != EXCEPTION_ILLEGAL_INSTRUCTION &&
         code != EXCEPTION_INT_DIVIDE_BY_ZERO && code != EXCEPTION_PRIV_INSTRUCTION && code != 0xC0000409 &&
         code != EXCEPTION_FLT_DIVIDE_BY_ZERO && code != EXCEPTION_FLT_INVALID_OPERATION && code != EXCEPTION_FLT_OVERFLOW &&
-        code != EXCEPTION_FLT_STACK_CHECK)   // the float ones only with GT4_FPU_TRAP (kernel.cpp)
+        code != EXCEPTION_FLT_STACK_CHECK &&  // the float ones only with GT4_FPU_TRAP (kernel.cpp)
+        code != EXCEPTION_GUARD_PAGE)  // a touch of another thread's stack guard (the system handles a thread's own)
         return EXCEPTION_CONTINUE_SEARCH;
     char where[256];
     if (code >= EXCEPTION_FLT_DENORMAL_OPERAND && code <= EXCEPTION_FLT_UNDERFLOW) {

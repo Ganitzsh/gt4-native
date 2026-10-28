@@ -100,6 +100,9 @@ int main(int argc, char **argv) {
     if (!load_elf(g_config.elf_path)) return 2;
     kernel_scan_syscalls();
     install_trampolines();
+    record_install();
+    profile_start();
+    gt4_orig_install();
     HANDLE t = CreateThread(nullptr, 64u << 20, game_thread, nullptr, STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr);
     if (!t) fatal("cannot start the game thread (Windows error %lu)", GetLastError());
     WaitForSingleObject(t, INFINITE);

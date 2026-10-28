@@ -67,6 +67,8 @@ consulted as a reference; no PCSX2 source is copied.
 **ps2-web-recomp (MIT).** `platform/gs/vu1_ref.*`, a second VU1 interpreter used only to check
 `vu1.cpp` (`GT4_VU1_DIFF`, `GT4_VU1=ref`), is adapted from the VU micro interpreter of ps2-web-recomp
 (`runtime/src/vu_micro.cpp`, `include/ps2/fpu.hpp`, `vu.hpp`, `vu_ops.hpp`), as vendored by gt4recomp.
+`third_party/ps2-web-recomp/` holds its translator (`recomp/`) and the runtime headers the translated code
+includes, unmodified (commit `1b480879`), for `tools/eeref`, a test tool (docs/DIFFERENTIAL_TESTING.md).
 Copyright (c) 2026 Samir Nuri. Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal in the Software without
 restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute,

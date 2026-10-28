@@ -85,6 +85,10 @@ debugger (exceptions with registers and the native functions on the stack; `--wa
 `GT4_CC_EXTRA=-finstrument-functions` the first time it runs: compile the provisional drafts that way
 (`game_cc.py --list`) and compare two scenes to see which drafts only one of them reaches (that found
 the texture upload chain 004A4F48 that broke GT mode's map).
+Testing against the original code (docs/DIFFERENTIAL_TESTING.md): `GT4_PROFILE=FILE:FROM:TO` samples where a
+scene spends its time; `GT4_RECORD` / `GT4_RECORD_ROOT` record calls of game functions for `tools/eeref` to
+replay on the original MIPS code; `GT4_SNAPSHOT` writes the guest RAM at given VBlanks; with
+`game_link.py --eeorig`, `GT4_ORIG=ADDR,...` or `GT4_ORIG=all` runs the original code in the game.
 `GT4_PAD_SCRIPT=VBLANK:BUTTON[:FRAMES],...` presses pad-1 buttons at given VBlanks when no host pad
 is connected (e.g. `900:cross,1200:right,1320:cross` answers the boot's memory-card dialogs).
 `GT4_MONEY=N` (testing) keeps the player's money from reading below N (game_src/func_0043AF68.cpp), for the

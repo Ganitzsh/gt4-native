@@ -86,3 +86,69 @@ A full run over every source is the worklist for the same kind of fix; its outpu
   unsupported, so those functions report `ORACLE-UNSUPPORTED`.
 - The 32-bit host is a test device. The port itself still needs the guest pointer model
   (`include/gt4/guest_abi.hpp`) for a 64-bit build.
+
+# The native game against the original code, in a race (2026-10-28)
+
+The harness above runs one decomp source on random inputs. The tools below test the *linked native game*
+against the original machine code on real game state: any function, mid-race, with all of its callees.
+
+## The reference: the original code, translated
+
+`tools/eeref/build.cmd C:\path\to\gt4-decomp` translates the user's `CORE.GT4.elf` to C++ with `eerecomp`
+(ps2-web-recomp, MIT, vendored unmodified in `third_party/ps2-web-recomp`). The translation is instruction by
+instruction and keeps the R5900's rules: 128-bit registers, MMI, VU0 macro instructions, and the EE FPU (no
+infinities or denormals, overflow clamped). Every function start of the decomp's `build/functions.csv` is an
+entry (`entries.py`), so code reached only through pointers is translated too; `hook_entries.py` adds a hook at
+each function's first instruction (used by the bridge below). The output, `build/eeref/gen` and `genh`, is
+the user's game and stays in `build/`.
+
+## Record and replay
+
+- `GT4_RECORD=ADDR[,ADDR...][@VBLANK][xCOUNT]` (runtime/record.cpp) records the first COUNT calls of each
+  function from VBlank VBLANK into `GT4_RECORD_DIR`: at entry the arguments, VU0, the scratchpad, VU memory,
+  the 32 MB of guest RAM and the caller's 64 KB of native stack (arguments point at its locals); at return the
+  same (RAM as the 4 KB pages that changed) and eax/edx. An int3 on the native function's `push %ebp`, which
+  the handler performs; interrupts are held from entry to return. With `GT4_RECORD_ROOT=ADDR`, the functions
+  are recorded only inside the first recorded call of ADDR, and their breakpoints are armed only then (a
+  breakpoint hit every frame in the menus slows them off the pad script).
+- `tools/eeref/replay.py --decomp ... DIR` runs each recorded call on the original code (`eeref.exe`) from the
+  entry state and compares the return and every changed word of memory: changed alike, within float rounding
+  (1e-5 relative: the EE truncates, the x87 rounds), or different. Arguments are mapped from the native stack to
+  the EE's registers with the kinds of the function's definition (abi_lint's parser): a float that goes to an
+  integer register makes the original compute garbage.
+- `tools/eeref/calltree.py --elf ... --functions ... ADDR --depth N --min-size B` lists a function's static
+  callees (jal and tail calls) for a GT4_RECORD list. `GT4_PROFILE=FILE:FROM:TO` (runtime/profile.cpp) samples
+  the game's threads (frame-pointer walk, game code only) to find a scene's call tree in the first place.
+- `GT4_SNAPSHOT=VBLANK,...` writes the guest RAM at those VBlanks, to compare game state between two runs.
+
+## The original code inside the game
+
+`game_link.py --eeorig build/eeref/genh` links the translated code into gt4_game (`tools/eeref/orig_bridge.cpp`;
+its RAM and scratchpad are the guest's, at their PS2 addresses):
+
+- `GT4_ORIG=ADDR[=KINDS[:RET]],...` runs the original code for those functions and everything under them;
+- `GT4_ORIG=all` sends every PS2 function address to the original code: all game logic is the original's,
+  and only the runtime's hardware and host layer (DMA starts, GS, IOP services, syscalls, libc helpers) is
+  native. `GT4_ORIG_KINDS=build/eeref/kinds.txt` (`kinds.py`) gives every function's parameter kinds.
+
+Calls from the original code to an address whose trampoline leads into the runtime are made natively, with
+the EE's eight integer argument registers and four stack slots; setjmp, longjmp and the runtime's stand-ins
+for unmatched game functions stay translated (a native longjmp on an EE jmp_buf loads EE values into x86
+registers). VU0 microprograms run on the native interpreter. The translated code runs at about 35 frames per
+second in a race. `GT4_ORIG_TRACE` logs each native call.
+
+## What it found
+
+- **The physics step (0034DB30) and the AI.** Recorded mid-race with its whole call tree (86 functions, among
+  them the provisional drafts on the AI's path: 00349FD0 driver input, 00465078 AI driver, 00463EA8 speed
+  planning), every callee agrees with the original within float rounding. The two words 003F7EA8 leaves
+  that the original clears are denormals (the EE flushes them to zero). 00465078's outputs differ by up to a
+  few percent on values of 1e-4: rounding, through its branches.
+- **The B-spec pile-up at New York's turn 1** (cars pitched 30-70 degrees nose down, in the physics state,
+  not just on screen) happens the same with the physics step as original code, and with all game code as
+  original code (`GT4_ORIG=all`: car 3 at 48 degrees at VBlank 6100; up to VBlank 5600 the pitches match the
+  native run's within a degree). The game code is therefore not the cause: what remains is the original's own
+  behaviour or an input both builds share (the runtime's services, the timing), which needs a reference that
+  runs on independent hardware emulation (PCSX2 with a BIOS, or ps2-web-recomp's own runtime) to settle.
+- With `GT4_ORIG=all` the menus, the HUD and the race run, but the race's 3D scene is not drawn (sky only): a
+  difference between the two worlds in the renderer's path, not investigated yet.

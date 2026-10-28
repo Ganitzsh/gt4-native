@@ -90,6 +90,40 @@ def compile_runtime(out):
         return list(ex.map(build, jobs))
 
 
+def compile_eeorig(out, gen):
+    """The translated original code and its bridge (--eeorig), or an empty gt4_orig_install."""
+    objdir = os.path.join(out, "eeorig")
+    os.makedirs(objdir, exist_ok=True)
+    if not gen:
+        stub = os.path.join(objdir, "orig_stub.c")
+        with open(stub, "w") as f:
+            f.write("void gt4_orig_install(void) {}\n")
+        obj = stub[:-2] + ".o"
+        run([tool("gcc"), "-c", "-O1", stub, "-o", obj], env=mingw_env())
+        return [obj]
+    inc = os.path.join(ROOT, "third_party", "ps2-web-recomp", "runtime", "include")
+    flags = ["-std=c++20", "-O1", "-msse2", "-mfpmath=sse", "-mstackrealign", "-fno-strict-aliasing", "-w", "-I", inc,
+             "-I", gen]
+    jobs = []
+    for n in sorted(os.listdir(gen)):
+        if n.endswith(".cpp"):
+            jobs.append((os.path.join(gen, n), os.path.join(objdir, n[:-4] + ".o"), []))
+    bridge = os.path.join(ROOT, "tools", "eeref", "orig_bridge.cpp")
+    jobs.append((bridge, os.path.join(objdir, "orig_bridge.o"),
+                 ["-I", os.path.join(ROOT, "runtime"), "-I", os.path.join(ROOT, "include")]))
+
+    def build(job):
+        src, obj, extra = job
+        if not (os.path.exists(obj) and os.path.getmtime(obj) >= os.path.getmtime(src)):
+            run([tool("g++"), "-c"] + flags + extra + [src, "-o", obj], env=mingw_env())
+        return obj
+
+    with ThreadPoolExecutor(os.cpu_count() or 8) as ex:
+        objs = list(ex.map(build, jobs))
+    print(f"original code for GT4_ORIG: {len(objs) - 1} translated units")
+    return objs
+
+
 def name_newer_headers(rt, obj):
     t = os.path.getmtime(obj)
     return any(os.path.getmtime(os.path.join(rt, h)) > t for h in os.listdir(rt) if h.endswith(".h"))
@@ -534,9 +568,11 @@ def main():
     ap.add_argument("--objlist", default="", help="file listing the game objects to link (instead of --objs)")
     ap.add_argument("--exclude", default="", help="file of object basenames to leave out (one per line)")
     ap.add_argument("--out", default=os.path.join(ROOT, "build", "game"))
+    ap.add_argument("--eeorig", default="", help="eerecomp's output (tools/eeref/build.cmd: build/eeref/gen): link the "
+                    "original code, translated, for GT4_ORIG (tools/eeref/orig_bridge.cpp)")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
-    rt_objs = compile_runtime(a.out)
+    rt_objs = compile_runtime(a.out) + compile_eeorig(a.out, a.eeorig)
     exclude = set()
     if a.exclude:
         exclude = {l.strip() for l in open(a.exclude) if l.strip() and not l.startswith("#")}
@@ -616,6 +652,8 @@ def main():
            "-Wl,--section-alignment=0x1000", "-Wl,--large-address-aware", "-Wl,--stack,0x400000",
            "-static", "-static-libgcc", "-static-libstdc++", "-Wl,-Map," + os.path.join(a.out, "gt4_game.map"),
            "-L" + os.path.join(FFMPEG, "lib")] + ["-l" + n for n in FFMPEG_LIBS] + ["-lbcrypt"]
+    if a.eeorig:  # the translated code's RAM and scratchpad are the guest's, at their PS2 addresses
+        cmd += ["-Wl,--defsym,__ZN3ps25g_ramE=0", "-Wl,--defsym,__ZN3ps25g_sprE=0x70000000"]
     run(cmd, env=mingw_env())
     with open(os.path.join(a.out, "LINK_REPORT.txt"), "w") as f:
         f.write(f"game objects: {len(game_objs)} ({len(dropped)} left out for runtime replacements)\n")

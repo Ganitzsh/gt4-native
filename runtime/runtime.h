@@ -17,6 +17,16 @@ extern RuntimeConfig g_config;
 
 // Starts the host services (kernel emulation of threads/semaphores is NOT done here: see kernel.cpp).
 void services_init();
+// Test tools, started by main when their variable is set: GT4_RECORD (record.cpp), GT4_PROFILE (profile.cpp).
+void record_install();
+void profile_start();
+
+}  // namespace gt4::rt
+
+// GT4_ORIG (tools/eeref/orig_bridge.cpp, linked with game_link.py --eeorig; otherwise an empty stub).
+extern "C" void gt4_orig_install();
+
+namespace gt4::rt {
 
 // Reads n bytes of the disc image at a byte offset (absolute: the image is linear, layer 1 follows
 // layer 0); the bytes past the end of the image read as zeros. Returns false if nothing was read.
