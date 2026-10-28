@@ -245,7 +245,7 @@ new file mode 100755
 index 0000000..eee386a
 --- /dev/null
 +++ b/gcc/config/i386/gt4-native.h
-@@ -0,0 +1,75 @@
+@@ -0,0 +1,93 @@
 +/* GT4 native port: the i386 PE-COFF (mingw32) target with the PS2 Emotion Engine's data model.
 +
 +   The game's decompiled sources were written for Sony's ee-gcc 2.96 (MIPS R5900, EABI, 32-bit
@@ -321,6 +321,24 @@ index 0000000..eee386a
 +   with a home area) but here the callee would write its extra parameter slots into the caller's
 +   frame.  The callee's view is the usual cdecl one ([esp+4] = first argument).  */
 +#define GT4_CALL_PAD 32
++
++/* Arguments passed by invisible reference as on the EE (abi64.h, mips.c function_arg_pass_by_reference,
++   EABI): an aggregate larger than 8 bytes, or of variable size, is passed as the address of the
++   caller's object, and the callee copies a named one before changing it.  128-bit values (TImode:
++   16 bytes, 16-aligned, the EE's 128-bit integers) stay by value, as the r5900 passes them in one
++   register.  The decomp's sources rely on it: a caller passes `&tmp' where the callee's definition
++   takes the 12-byte value itself (the STL heap and sort instantiations, 00607A80 and others), which
++   on the EE is the same call; copied onto the stack by value here, the callee read the pointer and
++   whatever followed it as the value.  */
++#define GT4_PASS_BY_REFERENCE(TYPE) \
++  ((TYPE) != 0 \
++   && (int_size_in_bytes (TYPE) == -1 \
++       || (int_size_in_bytes (TYPE) > 8 \
++	   && ! (int_size_in_bytes (TYPE) == 16 && TYPE_ALIGN (TYPE) >= 128))))
++#undef FUNCTION_ARG_PASS_BY_REFERENCE
++#define FUNCTION_ARG_PASS_BY_REFERENCE(CUM, MODE, TYPE, NAMED) GT4_PASS_BY_REFERENCE (TYPE)
++#undef FUNCTION_ARG_CALLEE_COPIES
++#define FUNCTION_ARG_CALLEE_COPIES(CUM, MODE, TYPE, NAMED) ((NAMED) && GT4_PASS_BY_REFERENCE (TYPE))
 diff --git a/gcc/configure b/gcc/configure
 index 1da1509..00e0da1 100755
 --- a/gcc/configure

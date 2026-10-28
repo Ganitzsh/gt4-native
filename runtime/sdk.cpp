@@ -5,6 +5,7 @@
 #include "runtime.h"
 
 #include <cstdarg>
+#include <cstdlib>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -83,6 +84,15 @@ extern "C" int gt4_display_aspect_milli() {
 extern "C" int gt4_menus_centered() {
     const char *m = gt4::rt::g_config.menus;
     return !(m && std::strcmp(m, "stretched") == 0);
+}
+
+// For game_src/func_0043AF68.cpp (testing): GT4_MONEY=N, the least money the player has; -1 when not set.
+extern "C" long long gt4_money_floor() {
+    static const long long floor = [] {
+        const char *e = std::getenv("GT4_MONEY");
+        return e && *e ? std::strtoll(e, nullptr, 10) : -1ll;
+    }();
+    return floor;
 }
 
 // The VBlank counter, for game-side debugging checks (game_src copies).

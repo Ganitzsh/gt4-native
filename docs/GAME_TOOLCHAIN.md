@@ -65,6 +65,17 @@ callee's view is plain cdecl (`[esp+4]` = first argument), so runtime code calls
 unchanged. gcc 2.9 emits a sibling call only when the callee's arguments fit in the caller's
 *declared* incoming area (`current_function_args_size`), so it never writes past it.
 
+**Large aggregates by invisible reference (`gt4-native.h`), as the EE.** ee-gcc's EABI passes an argument
+larger than 8 bytes (or of variable size) as the address of the caller's object, and the callee copies a
+named one before changing it (`abi64.h` `FUNCTION_ARG_PASS_BY_REFERENCE` / `FUNCTION_ARG_CALLEE_COPIES`,
+`mips.c` `function_arg_pass_by_reference`); 16-byte 16-aligned values (TImode, the 128-bit integers) stay by
+value. The native compiler does the same. The decomp relies on it: matched sources call the STL heap
+instantiations with `&tmp` where the template takes the 12-byte value (`00607758` -> `__push_heap`
+`00607A80`, `005FC170`, `005FCC20`, `00608488`), the same call on the EE. Copied by value onto the stack,
+the callee took the pointer and the comparator as the element: the vector font's polygon fill sorted
+garbage edges and GT mode crashed in its comparator (`006083D0`) when the garbage was unmapped. A struct
+passed through `...` is a pointer too (no game source does that).
+
 **No sibling calls (`calls.c`).** `expand_call` expands a call twice when a sibling call is
 possible (one insn chain each), and this snapshot's second expansion of the arguments is unsound:
 - a C++ class with a copy constructor is passed by value as the address of a copy built in a
