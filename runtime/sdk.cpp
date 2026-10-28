@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <cmath>
 
 using namespace gt4::rt;
 
@@ -84,6 +85,32 @@ extern "C" int gt4_display_aspect_milli() {
 extern "C" int gt4_menus_centered() {
     const char *m = gt4::rt::g_config.menus;
     return !(m && std::strcmp(m, "stretched") == 0);
+}
+
+// For the native 2D emitters (game_src/func_0049A200.cpp, 0049A360, 0049A4F8, 0049A6A0): with the menus in a
+// centred 4:3 area of the wide mode (game_src/func_00214FB0.cpp), a primitive that spans that whole area (the
+// layout's full width: backgrounds, fades) is widened to the frame's edges, as the PS2 stretches it in its own
+// 16:9 mode. xyz points at the first vertex's XYZF2 (x in the low 16 bits, 1/16 pixel, offset 2048 at the
+// frame's centre as GT4 sets XYOFFSET), the vertices `stride` bytes apart. Otherwise the sides keep stale
+// pixels (the dealers' backdrop feeds its frame back into itself).
+extern "C" void gt4_menu_band_widen(char *xyz, int stride, int n) {
+    const int aspect = gt4_display_aspect_milli();
+    if (n <= 0 || aspect < 1500 || !gt4_menus_centered() || !*reinterpret_cast<volatile int *>(0x006184F0)) return;
+    int lo = 0xFFFF, hi = 0;
+    for (int i = 0; i < n; ++i) {
+        const int x = *reinterpret_cast<uint16_t *>(xyz + i * stride);
+        lo = x < lo ? x : lo;
+        hi = x > hi ? x : hi;
+    }
+    const double band = 640.0 * 16.0 * (4.0 / 3.0) / (aspect / 1000.0);   // the centred area's width, 1/16 px
+    const double centre = 2048.0 * 16.0;
+    if (std::fabs((lo + hi) * 0.5 - centre) > 32.0 || std::fabs((hi - lo) - band) > 48.0) return;
+    const double scale = 640.0 * 16.0 / band;
+    for (int i = 0; i < n; ++i) {
+        uint16_t *x = reinterpret_cast<uint16_t *>(xyz + i * stride);
+        const double wide = centre + (*x - centre) * scale;
+        *x = static_cast<uint16_t>(wide < 0.0 ? 0.0 : wide > 65535.0 ? 65535.0 : wide + 0.5);
+    }
 }
 
 // For game_src/func_0043AF68.cpp (testing): GT4_MONEY=N, the least money the player has; -1 when not set.

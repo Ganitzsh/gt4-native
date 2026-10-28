@@ -1032,7 +1032,9 @@ void GsnScene::recordPrepass(VkCommandBuffer command, const SceneView& view) {
     s.execute(command, view.slot);
     s.retireTextures();
     static const long dumpAt = std::getenv("GT4_GSN_DUMP") ? std::strtol(std::getenv("GT4_GSN_DUMP"), nullptr, 10) : -1;
-    if (static_cast<long>(s.frame.vblank) == dumpAt) {
+    static bool dumped = false;   // the first frame drawn at or after that VBlank (the host can skip frames)
+    if (!dumped && dumpAt >= 0 && static_cast<long>(s.frame.vblank) >= dumpAt) {
+        dumped = true;
         s.dump.vblank = s.frame.vblank;
         vk::Barriers b;
         for (auto& [id, t] : s.targets) {

@@ -10,6 +10,7 @@
  * Q = 1.0, XYZF2 = x, y (16 bits each), (z >> 4) in 24 bits and (w >> 4) in the top 8. The original
  * software-pipelines the loop; natively each vertex runs in turn (see func_0049A360.cpp). */
 #include "gt4_asm.h" /* __gt4_vu0 (the VU0 registers) and __gt4_vu0_callms (vcallms) */
+extern "C" void gt4_menu_band_widen(char *xyz, int stride, int n); /* runtime/sdk.cpp: centred menus in the wide mode */
 
 struct Ctx {
     char pad0[0x4A];
@@ -28,6 +29,7 @@ static inline unsigned int get32(const char *p)
 
 extern "C" void func_0049A4F8(Ctx *ctx, int flags, int n, int pos, int colors)
 {
+    const int count = n;   /* for gt4_menu_band_widen */
     const char *src1 = (const char *)pos;
     const char *src3 = (const char *)colors;
     unsigned long long prim = (unsigned long long)(long long)(int)(((unsigned int)ctx->prim | (unsigned int)flags) & ~0x11u);
@@ -66,4 +68,5 @@ extern "C" void func_0049A4F8(Ctx *ctx, int flags, int n, int pos, int colors)
         put32(v + 12, ((vf1[2] >> 4) & 0xFFFFFF) | (((vf1[3] >> 4) & 0xFF) << 24));
         v += 16;
     } while (--n != 0);
+    gt4_menu_band_widen(p + 0x40 + 8, 16, count);
 }

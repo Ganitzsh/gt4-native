@@ -114,7 +114,10 @@ aspect ratio, which is how the pipeline already treats the test scene.
   centred 4:3 area (`--menus centered`, the default; gt4_host passes `--menus stretched` for `aspect.hud =
   stretched`, the PS2's look). Full-screen backgrounds drawn another way still fill the width; the menu models
   keep the game's own 0.75 squeeze, which is right for that frame. 0x00215FE0's rectangle mapping is untouched
-  and nothing looked clipped in the title, mode, course and car menus (2026-10-27).
+  and nothing looked clipped in the title, mode, course and car menus (2026-10-27). A primitive the native 2D
+  emitters (0x0049A200, 0x0049A360, 0x0049A4F8, 0x0049A6A0) place exactly over the centred area is a
+  background or a fade: `gt4_menu_band_widen` (runtime/sdk.cpp) widens it to the frame's edges, as the PS2's
+  16:9 mode stretches it (the dealers' backdrop left stale sides that its frame fed back into itself).
 - **Direct GS sprites** (0x004A6668 / 0x004A6498 -> 0x004A6538: copies and post effects in framebuffer pixels) are
   full-screen passes; they scale with the canvas.
 - **Fallback for anything not patched**: at the packet level R1 can tell 2D from 3D by the matrix in the

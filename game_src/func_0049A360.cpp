@@ -11,6 +11,7 @@
  * gives the same results. The vf1.z/w and vf2.w the original passes are the stale upper halves of
  * its GPRs (zero after the first vertex); natively they are 0 (the microprogram reads vf1.z only). */
 #include "gt4_asm.h" /* __gt4_vu0 (the VU0 registers) and __gt4_vu0_callms (vcallms) */
+extern "C" void gt4_menu_band_widen(char *xyz, int stride, int n); /* runtime/sdk.cpp: centred menus in the wide mode */
 
 struct Ctx {
     char pad0[0x4A];
@@ -31,6 +32,7 @@ static inline unsigned int get32(const char *p)
 
 extern "C" void func_0049A360(Ctx *ctx, int flags, int n, int pos, int uv)
 {
+    const int count = n;   /* for gt4_menu_band_widen */
     const char *src1 = (const char *)pos;
     const char *src2 = (const char *)uv;
     unsigned int rgba = ctx->rgba;
@@ -78,4 +80,5 @@ extern "C" void func_0049A360(Ctx *ctx, int flags, int n, int pos, int uv)
         put32(v + 20, ((w[2] >> 4) & 0xFFFFFF) | (((w[3] >> 4) & 0xFF) << 24));
         v += 24;
     } while (--n != 0);
+    gt4_menu_band_widen(p + 0x40 + 16, 24, count);
 }
