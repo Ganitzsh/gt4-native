@@ -87,6 +87,8 @@ debugger (exceptions with registers and the native functions on the stack; `--wa
 the texture upload chain 004A4F48 that broke GT mode's map).
 `GT4_PAD_SCRIPT=VBLANK:BUTTON[:FRAMES],...` presses pad-1 buttons at given VBlanks when no host pad
 is connected (e.g. `900:cross,1200:right,1320:cross` answers the boot's memory-card dialogs).
+`GT4_MONEY=N` (testing) keeps the player's money from reading below N (game_src/func_0043AF68.cpp), for the
+dealers, tuning shops and purchases. `GT4_MEMCARD=DIR` is relative to the working directory.
 
 Finding a wrong GS packet: decode the `--capture` file (GIF/VIF1 records), find the packet's guest
 address with `GT4_DMA_LOG`, then its writer with `gt4dbg --watch-write`. Provisional drafts
