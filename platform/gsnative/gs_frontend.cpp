@@ -475,6 +475,11 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
                     owner = pages[page].target;
                 }
             }
+    // The same overrun the other way: an image uploaded at the texture's base page after the newest target
+    // write in its extent is what the texture reads, and the declared size runs past it into an older target
+    // (the dealers' backdrop: a 640 x 448 T8 picture declared 1024 x 512, sent every frame into the memory the
+    // previous frame's final 32-bit target used).
+    if (owner && !pages[(t.tbp / 32) & 511].target && pages[(t.tbp / 32) & 511].serial > newest) owner = 0;
     // A target that starts at the texture's own base page wins: textures are declared at powers of two, so
     // their extent often runs past the buffer they read into later targets.
     // Several targets can start at one page (GT4 draws a 128-wide environment map and its 640-wide scene at
