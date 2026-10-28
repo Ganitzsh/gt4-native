@@ -34,6 +34,10 @@ void set_guest_fpu() {
     unsigned short cw;
     __asm__ volatile("fnstcw %0" : "=m"(cw));
     cw = (cw & ~0x0300) | 0x0000;  // precision control: single
+    if (const char *pc = getenv("GT4_FPU_PC"))  // testing: double or extended precision instead
+        cw |= pc[0] == 'd' ? 0x0200 : pc[0] == 'e' ? 0x0300 : 0;
+    if (getenv("GT4_FPU_TRAP"))  // testing: fault on the first invalid operation, divide by zero or overflow
+        cw &= ~0x000D;               // (the EE has no inf or NaN: it clamps; IEEE results here diverge)
     __asm__ volatile("fldcw %0" : : "m"(cw));
 }
 

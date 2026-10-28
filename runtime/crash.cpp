@@ -37,12 +37,40 @@ LONG WINAPI on_crash(EXCEPTION_POINTERS *ep) {
     const DWORD code = ep->ExceptionRecord->ExceptionCode;
     if (code == 0x406D1388 || code == DBG_PRINTEXCEPTION_C || code == 0xE06D7363) return EXCEPTION_CONTINUE_SEARCH;
     if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_STACK_OVERFLOW && code != EXCEPTION_ILLEGAL_INSTRUCTION &&
-        code != EXCEPTION_INT_DIVIDE_BY_ZERO && code != EXCEPTION_PRIV_INSTRUCTION && code != 0xC0000409)
+        code != EXCEPTION_INT_DIVIDE_BY_ZERO && code != EXCEPTION_PRIV_INSTRUCTION && code != 0xC0000409 &&
+        code != EXCEPTION_FLT_DIVIDE_BY_ZERO && code != EXCEPTION_FLT_INVALID_OPERATION && code != EXCEPTION_FLT_OVERFLOW &&
+        code != EXCEPTION_FLT_STACK_CHECK)   // the float ones only with GT4_FPU_TRAP (kernel.cpp)
         return EXCEPTION_CONTINUE_SEARCH;
+    char where[256];
+    if (code >= EXCEPTION_FLT_DENORMAL_OPERAND && code <= EXCEPTION_FLT_UNDERFLOW) {
+        // GT4_FPU_TRAP: an IEEE infinity or NaN where the EE would have clamped. Each instruction that made one is
+        // reported once (the x87 records it), then the program goes on with the IEEE result.
+        __asm__ volatile("fnclex");   // the pending exception would fault again in the logging below
+        CONTEXT *w = ep->ContextRecord;
+        const DWORD at = w->FloatSave.ErrorOffset;
+        static DWORD seen[1024];
+        static volatile LONG count = 0;
+        bool known = false;
+        for (LONG i = 0; i < count && i < 1024; ++i) known |= seen[i] == at;
+        if (!known) {
+            const LONG slot = InterlockedIncrement(&count) - 1;
+            if (slot < 1024) seen[slot] = at;
+            describe(at, where, sizeof where);
+            char caller[256] = "?";
+            // the caller of the faulting function, from its frame
+            const DWORD *frame = reinterpret_cast<const DWORD *>(w->Ebp);
+            if (!IsBadReadPtr(frame, 8)) describe(frame[1], caller, sizeof caller);
+            gt4::rt::log_error("x87 %s at %08lx (%s), called from %s",
+                               code == EXCEPTION_FLT_DIVIDE_BY_ZERO ? "divide by zero" : code == EXCEPTION_FLT_OVERFLOW ? "overflow"
+                                                                                                                : "invalid",
+                               static_cast<unsigned long>(at), where, caller);
+        }
+        w->FloatSave.StatusWord &= ~0x80FFu;   // exception flags, error summary and busy
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
     static volatile LONG once = 0;
     if (InterlockedExchange(&once, 1)) return EXCEPTION_CONTINUE_SEARCH;
     const CONTEXT *c = ep->ContextRecord;
-    char where[256];
     describe(c->Eip, where, sizeof where);
     fprintf(stderr, "CRASH: exception %08lx at %s", code, where);
     if (code == EXCEPTION_ACCESS_VIOLATION) {
