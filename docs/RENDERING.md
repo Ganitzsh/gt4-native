@@ -29,7 +29,7 @@ py tools\host_session.py run --exe build\host-windows-Release\gt4_host.exe --hos
   the window size, 1280x720). No window, surface or swapchain is created, so any GPU can be used (default: the discrete one)
   and no desktop is needed. Captures, session commands and reports are the same as in windowed runs.
 - **Sessions** (`tools/host_session.py`, `--session-dir`): a virtual gamepad plus a command queue (`axis`,
-  `button`, `reset`, `capture NAME`, `set KEY VALUE`, `wait FRAMES`, `resize W H`, `tone HZ S`, `quit`). The
+  `button`, `reset`, `capture NAME`, `set KEY VALUE`, `wait FRAMES`, `resize W H`, `tone HZ S`, `quit`); with `--game` its virtual gamepad is the game's pad 1 (`button dpdown 1` ...). The
   report lists the GPU, every setting change with the resulting pipeline, GPU frame times and the captures as
   PNG. `--host-arg=...` passes options to gt4_host. Windowed runs started from Windows session 0 (services, WSL)
   are launched on the logged-in desktop through `tools/host_windows.ps1`, because no window can present in

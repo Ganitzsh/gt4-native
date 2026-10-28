@@ -89,6 +89,8 @@ Testing against the original code (docs/DIFFERENTIAL_TESTING.md): `GT4_PROFILE=F
 scene spends its time; `GT4_RECORD` / `GT4_RECORD_ROOT` record calls of game functions for `tools/eeref` to
 replay on the original MIPS code; `GT4_SNAPSHOT` writes the guest RAM at given VBlanks; with
 `game_link.py --eeorig`, `GT4_ORIG=ADDR,...` or `GT4_ORIG=all` runs the original code in the game.
+The game's x87 unit runs at single precision and rounds toward zero, as the EE's FPU does (`GT4_FPU_RC=nearest`
+and `GT4_FPU_PC=d|e` for comparison).
 `GT4_POKE=VBLANK:ADDR=WORD,...[;VBLANK:...]` writes guest words when a VBlank is reached (ADDR can be `*WORD±OFF`:
 relative to the first guest word holding WORD, e.g. an object's vtable pointer), to put the game into a case under
 test. `GT4_AI_CATCHUP=original|reduced|off` fixes the host's `gameplay.ai_catchup` option (the AI catch-up, GT4's

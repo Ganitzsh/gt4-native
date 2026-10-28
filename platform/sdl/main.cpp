@@ -791,7 +791,7 @@ int run(const Options& options) {
                 gs->setGameOption(0, static_cast<uint32_t>(settings.aiCatchUp));   // runtime.h kOptionAiCatchUp
                 // Nothing reaches the game while the menu is open, nor afterwards until every button is up
                 // (the button that closed the menu would act in the game).
-                gt4::ps2::PadInput input = readPad(gamepad);
+                gt4::ps2::PadInput input = readPad(session ? session->gamepad() : gamepad);
                 if (padHeldBack) {
                     bool held = std::fabs(input.leftX) > 0.3f || std::fabs(input.leftY) > 0.3f;
                     for (float pressure : input.button) held |= pressure > 0.0f;
