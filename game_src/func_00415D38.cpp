@@ -53,9 +53,9 @@ extern "C" int SingleHandedHandleSolver__solve(Self *self, float *a, float *b, C
             float *qp = q;
             *pp = *a;
             *qp = *b;
-            int r = func_00416390(self, pp, qp, ctx, x, v);
+            int result = func_00416390(self, pp, qp, ctx, x, v);
             self->f40 = 0.5f - w / 3.1415927f;
-            return r;
+            return result;
         }
     }
     float *pp = p;

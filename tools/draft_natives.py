@@ -99,6 +99,7 @@ def main():
     store = os.path.join(a.decomp, "drafts")
     swarm = os.path.join(a.decomp, "build", "swarm")
     curated = {}
+    curated_failed = []
     gs = os.path.join(ROOT, "game_src")
     if os.path.isdir(gs):
         for n in os.listdir(gs):
@@ -129,6 +130,13 @@ def main():
         subprocess.run([sys.executable, os.path.join(ROOT, "tools", "game_cc.py"), "--decomp", a.decomp,
                         "--out", a.game, "--list", lst], check=False, stdout=subprocess.DEVNULL)
         print(f"{len(crels)} curated sources compiled (game_src/)")
+        # A curated source that does not compile would silently leave its function to a draft or the
+        # matched source: report it, and fail at the end.
+        for line in open(os.path.join(a.game, "census.jsonl"), encoding="utf-8"):
+            r = json.loads(line)
+            if r["file"] in crels and not r.get("ok"):
+                curated_failed.append(r["file"])
+                print(f"error: {r['file']} does not compile: {r.get('first_error')}", file=sys.stderr)
     missing = [x for x in missing if x not in curated]
     pending = {addr: candidates(addr, store, swarm, curated) for addr in missing}
     pending = {k: v for k, v in pending.items() if v}
@@ -187,6 +195,8 @@ def main():
         for addr in sorted(chosen):
             src, kind, diff, _ = chosen[addr]
             f.write(f"{addr} {src} {kind} {diff}\n")
+    if curated_failed:
+        sys.exit(f"{len(curated_failed)} curated sources do not compile (see above)")
 
 
 if __name__ == "__main__":
