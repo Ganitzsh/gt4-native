@@ -114,6 +114,19 @@ extern "C" void gt4_menu_band_widen(char *xyz, int stride, int n) {
     }
 }
 
+// For game_src/func_00492978.cpp, the text renderer's glyph visibility test: a text layer the size of the
+// menu layout (640 x 480) is seen over 320 -/+ 240 x aspect with the menus in a centred area of the wide mode
+// (game_src/func_00214FB0.cpp), so glyphs left of 0 or right of 640 still show (the GT map's labels at the
+// band edges). Other layers (text boxes) keep their bounds.
+extern "C" void gt4_text_cull_widen(float *lo, float *hi, float height) {
+    const int aspect = gt4_display_aspect_milli();
+    if (aspect < 1500 || !gt4_menus_centered() || !*reinterpret_cast<volatile int *>(0x006184F0)) return;
+    if (*hi != 640.0f || height != 480.0f) return;
+    const float half = 240.0f * static_cast<float>(aspect) / 1000.0f;
+    *lo = 320.0f - half;
+    *hi = 320.0f + half;
+}
+
 // For game_src/func_0043AF68.cpp (testing): GT4_MONEY=N, the least money the player has; -1 when not set.
 extern "C" long long gt4_money_floor() {
     static const long long floor = [] {

@@ -111,7 +111,8 @@ extern "C" void RacePS2Base__render_reflection(char *arg0, void *arg1, s32 arg2,
             if (M2C_FIELD(temp_s1, s32 *, 0xC2C) > 0) {
                 do {
                     float w = (f32)sp_.sp18;
-                    func_004A6788(0.0f, 0.0f, w, (f32) func_00105918(((s8 *)&sp_)), (f32) sp_.sp10 + bias, (f32) sp_.sp14 + bias, (f32) (sp_.sp10 + sp_.sp18) + bias, (f32) (sp_.sp14 + sp_.sp1C) + bias);
+                    f32 h = (f32) func_00105918(((s8 *)&sp_));   /* fills sp_, read by the arguments after it */
+                    func_004A6788(0.0f, 0.0f, w, h, (f32) sp_.sp10 + bias, (f32) sp_.sp14 + bias, (f32) (sp_.sp10 + sp_.sp18) + bias, (f32) (sp_.sp14 + sp_.sp1C) + bias);
                     if (var_s0 & 1) {
                         func_00105728(((s8 *)&sp_));
                         func_001056A0(pb);

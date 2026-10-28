@@ -8,7 +8,9 @@
    the pen advanced and the line wrapped after anything but '.', ',' and '\''.
    Written from the astra draft (drafts/00492978/00492978_6a199200d9eff5c2.cpp), checked against the
    assembly; the MMI kerning loop is plain C here. Natively the draw callback (func_00491FC0) takes
-   its four ints before its four floats, so it is called in that order. */
+   its four ints before its four floats, so it is called in that order. A glyph's visibility test against
+   the text layer takes the wide frame's extent for a layer the size of the menu layout in the centred wide
+   mode (gt4_text_cull_widen, runtime/sdk.cpp). */
 typedef unsigned char u8;
 typedef signed char s8;
 typedef unsigned short u16;
@@ -32,6 +34,7 @@ extern "C" void func_00490760(State *s);
 extern "C" Glyph *func_00491A80(Font *f, int code);
 extern "C" unsigned char func_00491AC0(Font *f);
 extern "C" void func_00491F98(void);
+extern "C" void gt4_text_cull_widen(float *lo, float *hi, float height);
 
 static inline int adds8(int x, int y)
 {
@@ -122,7 +125,9 @@ extern "C" int func_00492978(int code, Draw draw, DrawOther other, State *s)
     }
     y = s->y + oy * sy;
     bottom = y + (float)g->h * sy;
-    if (draw && x + s->dx < s->width && right + s->dx > 0.0f && y + s->dy < s->height &&
+    float lo = 0.0f, hi = s->width;
+    gt4_text_cull_widen(&lo, &hi, s->height);
+    if (draw && x + s->dx < hi && right + s->dx > lo && y + s->dy < s->height &&
         bottom + s->dy > 0.0f) {
         int u = g->u, v = g->v, ur = u + g->w, vb = v + g->h;
         float shadow = s->shadow;

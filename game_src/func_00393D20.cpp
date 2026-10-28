@@ -287,7 +287,11 @@ extern "C" void func_00393D20(char *arg0, s32 arg1, char *arg2, s32 arg3, s32 ar
     func_004A2750(7, 0.0f);
     func_004A2980(0);
     func_004A6F10(1, 0xFF);
-    func_004A6788(0.0f, 0.0f, (f32) M2C_FIELD(spA0, s32 *, 8), (f32) func_00105818(&spA0), (f32) M2C_FIELD(spA0, s32 *, 16), (f32) M2C_FIELD(spA0, s32 *, 20), (f32) (M2C_FIELD(spA0, s32 *, 16) + M2C_FIELD(spA0, s32 *, 24)), (f32) (M2C_FIELD(spA0, s32 *, 20) + M2C_FIELD(spA0, s32 *, 28)));
+    {   /* the EE evaluates these left to right: the third before func_00105818 fills spA0, the rest after */
+        f32 width = (f32) M2C_FIELD(spA0, s32 *, 8);
+        f32 height = (f32) func_00105818(&spA0);
+        func_004A6788(0.0f, 0.0f, width, height, (f32) M2C_FIELD(spA0, s32 *, 16), (f32) M2C_FIELD(spA0, s32 *, 20), (f32) (M2C_FIELD(spA0, s32 *, 16) + M2C_FIELD(spA0, s32 *, 24)), (f32) (M2C_FIELD(spA0, s32 *, 20) + M2C_FIELD(spA0, s32 *, 28)));
+    }
     func_004AB040(4);
     func_004A26F0(3);
     func_004A2980(0xFFFFFF);
