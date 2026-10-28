@@ -127,6 +127,18 @@ struct GsnScene::Impl {
             for (int repeat = 0; repeat < 2; ++repeat)
                 samplers[linear * 2 + repeat] = vk::createSampler(device, linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST, VK_SAMPLER_MIPMAP_MODE_NEAREST,
                                                                   repeat ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+        makeMipSamplers(16.0f);
+    }
+
+    // The mipmapped textures' samplers at an anisotropy (texture.anisotropy; 1 = off).
+    float mipAnisotropy = 0.0f;
+    void makeMipSamplers(float anisotropy) {
+        anisotropy = std::clamp(anisotropy, 1.0f, std::max(1.0f, device.maxAnisotropy));
+        if (anisotropy == mipAnisotropy) return;
+        if (mipSamplers[0]) vkDeviceWaitIdle(device.device);
+        for (VkSampler& s : mipSamplers)
+            if (s) { vkDestroySampler(device.device, s, nullptr); s = VK_NULL_HANDLE; }
+        mipAnisotropy = anisotropy;
         for (int uv = 0; uv < 4; ++uv) {   // the address mode per axis (WMS, WMT)
             VkSamplerCreateInfo info{};
             info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -135,8 +147,8 @@ struct GsnScene::Impl {
             info.addressModeU = (uv & 2) ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
             info.addressModeV = (uv & 1) ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
             info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-            info.anisotropyEnable = device.anisotropy ? VK_TRUE : VK_FALSE;
-            info.maxAnisotropy = std::min(16.0f, device.maxAnisotropy);
+            info.anisotropyEnable = device.anisotropy && anisotropy > 1.0f ? VK_TRUE : VK_FALSE;
+            info.maxAnisotropy = anisotropy;
             info.maxLod = VK_LOD_CLAMP_NONE;
             vk::check(vkCreateSampler(device.device, &info, nullptr, &mipSamplers[uv]), "vkCreateSampler");
         }
@@ -886,6 +898,7 @@ void GsnScene::setFrame(gsn::FrameList& list) {
 
 bool GsnScene::hasFrame() const { return impl->any; }
 void GsnScene::setScale(uint32_t scale) { impl->scaleSetting = scale; }
+void GsnScene::setAnisotropy(int anisotropy) { impl->makeMipSamplers(static_cast<float>(anisotropy)); }
 
 void GsnScene::prepare(const SceneFormats& formats) {
     Impl& s = *impl;

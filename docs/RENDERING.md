@@ -18,7 +18,7 @@ the simulation.
 
 ```bat
 tools\build_windows.cmd Release            :: VS 2022 + Ninja, -DGT4_BUILD_HOST=ON, builds and runs ctest
-build\host-windows-Release\gt4_host.exe    :: interactive window (keys below); Escape quits
+build\host-windows-Release\gt4_host.exe    :: interactive window (keys below); Escape opens the settings menu
 gt4_host --headless --size 2560x1440 --frames 300 --preset ultra --capture build\captures\ultra.ppm
 gt4_host --list-gpus | --list-displays | --list-options | --help
 py tools\host_session.py run --exe build\host-windows-Release\gt4_host.exe --host-arg=--headless ^
@@ -46,6 +46,23 @@ M motion blur, H shadows, R reflections, F fog, T texture filter, Y anisotropy, 
 sharpness, G grain, V vignette, C chromatic aberration, P pause; Shift reverses a cycle. The arrows or the left
 stick swing the chase camera; Space or the south button brightens the lights. Gamepad: Start preset, Back
 readout, D-pad anti-aliasing and render quality, shoulders upscaler, north button aspect ratio.
+
+## The settings menu
+
+Escape, or the pad's Guide button (or Select + Start), opens the settings menu over the picture: the options that
+apply to what is shown (over the game: preset, renderer, render resolution and scale, upscaler, sharpening,
+anti-aliasing, anisotropic filtering, window, v-sync, frame rate limit, aspect ratio, menu layout, grain, vignette,
+chromatic aberration, dither, the readout), each with a description, then Resume and Quit. Up/Down (D-pad, left
+stick, W/S) choose, Left/Right change, L1/R1 or PgUp/PgDn jump between sections, Enter or the south button
+accepts, Escape, Backspace, Circle or Start close it. Changes apply at once and are saved to the settings file.
+
+Over a live game the menu pauses it: the host sends `GT4_REC_HOST_CMD` 2 and the game's kernel stops its bus
+clock, so no VBlank, alarm or timer comes due (sound stops with the VBlanks that drive it); 3 resumes it, and the
+time spent paused is left out of the clock. The pad reaches the game again once every button is released, so
+the button that closed the menu does not also act in the game. The aspect ratio and the menu layout are passed
+to the game when it starts: they are marked `*` and apply at the next start. `GT4_HOST_KEYS=FRAME:KEY,...`
+(escape up down left right return backspace pageup pagedown f1) presses keys at host frames, for unattended
+checks of the menu, also without a window.
 
 ## Settings
 

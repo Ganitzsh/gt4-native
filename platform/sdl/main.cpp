@@ -13,6 +13,7 @@
 #include "renderer.h"
 #include "session.h"
 #include "settings.h"
+#include "settings_menu.h"
 #include "test_scene.h"
 
 #include <algorithm>
@@ -40,7 +41,7 @@ void require(bool success, const char* operation) {
 const char* kUsage =
     "Usage: gt4_host [mode] [options]\n"
     "SDL3/Vulkan host: the display pipeline on a test scene, or on GT4's frames (--game, --replay).\n"
-    "Modes (default: interactive window, Escape closes it):\n"
+    "Modes (default: interactive window; Escape opens the settings menu):\n"
     "  --probe              verify a window surface and a GPU that can present to it, then exit\n"
     "  --frames N           render N frames, then exit\n"
     "  --smoke-test         180 frames with resize/minimize/restore checks\n"
@@ -433,6 +434,31 @@ gt4::ps2::PadInput readPad(SDL_Gamepad* gamepad) {
     return in;
 }
 
+// GT4_HOST_KEYS=FRAME:KEY,... (unattended checks of the settings menu): presses KEY (escape up down left right
+// return backspace pageup pagedown f1) when FRAME frames have been presented. It also enables the menu
+// without a window.
+struct ScriptedKey { uint32_t frame; SDL_Keycode key; };
+std::vector<ScriptedKey> keyScript() {
+    static const std::pair<const char*, SDL_Keycode> names[] = {
+        {"escape", SDLK_ESCAPE}, {"up", SDLK_UP}, {"down", SDLK_DOWN}, {"left", SDLK_LEFT}, {"right", SDLK_RIGHT},
+        {"return", SDLK_RETURN}, {"backspace", SDLK_BACKSPACE}, {"pageup", SDLK_PAGEUP}, {"pagedown", SDLK_PAGEDOWN},
+        {"f1", SDLK_F1}};
+    std::vector<ScriptedKey> out;
+    const char* e = std::getenv("GT4_HOST_KEYS");
+    for (const char* p = e; p && *p;) {
+        unsigned frame = 0;
+        char name[16] = "";
+        int n = 0;
+        if (std::sscanf(p, "%u:%15[a-z0-9]%n", &frame, name, &n) < 2) break;
+        p += n;
+        for (const auto& [text, key] : names)
+            if (!std::strcmp(name, text)) out.push_back({frame, key});
+        if (*p == ',') ++p;
+    }
+    std::sort(out.begin(), out.end(), [](const ScriptedKey& a, const ScriptedKey& b) { return a.frame < b.frame; });
+    return out;
+}
+
 std::string jsonQuote(const std::string& text) {
     std::string out = "\"";
     for (char c : text) {
@@ -456,6 +482,8 @@ int run(const Options& options) {
     // The PS2 frame fills a 4:3 TV picture (640 x 448 with non-square pixels); --set aspect.ratio overrides.
     const bool gsMode = !options.game.empty() || !options.replay.empty();
     if (gsMode && settings.aspect == gt4::AspectRatio::Window) gt4::setOption(settings, "aspect.ratio", "4:3");
+    // Over the game, the settings readout only on request (F1, or the settings menu).
+    if (gsMode) settings.overlayText = false;
     for (const auto& [key, value] : options.sets) {
         const std::string error = gt4::setOption(settings, key, value);
         if (!error.empty()) throw std::invalid_argument("--set " + key + "=" + value + ": " + error);
@@ -584,7 +612,56 @@ int run(const Options& options) {
         }
     };
 
+    // The settings menu (Esc; the pad's Guide button or Select + Start). Over a live game it pauses the game;
+    // afterwards the pad reaches the game again once every button is released.
+    gt4::SettingsMenu menu(gsMode);
+    menu.setStartValues(settings);
+    bool padHeldBack = false;
+    SDL_GamepadButton menuHeld = SDL_GAMEPAD_BUTTON_INVALID;
+    Uint64 menuRepeatAt = 0;
+    int stickHeld = 0;   // the left stick in the menu: -1 up, 1 down
+    const std::vector<ScriptedKey> scriptedKeys = keyScript();
+    size_t nextScriptedKey = 0;
+    const bool menuEnabled = interactive || !scriptedKeys.empty();
+    if (interactive && gsMode) renderer->showMessage("Settings: Esc, or Guide / Select + Start on the pad", 6.0f);
+
     bool running = true, firstResize = false, minimized = false, restored = false, sawMinimized = false;
+    auto openMenu = [&](bool open) {
+        if (open) menu.open();
+        else menu.close();
+        if (!open) padHeldBack = true;
+        menuHeld = SDL_GAMEPAD_BUTTON_INVALID;
+    };
+    auto menuInput = [&](gt4::SettingsMenu::Input input) {
+        const auto result = menu.input(input, settings);
+        if (result.changed) {
+            renderer->apply(settings);
+            if (display) display->apply(settings);
+            save();
+        }
+        if (result.closed) openMenu(false);
+        if (result.quit) running = false;
+    };
+    // A pad button in the menu; directions repeat while held.
+    auto menuButton = [&](SDL_GamepadButton button) {
+        using Input = gt4::SettingsMenu::Input;
+        switch (button) {
+        case SDL_GAMEPAD_BUTTON_DPAD_UP: menuInput(Input::Up); break;
+        case SDL_GAMEPAD_BUTTON_DPAD_DOWN: menuInput(Input::Down); break;
+        case SDL_GAMEPAD_BUTTON_DPAD_LEFT: menuInput(Input::Left); break;
+        case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: menuInput(Input::Right); break;
+        case SDL_GAMEPAD_BUTTON_SOUTH: menuInput(Input::Accept); break;
+        case SDL_GAMEPAD_BUTTON_EAST:
+        case SDL_GAMEPAD_BUTTON_START: menuInput(Input::Back); break;
+        case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER: menuInput(Input::PageUp); break;
+        case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: menuInput(Input::PageDown); break;
+        default: return;
+        }
+        const bool direction = button == SDL_GAMEPAD_BUTTON_DPAD_UP || button == SDL_GAMEPAD_BUTTON_DPAD_DOWN ||
+                               button == SDL_GAMEPAD_BUTTON_DPAD_LEFT || button == SDL_GAMEPAD_BUTTON_DPAD_RIGHT;
+        menuHeld = direction && menu.isOpen() ? button : SDL_GAMEPAD_BUTTON_INVALID;
+        menuRepeatAt = SDL_GetTicks() + 350;
+    };
     uint32_t frames = 0;
     const Uint64 started = SDL_GetTicks();
     Uint64 restoreAt = 0;
@@ -595,6 +672,13 @@ int run(const Options& options) {
     float keyboardStick = 0.0f;
     bool keyboardAction = false;
     while (running) {
+        for (; nextScriptedKey < scriptedKeys.size() && scriptedKeys[nextScriptedKey].frame <= frames; ++nextScriptedKey) {
+            SDL_Event key{};
+            key.type = SDL_EVENT_KEY_DOWN;
+            key.key.key = scriptedKeys[nextScriptedKey].key;
+            key.key.down = true;
+            SDL_PushEvent(&key);
+        }
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             switch (event.type) {
@@ -614,14 +698,47 @@ int run(const Options& options) {
             case SDL_EVENT_GAMEPAD_REMOVED:
                 if (gamepad && SDL_GetGamepadID(gamepad) == event.gdevice.which) { SDL_CloseGamepad(gamepad); gamepad = nullptr; }
                 break;
-            case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
-                if (interactive && !gsMode && gamepad && SDL_GetGamepadID(gamepad) == event.gbutton.which) {
-                    const std::string change = gamepadCommand(settings, static_cast<SDL_GamepadButton>(event.gbutton.button));
-                    if (!change.empty()) { std::printf("%s\n", change.c_str()); renderer->apply(settings); save(); }
+            case SDL_EVENT_GAMEPAD_BUTTON_DOWN: {
+                if (!menuEnabled || !gamepad || SDL_GetGamepadID(gamepad) != event.gbutton.which) break;
+                const auto button = static_cast<SDL_GamepadButton>(event.gbutton.button);
+                const bool chord = (button == SDL_GAMEPAD_BUTTON_START && SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_BACK)) ||
+                                   (button == SDL_GAMEPAD_BUTTON_BACK && SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_START));
+                if (button == SDL_GAMEPAD_BUTTON_GUIDE || chord) { openMenu(!menu.isOpen()); break; }
+                if (menu.isOpen()) { menuButton(button); break; }
+                if (!gsMode) {
+                    const std::string change = gamepadCommand(settings, button);
+                    if (!change.empty()) { std::printf("%s\n", change.c_str()); renderer->showMessage(change); renderer->apply(settings); save(); }
                 }
                 break;
+            }
+            case SDL_EVENT_GAMEPAD_BUTTON_UP:
+                if (menuHeld == static_cast<SDL_GamepadButton>(event.gbutton.button)) menuHeld = SDL_GAMEPAD_BUTTON_INVALID;
+                break;
             case SDL_EVENT_KEY_DOWN:
+                if (event.key.key == SDLK_ESCAPE && menuEnabled) {
+                    if (!event.key.repeat) openMenu(!menu.isOpen());
+                    break;
+                }
                 if (event.key.key == SDLK_ESCAPE) { running = false; break; }
+                if (menu.isOpen()) {
+                    using Input = gt4::SettingsMenu::Input;
+                    switch (event.key.key) {
+                    case SDLK_UP: case SDLK_W: menuInput(Input::Up); break;
+                    case SDLK_DOWN: case SDLK_S: menuInput(Input::Down); break;
+                    case SDLK_LEFT: case SDLK_A: menuInput(Input::Left); break;
+                    case SDLK_RIGHT: case SDLK_D: menuInput(Input::Right); break;
+                    case SDLK_RETURN: case SDLK_KP_ENTER: case SDLK_SPACE:
+                        if (!(event.key.mod & SDL_KMOD_ALT)) menuInput(Input::Accept);
+                        break;
+                    case SDLK_BACKSPACE: menuInput(Input::Back); break;
+                    case SDLK_PAGEUP: case SDLK_Q: menuInput(Input::PageUp); break;
+                    case SDLK_PAGEDOWN: case SDLK_E: menuInput(Input::PageDown); break;
+                    default: break;
+                    }
+                    if (!(event.key.key >= SDLK_F1 && event.key.key <= SDLK_F12) &&
+                        !(event.key.key == SDLK_RETURN && (event.key.mod & SDL_KMOD_ALT)))
+                        break;
+                }
                 if (event.key.key == SDLK_LEFT) keyboardStick = -1.0f;
                 if (event.key.key == SDLK_RIGHT) keyboardStick = 1.0f;
                 if (event.key.key == SDLK_SPACE) keyboardAction = true;
@@ -629,6 +746,7 @@ int run(const Options& options) {
                     const std::string change = keyCommand(settings, event.key, gsMode);
                     if (!change.empty()) {
                         std::printf("%s\n", change.c_str());
+                        renderer->showMessage(change);
                         renderer->apply(settings);
                         if (display) display->apply(settings);
                         save();
@@ -669,8 +787,18 @@ int run(const Options& options) {
             renderer->useNativeFrames(wantNative);
             if (wantNative && gs->takeNativeFrame(nativeFrame, nativeSerial)) renderer->setNativeFrame(nativeFrame);
             if (gs->live()) {
+                gs->setPaused(menu.isOpen());
+                // Nothing reaches the game while the menu is open, nor afterwards until every button is up
+                // (the button that closed the menu would act in the game).
+                gt4::ps2::PadInput input = readPad(gamepad);
+                if (padHeldBack) {
+                    bool held = std::fabs(input.leftX) > 0.3f || std::fabs(input.leftY) > 0.3f;
+                    for (float pressure : input.button) held |= pressure > 0.0f;
+                    padHeldBack = held;
+                }
+                if (menu.isOpen() || padHeldBack) input = gt4::ps2::PadInput{};
                 uint8_t pad[18];
-                gt4::ps2::encodePad(readPad(gamepad), pad);
+                gt4::ps2::encodePad(input, pad);
                 gs->sendPad(0, true, pad);
             }
             renderer->setStatus(gs->status());
@@ -680,6 +808,33 @@ int run(const Options& options) {
                 running = false;
                 break;
             }
+        }
+        // The settings menu: held directions repeat; the view follows the settings (keys change them too).
+        if (menu.isOpen()) {
+            using Input = gt4::SettingsMenu::Input;
+            if (gamepad) {
+                const float y = static_cast<float>(SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTY)) / 32767.0f;
+                const int stick = y < -0.6f ? -1 : y > 0.6f ? 1 : 0;
+                if (stick != stickHeld) {
+                    stickHeld = stick;
+                    if (stick) menuInput(stick < 0 ? Input::Up : Input::Down);
+                    menuRepeatAt = SDL_GetTicks() + 350;
+                } else if (stick && SDL_GetTicks() >= menuRepeatAt) {
+                    menuInput(stick < 0 ? Input::Up : Input::Down);
+                    menuRepeatAt = SDL_GetTicks() + 110;
+                }
+            }
+            if (menuHeld != SDL_GAMEPAD_BUTTON_INVALID && SDL_GetTicks() >= menuRepeatAt) {
+                menuButton(menuHeld);
+                menuRepeatAt = SDL_GetTicks() + 110;
+            }
+        }
+        if (!running) break;
+        if (menu.isOpen()) {
+            const gt4::MenuView view = menu.view(settings);
+            renderer->setMenu(&view);
+        } else {
+            renderer->setMenu(nullptr);
         }
         // Controls are sampled once per frame here; the game will sample its input once per tick.
         if (session) {

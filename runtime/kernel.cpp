@@ -17,6 +17,7 @@
 
 namespace gt4::rt {
 uint64_t kernel_bus_cycles();
+bool kernel_paused();
 namespace {
 
 // ---------------------------------------------------------------------------------------------
@@ -302,6 +303,11 @@ DWORD WINAPI interrupt_thread(void *) {
     const uint64_t vblank_len = static_cast<uint64_t>(kBusHz * 22 / kHsyncHz);  // ~22 lines
     uint64_t next_start = vblank_cycles, next_end = ~0ull;
     for (;;) {
+        if (kernel_paused()) {   // nothing comes due; keep reading the host's records (the resume)
+            Sleep(5);
+            link_poll();
+            continue;
+        }
         uint64_t now = kernel_bus_cycles();
         uint64_t due = std::min(next_start, next_end);
         {
@@ -454,11 +460,41 @@ bool kernel_interrupt_now(bool dmac, int index) {
     return true;
 }
 
+// The host's settings menu pauses the game (GT4_REC_HOST_CMD 2 / 3): the bus clock stands still, so no
+// VBlank, alarm or timer comes due, and the time spent paused is left out afterwards.
+namespace {
+std::atomic<bool> g_paused{false};
+std::atomic<int64_t> g_paused_ticks{0};   // QPC ticks spent paused before the current pause
+int64_t g_pause_started = 0;
+}  // namespace
+
 uint64_t kernel_bus_cycles() {
     LARGE_INTEGER now;
     QueryPerformanceCounter(&now);
-    return static_cast<uint64_t>((now.QuadPart - g_qpc_start.QuadPart) * (kBusHz / g_qpc_freq.QuadPart));
+    int64_t ticks = now.QuadPart;
+    if (g_paused.load(std::memory_order_acquire)) ticks = g_pause_started;
+    ticks -= g_qpc_start.QuadPart + g_paused_ticks.load(std::memory_order_acquire);
+    return static_cast<uint64_t>(ticks * (kBusHz / g_qpc_freq.QuadPart));
 }
+
+void kernel_set_paused(bool paused) {
+    if (paused == g_paused.load()) return;
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    if (paused) {
+        g_pause_started = now.QuadPart;
+        g_paused.store(true, std::memory_order_release);
+        log_info("kernel: paused by the host");
+    } else {
+        // The offset first: until the flag clears, readers still see the frozen time.
+        g_paused_ticks.fetch_add(now.QuadPart - g_pause_started, std::memory_order_acq_rel);
+        g_paused.store(false, std::memory_order_release);
+        SetEvent(g_irq_wake);
+        log_info("kernel: resumed by the host");
+    }
+}
+
+bool kernel_paused() { return g_paused.load(std::memory_order_acquire); }
 
 uint32_t kernel_vblank_count() { return g_vblanks; }
 

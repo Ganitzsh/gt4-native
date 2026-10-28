@@ -19,6 +19,7 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 
@@ -241,6 +242,9 @@ struct Renderer::Impl {
     float stick = 0.0f;
     bool action = false;
     std::string status;
+    std::optional<gt4::MenuView> menu;
+    std::string message;
+    Uint64 messageUntil = 0;   // SDL_GetTicks
     std::string capturePath;
     gt4::vk::Buffer readback;
 
@@ -552,7 +556,7 @@ struct Renderer::Impl {
         canvas.safeArea = settings.safeArea;
         overlay->setFilter(settings.uiFilter);
         overlay->begin(frameSlot, extent, canvas);
-        if (gameFrame) { composeReadout(); return; }
+        if (gameFrame) { composeReadout(); composeMessage(); composeMenu(); return; }
         // Test HUD on the 640 x 480 canvas, anchored like a racing game's.
         const gt4::Color8 panel{8, 12, 20, 170}, white{240, 240, 240, 255}, accent{255, 190, 40, 255};
         overlay->canvasRect(16, 16, 150, 44, panel, gt4::Anchor::Left);
@@ -570,6 +574,98 @@ struct Renderer::Impl {
         overlay->canvasSprite(36, 404, 40, '@', accent, gt4::Anchor::Left);
         overlay->canvasText(320, 20, 8, "GT4 NATIVE - DISPLAY PIPELINE TEST SCENE", white, gt4::Anchor::Center);
         composeReadout();
+        composeMessage();
+        composeMenu();
+    }
+
+    // Integer text scale for the content height (the 8 x 8 font is point-sampled).
+    float textScale(float lines) const {
+        return std::max(1.0f, std::floor(static_cast<float>(pipeline->contentRect().extent.height) / lines));
+    }
+
+    void composeMessage() {
+        if (message.empty() || SDL_GetTicks() >= messageUntil || menu) return;
+        const auto content = pipeline->contentRect();
+        const float scale = textScale(360.0f);
+        const float w = 8.0f * scale * static_cast<float>(message.size()) + 16.0f * scale;
+        const float h = 8.0f * scale + 12.0f * scale;
+        const float x = static_cast<float>(content.offset.x) + (static_cast<float>(content.extent.width) - w) * 0.5f;
+        const float y = static_cast<float>(content.offset.y + content.extent.height) - h - 24.0f * scale;
+        overlay->pixelRect(x, y, w, h, {10, 14, 22, 200});
+        overlay->pixelText(x + 8.0f * scale, y + 6.0f * scale, scale, message, {235, 238, 242, 255});
+    }
+
+    // The settings menu: a panel in the middle of the content, a scrolling list of rows, the selected row's
+    // description and the controls underneath.
+    void composeMenu() {
+        if (!menu) return;
+        const auto content = pipeline->contentRect();
+        const float cx = static_cast<float>(content.offset.x), cy = static_cast<float>(content.offset.y);
+        const float cw = static_cast<float>(content.extent.width), ch = static_cast<float>(content.extent.height);
+        overlay->pixelRect(cx, cy, cw, ch, {0, 0, 0, 150});
+        const float scale = textScale(400.0f);
+        const float glyph = 8.0f * scale, rowHeight = 13.0f * scale, pad = 12.0f * scale;
+        const size_t columns = 72;
+        const float panelW = std::min(cw - 2.0f * pad, glyph * static_cast<float>(columns) + 2.0f * pad);
+        const size_t fit = static_cast<size_t>(std::max(4.0f, (ch - 2.0f * pad - 8.0f * rowHeight) / rowHeight));
+        const size_t shown = std::min(fit, menu->rows.size());
+        const float panelH = rowHeight * static_cast<float>(shown) + 7.0f * rowHeight + 2.0f * pad;
+        const float px = cx + (cw - panelW) * 0.5f, py = cy + std::max(pad, (ch - panelH) * 0.5f);
+        const gt4::Color8 panel{12, 16, 26, 235}, text{225, 230, 238, 255}, dim{140, 150, 165, 255},
+            accent{255, 196, 48, 255}, bar{48, 80, 140, 255}, ink{255, 255, 255, 255};
+        overlay->pixelRect(px, py, panelW, panelH, panel);
+        overlay->pixelRect(px, py, panelW, 2.0f * scale, accent);
+        float y = py + pad;
+        overlay->pixelText(px + pad, y, scale * 2.0f, menu->title, ink);
+        y += 2.0f * rowHeight;
+        // Scroll so that the selected row (and its section title) is visible.
+        size_t selected = 0;
+        for (size_t i = 0; i < menu->rows.size(); ++i) if (menu->rows[i].selected) selected = i;
+        size_t first = 0;
+        if (menu->rows.size() > shown) {
+            const long want = static_cast<long>(selected > 0 && menu->rows[selected - 1].header ? selected - 1 : selected);
+            first = static_cast<size_t>(std::clamp(want - static_cast<long>(shown / 2), 0L, static_cast<long>(menu->rows.size() - shown)));
+        }
+        const float listTop = y;
+        const size_t width = static_cast<size_t>((panelW - 2.0f * pad) / glyph);
+        for (size_t i = first; i < first + shown; ++i) {
+            const auto& row = menu->rows[i];
+            const float x = px + pad;
+            if (row.header) {
+                if (!row.label.empty()) overlay->pixelText(x, y + 2.0f * scale, scale, row.label, accent);
+                y += rowHeight;
+                continue;
+            }
+            if (row.selected) overlay->pixelRect(px + pad * 0.5f, y - 2.0f * scale, panelW - pad, rowHeight, bar);
+            const std::string label = "  " + row.label + (row.restart ? " *" : "");
+            overlay->pixelText(x, y + 1.0f * scale, scale, label, row.selected ? ink : text);
+            if (row.adjustable) {
+                const std::string value = row.selected ? "< " + row.value + " >" : row.value + "  ";
+                overlay->pixelText(x + glyph * static_cast<float>(width - std::min(width, value.size())), y + 1.0f * scale, scale,
+                                   value, row.selected ? ink : accent);
+            }
+            y += rowHeight;
+        }
+        if (first > 0) overlay->pixelText(px + panelW - pad - glyph, listTop - rowHeight, scale, "^", dim);
+        if (first + shown < menu->rows.size()) overlay->pixelText(px + panelW - pad - glyph, y, scale, "v", dim);
+        // The description, word-wrapped over three lines at most, then the controls.
+        y += rowHeight;
+        overlay->pixelRect(px + pad, y - 4.0f * scale, panelW - 2.0f * pad, 1.0f * scale, dim);
+        std::string line, help = menu->help;
+        int lines = 0;
+        size_t start = 0;
+        while (start < help.size() && lines < 3) {
+            size_t end = std::min(help.size(), start + width);
+            if (end < help.size()) {
+                const size_t space = help.rfind(' ', end);
+                if (space != std::string::npos && space > start) end = space;
+            }
+            overlay->pixelText(px + pad, y + rowHeight * static_cast<float>(lines), scale, help.substr(start, end - start), text);
+            start = end + (end < help.size() && help[end] == ' ' ? 1 : 0);
+            ++lines;
+        }
+        y += rowHeight * 3.5f;
+        overlay->pixelText(px + pad, y, scale, menu->footer.substr(0, width), dim);
     }
 
     void composeReadout() {
@@ -708,6 +804,7 @@ struct Renderer::Impl {
         if (sceneSwitched) { vkDeviceWaitIdle(device.device); pipeline.reset(); pipeline = std::make_unique<gt4::FramePipeline>(device, pool);
                              pipeline->prepareOutput(format, srgbFormat, static_cast<uint32_t>(presentedBits)); sceneSwitched = false; }
         pipeline->configure(settings, extent, active);
+        if (shownNative) gsnScene->setAnisotropy(settings.anisotropy);
         scene->setControls(stick, action);
         scene->apply(settings);
         const gt4::SceneView view = pipeline->beginFrame(slot, frameCounter);
@@ -805,6 +902,14 @@ void Renderer::capture(const std::string& path) {
     impl->capturePath = path;
 }
 void Renderer::setStatus(const std::string& text) { impl->status = text; }
+void Renderer::setMenu(const gt4::MenuView* view) {
+    if (view) impl->menu = *view;
+    else impl->menu.reset();
+}
+void Renderer::showMessage(const std::string& text, float seconds) {
+    impl->message = text;
+    impl->messageUntil = SDL_GetTicks() + static_cast<Uint64>(seconds * 1000.0f);
+}
 gt4::TestScene& Renderer::scene() { return *impl->scene; }
 void Renderer::useGameFrame(bool enabled) {
     if (impl->gameFrame != enabled) impl->sceneSwitched = true;   // the pipeline prepares the new scene source

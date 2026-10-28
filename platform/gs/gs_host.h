@@ -44,6 +44,8 @@ public:
     void setNativeFrames(bool wanted);
     // Host -> game pad state (libpad2 layout, 18 bytes). Ignored without a live game.
     void sendPad(uint32_t port, bool connected, const uint8_t data[18]);
+    // Stops or restarts the game's clock (its VBlanks, alarms and timers): the in-game settings menu.
+    void setPaused(bool paused);
 
     bool live() const;          // linked to a running game
     bool finished() const;      // the game exited, or the replay reached its end (without loop)

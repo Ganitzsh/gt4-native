@@ -23,6 +23,8 @@ public:
     bool hasFrame() const;
     // Render pixels per GS pixel; 0 = from the render extent (the nearest integer, 1..8).
     void setScale(uint32_t scale);
+    // Anisotropic filtering of mipmapped textures (texture.anisotropy; 1 = off). Waits for the GPU on a change.
+    void setAnisotropy(int anisotropy);
 
     void prepare(const SceneFormats& formats) override;
     void recordPrepass(VkCommandBuffer command, const SceneView& view) override;

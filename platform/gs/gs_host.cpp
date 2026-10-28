@@ -159,6 +159,7 @@ struct GsHost::Impl {
     std::unique_ptr<ps2::ReplaySource> replay;
     std::thread worker;
     std::atomic<bool> stop{false}, done{false};
+    bool paused = false;   // the game was asked to pause (setPaused)
 
     mutable std::mutex frameMutex;
     std::condition_variable frameReady;
@@ -392,6 +393,13 @@ void GsHost::sendPad(uint32_t port, bool connected, const uint8_t data[18]) {
     std::memcpy(payload + 4, &c, 4);
     std::memcpy(payload + 8, data, 18);
     impl->link->write(GT4_REC_PAD, payload, sizeof(payload));
+}
+
+void GsHost::setPaused(bool paused) {
+    if (!impl->link || !impl->link->running() || impl->paused == paused) return;
+    impl->paused = paused;
+    const uint32_t command = paused ? 2u : 3u;
+    impl->link->write(GT4_REC_HOST_CMD, &command, sizeof command);
 }
 
 bool GsHost::live() const { return impl->link && impl->link->running(); }

@@ -51,6 +51,8 @@ void kernel_set_interrupt_hook(void (*fn)());
 
 // Ticks of the PS2 bus clock (147.456 MHz) since boot, from the host's monotonic clock.
 uint64_t kernel_bus_cycles();
+void kernel_set_paused(bool paused);  // the host's settings menu: stops the bus clock (VBlanks, alarms)
+bool kernel_paused();
 uint32_t kernel_vblank_count();
 
 }  // namespace gt4::rt

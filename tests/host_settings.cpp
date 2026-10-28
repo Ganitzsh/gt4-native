@@ -1,6 +1,7 @@
 // gt4_host settings and display math: option parsing, presets, the settings file round trip, the aspect
 // ratios and the Hor+ reverse-Z projection. No GPU or window needed.
 #include "settings.h"
+#include "settings_menu.h"
 #include "vecmath.h"
 
 #include <cmath>
@@ -116,6 +117,54 @@ int main() {
     const Vec4 far = narrow * Vec4(0.0f, 0.0f, -1.0e6f, 1.0f);
     check(near(atNear.z / atNear.w, 1.0f), "reverse Z: depth 1 at the near plane");
     check(far.z / far.w >= 0.0f && far.z / far.w < 1e-6f, "reverse Z: depth towards 0 at infinity");
+
+    // The in-game settings menu.
+    {
+        using Input = SettingsMenu::Input;
+        Settings m;
+        applyPreset(m, Preset::High);
+        SettingsMenu menu(true);
+        menu.setStartValues(m);
+        menu.open();
+        auto selectedLabel = [&] {
+            for (const auto& row : menu.view(m).rows) if (row.selected) return row.label;
+            return std::string();
+        };
+        check(selectedLabel() == "Preset", "the menu starts on the first option");
+        check(menu.input(Input::Right, m).changed && m.preset == Preset::Ultra, "right moves the preset on");
+        check(!menu.input(Input::Right, m).changed && m.preset == Preset::Ultra, "the last value stays (custom is never chosen)");
+        check(menu.input(Input::Left, m).changed && m.preset == Preset::High, "left moves it back");
+        menu.input(Input::Down, m);
+        check(selectedLabel() == "Renderer", "down selects the next row");
+        check(menu.input(Input::Left, m).changed && m.gsRenderer == GsRenderer::Emulated && m.preset == Preset::Custom,
+              "the renderer changes, the preset becomes custom");
+        menu.input(Input::Down, m);
+        menu.input(Input::Down, m);
+        check(selectedLabel() == "Render scale", "render scale row");
+        check(menu.input(Input::Left, m).changed && m.quality == QualityMode::Custom && m.renderScale == 90,
+              "the render scale steps from the quality's scale and sets custom");
+        menu.input(Input::PageDown, m);
+        check(selectedLabel() == "Window", "page down goes to the next section");
+        menu.input(Input::PageUp, m);
+        check(selectedLabel() == "Preset", "page up goes to the top of the previous section");
+        for (int i = 0; i < 3; ++i) menu.input(Input::PageDown, m);
+        menu.input(Input::Up, m);
+        menu.input(Input::PageDown, m);
+        check(selectedLabel() == "Resume", "the actions come last");
+        auto view = menu.view(m);
+        check(!menu.restartPending(m), "nothing waits for a restart");
+        Settings widened = m;
+        setOption(widened, "aspect.ratio", "16:9");
+        check(menu.restartPending(widened), "the aspect ratio waits for a restart");
+        check(menu.view(widened).footer.find("starts again") != std::string::npos, "the footer says so");
+        const auto quitRow = menu.input(Input::Down, m);
+        check(!quitRow.changed && selectedLabel() == "Quit game", "quit row");
+        const auto quit = menu.input(Input::Accept, m);
+        check(quit.closed && quit.quit && !menu.isOpen(), "quit closes the menu and asks to quit");
+        menu.open();
+        check(menu.input(Input::Back, m).closed && !menu.isOpen(), "back closes the menu");
+        (void)view;
+    }
 
     if (failures == 0) std::puts("host settings: all checks passed");
     return failures == 0 ? 0 : 1;

@@ -236,6 +236,7 @@ void link_poll() {
                 g_hdr->game_state = 2;
                 ExitProcess(0);
             }
+            if (cmd == 2 || cmd == 3) kernel_set_paused(cmd == 2);
         }
         tail += (sizeof rec + rec.size + 15) & ~15ull;
     }

@@ -3,6 +3,7 @@
 // frames in flight, captures, and the display pipeline (platform/render/pipeline.h) fed by the test scene.
 // The PS2 graphics translation (R1) will replace the test scene behind the same SceneSource interface.
 #include "settings.h"
+#include "settings_menu.h"
 
 #include <volk.h>
 
@@ -45,6 +46,10 @@ public:
     void setControls(float horizontal, bool action);
     void capture(const std::string& path);
     void setStatus(const std::string& text);  // extra lines for the on-screen readout
+    // The settings menu drawn over the frame (platform/sdl/settings_menu.h); nullptr hides it.
+    void setMenu(const gt4::MenuView* view);
+    // A short message at the bottom of the screen (a setting changed by a key), for `seconds`.
+    void showMessage(const std::string& text, float seconds = 2.5f);
     gt4::TestScene& scene();
     // The PS2's displayed frame (GS back end) replaces the test scene and its HUD (docs/GS_BACKEND.md).
     void useGameFrame(bool enabled);
