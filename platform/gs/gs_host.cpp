@@ -10,6 +10,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <utility>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -59,7 +60,16 @@ public:
                 }
             native->vsync(count, list);
         }
-        if (native && stats) {
+        // GT4_GSN_AT=FROM[,TO] (debugging): the per-frame lines below only for those VBlanks.
+        static const std::pair<long, long> statsAt = [] {
+            long from = 0, to = -1;
+            if (const char* e = std::getenv("GT4_GSN_AT")) {
+                if (std::sscanf(e, "%ld,%ld", &from, &to) < 2) to = from;
+            }
+            return std::make_pair(from, to);
+        }();
+        const bool statsNow = statsAt.second < 0 || (static_cast<long>(count) >= statsAt.first && static_cast<long>(count) <= statsAt.second);
+        if (native && stats && statsNow) {
             uint32_t memory = 0, targets = 0, untextured = 0;
             for (const auto& d : list.draws) {
                 if (d.texture.kind == gsn::TextureSource::Kind::Memory) ++memory;

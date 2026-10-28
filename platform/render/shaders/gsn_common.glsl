@@ -29,5 +29,6 @@ const uint kDestAlphaBlend = 256u;// C = Ad: the pipeline's fixed-function facto
 const uint kNearest = 512u;       // point sampling: the GS's texel, its wrap modes, by texel fetch
 const uint kAlphaInvert = 2048u;  // the alpha test's failing pixels (AFAIL's pass)
 const uint kSnap = 1024u;
+const uint kSnapFiltered = 16384u;// a reinterpreted texture drawn scaled: GS bilinear over GS texels
 const uint kMipmapped = 4096u;    // the GS's mipmap levels: the sampler's trilinear filtering
 const uint kGeneratedMips = 8192u;// ... levels made from level 0 (the GS has none): alpha from level 0         // coordinates at the GS pixel's sample point, not the render pixel's

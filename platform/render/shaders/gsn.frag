@@ -77,6 +77,29 @@ vec4 bilinearTexel(vec2 position) {
     return mix(top, bottom, f.y) * 255.0;
 }
 
+// A reinterpreted texture drawn scaled with the bilinear filter: the GS's four texels, each the mean of the
+// render-scale sub-texels the reinterpretation built for it (draw.scale per axis).
+vec4 subTexelMean(int u, int v) {
+    const ivec2 s = ivec2(draw.scale), last = textureSize(source, 0) - 1;
+    vec4 sum = vec4(0.0);
+    for (int y = 0; y < s.y; ++y)
+        for (int x = 0; x < s.x; ++x) sum += texelFetch(source, min(ivec2(u, v) * s + ivec2(x, y), last), 0);
+    return sum / float(s.x * s.y);
+}
+
+vec4 bilinearSubTexels(vec2 position) {
+    const vec2 base = position - 0.5;
+    const vec2 cell = floor(base);
+    vec2 f = base - cell;
+    if (atNativeScale()) f = floor(f * 16.0) / 16.0;
+    const ivec2 size = ivec2(draw.textureSize);
+    const int u0 = wrap(int(cell.x), draw.clampU, size.x), u1 = wrap(int(cell.x) + 1, draw.clampU, size.x);
+    const int v0 = wrap(int(cell.y), draw.clampV, size.y), v1 = wrap(int(cell.y) + 1, draw.clampV, size.y);
+    const vec4 top = mix(subTexelMean(u0, v0), subTexelMean(u1, v0), f.x);
+    const vec4 bottom = mix(subTexelMean(u0, v1), subTexelMean(u1, v1), f.x);
+    return mix(top, bottom, f.y) * 255.0;
+}
+
 float pixelQ = 1.0;   // this pixel's Q (the GS's mipmap level comes from it)
 
 // The GS's level of detail for its own mipmaps: K, or (log2(1 / Q) << L) + K, then less by the render
@@ -91,6 +114,7 @@ float gsLevel() {
 vec4 texel(vec2 coordinate) {
     // coordinate: normalised over the texture (2^TW x 2^TH).
     coordinate = insideSprite(coordinate);
+    if ((draw.flags & kSnapFiltered) != 0u) return floor(bilinearSubTexels(coordinate * draw.textureSize) + 0.5);
     if ((draw.flags & (kNearest | kFromTarget | kMipmapped | kSnap)) == 0u) return floor(bilinearTexel(coordinate * draw.textureSize) + 0.5);
     if ((draw.flags & kNearest) != 0u) {
         vec4 c = nearestTexel(coordinate * draw.textureSize);

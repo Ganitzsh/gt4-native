@@ -37,7 +37,7 @@ static_assert(sizeof(DrawConstants) == 72);
 
 enum : uint32_t {
     kTextured = 1, kUv = 2, kFog = 4, kBlend = 8, kPabe = 16, kFba = 32, kFromTarget = 64, kTarget24 = 128, kDestAlphaBlend = 256,
-    kNearest = 512, kSnap = 1024, kAlphaInvert = 2048, kMipmapped = 4096, kGeneratedMips = 8192,
+    kNearest = 512, kSnap = 1024, kAlphaInvert = 2048, kMipmapped = 4096, kGeneratedMips = 8192, kSnapFiltered = 16384,
 };
 
 // A fixed-function blend for C = Ad: the coefficients of Cs and Cd as (a * Ad + b), mapped onto factors.
@@ -223,6 +223,22 @@ struct GsnScene::Impl {
                          VK_DYNAMIC_STATE_STENCIL_WRITE_MASK, VK_DYNAMIC_STATE_STENCIL_REFERENCE};
         desc.name = "gsn draw";
         return pipelines[key] = vk::createGraphics(device, desc);
+    }
+
+    // Whether a draw maps its texture's texels 1:1 onto GS pixels (within 3 %) on both axes.
+    bool oneToOne(const gsn::Draw& d, const DrawConstants& k) const {
+        float x0 = 1e30f, x1 = -1e30f, y0 = 1e30f, y1 = -1e30f, u0 = 1e30f, u1 = -1e30f, v0 = 1e30f, v1 = -1e30f;
+        const bool uv = (k.flags & kUv) != 0;
+        for (uint32_t i = 0; i < d.count; ++i) {
+            const gsn::Vertex& v = frame.vertices[d.first + i];
+            const float q = v.q != 0.0f ? v.q : 1.0f;
+            const float tu = uv ? v.u : v.s / q * k.textureSize[0], tv = uv ? v.v : v.t / q * k.textureSize[1];
+            x0 = std::min(x0, v.x); x1 = std::max(x1, v.x); y0 = std::min(y0, v.y); y1 = std::max(y1, v.y);
+            u0 = std::min(u0, tu); u1 = std::max(u1, tu); v0 = std::min(v0, tv); v1 = std::max(v1, tv);
+        }
+        const float dx = x1 - x0, dy = y1 - y0;
+        if (dx < 1.0f || dy < 1.0f) return true;
+        return std::fabs((u1 - u0) / dx - 1.0f) < 0.03f && std::fabs((v1 - v0) / dy - 1.0f) < 0.03f;
     }
 
     void ensureTarget(const gsn::Target& t) {
@@ -718,9 +734,12 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
                     }
                 }
             } else if (d.texture.kind == gsn::TextureSource::Kind::Reinterpreted && d.texture.id < count) {
-                // Bytes of a target read as indices: sampled once per GS pixel, as the effect expects.
+                // Bytes of a target read as indices. Read 1:1 (the colour grading's index ramps and palettes):
+                // once per GS pixel, at this render pixel's sub-texel. Scaled with the bilinear filter (the
+                // dealer's smoky backdrop squeezes the whole previous frame, as indices, into a smaller
+                // rectangle): the GS's four-texel filter over GS texels, each the mean of its sub-texels.
                 if (vk::Image* image = build(d.texture.id, at)) view = image->view;
-                k.flags |= kSnap;
+                k.flags |= linear && !oneToOne(d, k) ? kSnapFiltered : kSnap;
             }
             k.tex = static_cast<uint32_t>((s.tex0 >> 35) & 3) | (static_cast<uint32_t>((s.tex0 >> 34) & 1) << 2) |
                     (static_cast<uint32_t>(s.texa & 0xFF) << 8) | (static_cast<uint32_t>((s.texa >> 32) & 0xFF) << 16) |
@@ -882,6 +901,24 @@ void GsnScene::Impl::writeDump() {
                 for (uint32_t x = 0; x < e.width; ++x)
                     for (int c = 0; c < 3; ++c)
                         row[x * 3 + c] = static_cast<uint8_t>(std::clamp(toFloat(half[(size_t(y) * e.width + x) * 4 + c]) * 255.0f + 0.5f, 0.0f, 255.0f));
+                std::fwrite(row.data(), 1, row.size(), f);
+            }
+            std::fclose(f);
+        }
+        // The alpha as the GS keeps it (alpha x 128), as a grey image beside it.
+        std::snprintf(name, sizeof name, "gsn_%llu_%u_bp%04x_alpha.pgm", static_cast<unsigned long long>(dump.vblank), id, dump.bps[k]);
+        if (FILE* f = std::fopen(name, "wb")) {
+            std::fprintf(f, "P5\n%u %u\n255\n", e.width, e.height);
+            const uint16_t* half = static_cast<const uint16_t*>(buffer.mapped);
+            std::vector<uint8_t> row(e.width);
+            for (uint32_t y = 0; y < e.height; ++y) {
+                for (uint32_t x = 0; x < e.width; ++x) {
+                    const uint16_t h = half[(size_t(y) * e.width + x) * 4 + 3];
+                    const uint32_t exponent = (h >> 10) & 31, mantissa = h & 1023;
+                    const float v = exponent ? std::ldexp(static_cast<float>(mantissa | 1024), static_cast<int>(exponent) - 25)
+                                             : std::ldexp(static_cast<float>(mantissa), -24);
+                    row[x] = static_cast<uint8_t>(std::clamp(v * 128.0f + 0.5f, 0.0f, 255.0f));
+                }
                 std::fwrite(row.data(), 1, row.size(), f);
             }
             std::fclose(f);
