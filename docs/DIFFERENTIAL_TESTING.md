@@ -144,12 +144,12 @@ second in a race. `GT4_ORIG_TRACE` logs each native call.
   planning), every callee agrees with the original within float rounding. The two words 003F7EA8 leaves
   that the original clears are denormals (the EE flushes them to zero). 00465078's outputs differ by up to a
   few percent on values of 1e-4: rounding, through its branches.
-- **The B-spec pile-up at New York's turn 1** (cars pitched 30-70 degrees nose down, in the physics state,
-  not just on screen) happens the same with the physics step as original code, and with all game code as
-  original code (`GT4_ORIG=all`: car 3 at 48 degrees at VBlank 6100; up to VBlank 5600 the pitches match the
-  native run's within a degree). The game code is therefore not the cause: what remains is the original's own
-  behaviour or an input both builds share (the runtime's services, the timing), which needs a reference that
-  runs on independent hardware emulation (PCSX2 with a BIOS, or ps2-web-recomp's own runtime) to settle.
+- **No pile-up at New York's turn 1.** A first reading of the snapshots took the car matrix's first row for the
+  up axis and saw cars "pitched 30-70 degrees" there, the same with all game code as original code. The car
+  state (conductor + 0x6698 + i * 0x10A0 + 0x104) is position x, y, z (z up) and then the rows forward, side
+  and up: those angles were headings through the hairpin. Read correctly, every car stays within 7 degrees of
+  level while it turns about 190 degrees (VBlanks 6100-6900), and the `GT4_ORIG=all` run's headings match the
+  native run's up to the corner.
 - With `GT4_ORIG=all` the menus, the HUD and the race run, but the race's 3D scene is not drawn (sky only): a
   difference between the two worlds in the renderer's path, not investigated yet.
 - **The AI's catch-up** (rubber banding) is DynamicsConductor::ControlEnemySpeed (00365790), called by the
