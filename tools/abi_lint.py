@@ -78,8 +78,9 @@ def kind(param):
     words = p.split()
     if not words:
         return "?"
-    # drop the parameter name (the last word, when more than one word or it is not a type)
-    toks = words if len(words) == 1 else words[:-1]
+    # drop the parameter name (the last word, unless it is a type word: `unsigned long` has no name)
+    typewords = FLOAT | WIDE | QUAD | NARROW | {"long"}
+    toks = words if len(words) == 1 or words[-1] in typewords else words[:-1]
     joined = "".join(toks)
     if "longlong" in joined:
         return "w"
@@ -128,6 +129,20 @@ def scan(path, text):
             continue
         plist = split_params(params)
         kinds = [kind(p) for p in plist]
+        # The return: 'w' 64-bit, 'v' void, 'i' int or pointer, 's' a structure (returned through a hidden
+        # first argument, on the EE and natively), 'f' float.
+        rwords = [w for w in words if w not in ("extern", "static", "inline", "__inline__", "C", "virtual", "const",
+                                                 "volatile", "struct", "class", "union", "enum", "register")]
+        if "*" in prefix or "&" in prefix:
+            ret = "i"
+        elif not rwords or rwords == ["void"]:
+            ret = "v"
+        else:
+            ret = kind(" ".join(rwords) + " r")
+            if ret == "?":
+                ret = "s"
+        if ret == "s":
+            kinds = ["i"] + kinds
         if tail == ";" and path.endswith(".c") and params.strip() == "":
             kinds = None   # `f()` in C: unknown parameters
         used = None
@@ -148,7 +163,46 @@ def scan(path, text):
                 names = re.findall(r"[A-Za-z_]\w*", prm.split("=")[0])
                 name = names[-1] if names else ""
                 used.append(bool(name) and re.search(r"\b" + re.escape(name) + r"\b", body) is not None)
-        found.append((m.group(1).upper(), kinds, tail == "{", text.count("\n", 0, m.start()) + 1, used))
+        if used is not None and ret == "s":
+            used = [True] + used
+        found.append((m.group(1).upper(), kinds, tail == "{", text.count("\n", 0, m.start()) + 1, used, ret))
+    return found
+
+
+LABELLED = re.compile(r"(~?[A-Za-z_]\w*)\s*\(([^;{}]*)\)\s*(?:const\s*)?(?:throw\s*\(\s*\)\s*)?"
+                      r"__asm__\s*\(\s*\"func_([0-9A-Fa-f]{8})\"\s*\)\s*;")
+
+
+def scan_labelled(text):
+    """Declarations bound to an address by an asm label: [(addr, kinds, line, name)]. A member function's
+    `this` is its first integer argument; destructors (gcc 2's in-charge argument) are left out."""
+    found = []
+    depth_at = []
+    depth = 0
+    marks = {}
+    for m in LABELLED.finditer(text):
+        marks[m.start()] = m
+    if not marks:
+        return found
+    pos = 0
+    starts = sorted(marks)
+    k = 0
+    for i, ch in enumerate(text):
+        while k < len(starts) and starts[k] == i:
+            m = marks[starts[k]]
+            name = m.group(1)
+            if not name.startswith("~") and name not in KEYWORDS:
+                kinds = [kind(p) for p in split_params(m.group(2))]
+                if depth > 0:   # inside a class: the object comes first
+                    kinds = ["i"] + kinds
+                found.append((m.group(3).upper(), kinds, text.count("\n", 0, m.start()) + 1, name))
+            k += 1
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth = max(0, depth - 1)
+        if k >= len(starts):
+            break
     return found
 
 
@@ -188,28 +242,40 @@ def main():
             m = re.search(r"func_([0-9A-Fa-f]{8})", os.path.basename(path))
             if m:
                 overridden.add(m.group(1).upper())
+    # named sources (MGame__get_money.cpp): their address from the symbol table
+    named = {}
+    for line in open(os.path.join(a.decomp, "config", "symbol_addrs.txt"), encoding="utf-8", errors="replace"):
+        mm = re.match(r"\s*(\w+)\s*=\s*0x([0-9A-Fa-f]+)\s*;", line)
+        if mm:
+            named[mm.group(1)] = "%08X" % int(mm.group(2), 16)
     for path, role in files.items():
         base = os.path.basename(path)
         own = re.search(r"func_([0-9A-Fa-f]{8})|^([0-9a-f]{8})_", base)
-        own_addr = (own.group(1) or own.group(2)).upper() if own else None
+        own_addr = (own.group(1) or own.group(2)).upper() if own else named.get(os.path.splitext(base)[0])
         if role == "src" and own_addr in overridden:
             continue   # replaced by game_src/
         try:
             text = strip_comments(open(path, encoding="utf-8", errors="replace").read())
         except OSError:
             continue
-        for addr, kinds, is_def, line, used in scan(path, text):
+        for addr, kinds, is_def, line, used, ret in scan(path, text):
             if is_def:
                 if addr != own_addr:
                     continue   # a neighbour copied so the file compiles alone; its own file defines it
                 cur = definitions.get(addr)
                 if cur is None or rank[role] < cur[0]:
-                    definitions[addr] = (rank[role], kinds, path, line, used)
+                    definitions[addr] = (rank[role], kinds, path, line, used, ret)
             elif kinds is not None:
                 # only declarations the file calls (not ones whose address alone is taken)
                 calls = len(re.findall(r"\bfunc_" + addr + r"\s*\(", text, re.I))
                 if calls > 1:
-                    declarations[addr].append((kinds, path, line))
+                    declarations[addr].append((kinds, path, line, ret))
+        for addr, kinds, line, name in scan_labelled(text):
+            if addr == own_addr:
+                continue
+            if len(re.findall(r"(?<![\w~])" + re.escape(name) + r"\s*\(", text)) > 1 or \
+                    re.search(r"\b" + re.escape(name) + r"\s+\w+\s*\(", text):   # a call, or a constructed object
+                declarations[addr].append((kinds, path, line, "?"))
     problems = []
     for addr, decls in declarations.items():
         d = definitions.get(addr)
@@ -218,7 +284,7 @@ def main():
         dk, used = d[1], d[4]
         if "..." in dk:
             continue
-        for kinds, path, line in decls:
+        for kinds, path, line, ret in decls:
             if path == d[2]:
                 continue
             if "..." in kinds:
@@ -236,6 +302,9 @@ def main():
                     continue
                 if want != got:
                     bad.append(f"arg {i + 1}: {got} for {want}")
+            # 64-bit results: the EE's $v0 holds all of it; natively edx:eax, and a 32-bit declaration drops edx
+            if (d[5], ret) in (("w", "i"), ("i", "w")):
+                bad.append(f"returns {d[5]}, declared {ret}")
             if bad:
                 problems.append((addr, path, line, "".join(dk), "".join(kinds), "; ".join(bad)))
     problems.sort()

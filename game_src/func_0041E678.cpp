@@ -2,7 +2,10 @@
 /* Native correction of the provisional draft of 0041E678 (the driver's leg IK): 00420510 (matched)
  * takes (flag, joint, out, pole, base, target, p0, p1, l1, l2, tol, const float *minAngle). The
  * draft put minAngle before the three floats and added an int: the same call on the EE (the
- * pointer goes to the stack, the floats to $f12-$f14), but natively minAngle read 0. */
+ * pointer goes to the stack, the floats to $f12-$f14), but natively minAngle read 0.
+ * 00487A58 (matched: void (Vec4 *q, float angle), q = (0, s, 0, c) of angle/2 from 0057D8A0) reads only $a0
+ * and $f12; the draft declared it (Q *out, const Q *q, float) and passed &q twice, the same on the EE
+ * (jal at 0x41EA00 and 0x41EA2C), but natively the angle was the bits of the second pointer. */
 typedef unsigned int u128 __attribute__((mode(TI)));
 
 static inline float maxf(float a, float b) { float r; __asm__("max.s %0, %1, %2" : "=f"(r) : "f"(a), "f"(b)); return r; }
@@ -88,7 +91,7 @@ extern "C" V func_00421DC0(const Q *q);
 extern "C" void func_00486B38(M3 *dst, const M3 *src);
 extern "C" void func_00489300(V *out, const M3 *m, const V *v);
 extern "C" void func_004894E8(H *out, const M4 *m, const H *v);
-extern "C" void func_00487A58(Q *out, const Q *q, float a);
+extern "C" void func_00487A58(Q *out, float a);
 extern "C" void func_00488948(Q *q, const V *a, const V *b);
 extern "C" void func_00487830(Q *q, const V *axis, float a);
 extern "C" void func_004878C0(Q *q, const V *axis, float a);
@@ -107,7 +110,7 @@ struct Frame {
 static inline H mul(const M4 &m, const H &v) { H r; func_004894E8(&r, &m, &v); return r; }
 static inline V mul(const M3 &m, const V &v) { V r; func_00489300(&r, &m, &v); return r; }
 static inline M3 transpose(const M3 &m) { M3 r; func_00486B38(&r, &m); return r; }
-static inline void turn(Q &q, const Angle &a) { func_00487A58(&q, &q, a); }
+static inline void turn(Q &q, const Angle &a) { func_00487A58(&q, a); }
 static inline void setRot(Q &q, const V &v, const Angle &a) { func_00487830(&q, &v, a); }
 static inline void addRot(Q &q, const V &v, const Angle &a) { func_004878C0(&q, &v, a); }
 static inline Angle deg(float d) { return func_00420FC8(Angle(d)); }

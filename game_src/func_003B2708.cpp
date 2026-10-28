@@ -1,7 +1,11 @@
 /* compiler: ee-gcc2.96-no-strict-aliasing */
 /* Native correction of the provisional draft of 003B2708: 003B1FA8 and 003B21D8 take five arguments
  * (self, camera, &x, &y, &z); the original passes &sp640 in $t0, the draft passed four (natively
- * the fifth read 0: a write through a null pointer in the race). */
+ * the fifth read 0: a write through a null pointer in the race).
+ * 00416FD8 (out, a, t, in, extra) also takes five: the original sets $t0 = 0 in the delay slots of both
+ * jals (0x3B3F80, 0x3B3FB0); the draft passed four, so natively `extra` was the stack word after them,
+ * which 00416FD8 hands down through 0041C3F8/0041F560 to 0041D140 (movn at 0x41D1A8) and 0041EFE0
+ * (movz at 0x41EFFC), where null selects their default. */
 #include "types.h"
 #include "m2c_macros.h"
 #define NULL 0
@@ -206,7 +210,7 @@ int func_004152B0(void *, int, void *);       /* extern */
 int func_00415350(void *);                       /* extern */
 int func_00416B58(void *);                   /* extern */
 int func_00416F88(void *);                   /* extern */
-int func_00416FD8(void *, void *, void *, void *); /* extern */
+int func_00416FD8(void *, void *, void *, void *, void *); /* extern */
 int func_00421DF8(void *, void *, int, f32, f32); /* extern */
 s32 func_00459178(void *);                          /* extern */
 f32 func_004860E8(int, int, f32);           /* extern */
@@ -988,9 +992,9 @@ block_78:
                     spA4 = sp704;
                     spA8 = sp708;
                     if (temp_s7_2 == 1) {
-                        func_00416FD8((float *)stack, sp71C, &sp370, NULL);
+                        func_00416FD8((float *)stack, sp71C, &sp370, NULL, NULL);
                     } else {
-                        func_00416FD8((float *)stack, sp71C, &sp370, &sp6C0);
+                        func_00416FD8((float *)stack, sp71C, &sp370, &sp6C0, NULL);
                     }
                     M2C_FIELD(arg0, f32 *, 0x690) = func_00385918(&sp5C0);
                     M2C_FIELD(arg0, f32 *, 0x694) = func_00385928(&sp5C0);
