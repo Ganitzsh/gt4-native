@@ -46,6 +46,8 @@ public:
     void sendPad(uint32_t port, bool connected, const uint8_t data[18]);
     // Stops or restarts the game's clock (its VBlanks, alarms and timers): the in-game settings menu.
     void setPaused(bool paused);
+    // A gameplay option of the game (runtime.h GameOption): sent when it differs from the last value sent.
+    void setGameOption(uint32_t id, uint32_t value);
 
     bool live() const;          // linked to a running game
     bool finished() const;      // the game exited, or the replay reached its end (without loop)

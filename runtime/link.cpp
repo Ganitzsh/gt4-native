@@ -4,6 +4,7 @@
 #include "guest.h"
 #include "kernel.h"
 #include "log.h"
+#include "runtime.h"
 
 #include <windows.h>
 
@@ -250,6 +251,12 @@ void link_poll() {
                 ExitProcess(0);
             }
             if (cmd == 2 || cmd == 3) kernel_set_paused(cmd == 2);
+            if (cmd == 4 && n >= 12) {
+                uint32_t id, value;
+                std::memcpy(&id, payload + 4, 4);
+                std::memcpy(&value, payload + 8, 4);
+                set_game_option(id, value);
+            }
         }
         tail += (sizeof rec + rec.size + 15) & ~15ull;
     }

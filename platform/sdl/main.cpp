@@ -788,6 +788,7 @@ int run(const Options& options) {
             if (wantNative && gs->takeNativeFrame(nativeFrame, nativeSerial)) renderer->setNativeFrame(nativeFrame);
             if (gs->live()) {
                 gs->setPaused(menu.isOpen());
+                gs->setGameOption(0, static_cast<uint32_t>(settings.aiCatchUp));   // runtime.h kOptionAiCatchUp
                 // Nothing reaches the game while the menu is open, nor afterwards until every button is up
                 // (the button that closed the menu would act in the game).
                 gt4::ps2::PadInput input = readPad(gamepad);

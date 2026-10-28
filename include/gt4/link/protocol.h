@@ -40,7 +40,7 @@ enum Gt4LinkRecordType {
     GT4_REC_PAD = 64,       /* u32 port, u32 connected, 18 bytes libpad2 data (DualShock 2 layout) */
     GT4_REC_GS_EVENT = 65,  /* u32 kind (0 FINISH, 1 SIGNAL, 2 LABEL), u32 id, u64 value */
     GT4_REC_GS_IMAGE = 66,  /* u32 id, u32 qwc, then the downloaded qwords */
-    GT4_REC_HOST_CMD = 67,  /* u32 command (1 quit, 2 pause, 3 resume) */
+    GT4_REC_HOST_CMD = 67,  /* u32 command (1 quit, 2 pause, 3 resume, 4 gameplay option: u32 id, u32 value) */
 };
 
 /* Payload details as gt4_host consumes and produces them (docs/GS_BACKEND.md, "Link protocol"):
@@ -59,7 +59,8 @@ enum Gt4LinkRecordType {
  *                     id = low 32 bits of the register value, value = the full 64-bit value.
  *   GT4_REC_PAD       26 bytes: u32 port, u32 connected, 18 bytes of libpad2 data; sent every host frame.
  *   GT4_REC_HOST_CMD  1 (quit) when the host closes; the host terminates the game 3 s later if needed. 2 (pause)
- *                     and 3 (resume) around the host's settings menu: the game's bus clock stands still. */
+ *                     and 3 (resume) around the host's settings menu: the game's bus clock stands still. 4: a
+ *                     gameplay option (runtime.h GameOption) changed, or its value at start. */
 
 typedef struct Gt4LinkRecord {
     uint32_t type;

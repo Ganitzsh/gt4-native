@@ -150,6 +150,7 @@ const std::vector<const char*> kFilters{"point", "bilinear", "trilinear"};
 const std::vector<const char*> kTonemappers{"original", "reinhard", "aces", "agx", "agx_punchy", "pbr_neutral"};
 const std::vector<const char*> kEffects{"original", "off", "low", "medium", "high", "ultra"};
 const std::vector<const char*> kPresets{"original", "low", "medium", "high", "ultra", "custom"};
+const std::vector<const char*> kCatchUp{"original", "reduced", "off"};
 
 const std::vector<Option>& options() {
     static const std::vector<Option> table = [] {
@@ -272,6 +273,10 @@ const std::vector<Option>& options() {
         o.push_back(enumOption("graphics.preset", &Settings::preset, kPresets,
             "Applies a set of the options above: original (PS2-faithful), low, medium, high, ultra. Changing "
             "any member afterwards makes it custom."));
+        o.push_back(enumOption("gameplay.ai_catchup", &Settings::aiCatchUp, kCatchUp,
+            "The AI's catch-up (GT4's slow car boost), in the events that set it: cars behind the player are "
+            "sped up and cars ahead slowed down as the gaps grow. original = as on the PS2, reduced = half as "
+            "strong, off = every car at its own pace."));
         o.push_back(boolOption("scene.animate", &Settings::animate, "Test scene: run the animation.", false));
         o.push_back(floatOption("scene.fov", &Settings::fov, 20.0f, 110.0f,
             "Test scene: vertical field of view in degrees (Hor+).", false));
@@ -376,6 +381,7 @@ const char* name(Tonemapper v) { return kTonemappers[static_cast<size_t>(v)]; }
 const char* name(EffectQuality v) { return kEffects[static_cast<size_t>(v)]; }
 const char* name(TextureFilter v) { return kFilters[static_cast<size_t>(v)]; }
 const char* name(HudLayout v) { return kHud[static_cast<size_t>(v)]; }
+const char* name(AiCatchUp v) { return kCatchUp[static_cast<size_t>(v)]; }
 
 float aspectValue(AspectRatio ratio) {
     switch (ratio) {

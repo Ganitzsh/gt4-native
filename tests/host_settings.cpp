@@ -147,7 +147,7 @@ int main() {
         check(selectedLabel() == "Window", "page down goes to the next section");
         menu.input(Input::PageUp, m);
         check(selectedLabel() == "Preset", "page up goes to the top of the previous section");
-        for (int i = 0; i < 3; ++i) menu.input(Input::PageDown, m);
+        for (int i = 0; i < 4; ++i) menu.input(Input::PageDown, m);   // display, gameplay, image, actions
         menu.input(Input::Up, m);
         menu.input(Input::PageDown, m);
         check(selectedLabel() == "Resume", "the actions come last");

@@ -95,5 +95,36 @@ extern "C" long long gt4_money_floor() {
     return floor;
 }
 
+// The host's gameplay options (gameplay.* of its settings), sent at start and whenever they change
+// (GT4_REC_HOST_CMD 4). 0: gameplay.ai_catchup (game_src/func_00365790.cpp), 0 original, 1 reduced, 2 off;
+// GT4_AI_CATCHUP=original|reduced|off fixes it (headless tests).
+namespace {
+volatile int g_game_options[gt4::rt::kGameOptionCount];
+int env_catchup() {
+    static const int value = [] {
+        const char *e = std::getenv("GT4_AI_CATCHUP");
+        if (!e || !*e) return -1;
+        if (!std::strcmp(e, "original") || !std::strcmp(e, "0")) return 0;
+        if (!std::strcmp(e, "reduced") || !std::strcmp(e, "1")) return 1;
+        if (!std::strcmp(e, "off") || !std::strcmp(e, "2")) return 2;
+        gt4::rt::log_warn("GT4_AI_CATCHUP=%s: expected original, reduced or off", e);
+        return -1;
+    }();
+    return value;
+}
+}  // namespace
+
+void gt4::rt::set_game_option(uint32_t id, uint32_t value) {
+    if (id >= kGameOptionCount) return;
+    if (g_game_options[id] != static_cast<int>(value))
+        log_info("game option %u = %u", id, value);
+    g_game_options[id] = static_cast<int>(value);
+}
+
+extern "C" int gt4_game_option(int id) {
+    if (id == gt4::rt::kOptionAiCatchUp && env_catchup() >= 0) return env_catchup();
+    return id >= 0 && id < gt4::rt::kGameOptionCount ? g_game_options[id] : 0;
+}
+
 // The VBlank counter, for game-side debugging checks (game_src copies).
 extern "C" unsigned gt4_vblank() { return gt4::rt::kernel_vblank_count(); }

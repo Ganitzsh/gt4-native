@@ -2,7 +2,9 @@
 // User-facing display and image-quality settings of the native host (docs/RENDERING.md lists every
 // option). One plain struct, a versioned INI file in the user's configuration directory, command-line
 // overrides (--set section.key=value) and graphics presets. Settings only steer presentation: nothing
-// here may feed back into game state (docs/PLATFORM.md, "Rendering and audio only observe").
+// here may feed back into game state (docs/PLATFORM.md, "Rendering and audio only observe"), except the
+// [gameplay] section, whose options the game is sent explicitly (GT4_REC_HOST_CMD 4) and whose defaults
+// are the original game's behaviour.
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -25,6 +27,8 @@ enum class Tonemapper : uint8_t { Original, Reinhard, Aces, AgX, AgXPunchy, PbrN
 // Original: what the PS2 game draws (with the R1 renderer, the game's own GS output for that effect).
 enum class EffectQuality : uint8_t { Original, Off, Low, Medium, High, Ultra };
 enum class Preset : uint8_t { Original, Low, Medium, High, Ultra, Custom };
+// The AI's catch-up (GT4's "slow car boost": cars behind sped up, cars ahead slowed down, by event).
+enum class AiCatchUp : uint8_t { Original, Reduced, Off };
 
 struct Settings {
     static constexpr int kVersion = 1;
@@ -90,6 +94,9 @@ struct Settings {
     // [graphics]
     Preset preset = Preset::High;
 
+    // [gameplay] (sent to the game; not part of the graphics presets)
+    AiCatchUp aiCatchUp = AiCatchUp::Original;
+
     // [scene] (test scene only; not saved)
     bool animate = true;
     float fov = 50.0f;                // vertical field of view in degrees (Hor+)
@@ -111,6 +118,7 @@ const char* name(Tonemapper);
 const char* name(EffectQuality);
 const char* name(TextureFilter);
 const char* name(HudLayout);
+const char* name(AiCatchUp);
 
 // Content aspect ratio (width / height), or 0 for "match the window".
 float aspectValue(AspectRatio ratio);

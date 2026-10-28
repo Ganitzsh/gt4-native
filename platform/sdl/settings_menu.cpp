@@ -142,6 +142,14 @@ std::vector<Item> buildItems(bool game) {
         items.push_back(choice("HUD layout", "aspect.hud",
             {{"anchored", "Anchored"}, {"centered", "Centred 4:3"}, {"stretched", "Stretched"}}, "2D layout."));
 
+    if (game) {
+        items.push_back(header("GAMEPLAY"));
+        items.push_back(choice("AI catch-up", "gameplay.ai_catchup",
+            {{"original", "Original"}, {"reduced", "Reduced"}, {"off", "Off"}},
+            "GT4 speeds up the cars behind you and slows down the cars ahead in the events that ask for it "
+            "(rubber banding). Original: as on the PS2. Reduced: half as strong. Off: every car at its own pace."));
+    }
+
     items.push_back(header("IMAGE"));
     items.push_back(step("Film grain", "post.film_grain", 0.05f, 0.0f, 1.0f, true, "Film grain strength."));
     items.push_back(step("Vignette", "post.vignette", 0.05f, 0.0f, 1.0f, true, "Darkens the corners."));

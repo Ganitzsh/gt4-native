@@ -170,6 +170,7 @@ struct GsHost::Impl {
     std::thread worker;
     std::atomic<bool> stop{false}, done{false};
     bool paused = false;   // the game was asked to pause (setPaused)
+    int64_t gameOptions[8] = {-1, -1, -1, -1, -1, -1, -1, -1};   // gameplay option values sent (setGameOption)
 
     mutable std::mutex frameMutex;
     std::condition_variable frameReady;
@@ -410,6 +411,13 @@ void GsHost::setPaused(bool paused) {
     impl->paused = paused;
     const uint32_t command = paused ? 2u : 3u;
     impl->link->write(GT4_REC_HOST_CMD, &command, sizeof command);
+}
+
+void GsHost::setGameOption(uint32_t id, uint32_t value) {
+    if (!impl->link || !impl->link->running() || id >= 8 || impl->gameOptions[id] == value) return;
+    impl->gameOptions[id] = value;
+    const uint32_t payload[3] = {4u, id, value};
+    impl->link->write(GT4_REC_HOST_CMD, payload, sizeof payload);
 }
 
 bool GsHost::live() const { return impl->link && impl->link->running(); }

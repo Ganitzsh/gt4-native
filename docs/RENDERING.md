@@ -51,8 +51,9 @@ readout, D-pad anti-aliasing and render quality, shoulders upscaler, north butto
 
 Escape, or the pad's Guide button (or Select + Start), opens the settings menu over the picture: the options that
 apply to what is shown (over the game: preset, renderer, render resolution and scale, upscaler, sharpening,
-anti-aliasing, anisotropic filtering, window, v-sync, frame rate limit, aspect ratio, menu layout, grain, vignette,
-chromatic aberration, dither, the readout), each with a description, then Resume and Quit. Up/Down (D-pad, left
+anti-aliasing, anisotropic filtering, window, v-sync, frame rate limit, aspect ratio, menu layout, the AI's
+catch-up, grain, vignette, chromatic aberration, dither, the readout), each with a description, then Resume and
+Quit. Up/Down (D-pad, left
 stick, W/S) choose, Left/Right change, L1/R1 or PgUp/PgDn jump between sections, Enter or the south button
 accepts, Escape, Backspace, Circle or Start close it. Changes apply at once and are saved to the settings file.
 
@@ -60,7 +61,9 @@ Over a live game the menu pauses it: the host sends `GT4_REC_HOST_CMD` 2 and the
 clock, so no VBlank, alarm or timer comes due (sound stops with the VBlanks that drive it); 3 resumes it, and the
 time spent paused is left out of the clock. The pad reaches the game again once every button is released, so
 the button that closed the menu does not also act in the game. The aspect ratio and the menu layout are passed
-to the game when it starts: they are marked `*` and apply at the next start. `GT4_HOST_KEYS=FRAME:KEY,...`
+to the game when it starts: they are marked `*` and apply at the next start. The `[gameplay]` options are the
+only settings that change the game itself: the host sends each one when the game starts and whenever it changes
+(`GT4_REC_HOST_CMD` 4: id, value), and their defaults are the original game's behaviour. `GT4_HOST_KEYS=FRAME:KEY,...`
 (escape up down left right return backspace pageup pagedown f1) presses keys at host frames, for unattended
 checks of the menu, also without a window.
 
@@ -381,6 +384,12 @@ Generated from `gt4_host --list-options` (defaults are the `high` preset).
 | Option | Default | Values | Effect |
 |---|---|---|---|
 | `graphics.preset` | `high` | original \| low \| medium \| high \| ultra \| custom | Applies a set of the options above: original (PS2-faithful), low, medium, high, ultra. Changing any member afterwards makes it custom. |
+
+#### [gameplay]
+
+| Option | Default | Values | Effect |
+|---|---|---|---|
+| `gameplay.ai_catchup` | `original` | original \| reduced \| off | The AI's catch-up (GT4's slow car boost), in the events that set it: cars behind the player are sped up and cars ahead slowed down as the gaps grow. original = as on the PS2, reduced = half as strong, off = every car at its own pace. |
 
 #### [scene]
 

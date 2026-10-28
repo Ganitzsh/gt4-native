@@ -152,3 +152,10 @@ second in a race. `GT4_ORIG_TRACE` logs each native call.
   runs on independent hardware emulation (PCSX2 with a BIOS, or ps2-web-recomp's own runtime) to settle.
 - With `GT4_ORIG=all` the menus, the HUD and the race run, but the race's 3D scene is not drawn (sky only): a
   difference between the two worlds in the renderer's path, not investigated yet.
+- **The AI's catch-up** (rubber banding) is DynamicsConductor::ControlEnemySpeed (00365790), called by the
+  physics step for pairs of cars along the running order: it sets each car's time scale (state +0x444; the car's
+  physics step is that many 60ths of a second, 003658A0) from the event's slow car boost and fast enemy restrain
+  parameters (conductor +0xF818). Its native copy (game_src/func_00365790.cpp, the `gameplay.ai_catchup` option)
+  was checked by forcing the parameters on in a B-spec race (`GT4_POKE` at VBlank 4600: 20% over 10..100 m) and
+  replaying six recorded calls on the original: all agree (two within float rounding). Original slowed the
+  leader ahead of the player to 0.79 of real time; reduced to 0.86; off kept every car at 1.0.

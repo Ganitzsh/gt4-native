@@ -195,10 +195,48 @@ DWORD WINAPI snapshot_thread(void *) {
     return 0;
 }
 
+// The address of a GT4_POKE target: hex ADDR, or *WORD+OFF / *WORD-OFF (hex): OFF from the first guest word, in
+// RAM from 0x00100000, that holds WORD (an object found by its vtable pointer, wherever the heap put it).
+uint32_t poke_address(const char *p, char **end) {
+    if (*p != '*') return static_cast<uint32_t>(strtoul(p, end, 16));
+    const uint32_t word = static_cast<uint32_t>(strtoul(p + 1, end, 16));
+    const int sign = **end == '-' ? -1 : 1;
+    const uint32_t off = (**end == '+' || **end == '-') ? static_cast<uint32_t>(strtoul(*end + 1, end, 16)) : 0;
+    for (uint32_t a = 0x00100000; a < kRamSize; a += 4)
+        if (*static_cast<volatile uint32_t *>(guest_ptr(a)) == word) return a + sign * off;
+    log_warn("record: GT4_POKE: no guest word %08X", word);
+    return 0;
+}
+
+// GT4_POKE=VBLANK:ADDR=WORD[,ADDR=WORD...][;VBLANK:...] (hex addresses and words; ADDR as poke_address): writes
+// those guest words when each VBlank is reached, to put game state into a case under test (e.g. an event's
+// parameters).
+DWORD WINAPI poke_thread(void *) {
+    const char *p = getenv("GT4_POKE");
+    while (*p) {
+        char *end;
+        const uint32_t v = static_cast<uint32_t>(strtoul(p, &end, 0));
+        if (*end != ':') break;
+        p = end + 1;
+        while (kernel_vblank_count() < v) Sleep(1);
+        while (*p && *p != ';') {
+            const uint32_t addr = poke_address(p, &end);
+            if (*end != '=') return 0;
+            const uint32_t word = static_cast<uint32_t>(strtoul(end + 1, &end, 16));
+            if (addr) *static_cast<volatile uint32_t *>(guest_ptr(addr)) = word;
+            log_info("record: VBlank %u: [%08X] = %08X", kernel_vblank_count(), addr, word);
+            p = *end == ',' ? end + 1 : end;
+        }
+        if (*p == ';') ++p;
+    }
+    return 0;
+}
+
 }  // namespace
 
 void gt4::rt::record_install() {
     if (const char *d = getenv("GT4_RECORD_DIR")) g_dir = d;
+    if (const char *s = getenv("GT4_POKE"); s && *s) CreateThread(nullptr, 1u << 16, poke_thread, nullptr, 0, nullptr);
     if (const char *s = getenv("GT4_SNAPSHOT"); s && *s) {
         CreateDirectoryA(g_dir, nullptr);
         CreateThread(nullptr, 1u << 16, snapshot_thread, nullptr, 0, nullptr);
