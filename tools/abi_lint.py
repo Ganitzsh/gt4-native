@@ -30,11 +30,11 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 FLOAT = {"float", "f32", "F32", "float32"}
-WIDE = {"long", "s64", "u64", "double", "f64", "longlong", "ulonglong", "int64_t", "uint64_t"}
+WIDE = {"long", "s64", "u64", "double", "f64", "longlong", "ulonglong", "int64_t", "uint64_t", "M2C_UNK64"}
 QUAD = {"u128", "s128", "__gt4_u128", "__gt4_s128", "qword"}
 NARROW = {"int", "s32", "u32", "unsigned", "signed", "short", "s16", "u16", "char", "s8", "u8", "bool",
           "size_t", "uint32_t", "int32_t", "uint16_t", "int16_t", "uint8_t", "int8_t", "u_int", "uint", "BOOL",
-          "enum"}
+          "enum", "M2C_UNK", "M2C_UNK8", "M2C_UNK16", "M2C_UNK32"}   # m2c's unknown types are int-sized typedefs
 KEYWORDS = {"return", "if", "else", "case", "do", "while", "for", "switch", "goto", "sizeof", "new", "delete"}
 NAME = re.compile(r"\bfunc_([0-9A-Fa-f]{8})\s*\(")
 

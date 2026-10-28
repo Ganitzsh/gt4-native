@@ -103,6 +103,8 @@ def indirect_calls(segs, start, size):
             break
         op, funct, rs = w >> 26, w & 63, (w >> 21) & 31
         indirect = op == 0 and (funct == 0x09 or (funct == 0x08 and rs != 31))
+        if indirect and funct == 0x08 and is_switch(segs, a, start):
+            indirect = False   # a jump table, not a tail call
         if indirect:
             slot = word_at(segs, a + 4) or 0
             g2, f2 = writes(slot)
@@ -111,7 +113,20 @@ def indirect_calls(segs, start, size):
         g, f = writes(w)
         g_written |= g
         f_written |= f
+        if op == 3 or (op == 0 and funct == 0x09):   # after a call the argument registers hold the callee's values
+            g_written |= set(GPR_ARGS)
+            f_written |= set(FPR_ARGS)
     return out
+
+
+def is_switch(segs, at, start):
+    """A jr through a jump table: an sltiu bounds check and a load of the target shortly before."""
+    seen_load = seen_check = False
+    for a in range(max(start, at - 48), at, 4):
+        w = word_at(segs, a) or 0
+        seen_check |= (w >> 26) == 0x0B          # sltiu
+        seen_load |= (w >> 26) == 0x23           # lw
+    return seen_check and seen_load
 
 
 def definitions(decomp):
@@ -141,6 +156,9 @@ def definitions(decomp):
             continue
         params = [p for p in abi_lint.split_params(d.group(1)) if p.strip() and p.strip() != "void"]
         kinds = [abi_lint.kind(p) for p in params]
+        rets = [r for (x, _k, is_def, _l, _u, r) in abi_lint.scan(path, text) if is_def and x == addr]
+        if rets and rets[0] == "s":
+            kinds = ["i"] + kinds   # the returned struct's address comes first
         nint = sum(1 for k in kinds if k != "f")
         nflt = sum(1 for k in kinds if k == "f")
         cur = out.get(addr)
