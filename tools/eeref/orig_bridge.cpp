@@ -412,6 +412,15 @@ void redirect_all() {
     for (std::uint32_t k = 0; k < gt4_native_function_count; ++k)
         if (std::strncmp(gt4_native_functions[k].name, "gt4_replace_func_", 17) == 0) pending[gt4_native_functions[k].addr] = true;
     for (std::uint32_t a : kHardware) pending.erase(a);
+    // GT4_ORIG_KEEP=ADDR,...: functions that stay native (a test hook such as the GT4_MONEY floor, 0043AF68)
+    std::unordered_map<std::uint32_t, bool> keep;
+    for (const char *k = getenv("GT4_ORIG_KEEP"); k && *k;) {
+        char *e;
+        keep[static_cast<std::uint32_t>(std::strtoul(k, &e, 16))] = true;
+        k = *e == ',' ? e + 1 : e;
+        if (e == k) break;
+    }
+    for (const auto &[a, _] : keep) pending.erase(a);
     auto *thunks = static_cast<std::uint8_t *>(
         VirtualAlloc(nullptr, gt4_guest_function_count * 10u, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
     std::uint32_t count = 0;
@@ -422,6 +431,7 @@ void redirect_all() {
         std::int32_t rel;
         std::memcpy(&rel, p + 1, 4);
         if (addr + 5 + static_cast<std::uintptr_t>(rel) >= end && !pending.count(addr)) continue;
+        if (keep.count(addr)) continue;
         std::uint8_t *t = thunks + count * 10;
         t[0] = 0xB9;  // mov $addr, %ecx
         std::memcpy(t + 1, &addr, 4);

@@ -130,6 +130,8 @@ its RAM and scratchpad are the guest's, at their PS2 addresses):
 - `GT4_ORIG=all` sends every PS2 function address to the original code: all game logic is the original's,
   and only the runtime's hardware and host layer (DMA starts, GS, IOP services, syscalls, libc helpers) is
   native. `GT4_ORIG_KINDS=build/eeref/kinds.txt` (`kinds.py`) gives every function's parameter kinds.
+  `GT4_ORIG_KEEP=ADDR,...` keeps those functions native under `all` (a test hook such as the GT4_MONEY floor,
+  0043AF68).
 
 Calls from the original code to an address whose trampoline leads into the runtime are made natively, with
 the EE's eight integer argument registers and four stack slots; setjmp, longjmp and the runtime's stand-ins
