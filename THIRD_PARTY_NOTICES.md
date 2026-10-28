@@ -80,6 +80,12 @@ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTH
 LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
 ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+**PS2 float model (LGPL-3.0-or-later).** `runtime/ps2float/ps2float.c` and `.h` are copied unchanged from
+libretro/parallel-ps2 (`pcsx2/ps2float.*`, revision 32f5d699cc084f2d197072a24e7c7806121a1339), a bit-exact
+integer model of the EE and VU floating-point units (Booth multiplier, SRT divider) by the PCSX2 Dev Team and
+contributors. They keep their license header; the LGPL-3.0-or-later permits combining them with this GPL-3.0
+program. The game uses them through `gt4_ee_mul` and friends (runtime/sdk.cpp).
+
 ## FFmpeg
 
 The native game links a static FFmpeg (LGPL-2.1+, https://ffmpeg.org) for its movies, built by

@@ -3,6 +3,7 @@
 #include "kernel.h"
 #include "log.h"
 #include "runtime.h"
+#include "ps2float/ps2float.h"
 
 #include <cstdarg>
 #include <cstdlib>
@@ -152,6 +153,14 @@ extern "C" int gt4_game_option(int id) {
     if (id == gt4::rt::kOptionAiCatchUp && env_catchup() >= 0) return env_catchup();
     return id >= 0 && id < gt4::rt::kGameOptionCount ? g_game_options[id] : 0;
 }
+
+// The EE FPU's own arithmetic, bit for bit (runtime/ps2float: the PS2 float model of libretro/parallel-ps2,
+// LGPL-3.0+): for game code whose results depend on the last bit (keystreams, checksums over float state), where the
+// host's IEEE operations or plain truncation diverge. Raw single-precision bit patterns in and out.
+extern "C" uint32_t gt4_ee_mul(uint32_t a, uint32_t b) { return ps2f_raw(ps2f_mul(a, b)); }
+extern "C" uint32_t gt4_ee_div(uint32_t a, uint32_t b) { return ps2f_raw(ps2f_div(a, b)); }
+extern "C" uint32_t gt4_ee_add(uint32_t a, uint32_t b) { return ps2f_raw(ps2f_add(a, b)); }
+extern "C" uint32_t gt4_ee_sub(uint32_t a, uint32_t b) { return ps2f_raw(ps2f_sub(a, b)); }
 
 // The VBlank counter, for game-side debugging checks (game_src copies).
 extern "C" unsigned gt4_vblank() { return gt4::rt::kernel_vblank_count(); }
