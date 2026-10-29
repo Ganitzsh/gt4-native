@@ -77,6 +77,18 @@ inline int32_t vu_order(float f) {
     return i ^ ((i >> 31) & 0x7FFFFFFF);
 }
 
+// The VU's floats have no infinities, NaNs or denormals: exponent 255 is an ordinary exponent (read
+// here as the largest IEEE float of that sign) and a denormal is zero. Arithmetic takes its operands
+// through this and saturates its results with it. GT4 depends on it: 00499948 (text glyphs) packs a
+// coordinate's sign-extended upper word into z, 0xFFFFFFFF for a negative x, which the VU multiplies
+// by zero; as an IEEE NaN it spread to the result and the glyph lost its position.
+inline float vu_float(float f) {
+    const uint32_t u = ubits(f);
+    if ((u & 0x7F800000u) == 0x7F800000u) return fbits((u & 0x80000000u) | 0x7F7FFFFFu);
+    if ((u & 0x7F800000u) == 0) return fbits(u & 0x80000000u);
+    return f;
+}
+
 // The VU has no infinities: a division by zero gives the largest float of the right sign.
 float vu_div(float a, float b) {
     if (b == 0.0f) return fbits(((ubits(a) ^ ubits(b)) & 0x80000000u) | 0x7F7FFFFFu);
@@ -115,7 +127,15 @@ Upper upper(Gt4Vu0State &s, uint32_t u, uint32_t pc) {
     r.mask = ((dest >> 3) & 1) | ((dest >> 1) & 2) | ((dest << 1) & 4) | ((dest << 3) & 8);
     const int ft = (u >> 16) & 31, fs = (u >> 11) & 31, fd = (u >> 6) & 31;
     const int bc = u & 3;
-    const float *S = s.vf[fs], *T = s.vf[ft];
+    // Arithmetic reads the operands as the VU does (vu_float); MAX, MINI, ABS and ITOF see their bits.
+    const float *rawS = s.vf[fs], *rawT = s.vf[ft];
+    float S[4], T[4], A[4];
+    for (int k = 0; k < 4; ++k) {
+        S[k] = vu_float(rawS[k]);
+        T[k] = vu_float(rawT[k]);
+        A[k] = vu_float(s.acc[k]);
+    }
+    const float q = vu_float(s.q), i = vu_float(s.i);
     const int op = u & 0x3F;
     int kind;            // 0 add, 1 sub, 2 madd, 3 msub, 4 max, 5 mini, 6 mul
     int src;             // 0 vector, 1 bc, 2 q, 3 i
@@ -147,9 +167,9 @@ Upper upper(Gt4Vu0State &s, uint32_t u, uint32_t pc) {
             case 0x2D: kind = 3; src = 0; break;
             case 0x2E:  // OPMSUB fd.xyz = ACC.xyz - fs.yzx * ft.zxy
                 r.write = true;
-                r.v[0] = s.acc[0] - S[1] * T[2];
-                r.v[1] = s.acc[1] - S[2] * T[0];
-                r.v[2] = s.acc[2] - S[0] * T[1];
+                r.v[0] = vu_float(A[0] - S[1] * T[2]);
+                r.v[1] = vu_float(A[1] - S[2] * T[0]);
+                r.v[2] = vu_float(A[2] - S[0] * T[1]);
                 r.mask &= 7;
                 return r;
             case 0x2F: kind = 5; src = 0; break;
@@ -168,8 +188,8 @@ Upper upper(Gt4Vu0State &s, uint32_t u, uint32_t pc) {
             r.write = true;
             r.reg = ft;
             for (int k = 0; k < 4; ++k) {
-                if (sp == 0x1D) r.v[k] = std::fabs(S[k]);
-                else if (sp < 0x14) r.v[k] = static_cast<float>(static_cast<int32_t>(ubits(S[k]))) / scale[sp & 3];
+                if (sp == 0x1D) r.v[k] = fbits(ubits(rawS[k]) & 0x7FFFFFFFu);
+                else if (sp < 0x14) r.v[k] = static_cast<float>(static_cast<int32_t>(ubits(rawS[k]))) / scale[sp & 3];
                 else r.v[k] = fbits(static_cast<uint32_t>(ftoi(S[k] * scale[sp & 3])));
             }
             return r;
@@ -208,9 +228,9 @@ Upper upper(Gt4Vu0State &s, uint32_t u, uint32_t pc) {
             case 0x2E:  // OPMULA ACC.xyz = fs.yzx * ft.zxy
                 r.write = true;
                 r.to_acc = true;
-                r.v[0] = S[1] * T[2];
-                r.v[1] = S[2] * T[0];
-                r.v[2] = S[0] * T[1];
+                r.v[0] = vu_float(S[1] * T[2]);
+                r.v[1] = vu_float(S[2] * T[0]);
+                r.v[2] = vu_float(S[0] * T[1]);
                 r.mask &= 7;
                 return r;
             case 0x2F: return r;  // NOP
@@ -222,19 +242,20 @@ Upper upper(Gt4Vu0State &s, uint32_t u, uint32_t pc) {
     r.to_acc = acc;
     for (int k = 0; k < 4; ++k) {
         if (!(r.mask & (1 << k))) continue;
-        const float a = S[k];
-        const float b = src == 0 ? T[k] : src == 1 ? T[bc] : src == 2 ? s.q : s.i;
+        const bool bits = kind == 4 || kind == 5;   // MAX / MINI: the operands' bits, compared and kept
+        const float a = bits ? rawS[k] : S[k];
+        const float b = src == 0 ? (bits ? rawT[k] : T[k]) : src == 1 ? (bits ? rawT[bc] : T[bc]) : src == 2 ? q : i;
         float v;
         switch (kind) {
         case 0: v = a + b; break;
         case 1: v = a - b; break;
-        case 2: v = s.acc[k] + a * b; break;
-        case 3: v = s.acc[k] - a * b; break;
+        case 2: v = A[k] + a * b; break;
+        case 3: v = A[k] - a * b; break;
         case 4: v = vu_order(a) > vu_order(b) ? a : b; break;
         case 5: v = vu_order(a) < vu_order(b) ? a : b; break;
         default: v = a * b; break;
         }
-        r.v[k] = v;
+        r.v[k] = bits ? v : vu_float(v);
     }
     return r;
 }
@@ -330,13 +351,13 @@ extern "C" void __gt4_vu0_callms(unsigned int addr) {
                         break;
                     }
                     case 0x38:  // DIV Q, fs.fsf, ft.ftf
-                        q = {true, vu_div(s.vf[is][fsf], s.vf[it][ftf]), 7};
+                        q = {true, vu_float(vu_div(vu_float(s.vf[is][fsf]), vu_float(s.vf[it][ftf]))), 7};
                         break;
                     case 0x39:  // SQRT Q, ft.ftf
-                        q = {true, std::sqrt(std::fabs(s.vf[it][ftf])), 7};
+                        q = {true, std::sqrt(std::fabs(vu_float(s.vf[it][ftf]))), 7};
                         break;
                     case 0x3A:  // RSQRT Q, fs.fsf, ft.ftf
-                        q = {true, vu_div(s.vf[is][fsf], std::sqrt(std::fabs(s.vf[it][ftf]))), 13};
+                        q = {true, vu_float(vu_div(vu_float(s.vf[is][fsf]), std::sqrt(std::fabs(vu_float(s.vf[it][ftf]))))), 13};
                         break;
                     case 0x3B:  // WAITQ
                         if (q.active) {

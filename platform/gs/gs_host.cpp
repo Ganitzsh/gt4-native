@@ -104,13 +104,13 @@ public:
                         u0 = std::min(u0, v.u); u1 = std::max(u1, v.u); v0 = std::min(v0, v.v); v1 = std::max(v1, v.v);
                     }
                     const uint64_t t0 = d.state.tex0;
-                    std::printf("[gsn all] t%u bp %X frame %llX prim %03X | tbp %llX tbw %llu psm %llX %ux%u tfx %llu cbp %llX cpsm %llX csa %llu cld %llu | src %d:%u | alpha %llX test %llX | n %u xy %.0f,%.0f-%.0f,%.0f uv %.0f,%.0f-%.0f,%.0f rgba %08X",
+                    std::printf("[gsn all] t%u bp %X frame %llX prim %03X | tbp %llX tbw %llu psm %llX %ux%u tfx %llu cbp %llX cpsm %llX csa %llu cld %llu | src %d:%u | alpha %llX test %llX sc %llX | n %u xy %.0f,%.0f-%.0f,%.0f uv %.0f,%.0f-%.0f,%.0f rgba %08X",
                                 d.target, t ? t->bp : 0, (unsigned long long)d.state.frame, d.state.prim,
                                 (unsigned long long)(t0 & 0x3FFF), (unsigned long long)((t0 >> 14) & 0x3F), (unsigned long long)((t0 >> 20) & 0x3F),
                                 1u << ((t0 >> 26) & 0xF), 1u << ((t0 >> 30) & 0xF), (unsigned long long)((t0 >> 35) & 3),
                                 (unsigned long long)((t0 >> 37) & 0x3FFF), (unsigned long long)((t0 >> 51) & 0xF), (unsigned long long)((t0 >> 56) & 0x1F),
                                 (unsigned long long)(t0 >> 61), static_cast<int>(d.texture.kind), d.texture.id,
-                                (unsigned long long)d.state.alpha, (unsigned long long)d.state.test, d.count, x0, y0, x1, y1, u0, v0, u1, v1,
+                                (unsigned long long)d.state.alpha, (unsigned long long)d.state.test, (unsigned long long)d.state.scissor, d.count, x0, y0, x1, y1, u0, v0, u1, v1,
                                 d.count ? list.vertices[d.first].rgba : 0u);
                     if (d.texture.kind == gsn::TextureSource::Kind::Reinterpreted && d.texture.id < list.reinterpretations.size()) {
                         const auto& r = list.reinterpretations[d.texture.id];

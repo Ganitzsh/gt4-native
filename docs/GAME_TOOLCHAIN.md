@@ -243,6 +243,10 @@ assemblies; all with `--keep-s`); `census.jsonl` (`file, profile, lang, ok, stag
   The semantics (MMI lanes and saturation, FPU incl. the EE's truncating `cvt.w.s`, VU0 FMAC with
   dest masks and broadcasts, Q/I/R, clipping, VU0 integer and memory ops, COP2 moves, COP0 and
   `syscall` as runtime calls) are C helpers in `compat/game/gt4_asm.h`, included by the prelude.
+  VU0 arithmetic, in macro and micro mode, uses the VU's number format (`__gt4_vu_float`): no
+  infinities, NaNs or denormals. The game relies on it: 00499948 places text glyphs from vectors
+  whose z holds a coordinate's sign-extended upper word (0xFFFFFFFF for a negative x), multiplied by
+  zero; as an IEEE NaN it spread, and each label lost the letters left of its origin.
   A `#param` stringified into a VU register name in a macro (`"$vf" #n`) becomes the C index `n`.
 - **C99 variadic macros** (`#define F(a, ...) ... __VA_ARGS__`) take gcc 2.9's named form.
 - **Register variables** (`register int i __asm__("$25")`) lose the binding; a file-scope one bound
