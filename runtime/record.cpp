@@ -52,7 +52,7 @@ struct Hook {
     uint8_t *fn;
     volatile LONG taken;  // calls recorded so far
 };
-constexpr int kMaxHooks = 256;
+constexpr int kMaxHooks = 1024;
 Hook g_hooks[kMaxHooks];
 int g_hook_count;
 bool g_rooted;  // g_hooks[0] is GT4_RECORD_ROOT
@@ -102,11 +102,36 @@ void write_state(const Hook &hook, uint32_t index, uint32_t kind, const uint32_t
     h.stack_base = stack;
     h.stack_size = stack_window(stack);
     const auto *ram = static_cast<const uint8_t *>(guest_ptr(0));
+    // GT4_RECORD_DELTA (many functions recorded at once): the first entry writes the whole RAM to base.ram; every
+    // entry is then kind 2, the pages that differ from it (replay.py rebuilds the full entry).
+    static const bool delta = getenv("GT4_RECORD_DELTA") != nullptr;
+    static uint8_t *base = nullptr;
+    if (!kind && delta) {
+        if (!base) {
+            base = static_cast<uint8_t *>(VirtualAlloc(nullptr, kRamSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+            std::memcpy(base + kGuestSectionStart, ram + kGuestSectionStart, kRamSize - kGuestSectionStart);
+            char bpath[512];
+            snprintf(bpath, sizeof bpath, "%s/base.ram", g_dir);
+            if (FILE *b = fopen(bpath, "wb")) {
+                fwrite(base, 1, kRamSize, b);
+                fclose(b);
+            }
+        }
+        h.kind = 2;
+        for (uint32_t a = kGuestSectionStart; a < kRamSize; a += kPage) h.ram_pages += std::memcmp(ram + a, base + a, kPage) != 0;
+    }
     if (kind)
         for (uint32_t a = kGuestSectionStart; a < kRamSize; a += kPage) h.ram_pages += std::memcmp(ram + a, entry_ram + a, kPage) != 0;
     fwrite(&h, sizeof h, 1, f);
     fwrite(&__gt4_vu0, sizeof(Gt4Vu0State), 1, f);
-    if (!kind) {
+    if (h.kind == 2) {
+        for (uint32_t a = kGuestSectionStart; a < kRamSize; a += kPage)
+            if (std::memcmp(ram + a, base + a, kPage) != 0) {
+                fwrite(&a, 4, 1, f);
+                fwrite(ram + a, 1, kPage, f);
+            }
+        std::memcpy(entry_ram + kGuestSectionStart, ram + kGuestSectionStart, kRamSize - kGuestSectionStart);
+    } else if (!kind) {
         static const uint8_t zeros[kGuestSectionStart] = {};
         fwrite(zeros, 1, kGuestSectionStart, f);  // the unmapped first 68 KB
         fwrite(ram + kGuestSectionStart, 1, kRamSize - kGuestSectionStart, f);
@@ -162,6 +187,8 @@ LONG CALLBACK on_break(EXCEPTION_POINTERS *e) {
         log_info("record: call %u of %08x at VBlank %u", p.index, hook->addr, kernel_vblank_count());
         if (g_rooted && hook == &g_hooks[0]) arm_scoped(true);
     }
+    // a hook that has its calls no longer traps (hundreds of hooks at once: GT4_RECORD over every draft)
+    if (!g_rooted && hook->taken >= static_cast<LONG>(g_count)) arm(*hook, false);
     // the instruction the int3 replaced: push %ebp
     c->Esp -= 4;
     *reinterpret_cast<uint32_t *>(static_cast<uintptr_t>(c->Esp)) = c->Ebp;

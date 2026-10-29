@@ -154,7 +154,8 @@ extern "C" void func_003B5E80(char *arg0, char *arg1, s32 arg2) {
     temp_a1_2 = temp_a1 + 0x100;
     sp2FC = arg0 + 0x2900;
     sp2F8 = M2C_FIELD(arg0, s32 *, 0x198) == 1;
-    if (M2C_FIELD(temp_a1_2, s32 (**)(char *), 4)(arg1 + M2C_FIELD(temp_a1, s16 *, 0x100)) == 0) {
+    /* The EE forwards arg2 to this first slot-0x100 virtual in $a2 ($a1 then holds the vtable entry) (passthrough_lint). */
+    if (M2C_FIELD(temp_a1_2, s32 (**)(char *, char *, s32), 4)(arg1 + M2C_FIELD(temp_a1, s16 *, 0x100), temp_a1_2, arg2) == 0) {
         func_00392FC8(sp2FC, 0);
         func_003924D0(sp2FC);
     }

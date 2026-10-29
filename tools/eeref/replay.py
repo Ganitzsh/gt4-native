@@ -11,6 +11,7 @@ import argparse
 import glob
 import os
 import re
+import shutil
 import subprocess
 import sys
 
@@ -53,6 +54,35 @@ def definition(addr, decomp, draft_paths):
     return None
 
 
+def expand(pre):
+    """A GT4_RECORD_DELTA entry (kind 2: the RAM pages that differ from the directory's base.ram) as a full entry
+    file in the temp directory (the caller deletes it); other files unchanged (None)."""
+    import struct, tempfile, shutil
+    data = open(pre, 'rb').read()
+    if struct.unpack_from('<I', data, 20)[0] != 2:
+        return None
+    ram_size, = struct.unpack_from('<I', data, 96)
+    vu0_size, = struct.unpack_from('<I', data, 108)
+    pages, = struct.unpack_from('<I', data, 120)
+    ram = bytearray(open(os.path.join(os.path.dirname(pre), 'base.ram'), 'rb').read()[:ram_size])
+    off = 124 + vu0_size
+    for _ in range(pages):
+        a, = struct.unpack_from('<I', data, off)
+        ram[a:a + 0x1000] = data[off + 4:off + 4 + 0x1000]
+        off += 4 + 0x1000
+    head = bytearray(data[:124])
+    struct.pack_into('<I', head, 20, 0)
+    struct.pack_into('<I', head, 120, 0)
+    tmp = tempfile.mkdtemp()   # eeref reads ADDR_N.post next to ADDR_N.pre
+    path = os.path.join(tmp, os.path.basename(pre))
+    with open(path, 'wb') as f:
+        f.write(head + data[124:124 + vu0_size] + ram + data[off:])
+    post = pre[:-4] + '.post'
+    if os.path.exists(post):
+        shutil.copy(post, path[:-4] + '.post')
+    return path
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--decomp', required=True)
@@ -72,13 +102,16 @@ def main():
     for pre in pres:
         addr = os.path.basename(pre).split('_')[0].upper()
         d = definition(addr, a.decomp, draft_paths)
-        cmd = [a.eeref, pre, '--elf', elf, '--syms', syms, '--max', a.max if a.detail else '0']
+        full = expand(pre)
+        cmd = [a.eeref, full or pre, '--elf', elf, '--syms', syms, '--max', a.max if a.detail else '0']
         role = '?'
         if d:
             kinds, ret, role = d
             kinds = [k if k in 'ifwq' else 'i' for k in kinds if k != '...']
             cmd += ['--args', ','.join(kinds) or 'i', '--ret', {'s': 'v'}.get(ret, ret)]
         r = subprocess.run(cmd, capture_output=True, text=True)
+        if full:
+            shutil.rmtree(os.path.dirname(full))
         text = (r.stdout + r.stderr).strip()
         if a.detail:
             print(text)

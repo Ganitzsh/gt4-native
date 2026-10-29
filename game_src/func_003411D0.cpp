@@ -59,7 +59,7 @@ extern "C" void RacePS2Base__render_reflection(char *arg0, void *arg1, s32 arg2,
     temp_s3 = M2C_FIELD(M2C_FIELD(M2C_FIELD(arg0, char **, 0x6C), char **, 0x80), char **, 4);
     if ((M2C_FIELD(temp_s3, s32 *, 0x24) != 0) || (M2C_FIELD(temp_s3, s32 *, 0xC8) != 0)) {
         temp_v1 = M2C_FIELD(arg0, char **, 0x64) + 0xD0;
-        temp_s0 = M2C_FIELD(temp_v1, char *(**)(char *, int), 4)(arg0 + M2C_FIELD(temp_v1, s16 *, 0), 0);
+        temp_s0 = M2C_FIELD(temp_v1, char *(**)(char *, int, s32, s32, f32), 4)(arg0 + M2C_FIELD(temp_v1, s16 *, 0), 0, arg2, arg3, fparg0); /* $a2-$a3 and $f12 stay in place for the callee, so they are passed on. */
         if (M2C_FIELD(temp_s3, s32 *, 0x34) != 0) {
             func_00342370(0);
             temp_v0 = M2C_FIELD(temp_s0, char **, 0) + 0x30;

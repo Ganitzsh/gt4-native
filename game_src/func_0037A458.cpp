@@ -90,7 +90,8 @@ extern "C" s32 func_0037A458(char *arg0, char *arg1, s32 arg2, char *arg3) {
     temp_v1 = M2C_FIELD(arg0, char **, 0) + 0x138;
     temp_s4 = M2C_FIELD(M2C_FIELD(arg0, char **, 0x18C), s32 *, 0x18);
     M2C_FIELD(arg0, f32 *, 0x270) = 0x0.0p+0f;
-    M2C_FIELD(temp_v1, M2C_UNK (**)(char *, s32), 4)(arg0 + M2C_FIELD(temp_v1, s16 *, 0), arg2);
+    /* The EE also forwards arg2 and arg3 to this virtual in $a2 and $a3 (passthrough_lint). */
+    M2C_FIELD(temp_v1, M2C_UNK (**)(char *, s32, s32, char *), 4)(arg0 + M2C_FIELD(temp_v1, s16 *, 0), arg2, arg2, arg3);
     temp_v1_2 = M2C_FIELD(arg0, char **, 0) + 0xB8;
     temp_s2 = M2C_FIELD(temp_v1_2, u32 (**)(char *), 4)(arg0 + M2C_FIELD(temp_v1_2, s16 *, 0));
     temp_v0 = M2C_FIELD(arg0, s32 *, 0x27C);
