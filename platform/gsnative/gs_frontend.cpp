@@ -54,9 +54,11 @@ void FrameList::clear() {
     retiredTextures.clear();
     resetTextures = false;
     targets.clear();
+    dump = false;
 }
 
 void carryOver(FrameList& dropped, FrameList& into) {
+    into.dump = into.dump || dropped.dump;
     if (!dropped.textures.empty()) {
         for (auto& t : into.textures) dropped.textures.push_back(std::move(t));   // the later version wins
         into.textures = std::move(dropped.textures);

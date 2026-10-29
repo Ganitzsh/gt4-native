@@ -69,6 +69,7 @@ public:
     uint64_t run(uint32_t pc, uint64_t maxCycles = 50'000'000);
     bool runaway() const { return stoppedRunaway; }
     uint32_t pc() const { return tpc; }   // where MSCNT continues
+    void setPc(uint32_t pc) { tpc = pc & 0x7FF; }   // a saved state restored (GraphicsStream::restoreState)
     // XGKICK: sends the GIF packet at `qword` (PATH1); used by the native microprograms (vu1_native.cpp).
     void kick(uint32_t qword) { xgkick(qword); }
 

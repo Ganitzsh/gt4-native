@@ -33,6 +33,12 @@ int wrap(int i, uint mode, int size) {
     }
 }
 
+// A texel coordinate of a target (in GS texels) moved to that target's render pixels' grid. Render pixel j
+// holds what the GS draws at the point j / scale (gsn.vert), and the GS reads that point back at u =
+// j / scale + 0.5 (u in [k, k + 1) is the GS pixel k): u - 0.5 + 0.5 / scale puts it at that render pixel's
+// centre. At 1x it is u itself.
+vec2 fromTargetPosition(vec2 position) { return position - 0.5 + 0.5 / draw.scale; }
+
 // Point sampling as the GS: the texel under the coordinate (in texels; a small bias keeps exact integers
 // from rounding down), wrapped. From a target at a higher scale, the render pixel within that texel.
 vec4 nearestTexel(vec2 position) {
@@ -44,8 +50,13 @@ vec4 nearestTexel(vec2 position) {
         return texelFetch(source, min(i * ivec2(draw.scale) + sub, textureSize(source, 0) - 1), 0) * 255.0;
     }
     if ((draw.flags & kFromTarget) != 0u) {
-        const vec2 within = clamp(position - cell, 0.0, 0.999);
-        const ivec2 at = ivec2((draw.sourceOffset + vec2(i) + within) * draw.scale);
+        // The render pixel drawn at the GS point this texel coordinate stands for (fromTargetPosition): a
+        // copy at any scale reads each render pixel once, half a pixel from the next instead of on the edge.
+        const vec2 fine = fromTargetPosition(position) * draw.scale + 1.0 / 64.0;
+        const vec2 gsCell = floor(fine / draw.scale);
+        const ivec2 j = ivec2(wrap(int(gsCell.x), draw.clampU, size.x), wrap(int(gsCell.y), draw.clampV, size.y));
+        const vec2 within = min(fine - gsCell * draw.scale, draw.scale - 0.001);
+        const ivec2 at = ivec2(floor((draw.sourceOffset + vec2(j)) * draw.scale + within));
         const vec4 t = texelFetch(source, clamp(at, ivec2(0), textureSize(source, 0) - 1), 0);
         return min(vec4(t.rgb * 255.0, t.a * 128.0), 255.0);   // the GS clamps what blends write (COLCLAMP)
     }
@@ -125,7 +136,7 @@ vec4 texel(vec2 coordinate) {
         return floor(c + 0.5);
     }
     if ((draw.flags & kFromTarget) != 0u) {
-        const vec2 gsPixel = draw.sourceOffset + coordinate * draw.textureSize;
+        const vec2 gsPixel = draw.sourceOffset + fromTargetPosition(coordinate * draw.textureSize);
         const vec4 t = texture(source, gsPixel / draw.sourceSize);
         vec4 c = min(vec4(t.rgb * 255.0, t.a * 128.0), 255.0);   // COLCLAMP, as above
         if ((draw.flags & kTarget24) != 0u) {

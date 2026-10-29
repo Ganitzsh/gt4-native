@@ -24,6 +24,8 @@ public:
     virtual void readTransfer(void* out, uint32_t qwc) = 0;
     // The whole 4 MiB of GS local memory (debugging: GT4_VRAM_DUMP).
     virtual void readVram(void* out) { (void)out; }
+    // Replaces the whole of GS local memory (a saved state restored: GraphicsStream::restoreState).
+    virtual void writeVram(const void* data) { (void)data; }
 };
 
 // Host -> game records (pad, GS events, image data, commands); the live link writes them to its ring.
@@ -53,6 +55,12 @@ public:
     std::string describe() const;
     Vu1& vu() { return unit; }
     Vif1& vif() { return vif1; }
+
+    // A capture taken mid-run (GT4_HOST_RECORD from a later VBlank) starts with a GT4_REC_STATE record:
+    // VU1 and VIF1, the GS registers last written and GS memory (`vram`, 4 MiB in address order), so that its
+    // replay starts where the live run was rather than with no microprograms. Taken at a VBlank.
+    std::vector<uint8_t> saveState(const uint8_t* vram) const;
+    void restoreState(const uint8_t* payload, size_t size);
 
 private:
     // PATH1 (XGKICK) and PATH2 (DIRECT) packets go to the GS through this, which counts them.
@@ -92,6 +100,24 @@ private:
     // GIF arbiter would, or at the next VSYNC if the mask is never lifted.
     std::vector<uint8_t> heldPath3;
     void releasePath3();
+    // The GS registers last written, for saveState: general registers by address (as the GIF packets set
+    // them), privileged ones by offset / 16 (0x00-0xF0; IMR in the last slot).
+    static constexpr uint32_t kGsRegs = 0x64;
+    uint64_t gsRegs[kGsRegs] = {}, gsRegsSet[2] = {};
+    uint64_t privRegs[17] = {};
+    uint32_t privSet = 0;
+    struct GifShadow {
+        uint64_t regs = 0;
+        uint32_t left = 0;   // PACKED: qwords; REGLIST: words; IMAGE: qwords
+        uint32_t flg = 0, nreg = 1, reg = 0;
+    } gifShadow[4];
+    uint32_t packedQ = 0x3F800000;   // Q as PACKED ST left it, for RGBAQ
+    void shadowGif(uint32_t path, const uint8_t* data, size_t bytes);
+    void shadowReg(uint32_t reg, uint64_t value) {
+        if (reg >= kGsRegs) return;
+        gsRegs[reg] = value;
+        gsRegsSet[reg >> 6] |= 1ull << (reg & 63);
+    }
 };
 
 // Splits a byte buffer of concatenated records (a capture file, or bytes copied out of the ring).

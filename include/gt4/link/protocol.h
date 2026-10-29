@@ -36,6 +36,7 @@ enum Gt4LinkRecordType {
     GT4_REC_SPU2_REGS = 8,  /* the SPUP register image of a VBlank (2 x 0x1D0 bytes) */
     GT4_REC_SPU2_RAM = 9,   /* SPU2 RAM write: u32 address, then bytes */
     GT4_REC_LOG = 10,       /* text */
+    GT4_REC_STATE = 11,     /* host captures only: the state a capture taken mid-run starts from (GraphicsStream::saveState) */
     /* host -> game */
     GT4_REC_PAD = 64,       /* u32 port, u32 connected, 18 bytes libpad2 data (DualShock 2 layout) */
     GT4_REC_GS_EVENT = 65,  /* u32 kind (0 FINISH, 1 SIGNAL, 2 LABEL), u32 id, u64 value */
@@ -55,6 +56,10 @@ enum Gt4LinkRecordType {
  *   GT4_REC_VSYNC     ends the frame: the host scans out the display (both read circuits) at this point.
  *   GT4_REC_GS_READ   after the GIF data that set TRXDIR = 1 (local -> host): the host replies GS_IMAGE
  *                     with the same id and qwc qwords of transfer data (zeros past the end of the area).
+ *   GT4_REC_STATE     never on the link: the first record of a capture the host recorded from a later VBlank
+ *                     (GT4_HOST_RECORD=PATH,FROM,COUNT). Version 1: VU1 memories and registers, VIF1
+ *                     registers, the privileged and general GS registers last written, then GS memory
+ *                     (4 MiB in address order); the replay restores them (stream.cpp).
  *   GT4_REC_GS_EVENT  host -> game for SIGNAL / FINISH / LABEL written by any path (PATH1/2 included):
  *                     id = low 32 bits of the register value, value = the full 64-bit value.
  *   GT4_REC_PAD       26 bytes: u32 port, u32 connected, 18 bytes of libpad2 data; sent every host frame.

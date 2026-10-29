@@ -65,7 +65,167 @@ void GraphicsStream::sendGif(uint32_t path, const uint8_t* data, size_t bytes) {
         }
     }
     ++packetIndex;
+    shadowGif(path, data, bytes);
     gs.gif(path, data, bytes);
+}
+
+// Follows the registers a GIF packet writes (for saveState). A packet may continue in the next one of its path.
+void GraphicsStream::shadowGif(uint32_t path, const uint8_t* data, size_t bytes) {
+    GifShadow& g = gifShadow[path & 3];
+    const size_t n = bytes / 16;
+    size_t q = 0;
+    while (q < n) {
+        uint64_t lo, hi;
+        std::memcpy(&lo, data + q * 16, 8);
+        std::memcpy(&hi, data + q * 16 + 8, 8);
+        if (!g.left) {   // a tag
+            ++q;
+            const uint32_t nloop = lo & 0x7FFF;
+            g.flg = (lo >> 58) & 3;
+            g.nreg = (lo >> 60) & 15;
+            if (!g.nreg) g.nreg = 16;
+            g.regs = hi;
+            g.reg = 0;
+            g.left = g.flg >= 2 ? nloop : nloop * g.nreg;
+            if ((lo >> 46) & 1) shadowReg(0x00, (lo >> 47) & 0x7FF);   // PRE: PRIM
+            continue;
+        }
+        if (g.flg == 0) {   // PACKED
+            const uint32_t r = (g.regs >> (4 * g.reg)) & 15;
+            switch (r) {
+            case 0x0: shadowReg(0x00, lo & 0x7FF); break;
+            case 0x1:
+                shadowReg(0x01, (lo & 0xFF) | ((lo >> 32) & 0xFF) << 8 | (hi & 0xFF) << 16 | ((hi >> 32) & 0xFF) << 24 |
+                                    static_cast<uint64_t>(packedQ) << 32);
+                break;
+            case 0x2: shadowReg(0x02, lo); packedQ = static_cast<uint32_t>(hi); break;
+            case 0x3: shadowReg(0x03, (lo & 0x3FFF) | ((lo >> 32) & 0x3FFF) << 16); break;
+            case 0x4: case 0xC: shadowReg(0x0A, ((hi >> 36) & 0xFF) << 56); break;   // XYZF: its F is FOG
+            case 0xA: shadowReg(0x0A, ((hi >> 36) & 0xFF) << 56); break;
+            case 0xE: shadowReg(static_cast<uint32_t>(hi & 0xFF), lo); break;
+            case 0x5: case 0xD: case 0xF: break;
+            default: shadowReg(r, lo); break;   // TEX0_1/2, CLAMP_1/2
+            }
+            g.reg = (g.reg + 1) % g.nreg;
+            --g.left;
+            ++q;
+        } else if (g.flg == 1) {   // REGLIST: two registers per qword (the descriptors are the addresses)
+            for (uint64_t word : {lo, hi}) {
+                if (!g.left) break;
+                const uint32_t r = (g.regs >> (4 * g.reg)) & 15;
+                if (r <= 0xD) shadowReg(r, word);
+                g.reg = (g.reg + 1) % g.nreg;
+                --g.left;
+            }
+            ++q;
+        } else {   // IMAGE
+            const size_t skip = std::min<size_t>(g.left, n - q);
+            q += skip;
+            g.left -= static_cast<uint32_t>(skip);
+        }
+    }
+}
+
+namespace {
+struct StateWriter {
+    std::vector<uint8_t>& out;
+    void bytes(const void* p, size_t n) { out.insert(out.end(), static_cast<const uint8_t*>(p), static_cast<const uint8_t*>(p) + n); }
+    void u32(uint32_t v) { bytes(&v, 4); }
+    void u64(uint64_t v) { bytes(&v, 8); }
+};
+struct StateReader {
+    const uint8_t* p;
+    size_t left;
+    bool ok = true;
+    void bytes(void* out, size_t n) {
+        if (n > left) { ok = false; std::memset(out, 0, n); return; }
+        std::memcpy(out, p, n);
+        p += n;
+        left -= n;
+    }
+    uint32_t u32() { uint32_t v; bytes(&v, 4); return v; }
+    uint64_t u64() { uint64_t v; bytes(&v, 8); return v; }
+};
+constexpr uint32_t kStateMagic = 0x53345447;   // "GT4S"
+constexpr uint32_t kStateVersion = 1;
+constexpr size_t kVramBytes = 4u << 20;
+}  // namespace
+
+std::vector<uint8_t> GraphicsStream::saveState(const uint8_t* vram) const {
+    std::vector<uint8_t> out;
+    out.reserve(kVramBytes + 64 * 1024);
+    StateWriter w{out};
+    w.u32(kStateMagic);
+    w.u32(kStateVersion);
+    w.bytes(unit.micro, sizeof unit.micro);
+    w.bytes(unit.data, sizeof unit.data);
+    w.bytes(unit.vf, sizeof unit.vf);
+    w.bytes(&unit.acc, sizeof unit.acc);
+    w.bytes(unit.vi, sizeof unit.vi);
+    for (uint32_t v : {unit.i, unit.q, unit.p, unit.r, unit.mac, unit.status, unit.clip, unit.top, unit.itop, unit.pc()}) w.u32(v);
+    for (uint32_t v : {vif1.cl, vif1.wl, vif1.mode, vif1.mask, vif1.base, vif1.ofst, vif1.tops, vif1.itops, vif1.mark,
+                       static_cast<uint32_t>(vif1.dbf), static_cast<uint32_t>(vif1.path3Masked)})
+        w.u32(v);
+    w.bytes(vif1.row, sizeof vif1.row);
+    w.bytes(vif1.col, sizeof vif1.col);
+    w.u32(privSet);
+    w.bytes(privRegs, sizeof privRegs);
+    w.bytes(gsRegsSet, sizeof gsRegsSet);
+    w.bytes(gsRegs, sizeof gsRegs);
+    w.u32(packedQ);
+    w.bytes(vram, kVramBytes);
+    return out;
+}
+
+void GraphicsStream::restoreState(const uint8_t* payload, size_t size) {
+    StateReader r{payload, size};
+    if (r.u32() != kStateMagic || r.u32() != kStateVersion) {
+        std::fprintf(stderr, "Replay: a saved state of an unknown version (ignored)\n");
+        return;
+    }
+    r.bytes(unit.micro, sizeof unit.micro);
+    r.bytes(unit.data, sizeof unit.data);
+    r.bytes(unit.vf, sizeof unit.vf);
+    r.bytes(&unit.acc, sizeof unit.acc);
+    r.bytes(unit.vi, sizeof unit.vi);
+    for (uint32_t* v : {&unit.i, &unit.q, &unit.p, &unit.r, &unit.mac, &unit.status, &unit.clip, &unit.top, &unit.itop}) *v = r.u32();
+    unit.setPc(r.u32());
+    for (uint32_t* v : {&vif1.cl, &vif1.wl, &vif1.mode, &vif1.mask, &vif1.base, &vif1.ofst, &vif1.tops, &vif1.itops, &vif1.mark}) *v = r.u32();
+    vif1.dbf = r.u32() != 0;
+    vif1.path3Masked = r.u32() != 0;
+    r.bytes(vif1.row, sizeof vif1.row);
+    r.bytes(vif1.col, sizeof vif1.col);
+    const uint32_t privMask = r.u32();
+    uint64_t priv[17];
+    r.bytes(priv, sizeof priv);
+    uint64_t regsSet[2], regs[kGsRegs];
+    r.bytes(regsSet, sizeof regsSet);
+    r.bytes(regs, sizeof regs);
+    packedQ = r.u32();
+    if (!r.ok || r.left < kVramBytes) {
+        std::fprintf(stderr, "Replay: a truncated saved state (ignored)\n");
+        return;
+    }
+    for (uint32_t k = 0; k < 17; ++k)
+        if (privMask >> k & 1) {
+            const uint32_t offset = k < 16 ? k * 0x10 : 0x1010;
+            privRegs[k] = priv[k];
+            gs.privileged(offset, priv[k]);
+        }
+    privSet = privMask;
+    gs.writeVram(r.p);
+    // The general registers, as one A+D packet; not the ones that start something (vertex kicks, a
+    // transfer, the events).
+    std::vector<uint64_t> packet{0, 0xE};
+    for (uint32_t reg = 0; reg < kGsRegs; ++reg) {
+        if (!(regsSet[reg >> 6] >> (reg & 63) & 1)) continue;
+        if (reg == 0x04 || reg == 0x05 || reg == 0x0C || reg == 0x0D || reg == 0x53 || reg == 0x54 || reg >= 0x60) continue;
+        packet.push_back(regs[reg]);
+        packet.push_back(reg);
+    }
+    const uint64_t count = (packet.size() - 2) / 2;
+    packet[0] = count | 1ull << 15 | 1ull << 60;   // NLOOP, EOP, PACKED with one register (A+D)
+    sendGif(2, reinterpret_cast<const uint8_t*>(packet.data()), packet.size() * 8);
 }
 
 // PACKED RGBAQ (register 1) values of a PATH1 packet, counted by colour (debugging aid).
@@ -183,9 +343,17 @@ void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload)
         std::memcpy(&reg, payload, 4);
         std::memcpy(&value, payload + 8, 8);
         ++counters.privWrites;
+        if (reg < 0x100 || reg == 0x1010) {
+            const uint32_t slot = reg < 0x100 ? reg >> 4 : 16;
+            privRegs[slot] = value;
+            privSet |= 1u << slot;
+        }
         gs.privileged(reg, value);
         break;
     }
+    case GT4_REC_STATE:
+        restoreState(payload, size);
+        break;
     case GT4_REC_VSYNC: {
         uint32_t field = 0, count = 0;
         if (size >= 4) std::memcpy(&field, payload, 4);

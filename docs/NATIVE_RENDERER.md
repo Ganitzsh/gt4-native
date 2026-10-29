@@ -28,7 +28,11 @@ mostly the field lines, which the native renderer does not jitter.
 - **No motion vectors yet**: the pipeline uses SMAA and FSR 1 in place of TAA and FSR 2 for these frames.
 - Debugging: `GT4_GSN=stats`, `GT4_GSN_DRAWS=BP|all`, `GT4_GSN_XFER` (transfers, CLUT loads, XYOFFSET),
   `GT4_GSN_TEXDUMP=TBP`, `GT4_GSN_DUMP=VBLANK` (targets), `GT4_GSN_LIMIT=K`, `GT4_GSN_VRAM=N` (front-end memory),
-  and paraLLEl-GS's `GT4_VRAM_DUMP=FRAME:PACKET,...|end` for the reference.
+  `GT4_GSN_TRIGGER=PATH` (live sessions: when that file appears, that frame's lines and targets), and
+  paraLLEl-GS's `GT4_VRAM_DUMP=FRAME:PACKET,...|end` for the reference. A screen deep in the game is best
+  studied offline: `GT4_HOST_RECORD=PATH,FROM,COUNT` records what the host receives over those VBlanks, with
+  the VU1, VIF1 and GS state at FROM first, and `gt4_host --replay PATH --frames N` then plays it in either
+  renderer (`--preset original` / `high`), the same frames every time.
 
 The menus' 2D keeps a centred 4:3 area in the game's 16:9 mode (game-side, gt4-native-game
 WIDESCREEN.md). Open: motion vectors, COLCLAMP = 0 (wrapping), Z formats as frames and textures (GT4's Z24
@@ -99,6 +103,12 @@ Found frame by frame against paraLLEl-GS (`GT4_VRAM_DUMP` for its memory, `GT4_G
   it comes from, and the draws that sample it (`kSnap`) take their GS pixel's texel and their own
   sub-texel. The colour grading thus applies at full resolution, as the game meant it, with no
   GT4-specific detection.
+- **Supersampled cars (showroom, dealers).** A car on a turntable is drawn four times with half-pixel
+  jitter, each pass averaged into an accumulation target by copies in 32- and 64-pixel strips (xy - 0.5 with
+  uv on texel edges, so the GS reads texel centres). Render pixel j holds what the GS draws at the point
+  j / scale, so a target's texel coordinate is read at u - 0.5 + 0.5 / scale (`fromTargetPosition`): read at
+  u itself, every copy landed on the boundary between two render pixels and strips rounded differently,
+  which turned the car into a staircase, at 1x too (the field targets are drawn at 2x vertically).
 - **GIF tags across transfers.** An IMAGE tag can end one DMA packet and its pixels arrive in the next (the
   ramp's upload): each path keeps its tag in progress.
 - **Z only.** The mirror and the scene clear Z inside a rectangle with a sprite whose alpha test always fails

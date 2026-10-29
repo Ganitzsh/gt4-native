@@ -68,7 +68,20 @@ public:
             }
             return std::make_pair(from, to);
         }();
-        const bool statsNow = statsAt.second < 0 || (static_cast<long>(count) >= statsAt.first && static_cast<long>(count) <= statsAt.second);
+        // GT4_GSN_TRIGGER=PATH (debugging, live sessions): when that file appears it is deleted, this frame's lines
+        // below are printed whatever GT4_GSN_AT says, and the native renderer dumps the frame's targets.
+        bool triggered = false;
+        if (static const char* trigger = std::getenv("GT4_GSN_TRIGGER"); trigger && native) {
+            if (std::FILE* f = std::fopen(trigger, "rb")) {
+                std::fclose(f);
+                std::remove(trigger);
+                triggered = true;
+                list.dump = true;
+                std::printf("[gsn] vblank %u: triggered\n", count);
+            }
+        }
+        const bool statsNow = triggered || statsAt.second < 0 ||
+                              (static_cast<long>(count) >= statsAt.first && static_cast<long>(count) <= statsAt.second);
         if (native && stats && statsNow) {
             uint32_t memory = 0, targets = 0, untextured = 0;
             for (const auto& d : list.draws) {
@@ -145,6 +158,31 @@ public:
     }
     void readTransfer(void* out, uint32_t qwc) override { backend.readTransfer(out, qwc); }
     void readVram(void* out) override { backend.readVram(0, out, 4u << 20); }
+    void writeVram(const void* data) override {
+        // One PSMCT32 transfer 1024 pixels wide (BW 16) from block 0: its pixels cover GS memory exactly once.
+        const auto* words = static_cast<const uint32_t*>(data);
+        constexpr uint32_t kSide = 1024, kQwords = kSide * kSide / 4;
+        std::vector<uint64_t> packet{4 | 1ull << 60, 0xE};   // A+D x 4
+        auto ad = [&](uint64_t reg, uint64_t value) { packet.push_back(value); packet.push_back(reg); };
+        ad(0x50, 16ull << 48);                       // BITBLTBUF: DBP 0, DBW 16, DPSM CT32
+        ad(0x51, 0);                                 // TRXPOS
+        ad(0x52, kSide | uint64_t{kSide} << 32);     // TRXREG
+        ad(0x53, 0);                                 // TRXDIR: host to local
+        packet.reserve(packet.size() + kQwords * 2 + 2 * (kQwords / 0x7FFF + 1));
+        std::vector<uint32_t> pixels(kSide * kSide);
+        for (uint32_t y = 0; y < kSide; ++y)
+            for (uint32_t x = 0; x < kSide; ++x) pixels[y * kSide + x] = words[gsn::GsMemory::address32(0, 16, x, y) / 4];
+        for (uint32_t done = 0; done < kQwords;) {
+            const uint32_t n = std::min<uint32_t>(kQwords - done, 0x7FFF);
+            packet.push_back(n | (done + n == kQwords ? 1ull << 15 : 0) | 2ull << 58);   // IMAGE
+            packet.push_back(0);
+            const size_t at = packet.size();
+            packet.resize(at + size_t(n) * 2);
+            std::memcpy(&packet[at], pixels.data() + size_t(done) * 4, size_t(n) * 16);
+            done += n;
+        }
+        gif(2, reinterpret_cast<const uint8_t*>(packet.data()), packet.size() * 8);
+    }
     uint64_t blankFrames = 0;
     std::atomic<bool> nativeWanted{true};
 private:
@@ -209,6 +247,7 @@ struct GsHost::Impl {
     struct Recorder {
         std::unique_ptr<ps2::CaptureWriter> out;
         uint64_t from = 0, count = ~0ull, vsyncs = 0;
+        bool started = false;
     };
     std::unique_ptr<Recorder> recorder = [] {
         const char* e = std::getenv("GT4_HOST_RECORD");
@@ -228,8 +267,16 @@ struct GsHost::Impl {
     }();
     void dispatch(const Gt4LinkRecord& header, const uint8_t* payload) {
         if (recorder) {
-            if (recorder->vsyncs >= recorder->from && recorder->vsyncs < recorder->from + recorder->count)
+            if (recorder->vsyncs >= recorder->from && recorder->vsyncs < recorder->from + recorder->count) {
+                if (!recorder->started && recorder->from) {   // mid-run: the state the replay starts from
+                    std::vector<uint8_t> vram(4u << 20);
+                    target->readVram(vram.data());
+                    const std::vector<uint8_t> state = stream->saveState(vram.data());
+                    recorder->out->write(GT4_REC_STATE, state.data(), static_cast<uint32_t>(state.size()));
+                }
+                recorder->started = true;
                 recorder->out->write(header.type, payload, header.size);
+            }
             if (header.type == GT4_REC_VSYNC) {
                 ++recorder->vsyncs;
                 recorder->out->flush();   // a run that loses the device still leaves its frames

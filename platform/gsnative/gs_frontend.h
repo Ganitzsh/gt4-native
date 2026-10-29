@@ -109,6 +109,7 @@ struct FrameList {
     std::vector<Target> targets;          // every target known (created or grown this frame included)
     Display display;
     uint64_t vblank = 0;
+    bool dump = false;   // debugging: the renderer writes this frame's targets out (GT4_GSN_TRIGGER)
     void clear();
 };
 
