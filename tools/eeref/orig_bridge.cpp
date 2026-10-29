@@ -464,7 +464,14 @@ void redirect_all() {
 
 // Called by main (runtime/main.cpp) after the trampolines are in place; without --eeorig the link supplies an
 // empty one.
+extern "C" void gt4_difftest(const char *names);  // difftest.cpp
+
 extern "C" void gt4_orig_install() {
+    if (const char *t = getenv("GT4_DIFFTEST")) {   // native against original on random inputs, then exit
+        register_generated_code();
+        load_sigs();
+        gt4_difftest(t);
+    }
     const char *spec = getenv("GT4_ORIG");
     if (!spec || !*spec) return;
     register_generated_code();

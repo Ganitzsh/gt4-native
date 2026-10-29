@@ -37,12 +37,16 @@ constexpr uint32_t kGameMicrocode = 0x006D3280;  // 004A03C0: func_004A12B8(0, 0
 constexpr uint32_t kGameMicrocodeSize = 0xA80;
 
 bool g_loaded = false;
+uint8_t g_micro[kMicroSize];   // the micro image, kept here: the game's VU0 micro memory stays as recorded
 
+// The image as the game uploads it: from VU0 micro memory if something put it there (recordings from before the
+// game ran its programs in C++), else from the block in guest RAM the game uploads it from.
 void load_microcode() {
-    auto *micro = static_cast<uint8_t *>(guest_ptr(kMicroMem));
+    const auto *micro = static_cast<const uint8_t *>(guest_ptr(kMicroMem));
     bool empty = true;
     for (uint32_t k = 0; k < kMicroSize && empty; ++k) empty = micro[k] == 0;
-    if (empty) std::memcpy(micro, guest_ptr(kGameMicrocode), kGameMicrocodeSize);
+    std::memcpy(g_micro, micro, kMicroSize);
+    if (empty) std::memcpy(g_micro, guest_ptr(kGameMicrocode), kGameMicrocodeSize);
     g_loaded = true;
 }
 
@@ -264,7 +268,7 @@ void set_vi(Gt4Vu0State &s, int n, uint32_t v) {
 void vu0_interpret(unsigned int addr) {
     if (!g_loaded) load_microcode();
     Gt4Vu0State &s = __gt4_vu0;
-    const auto *code = static_cast<const uint32_t *>(guest_ptr(kMicroMem));
+    const auto *code = reinterpret_cast<const uint32_t *>(g_micro);
     uint32_t pc = addr & (kMicroSize - 8);
     int64_t branch_to = -1;  // taken branch: next pc after the delay slot
     bool end_next = false;

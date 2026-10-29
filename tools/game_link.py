@@ -111,6 +111,8 @@ def compile_eeorig(out, gen):
     bridge = os.path.join(ROOT, "tools", "eeref", "orig_bridge.cpp")
     jobs.append((bridge, os.path.join(objdir, "orig_bridge.o"),
                  ["-I", os.path.join(ROOT, "runtime"), "-I", os.path.join(ROOT, "include")]))
+    jobs.append((os.path.join(ROOT, "tools", "eeref", "difftest.cpp"), os.path.join(objdir, "difftest.o"),
+                 ["-I", os.path.join(ROOT, "runtime"), "-I", os.path.join(ROOT, "include")]))
 
     def build(job):
         src, obj, extra = job
@@ -120,7 +122,7 @@ def compile_eeorig(out, gen):
 
     with ThreadPoolExecutor(os.cpu_count() or 8) as ex:
         objs = list(ex.map(build, jobs))
-    print(f"original code for GT4_ORIG: {len(objs) - 1} translated units")
+    print(f"original code for GT4_ORIG: {len(objs) - 2} translated units")
     return objs
 
 

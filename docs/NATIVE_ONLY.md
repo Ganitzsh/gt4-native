@@ -40,7 +40,12 @@ the micro image, and then each state register's readers and writers (2026-10-29,
 - vi18 (CLIP flags) is read only after the same function's vclip: no state.
 
 The functions with MMI or FPU asm and no VU0 state (byte and halfword packing, compares, saturating arithmetic)
-need no group and go first.
+need no group and go first. (FPU asm is not counted: game_cc and asm_translate make it plain float arithmetic.)
+
+Baseline before rewriting (2026-10-29): a B-spec Sunday Cup race recorded every layer-3 function it reaches, two
+calls each, and replayed them on the original code: 65 agree, 4 within float drift, 11 understood (known.txt),
+2 wait on another thread. Rewritten so far, each checked with `GT4_DIFFTEST` (200 random images each):
+001C1850, 001C18B0, 001C1C50, 001C1CA8 (the movie player's byte masks, XOR and negation).
 
 ## Layer 2: VU1 (done)
 

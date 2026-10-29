@@ -16,3 +16,10 @@
 0057DC60  returns a leftover
 0057DE48  native builds a path string in its own stack frame inside the caller's window
 005BC6C0  __get_eh_context: the native runtime's exception context, not the EE one
+003E7F08  stores the address of a stack local in its object (arg0+0x50): the native and EE stacks differ
+00496EF0  a float converted to an integer one unit apart (float rounding before FTOI)
+0049B2C8  leaves other values in VU0 temporaries (vf1) at return; its outputs in memory agree
+0049F4C8  leaves another value in a VU0 temporary lane (vf2.z) at return; its outputs in memory agree
+004A5EB0  sine of runtime/native's angle reduction: SSE rounds to nearest where the EE truncates (1e-7 residuals)
+004A5ED8  cosine of runtime/native's angle reduction (as 004A5EB0)
+004A5F00  sine and cosine of runtime/native's angle reduction (as 004A5EB0)

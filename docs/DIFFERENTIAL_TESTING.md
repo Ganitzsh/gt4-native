@@ -141,6 +141,11 @@ the user's game and stays in `build/`.
   known, 109 stopped (107 waiting on hardware), 0 differ, after fixing the one real divergence it found
   (00360B60 passed an int and a pointer before the floats 00360980 takes: the native callee read them as
   its floats).
+- Functions no scene reaches: `GT4_DIFFTEST=NAME,...|all` in a gt4_game linked with `--eeorig` runs each test of
+  `tools/eeref/difftest.cpp` (a function, the memory it reads and writes, random inputs in a scratch area of guest
+  RAM) on the native and on the original code, compares everything written, logs a line per test and exits before
+  the game starts (`GT4_DIFFTEST_TRIALS`, default 200). A native rewrite that changes one operation fails every
+  trial (XOR made OR in 001C1C50: 200 of 200).
 - `tools/eeref/calltree.py --elf ... --functions ... ADDR --depth N --min-size B` lists a function's static
   callees (jal and tail calls) for a GT4_RECORD list. `GT4_PROFILE=FILE:FROM:TO` (runtime/profile.cpp) samples
   the game's threads (frame-pointer walk, game code only) to find a scene's call tree in the first place.
