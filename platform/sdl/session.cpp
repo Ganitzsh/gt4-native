@@ -59,6 +59,14 @@ struct Session::Impl {
     Uint64 toneUntil = 0;
     std::vector<fs::path> captures;
     uint32_t waitFrames = 0;   // "wait N": frames to render before the next command
+    std::function<uint64_t()> gameClock;
+    uint64_t waitVblank = 0;   // "vwait N": the game VBlank to reach before the next command
+    bool waiting() {
+        if (waitFrames) { --waitFrames; return true; }
+        if (waitVblank && gameClock && gameClock() < waitVblank) return true;
+        waitVblank = 0;
+        return false;
+    }
     std::function<std::string(const std::string&, const std::string&)> setting;
     explicit Impl(const std::string& path) : directory(path) {}
     ~Impl() {
@@ -230,6 +238,11 @@ struct Session::Impl {
             int count = 0;
             if (!(input >> count) || count < 1 || count > 100000) throw std::runtime_error("wait FRAMES requires 1..100000");
             waitFrames = static_cast<uint32_t>(count);
+        } else if (op == "vwait") {
+            int count = 0;
+            if (!(input >> count) || count < 1 || count > 100000) throw std::runtime_error("vwait VBLANKS requires 1..100000");
+            if (!gameClock) throw std::runtime_error("vwait needs a game");
+            waitVblank = gameClock() + static_cast<uint64_t>(count);
         } else if (op == "quit") quit = true;
         else throw std::runtime_error("Unknown command");
         std::string extra;
@@ -251,14 +264,13 @@ bool Session::tick(Renderer& renderer, SDL_Window* window, uint32_t frame) {
         else { if (impl->diagnostics) impl->diagnosticAudio(); return true; }
     }
     std::vector<fs::path> pending;
-    if (impl->waitFrames) --impl->waitFrames;   // "wait N": render N frames before the next command
-    else
+    if (!impl->waiting())   // "wait N" / "vwait N": render frames before the next command
         for (const auto& entry : fs::directory_iterator(impl->directory / "commands"))
             if (entry.is_regular_file() && entry.path().extension() == ".cmd") pending.push_back(entry.path());
     std::sort(pending.begin(), pending.end());
     bool quit = false;
     for (const auto& path : pending) {
-        if (impl->waitFrames) break;
+        if (impl->waitFrames || impl->waitVblank) break;
         std::ifstream input(path); std::string text; std::getline(input, text); input.close();
         try { quit |= impl->command(text, renderer, window, path.filename().string()); }
         catch (const std::exception& error) {
@@ -284,6 +296,7 @@ void Session::submitAudio(const int16_t* samples, uint32_t frames) { impl->submi
 void Session::onSetting(std::function<std::string(const std::string&, const std::string&)> handler) {
     impl->setting = std::move(handler);
 }
+void Session::onGameClock(std::function<uint64_t()> clock) { impl->gameClock = std::move(clock); }
 void Session::record(const char* type, const std::string& fields) { impl->event(type, fields); }
 void Session::frame(uint32_t number, double milliseconds, double gpuMilliseconds, uint32_t width, uint32_t height) {
     impl->event("frame", "\"frame\":" + std::to_string(number) + ",\"duration_ms\":" + std::to_string(milliseconds) +

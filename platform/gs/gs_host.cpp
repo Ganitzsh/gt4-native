@@ -265,7 +265,9 @@ struct GsHost::Impl {
         r->out = std::make_unique<ps2::CaptureWriter>(path);
         return r;
     }();
+    std::atomic<uint64_t> vblankRecords{0};
     void dispatch(const Gt4LinkRecord& header, const uint8_t* payload) {
+        if (header.type == GT4_REC_VSYNC) ++vblankRecords;
         if (recorder) {
             if (recorder->vsyncs >= recorder->from && recorder->vsyncs < recorder->from + recorder->count) {
                 if (!recorder->started && recorder->from) {   // mid-run: the state the replay starts from
@@ -413,6 +415,8 @@ std::unique_ptr<GsHost> GsHost::create(const Options& options, std::string& erro
     }
     return host;
 }
+
+uint64_t GsHost::vblanks() const { return impl->vblankRecords.load(); }
 
 bool GsHost::advance() {
     Impl& h = *impl;

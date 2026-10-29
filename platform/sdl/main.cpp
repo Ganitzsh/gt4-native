@@ -592,6 +592,7 @@ int run(const Options& options) {
     std::unique_ptr<Session> session;
     if (!options.sessionDirectory.empty()) {
         session = std::make_unique<Session>(options.sessionDirectory, options.audio, true);
+        if (gs) session->onGameClock([&gs] { return gs->vblanks(); });
         session->onSetting([&](const std::string& key, const std::string& value) {
             const std::string error = gt4::setOption(settings, key, value);
             if (error.empty()) {

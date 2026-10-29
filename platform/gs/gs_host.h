@@ -50,6 +50,7 @@ public:
     void setGameOption(uint32_t id, uint32_t value);
 
     bool live() const;          // linked to a running game
+    uint64_t vblanks() const;   // VBlanks received from the game or the capture (the game's clock)
     bool finished() const;      // the game exited, or the replay reached its end (without loop)
     int gameExitCode() const;   // the game's exit code once it has exited (0 otherwise)
     std::string status() const;     // one line for the overlay
