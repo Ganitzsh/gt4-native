@@ -42,6 +42,15 @@ inline int gt4_ftoi(float x, int frac) {
     return (int)scaled;
 }
 
+/* VU0's DIV: a / b, with the largest float of the right sign where the VU, which has no infinities, divides by 0 */
+inline float gt4_vu_div(float a, float b) {
+    if (b == 0.0f) {
+        const int negative = ((a < 0.0f) != (b < 0.0f)) || (a == 0.0f && 1.0f / b < 0.0f);
+        return negative ? -3.40282347e+38f : 3.40282347e+38f;
+    }
+    return a / b;
+}
+
 inline float gt4_minf(float a, float b) { return a < b ? a : b; }
 inline float gt4_maxf(float a, float b) { return a > b ? a : b; }
 
