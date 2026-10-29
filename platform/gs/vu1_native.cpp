@@ -31,7 +31,6 @@ enum : uint32_t {
     kConstants = 193,   // the setup's constants (below)
     kHeader = 217,      // optional GIF packet kicked before the strips (GS state), when the entry asks for it
     kOutput = 242,      // the packet the renderers build: tag, then ST, RGBA, XYZF2 per vertex
-    kSnapshotQwords = 440,   // what a program may write: the batch (lit in place) and its packet (64 vertices at most)
 };
 
 // Renderers, by their address in the micro image.
@@ -327,11 +326,16 @@ void storeRecord(Batch& absolute, const ClipVertex& v) {
     storeLanes(absolute, v.address + 4u, v.minus, kXyz);
 }
 
+// Polygons whose clip records ran past qword 1023 (Vu1Native::Stats::clipperWraps).
+uint64_t g_clipperWraps = 0;
+
 // Clips the triangle and writes its strip packet; kicks the packet before it (`pending`: the batch's state
-// packet before the first clipped polygon, then the previous polygon). False: the record allocator (never
-// reset within the call) would run past qword 1023 and wrap into the batch; the caller leaves such a batch
-// to the interpreter.
-bool clipPolygon(Batch& b, ClipVertex triangle[3], uint32_t& pending, const VuVec& tag, const VuVec& adc, const Constants& c) {
+// packet before the first clipped polygon, then the previous polygon). The records are allocated from qword
+// 948, five per new vertex; a polygon with more than 15 new vertices runs past qword 1023 and its records wrap
+// into the batch, as the VU's addressing does. A triangle clipped against six planes gains at most 12, so only
+// a ring made non-convex by rounding gets there: random geometry does, the game's has not (docs/VU1_PROGRAMS.md;
+// the records' flags word then is the low 6 bits of CLIP, where the VU keeps 12 bits of history).
+void clipPolygon(Batch& b, ClipVertex triangle[3], uint32_t& pending, const VuVec& tag, const VuVec& adc, const Constants& c) {
     Batch m{b.vu, 0};
     static const uint16_t initial[3] = {933, 938, 943};
     for (int k = 0; k < 3; ++k) {
@@ -344,6 +348,7 @@ bool clipPolygon(Batch& b, ClipVertex triangle[3], uint32_t& pending, const VuVe
     setWord(m, 941, 3, 943);
     std::vector<ClipVertex> ring(triangle, triangle + 3), next;
     uint16_t allocated = 948;
+    bool wrapped = false;
     // Plane bit, which record (plus: the -w side, minus: the +w side) and lane, in the program's order.
     static const struct { uint32_t mask; bool plus; int lane; } planes[6] = {{32, true, 2}, {16, false, 2}, {8, true, 1}, {4, false, 1}, {2, true, 0}, {1, false, 0}};
     const VuVec guard = b.reg(23);
@@ -375,8 +380,11 @@ bool clipPolygon(Batch& b, ClipVertex triangle[3], uint32_t& pending, const VuVe
                 st[i] = e.st[i] * da - a.st[i] * de;
                 colour[i] = e.colour[i] * da - a.colour[i] * de;
             }
-            if (allocated + 5u > 1024u) return false;
             ClipVertex v = clipVertex(pos * q, (pos * guard) * q, st * q, colour * q);
+            if (allocated + 5u > 1024u && !wrapped) {
+                wrapped = true;
+                ++g_clipperWraps;
+            }
             v.address = allocated;
             allocated = static_cast<uint16_t>(allocated + 5);
             storeRecord(m, v);
@@ -384,7 +392,7 @@ bool clipPolygon(Batch& b, ClipVertex triangle[3], uint32_t& pending, const VuVe
         }
         setWord(m, 932, 3, previous);   // in the branch's delay slot: written even when the polygon vanished
         ring.swap(next);
-        if (ring.size() < 3) return true;   // nothing left
+        if (ring.size() < 3) return;   // nothing left
         setWord(m, previous + 3u, 3, ring.front().address);
     }
     // The strip, from both ends of the ring: first, last, second, second to last, ... (reads and writes in
@@ -453,11 +461,10 @@ bool clipPolygon(Batch& b, ClipVertex triangle[3], uint32_t& pending, const VuVe
         rightPos = rightPreviousPos;
     }
     pending = packet;
-    return true;
 }
 
 // `pending`: the packet the next XGKICK sends (the state packet, then the last clipped polygon).
-bool clippedRenderer(Batch& b, Clipped kind, uint32_t& pending) {
+void clippedRenderer(Batch& b, Clipped kind, uint32_t& pending) {
     const Constants c(b);
     const VuVec guard = b.reg(23);
     const bool culling = kind != Clipped::Plain2300;
@@ -512,7 +519,7 @@ bool clippedRenderer(Batch& b, Clipped kind, uint32_t& pending) {
                             triangle[t] = clipVertex(p[t], p[t] * guard, b.load(kSt + v - 2 + t),
                                                      {itof0(colour.w[0]), itof0(colour.w[1]), itof0(colour.w[2]), itof0(colour.w[3])});
                         }
-                        if (!clipPolygon(b, triangle, pending, b.load(kTag), adc, c)) return false;
+                        clipPolygon(b, triangle, pending, b.load(kTag), adc, c);
                     }
                     hidden = true;
                 }
@@ -529,7 +536,6 @@ bool clippedRenderer(Batch& b, Clipped kind, uint32_t& pending) {
             storeFixed4(b, out++, xyzf);
         }
     }
-    return true;
 }
 
 // --- The lighting chain (0x0048) ---------------------------------------------------------------------
@@ -975,25 +981,6 @@ bool Vu1Native::run(Vu1& vu, uint32_t pc) {
         return false;
     }
     Batch b{vu, vu.top};
-    // A renderer that clips can still give up (the clipper's record allocator overflowing, see clipPolygon):
-    // keep the batch area and qword 870 to undo the run, and hold its packets until it completes.
-    struct Held final : GifSink {
-        GifSink* next = nullptr;
-        std::vector<std::vector<uint8_t>> packets;
-        void gif(uint32_t path, const uint8_t* data, size_t bytes) override {
-            if (path == 1) packets.emplace_back(data, data + bytes);
-            else if (next) next->gif(path, data, bytes);
-        }
-    };
-    static uint8_t saved[kSnapshotQwords * 16], savedStart[16];
-    Held held;
-    const bool clipping = entry.renderer == Renderer::R2300 || entry.renderer == Renderer::R27A8 || entry.renderer == Renderer::R2AD8;
-    if (clipping) {
-        for (uint32_t q = 0; q < kSnapshotQwords; ++q) std::memcpy(saved + q * 16, b.qword(q), 16);
-        std::memcpy(savedStart, vu.data + 870 * 16, 16);
-        held.next = vu.sink();
-        vu.setGifSink(&held);
-    }
     ++stats.parts[static_cast<uint32_t>(entry.renderer)];
     if (entry.lighting) {
         static const uint32_t unpacks[5] = {0x1908, 0x1878, 0x1810, 0x1990, 0x1A38};
@@ -1002,38 +989,25 @@ bool Vu1Native::run(Vu1& vu, uint32_t pc) {
     }
     if (entry.setup) setup(b);
     if (entry.lighting && !runChain(b, chain)) {   // an empty batch: the program ends in the lighting body
-        if (clipping) vu.setGifSink(held.next);
         if (entry.header) vu.kick(b.top + kHeader);
         vu.kick(b.top + kOutput);
         vu.tpc = 0x1810 / 8;
         ++stats.native;
         return true;
     }
-    bool complete = true;
+    const uint64_t wrapsBefore = g_clipperWraps;
     uint32_t pending = entry.header ? (b.top + kHeader) & 0xFFFF : 0;   // vi14
     switch (entry.renderer) {
     case Renderer::Strip: stripRenderer(b); break;
     case Renderer::CulledBack: culledRenderer(b, false); break;
     case Renderer::CulledFront: culledRenderer(b, true); break;
-    case Renderer::R2300: complete = clippedRenderer(b, Clipped::Plain2300, pending); break;
-    case Renderer::R27A8: complete = clippedRenderer(b, Clipped::Back27A8, pending); break;
-    case Renderer::R2AD8: complete = clippedRenderer(b, Clipped::Front2AD8, pending); break;
+    case Renderer::R2300: clippedRenderer(b, Clipped::Plain2300, pending); break;
+    case Renderer::R27A8: clippedRenderer(b, Clipped::Back27A8, pending); break;
+    case Renderer::R2AD8: clippedRenderer(b, Clipped::Front2AD8, pending); break;
     }
-    if (!complete) {   // undo; the interpreter runs the whole program (setup and lighting included)
-        for (uint32_t q = 0; q < kSnapshotQwords; ++q) std::memcpy(b.qword(q), saved + q * 16, 16);
-        std::memcpy(vu.data + 870 * 16, savedStart, 16);
-        vu.setGifSink(held.next);
-        ++stats.clipperFallbacks;
-        ++stats.interpreted;
-        return false;
-    }
+    stats.clipperWraps += g_clipperWraps - wrapsBefore;
     if (pending) vu.kick(pending);
     vu.kick(b.top + kOutput);
-    if (clipping) {
-        vu.setGifSink(held.next);
-        if (held.next)
-            for (const auto& packet : held.packets) held.next->gif(1, packet.data(), packet.size());
-    }
     static const std::pair<Renderer, uint32_t> ends[6] = {{Renderer::Strip, 0x2058}, {Renderer::CulledBack, 0x22D0}, {Renderer::CulledFront, 0x22D0},
                                                           {Renderer::R2300, 0x25C0}, {Renderer::R27A8, 0x2A28}, {Renderer::R2AD8, 0x2D58}};
     for (const auto& [r, end] : ends)

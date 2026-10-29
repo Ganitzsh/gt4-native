@@ -60,6 +60,7 @@ bool vecEquals(const Vu1& vu, uint32_t qw, float x, float y, float z, float w) {
     return dataFloat(vu, qw, 0) == x && dataFloat(vu, qw, 1) == y && dataFloat(vu, qw, 2) == z && dataFloat(vu, qw, 3) == w;
 }
 
+#if GT4_VU1_INTERPRETER   // the VU1 interpreter's instructions
 void testArithmetic() {
     using namespace vu;
     Vu1 unit;
@@ -210,6 +211,8 @@ void testXgkick() {
     expect(!gs.packets.empty() && gs.packets[0].bytes.size() == 32 &&
            std::memcmp(gs.packets[0].bytes.data(), unit.data + 160, 32) == 0, "XGKICK packet is the GIFtag and its data");
 }
+
+#endif  // GT4_VU1_INTERPRETER
 
 void testVifUnpack() {
     using namespace vif;
@@ -415,6 +418,7 @@ void testPad() {
 }
 
 // Interpreter speed (printed, not checked): the transform loop over 200 vertices, repeated.
+#if GT4_VU1_INTERPRETER
 void reportThroughput() {
     struct Null final : gt4::ps2::GifSink { void gif(uint32_t, const uint8_t*, size_t) override {} } sink;
     Vu1 unit;
@@ -429,16 +433,19 @@ void reportThroughput() {
                 static_cast<double>(unit.instructions) / seconds * 1e-6, static_cast<double>(cycles) / seconds * 1e-6,
                 static_cast<unsigned long long>(unit.instructions), seconds);
 }
+#endif  // GT4_VU1_INTERPRETER
 
 }  // namespace
 
 int main() {
+#if GT4_VU1_INTERPRETER
     reportThroughput();
     testArithmetic();
     testMoreInstructions();
     testBranches();
     testFlags();
     testXgkick();
+#endif
     testVifUnpack();
 #if GT4_VU1_INTERPRETER
     testTransformMicroprogram();   // needs MSCAL to run the program

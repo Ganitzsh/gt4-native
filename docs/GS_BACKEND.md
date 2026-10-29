@@ -158,10 +158,10 @@ Windows with MSVC 14.44 and on Linux, and it passes the pixel tests. No own GS w
 
 GT4's 3D runs through VU1 microprograms the game uploads with VIF1 `MPG`. They run natively, in C++
 (`platform/gs/vu1_native.cpp`, described in `docs/VU1_PROGRAMS.md`), bit for bit as the reference
-interpreter computes them. The interpreters stay behind the CMake option `GT4_VU1_INTERPRETER` (ON by
-default): development tools (`GT4_VU1=interp|ref`, `GT4_VU1_DIFF=1|native`, `GT4_VU1_TRACE`,
-`GT4_VU1_INVENTORY`) and the native code's fallback for the polygon clipper's rare record overflow. With the
-option OFF only GT4's native programs run.
+interpreter computes them. The interpreters are development and test tools behind the CMake option `GT4_VU1_INTERPRETER` (OFF by
+default, so the host has no PS2 code): `GT4_VU1=interp|ref`, `GT4_VU1_DIFF=1|native`, `GT4_VU1_TRACE`,
+`GT4_VU1_INVENTORY` and the tests that check the native programs. Without it only GT4's native programs run (a
+micro image that is not GT4's draws nothing).
 
 - **VIF1** (`platform/gs/vif1.*`): NOP, STCYCL, OFFSET, BASE, ITOP, STMOD (offset, difference, mode 3),
   MSKPATH3 (GT4 emits it, `004A1950`: PATH3 records that arrive while it is set are held and sent at the

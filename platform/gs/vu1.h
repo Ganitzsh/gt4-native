@@ -1,9 +1,9 @@
 #pragma once
-// VU1: the PS2's vector unit 1 in micro mode, interpreted on the CPU.
-//
-// DEVELOPMENT SCAFFOLD (CMake option GT4_VU1_INTERPRETER, on by default for development, not for
-// releases): GT4's 3D runs through VU1 microprograms the game uploads with VIF1 MPG; until those are
-// translated natively, this interpreter runs them. Written for this project from the public VU
+// VU1: the vector unit's state (data memory, registers, TOP/ITOP, XGKICK to the GS sink), which GT4's
+// microprograms in C++ (vu1_native.cpp) work on; with the CMake option GT4_VU1_INTERPRETER (OFF by default,
+// development and test builds only) also a micro-mode interpreter, run(). GT4's 3D runs through VU1
+// microprograms the game uploads with VIF1 MPG; the interpreter ran them until they were written in C++, and
+// remains the reference those are checked against. Written for this project from the public VU
 // documentation; behavioural details (flag and Q/P pipeline latencies, the integer-branch read of the
 // previous value, the result of a VF write by both slots) follow PCSX2's interpreter (GPL-3.0-or-later),
 // which was consulted as a reference. See docs/GS_BACKEND.md.
@@ -66,7 +66,9 @@ public:
 
     // Runs from instruction `pc` (8-byte units) until the program ends (E bit). Returns the cycles taken.
     // A program that never ends is stopped after `maxCycles` (reported by `runaway()`).
+#if GT4_VU1_INTERPRETER   // the interpreter (development builds)
     uint64_t run(uint32_t pc, uint64_t maxCycles = 50'000'000);
+#endif
     bool runaway() const { return stoppedRunaway; }
     uint32_t pc() const { return tpc; }   // where MSCNT continues
     void setPc(uint32_t pc) { tpc = pc & 0x7FF; }   // a saved state restored (GraphicsStream::restoreState)

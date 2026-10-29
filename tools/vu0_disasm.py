@@ -131,12 +131,14 @@ def lower(lo, pc):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--elf', required=True)
+    ap.add_argument('--elf')
+    ap.add_argument('--image', help='a micro image file instead (e.g. VU1\'s, from GT4_VU1_INVENTORY: instructions only '
+                                    'VU1 has print as ?)')
     ap.add_argument('--from', dest='start', type=lambda s: int(s, 0), default=0)
     ap.add_argument('--to', type=lambda s: int(s, 0), default=IMAGE_SIZE)
     a = ap.parse_args()
-    img = read_image(a.elf)
-    for pc in range(a.start & ~7, min(a.to, IMAGE_SIZE), 8):
+    img = open(a.image, 'rb').read() if a.image else read_image(a.elf)
+    for pc in range(a.start & ~7, min(a.to, len(img)), 8):
         lo, up = struct.unpack_from('<II', img, pc)
         lower_text = 'loi 0x%08X (%g)' % (lo, struct.unpack('<f', struct.pack('<I', lo))[0]) if up & 0x80000000 \
             else lower(lo, pc)

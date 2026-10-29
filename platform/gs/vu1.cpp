@@ -8,6 +8,7 @@
 #include <vector>
 
 namespace gt4::ps2 {
+#if GT4_VU1_INTERPRETER
 namespace {
 
 inline uint32_t bitsOf(float f) { uint32_t u; std::memcpy(&u, &f, 4); return u; }
@@ -580,6 +581,8 @@ struct VuExec {
     }
 };
 
+#endif  // GT4_VU1_INTERPRETER
+
 Vu1::Vu1() { reset(); }
 
 void Vu1::reset() {
@@ -606,6 +609,7 @@ void Vu1::reset() {
     delayBranch = false;
 }
 
+#if GT4_VU1_INTERPRETER
 void Vu1::stallOn(uint32_t reg, uint32_t mask) {
     if (reg == 0 || reg == kAcc) return;   // ACC is forwarded: MULA/MADDA chains do not stall
     for (uint32_t c = 0; c < 4; ++c)
@@ -670,6 +674,8 @@ void Vu1::setBranch(uint32_t target) {
     }
 }
 
+#endif  // GT4_VU1_INTERPRETER
+
 void Vu1::xgkick(uint32_t address) {
     if (!gifSink) return;
     std::vector<uint8_t> packet;
@@ -698,6 +704,7 @@ void Vu1::xgkick(uint32_t address) {
     gifSink->gif(1, packet.data(), packet.size());
 }
 
+#if GT4_VU1_INTERPRETER
 uint64_t Vu1::run(uint32_t startPc, uint64_t maxCycles) {
     VuExec exec{*this};
     tpc = startPc & 0x7FF;
@@ -778,5 +785,7 @@ uint64_t Vu1::run(uint32_t startPc, uint64_t maxCycles) {
     vi[0] = 0;
     return cycle - begin;
 }
+
+#endif  // GT4_VU1_INTERPRETER
 
 }  // namespace gt4::ps2

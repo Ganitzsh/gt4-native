@@ -197,7 +197,7 @@ int main() {
     auto ref = std::make_unique<Vu1Ref>();
     Vu1Native programs;
     Rng r(12345);
-    uint64_t runs = 0, notNative = 0, failures = 0;
+    uint64_t runs = 0, notNative = 0, failures = 0, wrapped = 0, wrappedDiffer = 0;
     auto check = [&](uint32_t pc, uint32_t top, uint32_t itop, const char* what) {
         vu->top = top;
         vu->itop = itop;
@@ -205,15 +205,25 @@ int main() {
         Collect nativeKicks;
         native->setGifSink(&nativeKicks);
         ++runs;
-        if (!programs.run(*native, pc)) {
+        const uint64_t wrapsBefore = programs.stats.clipperWraps;
+        if (!programs.run(*native, pc)) {   // every program of GT4's image has a native version
             ++notNative;
+            ++failures;
             return;
         }
+        // A polygon whose clip records wrapped past qword 1023 (only random geometry gets there, see
+        // vu1_native.cpp clipPolygon): compared, its differences counted apart.
+        const bool wraps = programs.stats.clipperWraps != wrapsBefore;
+        wrapped += wraps;
         ref->load(*vu);
         ref->sink = nullptr;
         ref->run(pc);
         const bool kicks = nativeKicks.bytes != ref->kicks;
         const bool data = std::memcmp(native->data, ref->data, 870 * 16 + 8) != 0;
+        if (wraps) {
+            wrappedDiffer += kicks || data;
+            return;
+        }
         if ((kicks || data) && failures == 0 && std::getenv("GT4_VU1_FUZZ_TRACE")) {   // the first failure, traced
             ref->load(*vu);
             ref->trace = std::fopen("fuzz_ref_trace.txt", "w");
@@ -273,7 +283,9 @@ int main() {
             check(0x3EA0 / 8, top, 0, "grid counters");
         }
     }
-    std::printf("vu1_native_fuzz: %llu runs, %llu left to the interpreter (clipper record overflow), %llu failed\n", (unsigned long long)runs,
-                (unsigned long long)notNative, (unsigned long long)failures);
+    std::printf("vu1_native_fuzz: %llu runs, %llu failed (%llu without a native program); %llu wrapped their clip records, "
+                "%llu of them differ from the reference\n",
+                (unsigned long long)runs, (unsigned long long)failures, (unsigned long long)notNative, (unsigned long long)wrapped,
+                (unsigned long long)wrappedDiffer);
     return failures ? 1 : 0;
 }

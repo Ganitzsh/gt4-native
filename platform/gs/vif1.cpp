@@ -20,6 +20,7 @@ namespace {
 // GT4_VU1_DIFF=1: every microprogram also runs in the reference interpreter (vu1_ref.cpp) from the same
 // state; differences in the PATH1 packets, data memory and registers are reported per program
 // (the first ones in detail, a table at exit).
+#if GT4_VU1_INTERPRETER   // the diff tools need the interpreters
 struct VuDiff final : GifSink {
     GifSink* next = nullptr;
     std::vector<uint8_t> kicks;
@@ -135,22 +136,27 @@ void runWithDiff(VuDiff& d, Vu1& vu, uint32_t address, uint64_t& cycles) {
         if (vu.vi[k] != d.ref->vi[k]) std::fprintf(stderr, "[vu1 diff] %04X vi%d: ours %04X, reference %04X\n", address * 8, k, vu.vi[k], d.ref->vi[k]);
 }
 
-// GT4's microprograms run in C++ (vu1_native.cpp) by default; the interpreter runs what the native code
-// leaves (another game's micro image, the clipper's rare record overflow). GT4_VU1=interp: everything in
-// the interpreter; GT4_VU1=ref: in the reference interpreter. GT4_VU1_DIFF=native: every program the native
-// code handles also runs in the reference interpreter, from the same state; the PATH1 packets and the data
-// memory must be identical (a table per entry at exit).
+#endif  // GT4_VU1_INTERPRETER
+
+// GT4's microprograms run in C++ (vu1_native.cpp). In GT4_VU1_INTERPRETER builds: GT4_VU1=interp runs
+// everything in the interpreter, GT4_VU1=ref in the reference interpreter, and the interpreter runs what the
+// native code leaves (another game's micro image); GT4_VU1_DIFF=native: every program the native code handles
+// also runs in the reference interpreter, from the same state; the PATH1 packets and the data memory must be
+// identical (a table per entry at exit).
 Vu1Native* vuNative() {
     static Vu1Native* native = [] {
+#if GT4_VU1_INTERPRETER
         const char* mode = std::getenv("GT4_VU1");
         const char* diff = std::getenv("GT4_VU1_DIFF");
         if (diff && !std::strcmp(diff, "native")) return new Vu1Native;
         if (diff || (mode && (!std::strcmp(mode, "interp") || !std::strcmp(mode, "ref")))) return static_cast<Vu1Native*>(nullptr);
+#endif
         return new Vu1Native;
     }();
     return native;
 }
 
+#if GT4_VU1_INTERPRETER
 struct NativeDiff final : GifSink {
     struct Collect final : GifSink {
         std::vector<uint8_t> kicks;
@@ -171,9 +177,9 @@ struct NativeDiff final : GifSink {
             std::fprintf(stderr, "[vu1 native] %04X: %llu %llu %llu\n", address * 8, (unsigned long long)c.runs, (unsigned long long)c.kick,
                          (unsigned long long)c.mem);
         if (Vu1Native* native = vuNative())
-            std::fprintf(stderr, "[vu1 native] %llu native, %llu interpreted (%llu needed the polygon clipper)\n",
+            std::fprintf(stderr, "[vu1 native] %llu native, %llu interpreted (%llu clipped polygons wrapped their records)\n",
                          (unsigned long long)native->stats.native, (unsigned long long)native->stats.interpreted,
-                         (unsigned long long)native->stats.clipperFallbacks);
+                         (unsigned long long)native->stats.clipperWraps);
         if (Vu1Native* native = vuNative())
             for (const auto& [part, runs] : native->stats.parts)
                 std::fprintf(stderr, "[vu1 native] part %04X: %llu runs\n", part, (unsigned long long)runs);
@@ -232,6 +238,8 @@ bool runNativeDiff(NativeDiff& d, Vu1Native& native, Vu1& vu, uint32_t address, 
     }
     return true;
 }
+
+#endif  // GT4_VU1_INTERPRETER
 
 constexpr uint32_t cmdOf(uint32_t code) { return (code >> 24) & 0x7F; }
 
@@ -333,7 +341,9 @@ bool Vif1::step() {
             if (!need(num * 2)) { --stats.codes; return false; }
             for (uint32_t k = 0; k < num; ++k)
                 std::memcpy(vu.micro + ((imm + k) & 0x7FF) * 8, next + 2 * k, 8);
+#if GT4_VU1_INTERPRETER
             if (Vu1Inventory* inventory = Vu1Inventory::get()) inventory->microWritten();
+#endif
             if (Vu1Native* native = vuNative()) native->microWritten();
             stats.mpgInstructions += num;
             consumed += num * 2;

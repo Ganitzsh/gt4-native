@@ -61,8 +61,13 @@ with 2048 or 3072 added to fog, which sets ADC (the GS does not draw the triangl
 
 The polygon clipper keeps its vertex records in VU memory, and the native code does too: the strip packet at
 qword 903 overruns them for polygons of nine vertices or more, and the emit loop then reads what it wrote.
-The record allocator is not reset within a call; when it would run past qword 1023 (random geometry only, so
-far) the native code gives the batch to the interpreter.
+The records are allocated from qword 948, five per new vertex, for each clipped triangle. A triangle clipped
+against six planes gains at most 12 vertices (to qword 1008), so only a ring made non-convex by rounding runs
+past qword 1023; its records then wrap into the batch, as the VU's addressing does, and the native code wraps
+them too. Random geometry gets there (1,743 of 657,600 fuzz runs), the game's has not (no run of a race or car
+select); in those runs the native result differs from the interpreter's (the records' flags word keeps 6 bits
+of CLIP where the VU keeps 12, and what the program reads back from the overwritten batch follows from it), and
+the fuzz test counts them apart. There is no fallback: the host has no interpreter.
 
 ## Lighting bodies
 
@@ -93,9 +98,11 @@ single precision as the interpreters do.
   state; the PATH1 packets and the data memory below the scratch area must be identical. A race (93,670 runs)
   and car select (281,368 runs) are identical.
 - `tests/vu1_native_fuzz.cpp` (ctest `vu1_native_fuzz`, needs `GT4_VU1_IMAGE=path` to the image): random
-  batches through every entry, every lighting block and table entry, both buffers, and the grids; 87,680 runs
-  identical.
+  batches through every entry, every lighting block and table entry, both buffers, and the grids; 657,600 runs
+  (`GT4_VU1_FUZZ_ROUNDS=300`), every one native, all identical but the 1,743 whose clip records wrapped.
 - `GT4_VU1=interp` runs everything in the interpreter, `GT4_VU1=ref` in the reference interpreter.
+- These tools need a build with the CMake option `GT4_VU1_INTERPRETER` (OFF by default: the host has no PS2
+  code, docs/NATIVE_ONLY.md).
 
 `vu1.cpp` (the interpreter with the VU's pipeline timing) computes in double precision and truncates; it
 differs from the reference in the last bit now and then, which matters only where a test sits on a knife

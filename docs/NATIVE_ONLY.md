@@ -13,7 +13,7 @@ code with eeref.
 | Layer | What runs PS2 semantics | Size |
 |---|---|---|
 | 1. VU0 microprograms | done 2026-10-29: C++ (`runtime/native/vu0_programs.cpp`), no interpreter in the game | 14 entry points in one 0xA80-byte image, called from 19 functions |
-| 2. VU1 fallback | `platform/gs/vu1.cpp` runs what `vu1_native.cpp` does not port: another micro image, an unported entry or lighting routine, a clipper batch past VU memory | the C++ programs cover the 1,590 instructions GT4's image runs; the interpreter is a fallback |
+| 2. VU1 fallback | done 2026-10-29: no interpreter in the host (`GT4_VU1_INTERPRETER` OFF by default, a development option); the clipper's record overflow wraps natively | the C++ programs cover the 1,590 instructions GT4's image runs |
 | 3. PS2 instructions in game code | `tools/game_toolchain/asm_translate.py` turns VU0 macro, MMI and multi-instruction asm into C over an emulated register file (`compat/game/gt4_asm.h`) | 157 sources: 55 matched, 6 game_src copies, 96 provisional drafts (single FPU instructions with a C meaning, `sqrt.s`, `min.s`..., are plain C already) |
 | 4. Provisional drafts | C++ that compiles to nearly the original, not proven | 525 functions (the eeref audit of the ones a GT mode session runs: all agree or understood) |
 | 5. Hardware data paths | the game builds DMA chains, VIF and GIF packets; `runtime/gs.cpp` walks them, `gt4_host` decodes VIF1, runs the VU1 programs and renders GS primitives (texture formats, CLUTs, blending, Z as the GS defines them) | the graphics library (pgl, 0x494578..) and the host's GS layer |
@@ -22,6 +22,14 @@ code with eeref.
 Order: 1 and 2 first (bounded, mechanical to verify), then 3 (function by function, eeref-verified), 4
 alongside (matching or proving drafts), then 5 (the game's graphics library drawing through a native
 renderer interface instead of GS packets), then 6.
+
+## Layer 2: VU1 (done)
+
+GT4's VU1 programs were already C++ (`platform/gs/vu1_native.cpp`, docs/VU1_PROGRAMS.md); the interpreter
+remained as a fallback for one case, a clipped polygon whose records run past VU memory, which the C++ now
+wraps as the hardware does (random geometry reaches it, the game's has not). The interpreters, the diff tools
+and the tests that use them build only with the CMake option `GT4_VU1_INTERPRETER` (OFF by default); the host
+binary has none of their code. A race: 335,142 VU1 programs, all native, identical to the reference.
 
 ## Layer 1: VU0 microprograms (done)
 

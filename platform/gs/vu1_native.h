@@ -29,7 +29,7 @@ public:
 
     struct Stats {
         uint64_t native = 0, interpreted = 0;
-        uint64_t clipperFallbacks = 0;   // batches interpreted because a triangle needed the polygon clipper
+        uint64_t clipperWraps = 0;   // clipped polygons whose records wrapped past qword 1023 (vu1_native.cpp)
         std::map<uint32_t, uint64_t> parts;   // native runs per renderer, lighting body and unpack routine (byte address)
     } stats;
 
