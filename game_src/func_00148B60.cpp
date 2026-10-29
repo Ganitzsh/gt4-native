@@ -1,9 +1,9 @@
 /* Native copy of MCarGarage::buildEngineCurveData (00148B60, matched): the power and torque curves drawn on the
- * car settings screen. Its loops take their point count from the engine data's 16-bit field at +0xE, for arrays of
- * 24 points; for the Nissan 240SX '96 that field is 7000 (the original code computes the same, checked with
- * GT4_ORIG on 00148B60's whole call tree), and the loops read 28 KB up the stack. On the PS2 that is RAM and the
- * curve gets garbage points past the 24th; natively the stack ends there and the read faults (opening Settings
- * before a race crashed). The count is bounded by the arrays here; the first 24 points are the same. */
+ * car settings screen. 0034B960 fills `arr` through 0034B808 with a 0x7C-byte gearing table (count, two rpm and two
+ * ratio arrays of 10), not just the 16-byte handle the source declares. On the EE that overflow lands in frame space
+ * nothing reads; natively the next local was the curve `d`, whose point count (+0xE) and rpm points it overwrote
+ * (7000: the loops then read 28 KB up the stack and faulted, and the clamped curve came out empty). `arr` gets the
+ * table's room here; the count stays bounded by the arrays as a guard. */
 /* compiler: ee-gcc2.96-nogcse */
 struct VE { short delta, index; int (*fn)(void *); };
 struct VF { short delta, index; float (*fn)(void *); };
@@ -34,7 +34,7 @@ static inline int geti(Value *p) { VE *e=(VE *)(p->vt+0x58); return e->fn((char 
 static inline float getf(Value *p) { VF *e=(VF *)(p->vt+0x60); return e->fn((char *)p+e->delta); }
 extern "C" void MCarGarage__buildEngineCurveData(Handle *ret,void *arg,int argc,Value **argv) {
  Data d;
- Handle arr;
+ union { Handle h; char table[0x80]; } arr;   /* native: room for 0034B808's table (see above) */
  Handle tmp;
  char spare[0x60];
  Handle h;
@@ -49,7 +49,7 @@ extern "C" void MCarGarage__buildEngineCurveData(Handle *ret,void *arg,int argc,
  void *src=func_00441248(ctx);
  ctx+=0x4a0;
  func_004413C8(src,buf);
- Handle *ap=&arr;
+ Handle *ap=&arr.h;
  func_0034B960(buf,ap,&d,ctx);
  if(argc>0) autoscale=geti(argv[0])!=0;
  float lim1=1000.0f;
@@ -58,7 +58,7 @@ extern "C" void MCarGarage__buildEngineCurveData(Handle *ret,void *arg,int argc,
  if(argc>2) lim2=getf(argv[2]);
  func_002EFC48(ap,6);
  int count=d.n;
- if(count>24) count=24;   /* native: the arrays hold 24 points (see above) */
+ if(count>24) count=24;   /* native guard: the arrays hold 24 points */
  Curve *c=func_00575DC8(0x804);
  c->n=count;
  float scale=lim1;

@@ -33,9 +33,10 @@ C++, `game_src/func_ADDR.cpp`, which the native link uses in place of the source
    lambdas, `<cstdint>` or `<algorithm>`; `extern "C" void *memcpy(void *, const void *, unsigned int);` if needed.
 7. **Test.** Add a test to `tools/eeref/difftest_*.cpp` (see `difftest.h`, and `difftest.cpp` for examples): fill
    the shared vectors it reads, the memory it reads, and the arguments, all random (within ranges the game uses).
-   `GT4_DIFFTEST` then runs the native and the original code from the same state and compares what they write and
-   return. A function whose inputs are impractical to build (scratchpad state, deep object graphs) is checked by
-   recording real calls instead (docs/DIFFERENTIAL_TESTING.md): say so.
+   `GT4_DIFFTEST` then runs the native and the original code from the same state and compares what they return and
+   leave in the scratch area, VU0 data memory, the scratchpad, shared vectors 8..31 and vi13. A function whose
+   inputs are impractical to build (deep object graphs) is checked by recording real calls instead
+   (docs/DIFFERENTIAL_TESTING.md): say so.
 8. **Compile check.** Copy the file to `C:\Users\julie\gt4-decomp\build\native_check_NAME\`, list it in a text
    file as `build/native_check_NAME/func_ADDR.cpp` (one per line), then from `C:\Users\julie\gt4-native-game`:
    `py tools/game_cc.py --decomp C:/Users/julie/gt4-decomp --out build/check_NAME --list LISTFILE`. Delete the

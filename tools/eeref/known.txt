@@ -23,3 +23,5 @@
 004A5EB0  sine of runtime/native's angle reduction: SSE rounds to nearest where the EE truncates (1e-7 residuals)
 004A5ED8  cosine of runtime/native's angle reduction (as 004A5EB0)
 004A5F00  sine and cosine of runtime/native's angle reduction (as 004A5EB0)
+00499948  screen coordinates 1/16 pixel apart: eeref runs program 0x700 in SSE arithmetic (round to nearest), the native code on the x87 (toward zero, as the VU)
+00499D00  as 00499948

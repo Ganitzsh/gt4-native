@@ -133,8 +133,9 @@ def name_newer_headers(rt, obj):
     return any(os.path.getmtime(os.path.join(rt, h)) > t for h in os.listdir(rt) if h.endswith(".h"))
 
 
-def nm_symbols(objs):
-    """{object: (defined globals, undefined)} with COFF names (leading underscore)."""
+def nm_symbols(objs, every=False):
+    """{object: (defined globals, undefined)} with COFF names (leading underscore). every: each defined name maps
+    to the list of all the objects defining it (else to the first)."""
     defined, undefined = {}, collections.defaultdict(list)
     chunks = [objs[i:i + 150] for i in range(0, len(objs), 150)]
 
@@ -148,7 +149,10 @@ def nm_symbols(objs):
                 path, _, rest = line.rpartition(":")
                 parts = rest.split()
                 if len(parts) == 3 and parts[1] in "TDBRCV":
-                    defined.setdefault(parts[2], path)
+                    if every:
+                        defined.setdefault(parts[2], []).append(path)
+                    else:
+                        defined.setdefault(parts[2], path)
             for line in u_out.splitlines():
                 path, _, rest = line.rpartition(":")
                 parts = rest.split()
@@ -594,8 +598,8 @@ def main():
         cur_defined, _ = nm_symbols(curated_objs)
         cur_fns = {n for n in cur_defined if n.startswith("_gt4fn_")}
         others = [o for o in game_objs if o not in curated_objs]
-        other_defined, _ = nm_symbols(others)
-        replaced_objs = {p for n, p in other_defined.items() if n in cur_fns}
+        other_defined, _ = nm_symbols(others, every=True)   # all of them: a source and a leftover draft may both
+        replaced_objs = {p for n, paths in other_defined.items() if n in cur_fns for p in paths}
         if replaced_objs:
             print(f"{len(replaced_objs)} objects replaced by curated native sources (game_src/)")
             game_objs = [o for o in game_objs if o not in replaced_objs]

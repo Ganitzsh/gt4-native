@@ -16,8 +16,8 @@ constexpr std::uint32_t kScratch = 0x01800000, kScratchSize = 0x00200000;
 struct Test {
     const char *name;    // the GT4_DIFFTEST name (usually the address)
     std::uint32_t addr;  // the PS2 function
-    const char *kinds;   // its parameters as the bridge passes them to the original: i (32-bit), w (64-bit), f, q
-    char ret;            // v, i, f; 's' a 16-byte structure (native: hidden pointer; not compared)
+    const char *kinds;   // its parameters as the bridge passes them to the original: i (32-bit), u (32-bit, zero-extended), w (64-bit), f, q
+    char ret;            // v, i, w (64-bit), f; 's' a 16-byte structure (native: hidden pointer; not compared)
     bool floats;         // outputs are floats computed differently (VU arithmetic against x87)
     void (*setup)(std::uint32_t args[8]);   // a float argument as its bits (bits())
 };

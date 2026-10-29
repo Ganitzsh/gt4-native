@@ -423,12 +423,13 @@ int main(int argc, char **argv) {
     if (argc > 2 && std::string(argv[1]) == "--vu0-fuzz") return vu0_fuzz_main(argc, argv);
     if (argc < 2) {
         std::fprintf(stderr, "usage: eeref ADDR_N.pre [--args i,f,w,q...] [--ret v|i|w|f] [--elf CORE.GT4.elf] [--syms FILE] [--all] "
-                             "[--max N]\n");
+                             "[--max N] [--vu-state]\n");
         return 2;
     }
     std::string pre_path = argv[1], kinds = "i,i,i,i", elf, syms;
     char ret_kind = 0;  // v none, i 32-bit, w 64-bit, f float (natively in eax); 0: not compared
-    bool all = false;
+    bool all = false, vu_state = false;  // --vu-state: compare only the shared vectors vf8..vf31 (a native
+                                          // rewrite keeps vf1..vf7 as locals, docs/VU0_REWRITE.md)
     int max_lines = 60;
     for (int k = 2; k < argc; ++k) {
         const std::string a = argv[k];
@@ -438,6 +439,7 @@ int main(int argc, char **argv) {
         else if (a == "--syms" && k + 1 < argc) syms = argv[++k];
         else if (a == "--max" && k + 1 < argc) max_lines = std::atoi(argv[++k]);
         else if (a == "--all") all = true;
+        else if (a == "--vu-state") vu_state = true;
     }
     std::string post_path = pre_path;
     if (post_path.size() > 4 && post_path.compare(post_path.size() - 4, 4, ".pre") == 0)
@@ -557,7 +559,7 @@ int main(int argc, char **argv) {
 
     // VU0 registers
     int vu_diffs = 0, vu_far = 0;
-    for (int k = 1; k < 32; ++k)
+    for (int k = vu_state ? 8 : 1; k < 32; ++k)
         for (int l = 0; l < 4; ++l) {
             std::uint32_t n, r = c.vu0.vf[k].w[l];
             std::memcpy(&n, &post.vu0.vf[k][l], 4);

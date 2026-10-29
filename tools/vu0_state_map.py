@@ -111,9 +111,10 @@ def source_regs(path, img):
                 reg = '%s%s' % (kind, n)
                 if n == '0':
                     continue
-                to = name.startswith(('lqc2', 'qmtc2', 'ctc2')) or (name.startswith('v') and k == 0 and not
-                                                                     name.startswith(('vclip', 'vdiv', 'vsqrt', 'vrsqrt',
-                                                                                      'vnop', 'vwaitq', 'vcallms')))
+                acc_dest = ops.strip().upper().startswith('ACC')   # vmulax ACC, $vf24, $vf1x: every vf is read
+                to = name.startswith(('lqc2', 'qmtc2', 'ctc2')) or (name.startswith('v') and k == 0 and not acc_dest and
+                                                                     not name.startswith(('vclip', 'vdiv', 'vsqrt', 'vrsqrt',
+                                                                                          'vnop', 'vwaitq', 'vcallms')))
                 if to:
                     writes.add(reg)
                 elif reg not in writes:

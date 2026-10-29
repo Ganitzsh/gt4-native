@@ -1,4 +1,6 @@
 /* compiler: ee-gcc2.96-no-strict-aliasing */
+/* Native version of 0034D490: the lanes of the 128-bit point its callee returns read as floats (the original moves them
+   out of a 128-bit register: MTC1, PCPYUD, DSRA32). */
 typedef unsigned char u8;
 typedef short s16;
 typedef float f32;
@@ -107,23 +109,7 @@ struct Vec {
     f32 w;
 };
 
-static inline f32 vx(I128 v) {
-    f32 f;
-    __asm__("mtc1 %1, %0" : "=f"(f) : "r"(v));
-    return f;
-}
-
-static inline I128 vsr32(I128 v) {
-    I128 r;
-    __asm__("dsra32 %0, %1, 0" : "=r"(r) : "r"(v));
-    return r;
-}
-
-static inline I128 vhi(I128 v) {
-    I128 r;
-    __asm__("pcpyud %0, %1, %1" : "=r"(r) : "r"(v));
-    return r;
-}
+static inline float quad_lane(const I128 &v, int k) { return ((const float *)&v)[k]; }
 
 extern char D_0069F648[];
 
@@ -233,9 +219,9 @@ extern "C" void DynamicsConductor__initialize(Conductor *self, int mode) {
         func_003F3B68(cfg, spec, grid, DynamicsConductor__getCourseType(self), 0, D_0069F648);
         start = entry->start;
         p = func_003952C0(owner->course, start);
-        pos.x = vx(p);
-        pos.y = -vx(vhi(p));
-        pos.z = vx(vsr32(p));
+        pos.x = quad_lane(p, 0);
+        pos.y = -quad_lane(p, 2);
+        pos.z = quad_lane(p, 1);
         rot.z = func_00395228(owner->course, start);
         mode2 = 0;
         distance = 0;

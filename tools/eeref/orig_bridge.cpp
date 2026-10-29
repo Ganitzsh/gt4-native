@@ -203,6 +203,19 @@ std::uintptr_t g_thunks, g_thunks_end;  // GT4_ORIG=all's thunks: original code,
 thread_local Cpu *t_cpu;
 thread_local std::uint8_t *t_stack;
 
+// A function's parameters and return as tools/eeref takes them (tools/eeref/kinds.py, GT4_ORIG_KINDS).
+struct Sig {
+    char kinds[24] = "iiiiiiii";
+    char ret = 'i';
+};
+std::unordered_map<std::uint32_t, Sig> g_sigs;
+
+const Sig &sig_of(std::uint32_t addr) {
+    static const Sig fallback;
+    const auto it = g_sigs.find(addr);
+    return it == g_sigs.end() ? fallback : it->second;
+}
+
 }  // namespace
 
 namespace ps2 {
@@ -236,12 +249,33 @@ bool gt4_orig_native(Cpu &c, std::uint32_t addr) {
     if (trace)
         gt4::rt::log_info("orig: native %08X (%s) from %08X, thread %lu, sp %08X", addr,
                           gt4::rt::native_name_for(target, nullptr), c.r[31].w[0], GetCurrentThreadId(), sp);
+    // A function in the kinds table gets its parameters as their kinds say (a float from $f12.., a 64-bit value in
+    // two words, a 128-bit one in four); else the eight integer registers.
+    std::uint32_t w[12] = {c.r[4].w[0], c.r[5].w[0], c.r[6].w[0], c.r[7].w[0], c.r[8].w[0], c.r[9].w[0],
+                           c.r[10].w[0], c.r[11].w[0], ld32(sp), ld32(sp + 8), ld32(sp + 16), ld32(sp + 24)};
+    const auto known = g_sigs.find(addr);
+    if (known != g_sigs.end()) {
+        std::uint32_t n = 0, ireg = 4, freg = 12, slot = 0;
+        for (const char *k = known->second.kinds; *k && n < 12; ++k) {
+            if (*k == 'f') {
+                w[n++] = freg <= 19 ? c.f[freg++] : ld32(sp + 8 * slot++);
+            } else if (*k == 'w' || *k == 'q') {
+                const int words = *k == 'w' ? 2 : 4;
+                for (int j = 0; j < words && n < 12; ++j) w[n++] = ireg <= 11 ? c.r[ireg].w[j] : ld32(sp + 8 * slot + 4 * j);
+                if (ireg <= 11) ++ireg; else slot += words / 2;
+            } else if (*k != '-') {
+                w[n++] = ireg <= 11 ? c.r[ireg++].w[0] : ld32(sp + 8 * slot++);
+            }
+        }
+    }
     vu0_to_native(c.vu0);
-    const std::uint64_t r = reinterpret_cast<Fn>(target)(c.r[4].w[0], c.r[5].w[0], c.r[6].w[0], c.r[7].w[0], c.r[8].w[0],
-                                                         c.r[9].w[0], c.r[10].w[0], c.r[11].w[0], ld32(sp), ld32(sp + 8),
-                                                         ld32(sp + 16), ld32(sp + 24));
+    const std::uint64_t r = reinterpret_cast<Fn>(target)(w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], w[8], w[9], w[10],
+                                                         w[11]);
     vu0_from_native(c.vu0);
-    c.r[2].sd[0] = static_cast<std::int32_t>(static_cast<std::uint32_t>(r));
+    if (known != g_sigs.end() && known->second.ret == 'w')
+        c.r[2].d[0] = r;
+    else
+        c.r[2].sd[0] = static_cast<std::int32_t>(static_cast<std::uint32_t>(r));
     c.f[0] = static_cast<std::uint32_t>(r);
     c.pc = c.r[31].w[0];
     return true;
@@ -250,18 +284,6 @@ bool gt4_orig_native(Cpu &c, std::uint32_t addr) {
 
 namespace {
 
-// A function's parameters and return as tools/eeref takes them (tools/eeref/kinds.py, GT4_ORIG_KINDS).
-struct Sig {
-    char kinds[24] = "iiiiiiii";
-    char ret = 'i';
-};
-std::unordered_map<std::uint32_t, Sig> g_sigs;
-
-const Sig &sig_of(std::uint32_t addr) {
-    static const Sig fallback;
-    const auto it = g_sigs.find(addr);
-    return it == g_sigs.end() ? fallback : it->second;
-}
 
 // Runs the original code of addr with a native caller's arguments; returns what the native function would
 // (edx:eax; a float in eax).
@@ -289,6 +311,9 @@ std::uint64_t run_original(const std::uint32_t *args, std::uint32_t addr, const 
             word += 4;
         } else if (*k == 'i') {
             if (ireg <= 11) c.r[ireg++].sd[0] = static_cast<std::int32_t>(args[word]);
+            word += 1;
+        } else if (*k == 'u') {   // a 32-bit value its caller zero-extends (LWU)
+            if (ireg <= 11) c.r[ireg++].d[0] = args[word];
             word += 1;
         }
     }
@@ -338,7 +363,7 @@ extern "C" std::uint64_t gt4_orig_run(const std::uint32_t *args, int index) {
 extern "C" std::uint64_t gt4_orig_run_addr(const std::uint32_t *args, std::uint32_t addr) {
     return run_original(args, addr, sig_of(addr));
 }
-// The same with the parameter kinds given (i, w, f, q) and the return kind (v, i, w, f): tools/eeref/difftest.cpp.
+// The same with the parameter kinds given (i, u, w, f, q) and the return kind (v, i, w, f): tools/eeref/difftest.cpp.
 extern "C" std::uint64_t gt4_orig_run_kinds(const std::uint32_t *args, std::uint32_t addr, const char *kinds, char ret) {
     Sig s;
     std::strncpy(s.kinds, kinds, sizeof s.kinds - 1);

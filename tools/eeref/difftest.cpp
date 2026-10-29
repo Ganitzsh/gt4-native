@@ -67,6 +67,8 @@ void *native_fn(std::uint32_t addr) {
     return nullptr;
 }
 
+using Fn8w = std::uint64_t (*)(std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t,
+                               std::uint32_t, std::uint32_t);
 using Fn8 = std::uint32_t (*)(std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t,
                               std::uint32_t, std::uint32_t);
 struct Ret16 {
@@ -128,12 +130,31 @@ void project_point(std::uint32_t a[8]) {
     random_vectors(28, 31, -1.5f, 1.5f);
 }
 
+// a double's bits: mostly ordinary values, some zeros, infinities, NaNs, denormals and huge or tiny exponents
+std::uint64_t random_double() {
+    const std::uint32_t pick = rnd() % 16;
+    const std::uint64_t sign = static_cast<std::uint64_t>(rnd() & 1) << 63;
+    const std::uint64_t mant = (static_cast<std::uint64_t>(rnd()) << 32 | rnd()) & 0xFFFFFFFFFFFFFull;
+    if (pick == 0) return sign;                                   // zero
+    if (pick == 1) return sign | 0x7FF0000000000000ull;          // infinity
+    if (pick == 2) return sign | 0x7FF0000000000000ull | (mant | 1);   // NaN
+    if (pick == 3) return sign | mant;                            // denormal
+    if (pick == 4) return sign | (static_cast<std::uint64_t>(1 + rnd() % 2046) << 52) | mant;   // any exponent
+    return sign | (static_cast<std::uint64_t>(1023 - 40 + rnd() % 80) << 52) | mant;          // near 1
+}
+void one_double(std::uint32_t a[8]) {
+    const std::uint64_t x = random_double();
+    a[0] = static_cast<std::uint32_t>(x);
+    a[1] = static_cast<std::uint32_t>(x >> 32);
+}
+
 const Register r0(Test{"001C1850", 0x001C1850, "iiiii", 's', false, image_mask});
 const Register r1(Test{"001C18B0", 0x001C18B0, "iiiii", 'v', false, image_mask});
 const Register r2(Test{"001C1C50", 0x001C1C50, "iiiii", 'v', false, image_two});
 const Register r3(Test{"001C1CA8", 0x001C1CA8, "iiii", 'v', false, image_one});
 const Register r4(Test{"003E21D8", 0x003E21D8, "ii", 'v', true, rotate_point});
 const Register r5(Test{"003B7C98", 0x003B7C98, "iiiiff", 'i', true, project_point});
+const Register r7(Test{"0057FB98", 0x0057FB98, "w", 'w', false, one_double});
 
 // within float rounding (1e-5 relative), or within the drift of a long computation (1e-3 relative, 1e-5 absolute:
 // the EE truncates where x87 rounds, and sums that cancel make the difference relative to the result large)
@@ -146,58 +167,93 @@ bool within(std::uint32_t a, std::uint32_t b, float rel, float abs) {
 bool close(std::uint32_t a, std::uint32_t b) { return within(a, b, 1e-5f, 1e-30f); }
 bool drift(std::uint32_t a, std::uint32_t b) { return within(a, b, 1e-3f, 1e-5f); }
 
+// What a trial compares: the scratch area, VU0's data memory, the scratchpad, as bytes (floats within tolerance when
+// the test says so); then shared vectors 8..31 and vi13, the state VU0's registers carry between functions
+// (vf1..vf7, ACC, Q and I are temporaries a rewrite does not keep).
+struct Region {
+    const char *name;
+    std::uint32_t addr, size;
+};
+const Region kRegions[] = {{"scratch", kScratch, kScratchSize}, {"VU0 data", 0x11004000, 0x1000}, {"scratchpad", 0x70000000, 0x4000}};
+
+struct Snapshot {
+    std::vector<std::uint8_t> mem[3];
+    Gt4Vu0State vu;
+    void take() {
+        for (int r = 0; r < 3; ++r) mem[r].assign(ram(kRegions[r].addr), ram(kRegions[r].addr) + kRegions[r].size);
+        vu = __gt4_vu0;
+    }
+    void put() const {
+        for (int r = 0; r < 3; ++r) std::memcpy(ram(kRegions[r].addr), mem[r].data(), kRegions[r].size);
+        __gt4_vu0 = vu;
+    }
+};
+
 bool run(const Test &t, int trials) {
     void *fn = native_fn(t.addr);
     if (!fn) {
         gt4::rt::log_error("difftest %s: no native function", t.name);
         return false;
     }
-    std::vector<std::uint8_t> before(kScratchSize), native(kScratchSize);
-    Gt4Vu0State vu_before;
+    Snapshot before, native, original;
     int differ = 0, rounding = 0, drifted = 0;
     for (int n = 0; n < trials; ++n) {
         std::uint32_t args[8] = {};
         t.setup(args);
-        std::memcpy(before.data(), ram(kScratch), kScratchSize);
-        vu_before = __gt4_vu0;
-        std::uint32_t native_ret = 0;
-        if (t.ret == 's')
+        before.take();
+        std::uint64_t native_ret = 0;
+        if (t.ret == 'w')
+            native_ret = reinterpret_cast<Fn8w>(fn)(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7]);
+        else if (t.ret == 's')
             reinterpret_cast<Fn8Ret16>(fn)(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7]);
         else
             native_ret = reinterpret_cast<Fn8>(fn)(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7]);
-        std::memcpy(native.data(), ram(kScratch), kScratchSize);
-        std::memcpy(ram(kScratch), before.data(), kScratchSize);
-        __gt4_vu0 = vu_before;
-        const std::uint32_t orig_ret = static_cast<std::uint32_t>(gt4_orig_run_kinds(args, t.addr, t.kinds,
-                                                                                     t.ret == 's' ? 'v' : t.ret));
-        bool same = t.ret == 'v' || t.ret == 's' || native_ret == orig_ret || (t.ret == 'f' && t.floats && drift(native_ret, orig_ret));
-        int first = -1;
-        for (std::uint32_t k = 0; k < kScratchSize; k += 4) {
-            std::uint32_t a, b;
-            std::memcpy(&a, &native[k], 4);
-            std::memcpy(&b, ram(kScratch) + k, 4);
-            if (a == b) continue;
-            if (t.floats && close(a, b)) {
+        native.take();
+        before.put();
+        std::uint64_t orig_ret = gt4_orig_run_kinds(args, t.addr, t.kinds, t.ret == 's' ? 'v' : t.ret);
+        original.take();
+        if (t.ret != 'w') {
+            native_ret &= 0xFFFFFFFFu;
+            orig_ret &= 0xFFFFFFFFu;
+        }
+        bool same = t.ret == 'v' || t.ret == 's' || native_ret == orig_ret ||
+                    (t.ret == 'f' && t.floats && drift(static_cast<std::uint32_t>(native_ret), static_cast<std::uint32_t>(orig_ret)));
+        const char *where = "";
+        std::uint32_t at = 0, na = 0, oa = 0;
+        auto word = [&](const char *region, std::uint32_t addr, std::uint32_t x, std::uint32_t y) {
+            if (x == y) return;
+            if (t.floats && close(x, y)) {
                 ++rounding;
-                continue;
+                return;
             }
-            if (t.floats && drift(a, b)) {
+            if (t.floats && drift(x, y)) {
                 ++drifted;
-                continue;
+                return;
+            }
+            if (same) {
+                where = region;
+                at = addr;
+                na = x;
+                oa = y;
             }
             same = false;
-            if (first < 0) first = static_cast<int>(k);
-        }
-        if (!same && ++differ <= 3) {
-            std::uint32_t a = 0, b = 0;
-            if (first >= 0) {
-                std::memcpy(&a, &native[first], 4);
-                std::memcpy(&b, ram(kScratch) + first, 4);
+        };
+        for (int r = 0; r < 3; ++r)
+            for (std::uint32_t k = 0; k < kRegions[r].size; k += 4) {
+                std::uint32_t x, y;
+                std::memcpy(&x, &native.mem[r][k], 4);
+                std::memcpy(&y, &original.mem[r][k], 4);
+                word(kRegions[r].name, kRegions[r].addr + k, x, y);
             }
-            gt4::rt::log_warn("difftest %s trial %d: return native %08x original %08x; first word differing at %08x: native "
-                              "%08x original %08x",
-                              t.name, n, native_ret, orig_ret, first < 0 ? 0 : kScratch + first, a, b);
-        }
+        for (int v = 8; v < 32; ++v)
+            for (int k = 0; k < 4; ++k) word("vector", static_cast<std::uint32_t>(v * 4 + k), bits(native.vu.vf[v][k]),
+                                              bits(original.vu.vf[v][k]));
+        word("vi13", 13, native.vu.vi[13] & 0xFFFF, original.vu.vi[13] & 0xFFFF);
+        if (!same && ++differ <= 3)
+            gt4::rt::log_warn("difftest %s trial %d (args %08x %08x %08x %08x): return native %016llx original %016llx; first "
+                              "differing word: %s %08x native %08x original %08x",
+                              t.name, n, args[0], args[1], args[2], args[3], static_cast<unsigned long long>(native_ret),
+                              static_cast<unsigned long long>(orig_ret), where, at, na, oa);
     }
     gt4::rt::log_info("difftest %s: %d trials, %d differ (%d words within float rounding, %d within 1e-3)", t.name, trials,
                       differ, rounding, drifted);

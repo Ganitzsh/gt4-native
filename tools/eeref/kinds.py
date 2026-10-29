@@ -38,6 +38,19 @@ def main():
                 continue
             ks = ''.join(k if k in 'ifwq' else 'i' for k in kinds if k != '...')
             best[addr] = (rank[role], ks or '-', {'s': 'v'}.get(ret, ret if ret in 'viwf' else 'i'))
+    # The runtime's replacements (gt4_replace_func_ADDR) are what runs at their addresses: the original code calls
+    # them natively, with the arguments as these definitions take them.
+    for root, _dirs, names in os.walk(os.path.join(ROOT, 'runtime')):
+        for n in names:
+            if not n.endswith('.cpp'):
+                continue
+            path = os.path.join(root, n)
+            text = abi_lint.strip_comments(open(path, encoding='utf-8', errors='replace').read())
+            text = text.replace('gt4_replace_func_', 'func_')
+            for addr, kinds, is_def, _line, _used, ret in abi_lint.scan(path, text):
+                if is_def and kinds is not None:
+                    ks = ''.join(k if k in 'ifwq' else 'i' for k in kinds if k != '...')
+                    best[addr] = (-1, ks or '-', {'s': 'v'}.get(ret, ret if ret in 'viwf' else 'i'))
     os.makedirs(os.path.dirname(a.out), exist_ok=True)
     with open(a.out, 'w', newline='\n') as f:
         for addr in sorted(best):

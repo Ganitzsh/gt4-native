@@ -135,7 +135,9 @@ def main():
             rows.append((True, os.path.basename(pre)[:-4], d[2] if d else '?', 'CORRUPT', 'file length disagrees with its header'))
             continue
         full = expand(pre, ram)
-        cmd = [a.eeref, full or pre, '--elf', elf, '--syms', syms, '--max', a.max if a.detail else '0']
+        # VU0's temporaries (vf1..vf7) are not compared: native rewrites keep them as locals (docs/VU0_REWRITE.md), so
+        # every caller of one leaves others there; a use of them across a call shows in memory or the return
+        cmd = [a.eeref, full or pre, '--elf', elf, '--syms', syms, '--max', a.max if a.detail else '0', '--vu-state']
         role = '?'
         if d:
             kinds, ret, role = d
