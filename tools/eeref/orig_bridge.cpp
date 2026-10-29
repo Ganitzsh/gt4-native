@@ -338,6 +338,14 @@ extern "C" std::uint64_t gt4_orig_run(const std::uint32_t *args, int index) {
 extern "C" std::uint64_t gt4_orig_run_addr(const std::uint32_t *args, std::uint32_t addr) {
     return run_original(args, addr, sig_of(addr));
 }
+// The same with the parameter kinds given (i, w, f, q) and the return kind (v, i, w, f): tools/eeref/difftest.cpp.
+extern "C" std::uint64_t gt4_orig_run_kinds(const std::uint32_t *args, std::uint32_t addr, const char *kinds, char ret) {
+    Sig s;
+    std::strncpy(s.kinds, kinds, sizeof s.kinds - 1);
+    s.kinds[sizeof s.kinds - 1] = 0;
+    s.ret = ret;
+    return run_original(args, addr, s);
+}
 
 // gt4_orig_entry: entered in place of a GT4_ORIG function's native code, with %ecx = its hook index.
 // gt4_orig_entry_addr: entered from a PS2 address's trampoline (GT4_ORIG=all), with %ecx = that address.
