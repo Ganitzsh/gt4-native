@@ -111,8 +111,10 @@ aspect ratio, which is how the pipeline already treats the test scene.
   `aspect.safe_area` inset applies on top.
 - **Menus** (0..640 orthographic): done the centred way. `game_src/func_00214FB0.cpp` gives the menus'
   orthographic projection 320 -/+ 240 x aspect in the wide mode, so their 640 x 480 layout keeps its shape in a
-  centred 4:3 area (`--menus centered`, the default; gt4_host passes `--menus stretched` for `aspect.hud =
-  stretched`, the PS2's look). Full-screen backgrounds drawn another way still fill the width; the menu models
+  centred 4:3 area (`--menus centered`, the game's default; gt4_host passes it only for `aspect.hud =
+  centered` and `--menus stretched` otherwise: GT4's own 16:9 layout, its font squeezed to the frame, lines up
+  every page, while centring misplaces pages drawn as one full-screen image under their text, such as the
+  status page and Home, 2026-10-29). Full-screen backgrounds drawn another way still fill the width; the menu models
   keep the game's own 0.75 squeeze, which is right for that frame. 0x00215FE0's rectangle mapping is untouched
   and nothing looked clipped in the title, mode, course and car menus (2026-10-27). A primitive the native 2D
   emitters (0x0049A200, 0x0049A360, 0x0049A4F8, 0x0049A6A0) place exactly over the centred area is a

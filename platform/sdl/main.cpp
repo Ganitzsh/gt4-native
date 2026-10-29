@@ -556,7 +556,10 @@ int run(const Options& options) {
             gsOptions.gameArgs.push_back(std::to_string(a));
             // The menus' 2D: in a centred 4:3 area, or stretched as on the PS2 (aspect.hud = stretched).
             gsOptions.gameArgs.push_back("--menus");
-            gsOptions.gameArgs.push_back(settings.hud == gt4::HudLayout::Stretched ? "stretched" : "centered");
+            // Only aspect.hud = centered keeps them in a 4:3 area: GT4's own 16:9 layout (its font squeezed to
+            // the frame) lines every page up, while centring misplaces the pages drawn as one full-screen image
+            // under their text (the status page, Home).
+            gsOptions.gameArgs.push_back(settings.hud == gt4::HudLayout::Centered ? "centered" : "stretched");
         }
         gsOptions.replayPath = options.replay;
         gsOptions.lockstep = lockstep;

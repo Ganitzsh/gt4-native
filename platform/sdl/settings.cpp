@@ -187,8 +187,9 @@ const std::vector<Option>& options() {
             "Content aspect ratio. Other window shapes get black bars (letterbox or pillarbox). 3D is Hor+: the "
             "vertical field of view stays fixed and wider ratios see more to the sides."));
         o.push_back(enumOption("aspect.hud", &Settings::hud, kHud,
-            "2D layout: anchored = HUD elements keep to the edges of the content area, centered = 2D stays in a "
-            "centred 4:3 area, stretched = the 4:3 layout is stretched (the PS2 on a widescreen TV)."));
+            "2D layout: anchored = HUD elements keep to the edges of the content area and the menus use GT4's own "
+            "widescreen layout, centered = 2D stays in a centred 4:3 area (some menu pages misalign), stretched = "
+            "the 4:3 layout is stretched (the PS2 on a widescreen TV)."));
         o.push_back(floatOption("aspect.safe_area", &Settings::safeArea, 0.0f, 0.15f,
             "HUD inset from the content edges, as a fraction of the content height."));
         o.push_back(enumOption("render.gs", &Settings::gsRenderer, kGsRenderers,
