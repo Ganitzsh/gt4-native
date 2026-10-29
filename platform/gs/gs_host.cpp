@@ -127,11 +127,13 @@ public:
                 const gsn::Target* t = nullptr;
                 for (const auto& x : list.targets) if (x.id == d.target) t = &x;
                 if (!t || static_cast<long>(t->bp) != drawsAt) continue;
-                std::printf("[gsn draw] test %llX zbuf %llX frame %llX prim %03X tex0 %016llX src kind %d id %u off %d,%d clamp %llX tex1 %llX alpha %llX, %u vertices\n", (unsigned long long)d.state.test, (unsigned long long)d.state.zbuf, (unsigned long long)d.state.frame, d.state.prim,
+                std::printf("[gsn draw] test %llX zbuf %llX frame %llX prim %03X tex0 %016llX src kind %d id %u off %d,%d clamp %llX tex1 %llX alpha %llX sc %llX, %u vertices\n", (unsigned long long)d.state.test, (unsigned long long)d.state.zbuf, (unsigned long long)d.state.frame, d.state.prim,
                             static_cast<unsigned long long>(d.state.tex0), static_cast<int>(d.texture.kind), d.texture.id, d.texture.offsetX,
                             d.texture.offsetY, static_cast<unsigned long long>(d.state.clamp), static_cast<unsigned long long>(d.state.tex1),
-                            static_cast<unsigned long long>(d.state.alpha), d.count);
-                for (uint32_t k = 0; k < std::min<uint32_t>(d.count, 6); ++k) {
+                            static_cast<unsigned long long>(d.state.alpha), static_cast<unsigned long long>(d.state.scissor), d.count);
+                // GT4_GSN_VERTS=N: the first N vertices of each draw (default 6)
+                static const uint32_t verts = std::getenv("GT4_GSN_VERTS") ? std::strtoul(std::getenv("GT4_GSN_VERTS"), nullptr, 10) : 6;
+                for (uint32_t k = 0; k < std::min<uint32_t>(d.count, verts); ++k) {
                     const auto& v = list.vertices[d.first + k];
                     std::printf("    z %08X xy %.2f %.2f uv %.2f %.2f stq %.4f %.4f %.4f rgba %08X\n", v.z, v.x, v.y, v.u, v.v, v.s, v.t, v.q, v.rgba);
                 }

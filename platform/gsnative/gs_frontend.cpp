@@ -356,6 +356,15 @@ void GsFrontend::emit(const Vertex* v, uint32_t n, Topology topology) {
     const uint32_t scissorY0 = static_cast<uint32_t>((s.scissor >> 32) & 0x7FF), scissorY1 = static_cast<uint32_t>((s.scissor >> 48) & 0x7FF);
     const uint32_t top = static_cast<uint32_t>(std::clamp(y0, static_cast<float>(scissorY0), static_cast<float>(scissorY1)));
     const uint32_t bottom = static_cast<uint32_t>(std::clamp(std::max(y0, std::ceil(y1) - 1.0f), static_cast<float>(scissorY0), static_cast<float>(scissorY1)));
+    // A triangle whose bounds hold no GS pixel inside the scissor draws nothing on the GS (pixel k is covered
+    // from y0 <= k < y1); at a higher render scale the render pixels between the GS's sample points would still
+    // catch its edge (menu text parked just below the screen showed as a line of glyph tops). Only for 2D
+    // (sprites, UV texturing): 3D meshes keep their slivers, which at a higher scale fill the cracks between pixels.
+    const bool flat = (prim & 7) == 6 || ((prim >> 8) & 1);
+    if (topology == Topology::Triangles && flat &&
+        (std::max(std::ceil(x0), static_cast<float>(scissorX0)) > std::min(std::ceil(x1) - 1.0f, static_cast<float>(scissorX1)) ||
+         std::max(std::ceil(y0), static_cast<float>(scissorY0)) > std::min(std::ceil(y1) - 1.0f, static_cast<float>(scissorY1))))
+        return;
     const uint32_t width = static_cast<uint32_t>((s.frame >> 16) & 0x3F);
     const uint32_t colour = targetFor(s.frame, false, scissorY1 + 1, width);
     const bool zte = (s.test >> 16) & 1;
