@@ -181,6 +181,30 @@ DWORD WINAPI snapshot_thread(void *) {
         if (end == p && *p) break;
     }
     static const uint8_t zeros[kGuestSectionStart] = {};
+    // trigger:FILE: whenever FILE appears (it is deleted), the RAM and the scratchpad (snap_N.spr, 16 KB at
+    // 0x70000000), named by the VBlank then; for screens reached by hand.
+    if (std::strncmp(getenv("GT4_SNAPSHOT"), "trigger:", 8) == 0) {
+        const char *file = getenv("GT4_SNAPSHOT") + 8;
+        for (;;) {
+            Sleep(200);
+            if (GetFileAttributesA(file) == INVALID_FILE_ATTRIBUTES) continue;
+            DeleteFileA(file);
+            const uint32_t v = kernel_vblank_count();
+            char path[512];
+            snprintf(path, sizeof path, "%s/snap_%u.ram", g_dir, v);
+            if (FILE *f = fopen(path, "wb")) {
+                fwrite(zeros, 1, kGuestSectionStart, f);
+                fwrite(guest_ptr(kGuestSectionStart), 1, kRamSize - kGuestSectionStart, f);
+                fclose(f);
+            }
+            snprintf(path, sizeof path, "%s/snap_%u.spr", g_dir, v);
+            if (FILE *f = fopen(path, "wb")) {
+                fwrite(guest_ptr(0x70000000), 1, 0x4000, f);
+                fclose(f);
+            }
+            log_info("record: guest RAM and scratchpad at VBlank %u -> %s/snap_%u.*", v, g_dir, v);
+        }
+    }
     for (uint32_t v : at) {
         while (kernel_vblank_count() < v) Sleep(1);
         char path[512];

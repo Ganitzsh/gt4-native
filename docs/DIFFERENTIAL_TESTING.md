@@ -120,6 +120,13 @@ the user's game and stays in `build/`.
   callees (jal and tail calls) for a GT4_RECORD list. `GT4_PROFILE=FILE:FROM:TO` (runtime/profile.cpp) samples
   the game's threads (frame-pointer walk, game code only) to find a scene's call tree in the first place.
 - `GT4_SNAPSHOT=VBLANK,...` writes the guest RAM at those VBlanks, to compare game state between two runs.
+  `GT4_SNAPSHOT=trigger:FILE` writes the RAM and the scratchpad whenever FILE appears (screens reached by hand).
+- `GT4_WATCH_WRITE=ADDR[,ADDR...][@FILE]` (runtime/crash.cpp): hardware write watchpoints, up to four, on every thread
+  (re-scanned as threads start), armed when FILE appears; each write is logged with the writer and two callers.
+  `GT4_WATCH_ODD=1` logs only values no computed float has (an address or an integer stored as a float).
+  `gt4_debug_watch(addr)` (runtime/watch.cpp) arms one from game-side code for a heap object.
+- `GT4_FPU_TRAP=file:FILE` arms the x87 trap (`GT4_FPU_TRAP`) only once FILE appears, so a screen is reached at
+  full speed first.
 
 ## The original code inside the game
 
@@ -130,8 +137,10 @@ its RAM and scratchpad are the guest's, at their PS2 addresses):
 - `GT4_ORIG=all` sends every PS2 function address to the original code: all game logic is the original's,
   and only the runtime's hardware and host layer (DMA starts, GS, IOP services, syscalls, libc helpers) is
   native. `GT4_ORIG_KINDS=build/eeref/kinds.txt` (`kinds.py`) gives every function's parameter kinds.
-  `GT4_ORIG_KEEP=ADDR,...` keeps those functions native under `all` (a test hook such as the GT4_MONEY floor,
-  0043AF68).
+  `GT4_ORIG_KEEP=ADDR|LO-HI,...` keeps those functions (or address ranges) native under `all` (a test hook such
+  as the GT4_MONEY floor, 0043AF68; ranges bisect a difference). A bisection that needs several separate ranges
+  original at once points at data the native code leaves unwritten (GT Auto's lights: stack garbage), not at
+  one function.
 
 Calls from the original code to an address whose trampoline leads into the runtime are made natively, with
 the EE's eight integer argument registers and four stack slots; setjmp, longjmp and the runtime's stand-ins

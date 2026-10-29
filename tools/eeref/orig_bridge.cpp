@@ -412,14 +412,25 @@ void redirect_all() {
     for (std::uint32_t k = 0; k < gt4_native_function_count; ++k)
         if (std::strncmp(gt4_native_functions[k].name, "gt4_replace_func_", 17) == 0) pending[gt4_native_functions[k].addr] = true;
     for (std::uint32_t a : kHardware) pending.erase(a);
-    // GT4_ORIG_KEEP=ADDR,...: functions that stay native (a test hook such as the GT4_MONEY floor, 0043AF68)
+    // GT4_ORIG_KEEP=ADDR|LO-HI,...: functions that stay native (a test hook such as the GT4_MONEY floor,
+    // 0043AF68; address ranges, HI excluded, to bisect a difference between the native and the original code)
     std::unordered_map<std::uint32_t, bool> keep;
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> keepRanges;
     for (const char *k = getenv("GT4_ORIG_KEEP"); k && *k;) {
         char *e;
-        keep[static_cast<std::uint32_t>(std::strtoul(k, &e, 16))] = true;
-        k = *e == ',' ? e + 1 : e;
+        const auto lo = static_cast<std::uint32_t>(std::strtoul(k, &e, 16));
         if (e == k) break;
+        if (*e == '-') {
+            const char *h = e + 1;
+            keepRanges.emplace_back(lo, static_cast<std::uint32_t>(std::strtoul(h, &e, 16)));
+        } else {
+            keep[lo] = true;
+        }
+        k = *e == ',' ? e + 1 : e;
     }
+    for (std::uint32_t k = 0; k < gt4_guest_function_count; ++k)
+        for (const auto &[lo, hi] : keepRanges)
+            if (gt4_guest_functions[k].addr >= lo && gt4_guest_functions[k].addr < hi) keep[gt4_guest_functions[k].addr] = true;
     for (const auto &[a, _] : keep) pending.erase(a);
     auto *thunks = static_cast<std::uint8_t *>(
         VirtualAlloc(nullptr, gt4_guest_function_count * 10u, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));

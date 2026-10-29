@@ -8,7 +8,7 @@
 typedef unsigned long u64;
 struct Obj { char *vt; };
 struct Tgt { char *vt; char p4[0x184]; float f188; int i18C; char p190[0xD0]; u64 f260, f268; };
-struct GetEnt { short delta,index; Tgt *(*fn)(void *, int); };
+struct GetEnt { short delta,index; Tgt *(*fn)(void *, int, float); };
 struct IntEnt { short delta,index; int (*fn)(void *); };
 struct VoidEnt { short delta,index; void (*fn)(void *); };
 struct InitEnt { short delta,index; void (*fn)(void *, char *, int); };
@@ -17,9 +17,9 @@ extern "C" int func_003FF688(int, int *, int);
 extern "C" float func_00578598(void *);
 extern "C" void func_0037BC48(Tgt *, int, int);
 extern "C" void func_00379FA8(Tgt *, int, float);
-static inline Tgt *get(Obj *self, int idx) {
+static inline Tgt *get(Obj *self, int idx, float time) {
     GetEnt *e=(GetEnt *)(self->vt+0xD8);
-    return e->fn((char *)self+e->delta,idx);
+    return e->fn((char *)self+e->delta,idx,time);
 }
 static inline int kind(Tgt *t) {
     IntEnt *e=(IntEnt *)(t->vt+0xB8);
@@ -30,7 +30,7 @@ extern "C" int func_00376238(Obj *self, int slotIndex, int a2, char *context, vo
     int candidates[26];
     int previousKind = -1;
     Tgt *target=*(Tgt **)((char *)self+slotIndex*0x19C+0x158);
-    if (get(self,slotIndex)==target) {
+    if (get(self,slotIndex,time)==target) {
         if (target->i18C==*(int *)(context+0x10)) previousKind=kind(target);
     }
     int candidateCount=func_003FF688(*(int *)(context+0x10),candidates,26);

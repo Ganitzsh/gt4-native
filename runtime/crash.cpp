@@ -5,8 +5,11 @@
 #include "log.h"
 
 #include <windows.h>
+#include <tlhelp32.h>
 
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 
 extern "C" {
 extern const unsigned gt4_unresolved_base, gt4_unresolved_count;
@@ -202,9 +205,91 @@ LONG WINAPI on_crash(EXCEPTION_POINTERS *ep) {
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
+// GT4_WATCH_WRITE=ADDR[,ADDR...][@FILE] (debugging): hardware write watchpoints (up to four guest addresses,
+// four bytes each) on every thread, armed when FILE appears (at start without @FILE); each write is logged with
+// the native function that made it and its two callers, the first 200 of them. GT4_WATCH_ODD=1: only writes of a
+// value no float the game computes would have (a non-zero exponent below 2^-60: an address or an integer read as
+// a float).
+LONG WINAPI on_watch(EXCEPTION_POINTERS *ep) {
+    if (ep->ExceptionRecord->ExceptionCode != EXCEPTION_SINGLE_STEP) return EXCEPTION_CONTINUE_SEARCH;
+    CONTEXT *c = ep->ContextRecord;
+    if (!(c->Dr6 & 0xF)) return EXCEPTION_CONTINUE_SEARCH;
+    static const bool odd_only = getenv("GT4_WATCH_ODD") != nullptr;
+    const int slot = __builtin_ctz(static_cast<unsigned>(c->Dr6 & 0xF));
+    const DWORD addr = (&c->Dr0)[slot];
+    const unsigned value = *reinterpret_cast<const volatile unsigned *>(addr);
+    const unsigned exponent = (value >> 23) & 0xFF;
+    static volatile LONG logged = 0;
+    if ((!odd_only || (exponent != 0 && exponent < 127 - 60)) && InterlockedIncrement(&logged) <= 200) {
+        char where[256], caller[256] = "?", caller2[256] = "?";
+        describe(c->Eip, where, sizeof where);
+        const DWORD *frame = reinterpret_cast<const DWORD *>(c->Ebp);
+        if (!IsBadReadPtr(frame, 8)) {
+            describe(frame[1], caller, sizeof caller);
+            const DWORD *up = reinterpret_cast<const DWORD *>(frame[0]);
+            if (!IsBadReadPtr(up, 8)) describe(up[1], caller2, sizeof caller2);
+        }
+        gt4::rt::log_info("watch: write of %08lx = %08x at %s, called from %s, from %s", static_cast<unsigned long>(addr),
+                          value, where, caller, caller2);
+    }
+    c->Dr6 = 0;
+    return EXCEPTION_CONTINUE_EXECUTION;
+}
+
+DWORD WINAPI watch_thread(void *) {
+    const char *spec = getenv("GT4_WATCH_WRITE");
+    DWORD addr[4] = {};
+    int n = 0;
+    const char *p = spec;
+    while (*p && *p != '@' && n < 4) {
+        char *end;
+        addr[n++] = strtoul(p, &end, 16);
+        p = *end == ',' ? end + 1 : end;
+        if (end == p && *p != '@') break;
+    }
+    if (const char *at = strchr(spec, '@'))
+        while (GetFileAttributesA(at + 1) == INVALID_FILE_ATTRIBUTES) Sleep(100);
+    DWORD dr7 = 0;
+    for (int k = 0; k < n; ++k) dr7 |= (1u << (2 * k)) | (0xDu << (16 + 4 * k));   // local enable, write, 4 bytes
+    // Threads started later are armed by the next scan (every 100 ms).
+    const DWORD self = GetCurrentThreadId();
+    static DWORD done[512];
+    int armed = 0;
+    for (;;) {
+        HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        THREADENTRY32 te{sizeof te};
+        for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te)) {
+            if (te.th32OwnerProcessID != GetCurrentProcessId() || te.th32ThreadID == self) continue;
+            bool known = false;
+            for (int k = 0; k < armed && !known; ++k) known = done[k] == te.th32ThreadID;
+            if (known || armed >= 512) continue;
+            HANDLE h = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT | THREAD_SUSPEND_RESUME, FALSE, te.th32ThreadID);
+            if (!h) continue;
+            SuspendThread(h);
+            CONTEXT c{};
+            c.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+            if (GetThreadContext(h, &c)) {
+                for (int k = 0; k < n; ++k) (&c.Dr0)[k] = addr[k];
+                c.Dr7 = dr7;
+                if (SetThreadContext(h, &c)) done[armed++] = te.th32ThreadID;
+            }
+            ResumeThread(h);
+            CloseHandle(h);
+        }
+        CloseHandle(snap);
+        static int reported = 0;
+        if (armed != reported) gt4::rt::log_info("watch: %d write watchpoints armed on %d threads", n, reported = armed);
+        Sleep(100);
+    }
+}
+
 struct Install {
     Install() {
         AddVectoredExceptionHandler(1, on_crash);
+        if (const char *w = getenv("GT4_WATCH_WRITE"); w && *w) {
+            AddVectoredExceptionHandler(1, on_watch);
+            CreateThread(nullptr, 1u << 16, watch_thread, nullptr, 0, nullptr);
+        }
         fprintf(stderr, "gt4_game: starting\n");
     }
 } g_install __attribute__((init_priority(101)));

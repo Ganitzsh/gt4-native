@@ -3,7 +3,7 @@
 struct VEntry {
     s16 delta;
     s16 index;
-    float (*fn)(void *);
+    float (*fn)(void *, float);
 };
 
 struct Sub {
@@ -23,6 +23,6 @@ extern "C" float CarGeometry__GetSeatPosition_Z(Obj *arg0, float unusedf0) {
     Sub *s = arg0->unk1C;
     VEntry *e = &s->vtbl[4];
 
-    return e->fn((char *)s + e->delta);
+    return e->fn((char *)s + e->delta, unusedf0);
 }
 /* native correction of src/race/CarGeometry_NormalCarGeometry/CarGeometry__GetSeatPosition_Z.cpp: returns the float ($f0) that the virtual call leaves, which the callers read. */

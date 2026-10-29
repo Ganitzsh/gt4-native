@@ -251,10 +251,12 @@ struct GsHost::Impl {
 
     // GT4_HOST_RECORD=PATH[,FROM[,COUNT]] (debugging): the records the host receives, VBlanks FROM..FROM+COUNT,
     // as a capture for --replay (what a live run saw, which a game-side --capture does not reproduce).
+    // FROM = trigger:FILE: from the VBlank at which FILE appears (it is deleted), for screens reached by hand.
     struct Recorder {
         std::unique_ptr<ps2::CaptureWriter> out;
         uint64_t from = 0, count = ~0ull, vsyncs = 0;
         bool started = false;
+        std::string trigger;
     };
     std::unique_ptr<Recorder> recorder = [] {
         const char* e = std::getenv("GT4_HOST_RECORD");
@@ -262,7 +264,17 @@ struct GsHost::Impl {
         auto r = std::make_unique<Recorder>();
         std::string path = e;
         const size_t comma = path.find(',');
-        if (comma != std::string::npos) {
+        if (comma != std::string::npos && path.compare(comma + 1, 8, "trigger:") == 0) {
+            std::string rest = path.substr(comma + 9);
+            const size_t c2 = rest.find(',');
+            if (c2 != std::string::npos) {
+                r->count = std::strtoull(rest.c_str() + c2 + 1, nullptr, 10);
+                rest.resize(c2);
+            }
+            r->trigger = rest;
+            r->from = ~0ull;
+            path.resize(comma);
+        } else if (comma != std::string::npos) {
             unsigned long long from = 0, count = ~0ull;
             std::sscanf(path.c_str() + comma + 1, "%llu,%llu", &from, &count);
             r->from = from;
@@ -288,6 +300,14 @@ struct GsHost::Impl {
             }
             if (header.type == GT4_REC_VSYNC) {
                 ++recorder->vsyncs;
+                if (!recorder->trigger.empty() && recorder->from == ~0ull) {
+                    if (std::FILE* f = std::fopen(recorder->trigger.c_str(), "rb")) {
+                        std::fclose(f);
+                        std::remove(recorder->trigger.c_str());
+                        recorder->from = recorder->vsyncs;
+                        std::printf("GS: recording from VBlank %llu\n", static_cast<unsigned long long>(recorder->from));
+                    }
+                }
                 recorder->out->flush();   // a run that loses the device still leaves its frames
             }
         }

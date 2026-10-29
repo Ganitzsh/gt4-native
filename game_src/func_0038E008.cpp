@@ -3,7 +3,7 @@
 struct VEntry_0038E008 {
     s16 delta;
     s16 index;
-    float (*fn)(void *);
+    float (*fn)(void *, float);
 };
 
 struct Inner_0038E008 {
@@ -23,6 +23,6 @@ extern "C" float CarGeometry__GetShiftPosition_X(struct Obj_0038E008 *arg0, floa
     Inner_0038E008 *a1 = arg0->unk1C;
     VEntry_0038E008 *e = &a1->vtbl[18];
 
-    return e->fn((char *)a1 + e->delta);
+    return e->fn((char *)a1 + e->delta, unusedf0);
 }
 /* native correction of src/race/CarGeometry_NormalCarGeometry/CarGeometry__GetShiftPosition_X.cpp: returns the float ($f0) that the virtual call leaves, which the callers read. */

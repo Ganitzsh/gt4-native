@@ -125,8 +125,22 @@ void set_guest_fpu() {
     if (const char *rc = getenv("GT4_FPU_RC"); rc && rc[0] == 'n') cw &= ~0x0C00;
     if (const char *pc = getenv("GT4_FPU_PC"))  // testing: double or extended precision instead
         cw |= pc[0] == 'd' ? 0x0200 : pc[0] == 'e' ? 0x0300 : 0;
-    if (getenv("GT4_FPU_TRAP"))  // testing: fault on the first invalid operation, divide by zero or overflow
-        cw &= ~0x000D;               // (the EE has no inf or NaN: it clamps; IEEE results here diverge)
+    if (const char *t = getenv("GT4_FPU_TRAP"); t && std::strncmp(t, "file:", 5) != 0)
+        cw &= ~0x000D;  // testing: fault on the first invalid operation, divide by zero or overflow
+                        // (the EE has no inf or NaN: it clamps; IEEE results here diverge)
+    __asm__ volatile("fldcw %0" : : "m"(cw));
+}
+
+// GT4_FPU_TRAP=file:PATH (testing): the trap above only once PATH exists, for the game threads that then
+// enter WaitSema; reaching a screen at full speed first, since every IEEE infinity or NaN then faults.
+std::atomic<bool> g_fpu_trap_armed{false};
+void arm_fpu_trap_here() {
+    static thread_local bool armed = false;
+    if (armed || !g_fpu_trap_armed.load(std::memory_order_relaxed)) return;
+    armed = true;
+    unsigned short cw;
+    __asm__ volatile("fnclex\n\tfnstcw %0" : "=m"(cw));
+    cw &= ~0x000D;
     __asm__ volatile("fldcw %0" : : "m"(cw));
 }
 
@@ -338,6 +352,12 @@ DWORD WINAPI interrupt_thread(void *) {
                 g_pending_intc |= 1u << 2;  // VBLANK_START
                 ++g_vblanks;
                 if (g_vblank_hook) g_vblank_hook(g_vblanks);
+                static const char *trap = getenv("GT4_FPU_TRAP");
+                if (trap && !std::strncmp(trap, "file:", 5) && g_vblanks % 30 == 0 && !g_fpu_trap_armed &&
+                    GetFileAttributesA(trap + 5) != INVALID_FILE_ATTRIBUTES) {
+                    g_fpu_trap_armed = true;
+                    log_info("x87 trap armed at VBlank %u", g_vblanks.load());
+                }
                 next_start += vblank_cycles;
                 if (next_start < now) next_start = now + vblank_cycles;  // fell behind: skip
                 next_end = now + vblank_len;
@@ -972,6 +992,7 @@ SYSCALL int gt4_sys_SignalSema(int id) {
 }
 
 SYSCALL int gt4_sys_WaitSema(int id) {
+    arm_fpu_trap_here();
     KernelScope ks;
     EnterCriticalSection(&g_lock);
     int r = -1;

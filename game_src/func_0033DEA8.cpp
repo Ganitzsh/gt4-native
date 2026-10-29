@@ -8,6 +8,7 @@ extern int D_006184F0;
 #define I(p,o) (*(int *)((char *)(p)+(o)))
 #define F(p,o) (*(float *)((char *)(p)+(o)))
 typedef char *(*Get)(char *, int);
+typedef char *(*GetT)(char *, int, float);
 typedef char *(*Ptr)(char *);
 typedef int (*Test)(char *);
 typedef float (*Float)(char *);
@@ -17,6 +18,7 @@ class Node { public: virtual void m0(); virtual void m1(); virtual void m2(); vi
 struct Item { Node *node; };
 typedef Vec3 (*Vec)(float,char *);
 static inline V *entry(char *p,int off) { return (V *)(P(p,0)+off); }
+static inline char *cameraT(char *p,float t) { V *v=(V *)(P(p,0x64)+0xD0); return ((GetT)v->fn)(p+v->d,0,t); }
 static inline char *camera(char *p) { V *v=(V *)(P(p,0x64)+0xD0); return ((Get)v->fn)(p+v->d,0); }
 static inline float vf(char *p,int off) { V *v=entry(p,off); return ((Float)v->fn)(p+v->d); }
 static inline int odd(int t) { int flag=0; if(t==1 || t==3) flag=1; return flag; }
@@ -47,7 +49,7 @@ void func_004AB040(int);
 }
 extern "C" void RacePS2Base__render_world(char *self, Buf *out,float t) {
  Buf b; Buf aux;
- char *cam=camera(self);
+ char *cam=cameraT(self,t);
  char *scene=P(P(P(P(self,0x6C),0x80),4),0x80);
  func_0033E8E0(self);
  func_00105338(&b,&D_00618588.b[D_00618588.cur],0);

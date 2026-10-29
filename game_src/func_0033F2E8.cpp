@@ -33,7 +33,7 @@ virtual void m21();
 virtual void m22();
 virtual int check();
 virtual void m24();
-virtual View *view(int);
+virtual View *view(int,float);
 virtual void m26();
 virtual void m27();
 virtual void m28();
@@ -218,7 +218,7 @@ static inline void color(Color *c,float a) { func_004A7D90(c->v[0],c->v[1],c->v[
 extern "C" void func_0033F2E8(char *self, int *rs, void *tex, int unused0, float unusedf0) {
     char *course=P(P(P(self,0x6c),0x80),4);
     char *data=P(course,0x80);
-    char *view=(char *)((Race *)self)->view(0);
+    char *view=(char *)((Race *)self)->view(0,unusedf0);
     func_0033EA30(self,rs);
     func_001056A0(rs);
     func_00105708(tex);

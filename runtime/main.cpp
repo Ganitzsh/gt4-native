@@ -38,8 +38,9 @@ void set_guest_fpu() {
     if (const char *rc = getenv("GT4_FPU_RC"); rc && rc[0] == 'n') cw &= ~0x0C00;
     if (const char *pc = getenv("GT4_FPU_PC"))  // testing: double or extended precision instead
         cw |= pc[0] == 'd' ? 0x0200 : pc[0] == 'e' ? 0x0300 : 0;
-    if (getenv("GT4_FPU_TRAP"))  // testing: fault on the first invalid operation, divide by zero or overflow
-        cw &= ~0x000D;               // (the EE has no inf or NaN: it clamps; IEEE results here diverge)
+    if (const char *t = getenv("GT4_FPU_TRAP"); t && std::strncmp(t, "file:", 5) != 0)
+        cw &= ~0x000D;  // testing: fault on the first invalid operation, divide by zero or overflow
+                        // (the EE has no inf or NaN: it clamps; IEEE results here diverge; file:PATH: kernel.cpp)
     __asm__ volatile("fldcw %0" : : "m"(cw));
 }
 

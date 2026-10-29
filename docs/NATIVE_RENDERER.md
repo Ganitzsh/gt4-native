@@ -30,7 +30,7 @@ mostly the field lines, which the native renderer does not jitter.
   `GT4_GSN_TEXDUMP=TBP`, `GT4_GSN_DUMP=VBLANK` (targets), `GT4_GSN_LIMIT=K`, `GT4_GSN_VRAM=N` (front-end memory),
   `GT4_GSN_TRIGGER=PATH` (live sessions: when that file appears, that frame's lines and targets), and
   paraLLEl-GS's `GT4_VRAM_DUMP=FRAME:PACKET,...|end` for the reference. A screen deep in the game is best
-  studied offline: `GT4_HOST_RECORD=PATH,FROM,COUNT` records what the host receives over those VBlanks, with
+  studied offline: `GT4_HOST_RECORD=PATH,FROM,COUNT` (FROM = `trigger:FILE`: when FILE appears) records what the host receives over those VBlanks, with
   the VU1, VIF1 and GS state at FROM first, and `gt4_host --replay PATH --frames N` then plays it in either
   renderer (`--preset original` / `high`), the same frames every time.
 
