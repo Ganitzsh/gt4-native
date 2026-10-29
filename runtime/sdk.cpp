@@ -31,6 +31,34 @@ extern "C" void gt4_init_dwarf_reg_size_table(unsigned char *table) {
 extern "C" int gt4_sys_StartThread(int id, uint32_t arg);
 extern "C" int gt4_replace_StartThread(int id, uint32_t arg) { return gt4_sys_StartThread(id, arg); }
 
+// thread.o's iSuspendThread wrapper (005AEC80): the queue for its own interrupt context is the EE kernel's
+// concern; the native kernel suspends directly.
+extern "C" int gt4_sys_SuspendThread(int id);
+extern "C" int gt4_replace_iSuspendThread(int id) { return gt4_sys_SuspendThread(id); }
+
+// timer.o's iGetTimerSystemTime (005B8400): the bus clock, as GetTimerSystemTime.
+extern "C" uint64_t gt4_replace_iGetTimerSystemTime() { return kernel_bus_cycles(); }
+
+// filestub.o's scePowerOffHandler (005B2808): registers the function the IOP's power-off notice calls (with the
+// module's $gp). There is no power-off natively: the handler is kept and the previous one returned.
+extern "C" uint32_t gt4_replace_scePowerOffHandler(uint32_t func, uint32_t arg) {
+    static uint32_t handler, handler_arg;
+    const uint32_t old = handler;
+    handler = func;
+    handler_arg = arg;
+    return old;
+}
+
+// _InitTLB (005B9AF0): programs the EE's TLB (scratchpad, kernel, default and extended mappings). Native memory
+// is mapped by the runtime (guest.cpp); nothing to do. Returns the wired entry count, which nothing reads.
+extern "C" int gt4_replace_func_005B9AF0() { return 0; }
+
+// loadcore.o's _sceErxExecModuleFunction (00586208) and _sceErxExecGpFunction (00586398): call a function of an
+// EE relocatable module (ERX) under that module's $gp, forwarding their variadic arguments. GT4 loads no ERX
+// module and nothing calls them; a call would need its arguments forwarded, so it stops the game instead.
+extern "C" int gt4_replace__sceErxExecModuleFunction() { fatal("_sceErxExecModuleFunction: no ERX modules natively"); }
+extern "C" int gt4_replace__sceErxExecGpFunction() { fatal("_sceErxExecGpFunction: no ERX modules natively"); }
+
 // Debugging aid: how many x87 registers are in use (8 - the empty ones in the tag word). Game code
 // must leave the x87 stack empty between functions; a float result called as void leaks one.
 extern "C" int gt4_fpu_depth() {
