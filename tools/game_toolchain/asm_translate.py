@@ -17,7 +17,7 @@ asm statement comes here. A statement whose instructions are all known becomes a
   same file gets a shadow static holding the full register it was last given; an input takes the
   shadow when its low bytes still equal the variable's value;
 - VU0 registers are the program-wide __gt4_vu0 register file (runtime/native/vu0.cpp), which the
-  VU0 macro-mode instructions operate on; vcallms calls the runtime's VU0 microprogram runner.
+  VU0 macro-mode instructions operate on; vcallms calls the runtime's VU0 programs (C++).
 
 Inside a single-line macro, `"... $vf" #n` stringification is kept as the C expression n (the VU
 register index), which the preprocessor substitutes.

@@ -239,7 +239,7 @@ assemblies; all with `--keep-s`); `census.jsonl` (`file, profile, lang, ok, stag
   `pcpyud %0,%1,%1 : "=r"(hi) : "r"(lo)` reads lo's high half), a plain variable that is a register
   output and a register input in the same file gets a shadow static of its full register, used
   while its low bytes still equal the variable. VU0 registers are one program-wide register file,
-  `__gt4_vu0` (`runtime/native/vu0.cpp`); `vcallms` runs the VU0 microprogram interpreter there.
+  `__gt4_vu0` (`runtime/native/vu0.cpp`); `vcallms` runs GT4's VU0 programs in C++ (`runtime/native/vu0_programs.cpp`).
   The semantics (MMI lanes and saturation, FPU incl. the EE's truncating `cvt.w.s`, VU0 FMAC with
   dest masks and broadcasts, Q/I/R, clipping, VU0 integer and memory ops, COP2 moves, COP0 and
   `syscall` as runtime calls) are C helpers in `compat/game/gt4_asm.h`, included by the prelude.
@@ -342,7 +342,7 @@ Symbol scan of all 30,189 objects (`nm`): no duplicate global definitions; the u
 
 Other things to keep in mind when linking and running:
 
-- All sources compile now (above); hand-written assembly the boot reaches gets native code in `runtime/native/` (one file per decomp unit), VU0 microprograms run in `runtime/native/vu0.cpp`.
+- All sources compile now (above); hand-written assembly the boot reaches gets native code in `runtime/native/` (one file per decomp unit), VU0 microprograms are C++ in `runtime/native/vu0_programs.cpp`.
 - 2.9 inlines less than 2.96; with `--export own` every out-of-line copy is local, so nothing
   collides, but the code is larger.
 - `delete[]` passes in-charge 0 instead of 2 to element destructors (classes with virtual bases

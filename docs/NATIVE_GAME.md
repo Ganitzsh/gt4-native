@@ -80,7 +80,6 @@ debugger (exceptions with registers and the native functions on the stack; `--wa
 `--scan WORD` or `--dump ADDR LEN` with `--scan-after SECONDS` read guest RAM during a run).
 `GT4_WATCH=SECONDS` logs every guest thread's state and call chain; `GT4_DMA_LOG=N`
 (`GT4_DMA_LOG_FROM=VBLANK`) logs the DMA tags walked, to find a packet in guest memory;
-`GT4_VU0_TRACE=ADDR` logs every instruction pair of the first run of a VU0 microprogram.
 `GT4_TRACE_HITS=FILE` appends the PS2 address of each function compiled with
 `GT4_CC_EXTRA=-finstrument-functions` the first time it runs: compile the provisional drafts that way
 (`game_cc.py --list`) and compare two scenes to see which drafts only one of them reaches (that found

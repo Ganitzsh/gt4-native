@@ -124,8 +124,9 @@ the user's game and stays in `build/`.
   copy could disagree with it (replay.py reports a file whose length disagrees with its header as `CORRUPT`).
 - What the reference models: the kernel calls whose effects are outside EE RAM (thread id and priority,
   wake-up, semaphores, cache flushes, interrupt masks, SIF DMA status) return what an uncontended kernel
-  would; VU0 microprograms (`vcallms`) run on the native game's interpreter (`runtime/native/vu0.cpp`, linked
-  into eeref with `shim/`), so a replay checks the EE code around them, not the interpreter; the scratchpad
+  would; VU0 microprograms (`vcallms`) run on the micro-mode interpreter (`tools/eeref/vu0_interp.cpp`, the
+  reference the game's C++ programs were checked against; `eeref --vu0-fuzz N --elf ...` compares the two on N
+  random states per program); the scratchpad
   and VU memory are mapped. A call still running after 2^28 instructions stops as `spinning` (it waits on a
   hardware register or another thread); other syscalls and EE hardware registers stop it or read 0.
 - Verdicts: `agree`; `close` (the only differences are within 1e-3 relative or 1e-5 absolute: long float
@@ -164,7 +165,7 @@ its RAM and scratchpad are the guest's, at their PS2 addresses):
 Calls from the original code to an address whose trampoline leads into the runtime are made natively, with
 the EE's eight integer argument registers and four stack slots; setjmp, longjmp and the runtime's stand-ins
 for unmatched game functions stay translated (a native longjmp on an EE jmp_buf loads EE values into x86
-registers). VU0 microprograms run on the native interpreter. The translated code runs at about 35 frames per
+registers). VU0 microprograms ran on the native interpreter (the game has C++ programs now). The translated code runs at about 35 frames per
 second in a race. `GT4_ORIG_TRACE` logs each native call.
 
 ## What it found

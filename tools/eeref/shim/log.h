@@ -3,6 +3,7 @@
 namespace gt4::rt {
 
 void log_info(const char *fmt, ...);
+void log_warn(const char *fmt, ...);
 [[noreturn]] void fatal(const char *fmt, ...);
 
 }  // namespace gt4::rt

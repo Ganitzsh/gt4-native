@@ -14,7 +14,7 @@
 // that both changed to floats within 1e-5 of each other counts as rounding (the EE's FPU truncates and
 // has no denormals; the x87 does neither) and is listed only with --all.
 #include "ps2/generated.hpp"
-#include "../../runtime/native/vu0.h"
+#include "vu0_interp.h"
 
 #include <algorithm>
 #include <cmath>
@@ -196,7 +196,8 @@ void ctc2(Cpu &c, std::uint32_t reg, std::uint32_t value) {
         break;
     }
 }
-// VU0 microprograms run on the native game's interpreter (runtime/native/vu0.cpp), over eeref's VU memory.
+// VU0 microprograms run on the micro-mode interpreter (vu0_interp.cpp), over eeref's VU memory: the reference,
+// not the game's C++ ports of them.
 void vcallms(Cpu &c, std::uint32_t address) {
     Gt4Vu0State &n = __gt4_vu0;
     const Vu0Regs &v = c.vu0;
@@ -210,7 +211,7 @@ void vcallms(Cpu &c, std::uint32_t address) {
     n.clip = v.clip;
     n.vi[16] = v.status;
     n.vi[17] = v.mac;
-    __gt4_vu0_callms(address);
+    vu0_interpret(address);
     Vu0Regs &o = c.vu0;
     for (int k = 0; k < 32; ++k) std::memcpy(o.vf[k].w, n.vf[k], 16);
     std::memcpy(o.acc.w, n.acc, 16);
@@ -385,7 +386,34 @@ struct Diff {
 
 }  // namespace
 
+// --vu0-fuzz N --elf CORE.GT4.elf: the ELF's loadable segments to RAM (for the micro image at 0x006D3280),
+// then GT4's VU0 programs in C++ against the interpreter (vu0_interp.cpp).
+int vu0_fuzz_main(int argc, char **argv) {
+    long trials = std::atol(argv[2]);
+    for (int k = 3; k + 1 < argc; ++k)
+        if (std::string(argv[k]) == "--elf") {
+            FILE *f = std::fopen(argv[k + 1], "rb");
+            if (!f) return 2;
+            std::vector<std::uint8_t> elf;
+            std::uint8_t buf[1 << 16];
+            for (std::size_t n; (n = std::fread(buf, 1, sizeof buf, f)) > 0;) elf.insert(elf.end(), buf, buf + n);
+            std::fclose(f);
+            auto u32 = [&](std::size_t o) { return load<std::uint32_t>(elf.data() + o); };
+            const std::uint32_t phoff = u32(0x1C), phentsize = load<std::uint16_t>(elf.data() + 0x2A),
+                                phnum = load<std::uint16_t>(elf.data() + 0x2C);
+            for (std::uint32_t p = 0; p < phnum; ++p) {
+                const std::size_t ph = phoff + p * phentsize;
+                const std::uint32_t off = u32(ph + 4), vaddr = u32(ph + 8), filesz = u32(ph + 16);
+                if (u32(ph) == 1 && vaddr + filesz <= kRamSize) std::memcpy(g_ram + vaddr, elf.data() + off, filesz);
+            }
+            return vu0_fuzz(trials) ? 1 : 0;
+        }
+    std::fprintf(stderr, "usage: eeref --vu0-fuzz N --elf CORE.GT4.elf\n");
+    return 2;
+}
+
 int main(int argc, char **argv) {
+    if (argc > 2 && std::string(argv[1]) == "--vu0-fuzz") return vu0_fuzz_main(argc, argv);
     if (argc < 2) {
         std::fprintf(stderr, "usage: eeref ADDR_N.pre [--args i,f,w,q...] [--ret v|i|w|f] [--elf CORE.GT4.elf] [--syms FILE] [--all] "
                              "[--max N]\n");
@@ -536,10 +564,17 @@ int main(int argc, char **argv) {
     return diffs.size() == (all ? rounding : 0) && !vu_diffs ? 0 : 4;
 }
 
-// What runtime/native/vu0.cpp needs of the runtime (shim/guest.h, shim/log.h).
+// What the runtime code linked here needs of the runtime (shim/guest.h, shim/log.h).
 namespace gt4::rt {
 void *guest_ptr(uint32_t addr) { return addr < ps2::kRamSize ? ps2::g_ram + addr : ps2::slow_ptr(addr, 1); }
 void log_info(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    std::vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    std::fputc('\n', stderr);
+}
+void log_warn(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
     std::vfprintf(stderr, fmt, ap);

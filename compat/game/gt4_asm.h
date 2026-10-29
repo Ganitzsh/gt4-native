@@ -8,7 +8,7 @@
  *     low 64 bits and keep the high 64 (EE), the MMI ones all 128;
  *   - a floating-point register ("f", $f0...) is a float;
  *   - VU0 (COP2: $vf0-31, ACC, $vi0-31, Q, I, R, P) is one register file for the whole program,
- *     __gt4_vu0, defined by the native runtime (runtime/native/vu0.cpp), which also runs VU0
+ *     __gt4_vu0, defined by the native runtime (runtime/native/vu0.cpp), whose vcallms runs GT4's VU0
  *     microprograms (vcallms).  VU0 float arithmetic is single precision here (x87 with the
  *     runtime's precision control), in the VU's number format (__gt4_vu_float).
  */
@@ -306,7 +306,7 @@ static __inline__ int __gt4_f_toint (float x)
 
 /* The VU's floats have no infinities, NaNs or denormals: exponent 255 is an ordinary exponent (read
  * as the largest IEEE float of that sign) and a denormal is zero.  Arithmetic takes its operands
- * through this and saturates its results with it, as runtime/native/vu0.cpp does for microprograms
+ * through this and saturates its results with it, as runtime/native/vu0_programs.cpp does for microprograms
  * (a NaN there cost text glyphs their position: 00499948). */
 static __inline__ float __gt4_vu_float (float f)
 {
