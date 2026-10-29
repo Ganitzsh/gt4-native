@@ -726,8 +726,13 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
                     // without them gets the levels made from it (the GS shows such textures aliased).
                     // (With made levels, gsn.frag takes the alpha the alpha test sees from level 0, as the GS
                     // without mipmaps: averaged levels would make cut-outs such as fences and foliage solid.)
-                    const bool perspective = !((prim >> 8) & 1);
-                    const bool made = t->second.levels == 1 && t->second.generated > 1 && perspective && linear && (sx > 1 || sy > 1);
+                    // Not for sprites (2D, even with STQ: the dealers' logos) nor for the region modes of
+                    // CLAMP, which the hardware sampler does not know (the logos' REGION_CLAMP keeps the rows
+                    // under them out; sampled past it they drew a line of other texels).
+                    const bool perspective = !((prim >> 8) & 1) && (prim & 7) != 6;
+                    const bool plainWrap = (s.clamp & 3) < 2 && ((s.clamp >> 2) & 3) < 2;
+                    const bool made = t->second.levels == 1 && t->second.generated > 1 && perspective && plainWrap && linear &&
+                                      (sx > 1 || sy > 1);
                     if (t->second.levels > 1 || made) {
                         k.flags = (k.flags & ~kNearest) | kMipmapped | (made ? kGeneratedMips : 0u);
                         sampler = mipSamplers[((s.clamp & 3) == 0 ? 2 : 0) + (((s.clamp >> 2) & 3) == 0 ? 1 : 0)];
