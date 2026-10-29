@@ -25,6 +25,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <vector>
 #include <new>
 #include <vector>
 
@@ -103,7 +104,8 @@ void write_state(const Hook &hook, uint32_t index, uint32_t kind, const uint32_t
     h.stack_size = stack_window(stack);
     const auto *ram = static_cast<const uint8_t *>(guest_ptr(0));
     // GT4_RECORD_DELTA (many functions recorded at once): the first entry writes the whole RAM to base.ram; every
-    // entry is then kind 2, the pages that differ from it (replay.py rebuilds the full entry).
+    // entry is then kind 2, the pages that differ from the entry recorded before it (in order.txt), and the base
+    // follows; replay.py rebuilds the full entries by walking the chain.
     static const bool delta = getenv("GT4_RECORD_DELTA") != nullptr;
     static uint8_t *base = nullptr;
     if (!kind && delta) {
@@ -118,30 +120,44 @@ void write_state(const Hook &hook, uint32_t index, uint32_t kind, const uint32_t
             }
         }
         h.kind = 2;
-        for (uint32_t a = kGuestSectionStart; a < kRamSize; a += kPage) h.ram_pages += std::memcmp(ram + a, base + a, kPage) != 0;
     }
-    if (kind)
-        for (uint32_t a = kGuestSectionStart; a < kRamSize; a += kPage) h.ram_pages += std::memcmp(ram + a, entry_ram + a, kPage) != 0;
+    // The pages that differ, copied in one pass: the game's other threads go on writing RAM meanwhile, and a
+    // second pass could find another set than the count in the header (every later section then shifts).
+    std::vector<uint8_t> pages;
+    if (h.kind == 2 || kind) {
+        const uint8_t *ref = kind ? entry_ram : base;
+        for (uint32_t a = kGuestSectionStart; a < kRamSize; a += kPage)
+            if (std::memcmp(ram + a, ref + a, kPage) != 0) {
+                const size_t at = pages.size();
+                pages.resize(at + 4 + kPage);
+                std::memcpy(&pages[at], &a, 4);
+                std::memcpy(&pages[at + 4], ram + a, kPage);
+            }
+        h.ram_pages = static_cast<uint32_t>(pages.size() / (4 + kPage));
+    }
     fwrite(&h, sizeof h, 1, f);
     fwrite(&__gt4_vu0, sizeof(Gt4Vu0State), 1, f);
     if (h.kind == 2) {
-        for (uint32_t a = kGuestSectionStart; a < kRamSize; a += kPage)
-            if (std::memcmp(ram + a, base + a, kPage) != 0) {
-                fwrite(&a, 4, 1, f);
-                fwrite(ram + a, 1, kPage, f);
-            }
+        fwrite(pages.data(), 1, pages.size(), f);
+        for (size_t at = 0; at < pages.size(); at += 4 + kPage) {   // the next entry's reference
+            uint32_t a;
+            std::memcpy(&a, &pages[at], 4);
+            std::memcpy(base + a, &pages[at + 4], kPage);
+        }
         std::memcpy(entry_ram + kGuestSectionStart, ram + kGuestSectionStart, kRamSize - kGuestSectionStart);
+        char opath[512];
+        snprintf(opath, sizeof opath, "%s/order.txt", g_dir);
+        if (FILE *o = fopen(opath, "a")) {
+            fprintf(o, "%08x_%u.pre\n", hook.addr, index);
+            fclose(o);
+        }
     } else if (!kind) {
         static const uint8_t zeros[kGuestSectionStart] = {};
         fwrite(zeros, 1, kGuestSectionStart, f);  // the unmapped first 68 KB
         fwrite(ram + kGuestSectionStart, 1, kRamSize - kGuestSectionStart, f);
         std::memcpy(entry_ram + kGuestSectionStart, ram + kGuestSectionStart, kRamSize - kGuestSectionStart);
     } else {
-        for (uint32_t a = kGuestSectionStart; a < kRamSize; a += kPage)
-            if (std::memcmp(ram + a, entry_ram + a, kPage) != 0) {
-                fwrite(&a, 4, 1, f);
-                fwrite(ram + a, 1, kPage, f);
-            }
+        fwrite(pages.data(), 1, pages.size(), f);
     }
     fwrite(guest_ptr(kScratchpad), 1, kScratchpadSize, f);
     fwrite(guest_ptr(kVuMem), 1, kVuMemSize, f);

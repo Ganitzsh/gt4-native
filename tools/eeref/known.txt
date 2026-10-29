@@ -1,0 +1,18 @@
+# Replayed calls whose difference from the original code is understood (tools/eeref/replay.py reports them as
+# `known`, not DIFFER). One function per line: address, then why. Remove a line when the reason goes away.
+00215CD0  game_src: wide mode stretches full-width menu rectangles to the frame (and the replay cannot read the floats of a method named mRenderContextPS2__virtual_51)
+00217058  game_src: float drift of a long VU0 matrix computation (all but two words within 1e-3; residuals the original leaves near 1e-7 come out 0)
+002472B8  game_src: text box edges within 1/1000 of a whole number taken as that number (host floats leave 127.99999)
+0034EF30  draft declared int, the original returns nothing: both return values are leftovers
+00427930  VU0 register lanes one ulp apart at 1e-12
+00427A70  VU0 register lanes one ulp apart at 1e-12
+0049DA60  returns whatever its void tail callees leave
+0049F7D8  the original also stores an uninitialised w lane (up.w, a stack slot) into the 3x3 basis at 0084AFF0, which nothing reads
+004A2B10  returns the leftover of void func_004A2BC8
+004A2B58  returns the leftover of void func_004A2BC8
+004AB6D8  reads DMA CHCR, a hardware register eeref does not model (reads 0)
+005786F0  a thread entry: ends in the thread exit, never returns (no .post)
+00579898  native writes a local in its own stack frame inside the caller's window
+0057DC60  returns a leftover
+0057DE48  native builds a path string in its own stack frame inside the caller's window
+005BC6C0  __get_eh_context: the native runtime's exception context, not the EE one

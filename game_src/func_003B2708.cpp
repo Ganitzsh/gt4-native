@@ -211,7 +211,7 @@ int func_00415350(void *);                       /* extern */
 int func_00416B58(void *);                   /* extern */
 int func_00416F88(void *);                   /* extern */
 int func_00416FD8(void *, void *, void *, void *, void *); /* extern */
-int func_00421DF8(void *, void *, int, f32, f32); /* extern */
+int func_00421DF8(void *, void *, f32, f32, f32); /* extern */
 s32 func_00459178(void *);                          /* extern */
 f32 func_004860E8(int, int, f32);           /* extern */
 int func_00488528(void *, f32, f32, f32);        /* extern */
@@ -987,7 +987,7 @@ block_78:
                     temp_f20_23 = func_00385688(&sp5C0);
                     sp7C = temp_f20_23 + (func_003858B8(&sp5C0) * 0x1.0000000000000p-2f);
                     func_0057D8A0(&sp6A8, &sp6A4, -func_003858B8(&sp5C0));
-                    func_00421DF8(&sp700, &sp650, 0, sp6A4, sp6A8);
+                    func_00421DF8(&sp700, &sp650, 0.0f, sp6A4, sp6A8);
                     spA0 = sp700;
                     spA4 = sp704;
                     spA8 = sp708;

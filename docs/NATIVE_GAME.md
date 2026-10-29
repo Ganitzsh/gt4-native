@@ -67,7 +67,7 @@ points calls and the trampoline at it and leaves out the decomp object that defi
 ## Build and run
 
 ```
-py tools/game_cc.py --decomp C:\path\to\gt4-decomp --out build/game/obj --all   (compiler in WSL)
+py tools/game_cc.py --decomp C:\path\to\gt4-decomp --out build/game --all   (compiler in WSL; objects in build/game/obj)
 py tools/game_link.py --decomp C:\path\to\gt4-decomp --objs build/game/obj
 build\game\gt4_game.exe --elf ...\orig\SCUS-97328\CORE.GT4.elf [--iso disc.iso] [--capture FILE]
 build\game\gt4_game.exe --self-test        (kernel scheduling and interrupt checks)

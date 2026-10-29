@@ -60,7 +60,7 @@ extern char D_0068FFA0[];
 extern "C" void func_0015AA68(void *arg0, int arg1) throw();
 extern "C" void func_0015AAC0(void *arg0, void *arg1) throw();
 extern "C" void func_00326798(void *p, s32 size, s32 align, const char *name);
-extern "C" s32 func_00433348(s32, const char *, B32 *, float);
+extern "C" s32 func_00433348(float, s32, const char *, B32 *);
 extern "C" s32 func_00447BB8(const char *arg0);
 extern "C" s32 func_004482C0(unsigned long a);
 extern "C" void func_0044B258(In *src, B32 *dst, s32 n);
@@ -123,7 +123,7 @@ extern "C" void MCourseRecordUnit__insertEntryMaxSpeed(void *arg0, void *recordH
         request.f28 = name;
         func_005A48D8(&packed, 0, 0x20);
         func_0044B258(&request, &packed, 0x20);
-        func_00433348(listHandle.p->p10, name, &packed, maxSpeed);
+        func_00433348(maxSpeed, listHandle.p->p10, name, &packed);
         func_0015AA68(&listHandle, 2);
     }
 }

@@ -97,6 +97,21 @@ def kind(param):
     return "?"
 
 
+def in_class(text, pos):
+    """Whether pos lies directly in the body of a struct, class or union."""
+    depth = 0
+    for i in range(pos - 1, -1, -1):
+        ch = text[i]
+        if ch == "}":
+            depth += 1
+        elif ch == "{":
+            if depth == 0:
+                head = text[max(0, text.rfind(";", 0, i), text.rfind("}", 0, i)) + 1:i]
+                return re.search(r"\b(struct|class|union)\b", head) is not None and "(" not in head
+            depth -= 1
+    return False
+
+
 def scan(path, text):
     """[(addr, kinds, is_definition, line)]"""
     found = []
@@ -121,11 +136,13 @@ def scan(path, text):
             j += mm.end()
         tail = text[j:].lstrip()[:1]
         line_start = text.rfind("\n", 0, m.start()) + 1
-        prefix = text[line_start:m.start()]
+        # `void func_A(int), func_B(float);` declares both: the earlier declarators of the list leave the prefix
+        prefix = re.sub(r"\bfunc_[0-9A-Fa-f]{8}\s*\((?:[^()]|\([^()]*\))*\)\s*(?:throw\s*\(\s*\)\s*)?,\s*", "",
+                        text[line_start:m.start()])
         words = re.findall(r"[A-Za-z_]\w*", prefix)
         if not words or any(w in KEYWORDS for w in words) or re.search(r"[=(,!&|+\-/%<>?:]", prefix.replace("::", "")):
             continue   # a call, not a declaration
-        if tail not in ("{", ";"):
+        if tail not in ("{", ";", ","):
             continue
         plist = split_params(params)
         kinds = [kind(p) for p in plist]
@@ -143,6 +160,8 @@ def scan(path, text):
                 ret = "s"
         if ret == "s":
             kinds = ["i"] + kinds
+        if in_class(text, m.start()) and "static" not in words:
+            kinds = ["i"] + kinds   # a member function: the object comes first
         if tail == ";" and path.endswith(".c") and params.strip() == "":
             kinds = None   # `f()` in C: unknown parameters
         used = None
@@ -169,7 +188,7 @@ def scan(path, text):
     return found
 
 
-LABELLED = re.compile(r"(~?[A-Za-z_]\w*)\s*\(([^;{}]*)\)\s*(?:const\s*)?(?:throw\s*\(\s*\)\s*)?"
+LABELLED = re.compile(r"(~?[A-Za-z_]\w*)\s*\(([^;{}]*?)\)\s*(?:const\s*)?(?:throw\s*\(\s*\)\s*)?"
                       r"__asm__\s*\(\s*\"func_([0-9A-Fa-f]{8})\"\s*\)\s*;")
 
 

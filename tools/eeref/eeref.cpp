@@ -14,9 +14,11 @@
 // that both changed to floats within 1e-5 of each other counts as rounding (the EE's FPU truncates and
 // has no denormals; the x87 does neither) and is listed only with --all.
 #include "ps2/generated.hpp"
+#include "../../runtime/native/vu0.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -52,6 +54,7 @@ std::uint8_t *slow_ptr(std::uint32_t a, std::uint32_t n) {
         return g_native_stack.data() + (a - g_native_stack_base);
     if (a - kStackBase <= kStackSize - n) return g_stack + (a - kStackBase);
     if (a - kVuMem <= kVuMemSize - n) return g_vu_mem + (a - kVuMem);
+    if (a - 0x70000000u <= kScratchpadSize - n) return g_spr + (a - 0x70000000u);
     const std::uint32_t m = a & 0x0FFFFFFFu;  // uncached mirrors at 0x20000000 and 0x30000000
     if ((a >> 28) >= 2 && (a >> 28) <= 3 && m <= kRamSize - n) return g_ram + m;
     if (++g_bad_accesses <= 8) std::fprintf(stderr, "eeref: access to unmapped %08X\n", a);
@@ -118,13 +121,37 @@ void bad_entry(Cpu &c, std::uint32_t unit_base) {
     std::fprintf(stderr, "eeref: bad entry into unit %08X for %08X\n", unit_base, c.pc);
     stop(c, c.pc, "bad entry");
 }
+// A call still running after 2^28 instructions is waiting on something the reference does not model (a
+// hardware register, another thread): it stops where it spins.
+int g_slices;
 bool preempt(Cpu &c) {
-    c.budget = 1 << 30;
-    return false;
+    c.budget = 1 << 24;
+    if (++g_slices >= 16) stop(c, c.pc, "spinning");
+    return g_halted;
 }
+// The kernel calls whose effects live outside EE RAM (threads, semaphores, caches, interrupt masks, SIF DMA)
+// return what an uncontended kernel would; any other stops the replay.
 void syscall(Cpu &c, std::uint32_t pc) {
-    std::fprintf(stderr, "eeref: syscall %d at %08X\n", static_cast<int>(c.r[3].w[0]), pc);
-    stop(c, pc, "syscall");
+    const int n = std::abs(static_cast<std::int16_t>(c.r[3].w[0]));   // the interrupt-context forms are negative
+    const std::int32_t a0 = static_cast<std::int32_t>(c.r[4].w[0]);
+    std::int32_t v0;
+    switch (n) {
+    case 0x2F: v0 = 1; break;                               // GetThreadId
+    case 0x42: case 0x43: case 0x44: case 0x45: case 0x46:  // SignalSema, iSignalSema, WaitSema, PollSema, iPollSema
+        v0 = a0; break;
+    case 0x29: case 0x2A: case 0x2B:                        // (i)ChangeThreadPriority, RotateThreadReadyQueue
+    case 0x33: case 0x34:                                   // WakeupThread, iWakeupThread
+    case 0x14: case 0x15: case 0x16: case 0x17:             // _EnableIntc, _DisableIntc, _EnableDmac, _DisableDmac
+    case 0x64: case 0x68:                                   // FlushCache, iFlushCache
+        v0 = 0; break;
+    case 0x76: v0 = -1; break;                              // SifDmaStat: transfer complete
+    case 0x77: v0 = 1; break;                               // SifSetDma: a transfer id
+    default:
+        std::fprintf(stderr, "eeref: syscall %d at %08X\n", n, pc);
+        stop(c, pc, "syscall");
+        return;
+    }
+    c.r[2].sd[0] = v0;
 }
 void breakpoint(Cpu &c, std::uint32_t pc) { stop(c, pc, "break"); }
 void trap(Cpu &c, std::uint32_t pc) { stop(c, pc, "trap"); }
@@ -169,9 +196,32 @@ void ctc2(Cpu &c, std::uint32_t reg, std::uint32_t value) {
         break;
     }
 }
+// VU0 microprograms run on the native game's interpreter (runtime/native/vu0.cpp), over eeref's VU memory.
 void vcallms(Cpu &c, std::uint32_t address) {
-    std::fprintf(stderr, "eeref: vcallms %04X (VU0 microprograms are not replayed yet)\n", address);
-    stop(c, c.pc, "vcallms");
+    Gt4Vu0State &n = __gt4_vu0;
+    const Vu0Regs &v = c.vu0;
+    for (int k = 0; k < 32; ++k) std::memcpy(n.vf[k], v.vf[k].w, 16);
+    std::memcpy(n.acc, v.acc.w, 16);
+    for (int k = 0; k < 16; ++k) n.vi[k] = v.vi[k];
+    std::memcpy(&n.q, &v.q, 4);
+    std::memcpy(&n.i, &v.i, 4);
+    std::memcpy(&n.p, &v.p, 4);
+    n.r = 0x3F800000u | (v.r & 0x7FFFFFu);
+    n.clip = v.clip;
+    n.vi[16] = v.status;
+    n.vi[17] = v.mac;
+    __gt4_vu0_callms(address);
+    Vu0Regs &o = c.vu0;
+    for (int k = 0; k < 32; ++k) std::memcpy(o.vf[k].w, n.vf[k], 16);
+    std::memcpy(o.acc.w, n.acc, 16);
+    for (int k = 0; k < 16; ++k) o.vi[k] = static_cast<std::uint16_t>(n.vi[k]);
+    std::memcpy(&o.q, &n.q, 4);
+    std::memcpy(&o.i, &n.i, 4);
+    std::memcpy(&o.p, &n.p, 4);
+    o.r = n.r & 0x7FFFFFu;
+    o.clip = n.clip;
+    o.status = n.vi[16];
+    o.mac = n.vi[17];
 }
 bool vu0_busy(Cpu &) { return false; }
 void vu0_wait(Cpu &) {}
@@ -321,6 +371,14 @@ bool close(std::uint32_t a, std::uint32_t b) {
     return std::fabs(x - y) <= 1e-5 * std::max(std::fabs(x), std::fabs(y)) + 1e-12;
 }
 
+// Close but past rounding: within 1e-3, or both within 1e-5 of zero. Long float computations drift this far
+// (the EE truncates, the native build rounds; a residual the one leaves the other computes as exactly 0).
+bool near_enough(std::uint32_t a, std::uint32_t b) {
+    if (!floaty(a) || !floaty(b)) return false;
+    const double x = as_float(a), y = as_float(b);
+    return std::fabs(x - y) <= 1e-3 * std::max(std::fabs(x), std::fabs(y)) + 1e-5;
+}
+
 struct Diff {
     std::uint32_t addr, pre, native, ref;
 };
@@ -374,28 +432,36 @@ int main(int argc, char **argv) {
     c.vu0.status = pre.vu0.vi[16];
     c.vu0.mac = pre.vu0.vi[17];
 
-    // the arguments: native stack words to EE registers
-    std::uint32_t word = 0, ireg = 4, freg = 12;
-    for (std::size_t at = 0; at < kinds.size(); at += 2) {
+    // the arguments: native stack words to EE registers, those past $t3 / $f19 to the caller's 8-byte
+    // stack slots from 0($sp) (EABI)
+    const std::uint32_t sp = kStackBase + kStackSize - 0x100;
+    std::uint8_t *slots = g_stack + (sp - kStackBase);
+    std::uint32_t word = 0, ireg = 4, freg = 12, slot = 0;
+    for (std::size_t at = 0; at < kinds.size() && word < 16; at += 2) {
         const char kind = kinds[at];
         if (kind == 'f') {
             if (freg <= 19) c.f[freg++] = pre.h.args[word];
+            else std::memcpy(slots + 8 * slot++, &pre.h.args[word], 4);
             word += 1;
         } else if (kind == 'w') {
-            if (ireg <= 11) c.r[ireg++].d[0] = pre.h.args[word] | static_cast<std::uint64_t>(pre.h.args[word + 1]) << 32;
+            const std::uint64_t v = pre.h.args[word] | static_cast<std::uint64_t>(pre.h.args[word + 1]) << 32;
+            if (ireg <= 11) c.r[ireg++].d[0] = v;
+            else std::memcpy(slots + 8 * slot++, &v, 8);
             word += 2;
         } else if (kind == 'q') {
             if (ireg <= 11) std::memcpy(c.r[ireg++].w, &pre.h.args[word], 16);
             word += 4;
         } else {
-            if (ireg <= 11) c.r[ireg++].sd[0] = static_cast<std::int32_t>(pre.h.args[word]);
+            const std::int64_t v = static_cast<std::int32_t>(pre.h.args[word]);
+            if (ireg <= 11) c.r[ireg++].sd[0] = v;
+            else std::memcpy(slots + 8 * slot++, &v, 8);
             word += 1;
         }
     }
     c.r[28].sd[0] = 0x006DDDF0;  // $gp (crt0)
-    c.r[29].sd[0] = static_cast<std::int32_t>(kStackBase + kStackSize - 0x100);
+    c.r[29].sd[0] = static_cast<std::int32_t>(sp);
     c.r[31].sd[0] = kReturn;
-    c.budget = 1 << 30;
+    c.budget = 1 << 24;
     c.pc = pre.h.addr;
     for (int round = 0; round < 1000 && !g_halted && c.pc != kReturn; ++round) {
         c.pc &= ~kUnwind;
@@ -415,7 +481,7 @@ int main(int argc, char **argv) {
 
     // memory: every word either side changed
     std::vector<Diff> diffs;
-    std::size_t same_changed = 0, rounding = 0, native_only = 0, ref_only = 0;
+    std::size_t same_changed = 0, rounding = 0, native_only = 0, ref_only = 0, near_count = 0;
     auto scan = [&](const std::uint8_t *p0, const std::uint8_t *pn, const std::uint8_t *pr, std::uint32_t base, std::uint32_t size) {
         for (std::uint32_t o = 0; o < size; o += 4) {
             const std::uint32_t a = load<std::uint32_t>(p0 + o), n = load<std::uint32_t>(pn + o), r = load<std::uint32_t>(pr + o);
@@ -426,6 +492,7 @@ int main(int argc, char **argv) {
             }
             const bool round_off = close(n, r);
             rounding += round_off;
+            near_count += !round_off && near_enough(n, r);
             native_only += r == a;
             ref_only += n == a;
             if (!round_off || all) diffs.push_back({base + o, a, n, r});
@@ -438,8 +505,8 @@ int main(int argc, char **argv) {
         scan(pre.stack.data() + 64, post.stack.data() + 64, g_native_stack.data() + 64, g_native_stack_base + 64,
              static_cast<std::uint32_t>(g_native_stack.size()) - 64);
     std::printf("  memory: %zu words changed alike, %zu within float rounding, %zu differ (%zu only native changed, %zu only "
-                "the original changed)\n",
-                same_changed, rounding, diffs.size() - (all ? rounding : 0), native_only, ref_only);
+                "the original changed; %zu within 1e-3)\n",
+                same_changed, rounding, diffs.size() - (all ? rounding : 0), native_only, ref_only, near_count);
     int shown = 0;
     for (const Diff &d : diffs) {
         if (shown++ >= max_lines) {
@@ -453,14 +520,39 @@ int main(int argc, char **argv) {
     }
 
     // VU0 registers
-    int vu_diffs = 0;
+    int vu_diffs = 0, vu_far = 0;
     for (int k = 1; k < 32; ++k)
         for (int l = 0; l < 4; ++l) {
             std::uint32_t n, r = c.vu0.vf[k].w[l];
             std::memcpy(&n, &post.vu0.vf[k][l], 4);
-            if (n != r && !close(n, r) && vu_diffs++ < 16)
-                std::printf("  vf%02d.%c native %g original %g\n", k, "xyzw"[l], as_float(n), as_float(r));
+            if (n == r || close(n, r)) continue;
+            vu_far += !near_enough(n, r);
+            if (vu_diffs++ < 16) std::printf("  vf%02d.%c native %g original %g\n", k, "xyzw"[l], as_float(n), as_float(r));
         }
-    if (vu_diffs) std::printf("  %d VU0 register lanes differ\n", vu_diffs);
-    return returned && !ret_differs && diffs.size() == (all ? rounding : 0) && !vu_diffs ? 0 : 1;
+    if (vu_diffs) std::printf("  %d VU0 register lanes differ (%d past 1e-3)\n", vu_diffs, vu_far);
+    // exit status: 0 agree; 4 the only differences are within 1e-3 (float drift); 1 otherwise
+    if (!returned || ret_differs) return 1;
+    if (diffs.size() - (all ? rounding : 0) - near_count || vu_far) return 1;
+    return diffs.size() == (all ? rounding : 0) && !vu_diffs ? 0 : 4;
 }
+
+// What runtime/native/vu0.cpp needs of the runtime (shim/guest.h, shim/log.h).
+namespace gt4::rt {
+void *guest_ptr(uint32_t addr) { return addr < ps2::kRamSize ? ps2::g_ram + addr : ps2::slow_ptr(addr, 1); }
+void log_info(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    std::vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    std::fputc('\n', stderr);
+}
+void fatal(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    std::fputs("eeref: ", stderr);
+    std::vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    std::fputc('\n', stderr);
+    std::exit(3);
+}
+}  // namespace gt4::rt

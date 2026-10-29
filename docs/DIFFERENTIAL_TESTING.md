@@ -115,7 +115,26 @@ the user's game and stays in `build/`.
   entry state and compares the return and every changed word of memory: changed alike, within float rounding
   (1e-5 relative: the EE truncates, the x87 rounds), or different. Arguments are mapped from the native stack to
   the EE's registers with the kinds of the function's definition (abi_lint's parser): a float that goes to an
-  integer register makes the original compute garbage.
+  integer register makes the original compute garbage. Arguments past $t3 or $f19 go to the caller's 8-byte
+  stack slots from 0($sp) (EABI).
+- Many functions at once: `GT4_RECORD_DELTA=1` writes the whole RAM once (`base.ram`) and each entry as the
+  pages that differ from the entry recorded before it, in `order.txt` order (an audit of ~400 calls: 150 MB
+  instead of 13 GB); replay.py rebuilds each entry by walking the chain. The changed pages are copied in one
+  pass: the game's other threads keep writing while a call is recorded, and a count taken apart from the
+  copy could disagree with it (replay.py reports a file whose length disagrees with its header as `CORRUPT`).
+- What the reference models: the kernel calls whose effects are outside EE RAM (thread id and priority,
+  wake-up, semaphores, cache flushes, interrupt masks, SIF DMA status) return what an uncontended kernel
+  would; VU0 microprograms (`vcallms`) run on the native game's interpreter (`runtime/native/vu0.cpp`, linked
+  into eeref with `shim/`), so a replay checks the EE code around them, not the interpreter; the scratchpad
+  and VU memory are mapped. A call still running after 2^28 instructions stops as `spinning` (it waits on a
+  hardware register or another thread); other syscalls and EE hardware registers stop it or read 0.
+- Verdicts: `agree`; `close` (the only differences are within 1e-3 relative or 1e-5 absolute: long float
+  computations drift that far); `known` (an understood difference listed in `tools/eeref/known.txt`);
+  `DIFFER`; `STOPPED` (with where and why); `CORRUPT`. An audit of the native-only code (every provisional
+  draft and game_src copy, two calls each, boot to GT mode's GT Auto, 2026-10-29): 265 agree, 1 close, 28
+  known, 109 stopped (107 waiting on hardware), 0 differ, after fixing the one real divergence it found
+  (00360B60 passed an int and a pointer before the floats 00360980 takes: the native callee read them as
+  its floats).
 - `tools/eeref/calltree.py --elf ... --functions ... ADDR --depth N --min-size B` lists a function's static
   callees (jal and tail calls) for a GT4_RECORD list. `GT4_PROFILE=FILE:FROM:TO` (runtime/profile.cpp) samples
   the game's threads (frame-pointer walk, game code only) to find a scene's call tree in the first place.
