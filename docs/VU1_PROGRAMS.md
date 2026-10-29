@@ -64,8 +64,8 @@ qword 903 overruns them for polygons of nine vertices or more, and the emit loop
 The records are allocated from qword 948, five per new vertex, for each clipped triangle. A triangle clipped
 against six planes gains at most 12 vertices (to qword 1008), so only a ring made non-convex by rounding runs
 past qword 1023; its records then wrap into the batch, as the VU's addressing does, and the native code wraps
-them too. Random geometry gets there (1,743 of 657,600 fuzz runs), the game's has not (no run of a race or car
-select); in those runs the native result differs from the interpreter's (the records' flags word keeps 6 bits
+them too. Random geometry gets there (1,743 of 657,600 fuzz runs), the game's has not (not in the race and car
+select below, nor in GT mode's menus); in those runs the native result differs from the interpreter's (the records' flags word keeps 6 bits
 of CLIP where the VU keeps 12, and what the program reads back from the overwritten batch follows from it), and
 the fuzz test counts them apart. There is no fallback: the host has no interpreter.
 

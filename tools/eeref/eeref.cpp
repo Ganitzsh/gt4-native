@@ -47,6 +47,7 @@ std::uint8_t g_vu_mem[kVuMemSize];
 std::vector<std::uint8_t> g_native_stack;  // the caller's native stack window: arguments point at its locals
 std::uint32_t g_native_stack_base;
 bool g_halted;
+std::int32_t g_thread_id = 1;  // the guest thread of the recorded call (its .pre's edx), for GetThreadId
 int g_bad_accesses;
 
 std::uint8_t *slow_ptr(std::uint32_t a, std::uint32_t n) {
@@ -126,7 +127,13 @@ void bad_entry(Cpu &c, std::uint32_t unit_base) {
 int g_slices;
 bool preempt(Cpu &c) {
     c.budget = 1 << 24;
-    if (++g_slices >= 16) stop(c, c.pc, "spinning");
+    if (++g_slices >= 16) {
+        // the registers that usually name what it waits on (an object in $s0/$a0)
+        std::fprintf(stderr, "eeref: spinning with s0 %08X a0 %08X v0 %08X; [s0+0x18..0x24] %08X %08X %08X %08X\n",
+                     c.r[16].w[0], c.r[4].w[0], c.r[2].w[0], slow_ld32(c.r[16].w[0] + 0x18), slow_ld32(c.r[16].w[0] + 0x1C),
+                     slow_ld32(c.r[16].w[0] + 0x20), slow_ld32(c.r[16].w[0] + 0x24));
+        stop(c, c.pc, "spinning");
+    }
     return g_halted;
 }
 // The kernel calls whose effects live outside EE RAM (threads, semaphores, caches, interrupt masks, SIF DMA)
@@ -136,7 +143,7 @@ void syscall(Cpu &c, std::uint32_t pc) {
     const std::int32_t a0 = static_cast<std::int32_t>(c.r[4].w[0]);
     std::int32_t v0;
     switch (n) {
-    case 0x2F: v0 = 1; break;                               // GetThreadId
+    case 0x2F: v0 = g_thread_id; break;                     // GetThreadId: the recorded call's thread
     case 0x42: case 0x43: case 0x44: case 0x45: case 0x46:  // SignalSema, iSignalSema, WaitSema, PollSema, iPollSema
         v0 = a0; break;
     case 0x29: case 0x2A: case 0x2B:                        // (i)ChangeThreadPriority, RotateThreadReadyQueue
@@ -439,6 +446,7 @@ int main(int argc, char **argv) {
     if (!read_state(pre_path, pre) || !read_state(post_path, post, &pre.ram)) return 2;
     if (!syms.empty()) load_syms(syms);
 
+    if (pre.h.edx > 0 && pre.h.edx < 256) g_thread_id = static_cast<std::int32_t>(pre.h.edx);  // older recordings: 0
     register_generated_code();
     std::memcpy(g_ram, pre.ram.data(), kRamSize);
     std::memcpy(g_spr, pre.spr.data(), kScratchpadSize);

@@ -30,6 +30,7 @@
 #include <vector>
 
 extern "C" void gt4_record_return();  // record_stub.s
+extern "C" int gt4_sys_GetThreadId();
 
 namespace {
 
@@ -95,7 +96,7 @@ void write_state(const Hook &hook, uint32_t index, uint32_t kind, const uint32_t
     h.kind = kind;
     if (args) std::memcpy(h.args, args, sizeof h.args);
     h.eax = eax;
-    h.edx = edx;
+    h.edx = kind ? edx : static_cast<uint32_t>(gt4_sys_GetThreadId());   // an entry: the guest thread (eeref's GetThreadId)
     h.ram_size = kRamSize;
     h.spr_size = kScratchpadSize;
     h.vu_size = kVuMemSize;

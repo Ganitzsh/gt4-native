@@ -226,9 +226,17 @@ using IntcFn = int (*)(int cause, uint32_t arg, uint32_t addr);
 using AlarmFn = void (*)(int id, uint16_t ticks, uint32_t arg);
 
 void run_handlers(std::vector<Handler> &list, int cause) {
+    // GT4_TRACE_INTC=CAUSE: every 120th dispatch of that INTC cause, the handlers with their results
+    static const int traced = getenv("GT4_TRACE_INTC") ? atoi(getenv("GT4_TRACE_INTC")) : -1;
+    static unsigned dispatches = 0;
+    const bool trace = cause == traced && &list != &g_dmac[cause] && dispatches++ % 120 == 0;
     for (const Handler &h : list) {
-        if (!h.enabled) continue;
+        if (!h.enabled) {
+            if (trace) log_info("intc %d: handler %08x disabled", cause, h.func);
+            continue;
+        }
         int r = reinterpret_cast<IntcFn>(guest_ptr(h.func))(cause, h.arg, 0);
+        if (trace) log_info("intc %d: handler %08x returned %d", cause, h.func, r);
         if (r < 0) break;  // the handler ends the chain
     }
 }
@@ -605,6 +613,8 @@ DWORD WINAPI watchdog_thread(void *p) {
                               : t.status == THS_WAIT ? (t.wait == WAIT_SEMA ? "sema" : "sleep")
                               : t.status == THS_DORMANT ? "dormant" : "susp",
                               t.prio, t.kernel_depth ? "(k)" : "");
+                if (t.status == THS_WAIT && t.wait == WAIT_SEMA)   // which semaphore, and its count
+                    n += snprintf(line + n, sizeof line - n, "[s%d c%d]", t.wait_id, g_semas[t.wait_id].count);
             }
             if (Thread *r = g_running) {
                 running = r->id;

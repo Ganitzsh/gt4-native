@@ -128,7 +128,12 @@ the user's game and stays in `build/`.
   reference the game's C++ programs were checked against; `eeref --vu0-fuzz N --elf ...` compares the two on N
   random states per program); the scratchpad
   and VU memory are mapped. A call still running after 2^28 instructions stops as `spinning` (it waits on a
-  hardware register or another thread); other syscalls and EE hardware registers stop it or read 0.
+  hardware register or another thread; it prints `$s0` and the words at `$s0+0x18`, a lock's owner and count in
+  the libraries' mutex); other syscalls and EE hardware registers stop it or read 0. GetThreadId returns the
+  recorded call's guest thread (an entry's header keeps it where a return keeps edx), so a recursive mutex the
+  thread already holds is taken again. A call that waits for another thread (a database read the loader thread
+  completes) cannot finish in eeref: `game_link.py --eeorig` and `GT4_ORIG=ADDR,...` run the original code in the
+  game instead, which is how a crash is placed in the native code or not (below).
 - Verdicts: `agree`; `close` (the only differences are within 1e-3 relative or 1e-5 absolute: long float
   computations drift that far); `known` (an understood difference listed in `tools/eeref/known.txt`);
   `DIFFER`; `STOPPED` (with where and why); `CORRUPT`. An audit of the native-only code (every provisional

@@ -95,7 +95,13 @@ relative to the first guest word holding WORD, e.g. an object's vtable pointer),
 test. `GT4_AI_CATCHUP=original|reduced|off` fixes the host's `gameplay.ai_catchup` option (the AI catch-up, GT4's
 slow car boost: game_src/func_00365790.cpp).
 `GT4_PAD_SCRIPT=VBLANK:BUTTON[:FRAMES],...` presses pad-1 buttons at given VBlanks when no host pad
-is connected (e.g. `900:cross,1200:right,1320:cross` answers the boot's memory-card dialogs).
+is connected (e.g. `900:cross,1200:right,1320:cross` answers the boot's memory-card dialogs). The VBlanks are the
+game's: once the menus run at 30 frames a second, a headless host presents about two frames per VBlank, so a
+capture's frame number is not the VBlank (the host's closing `GS:` line gives both totals). On GT mode's map a
+move takes effect after the map has scrolled (some 200 VBlanks); presses while it scrolls are lost.
+`GT4_TRACE_PAD=1` logs each scripted press as the game reads it, `=all` every read of pad 1 with its VBlank.
+`GT4_TRACE_INTC=CAUSE` logs, every 120th time, each INTC handler of that cause with its result (a handler returning
+a negative value ends the chain). `GT4_WATCH` names the semaphore a waiting thread waits on, with its count.
 `GT4_MONEY=N` (testing) keeps the player's money from reading below N (game_src/func_0043AF68.cpp), for the
 dealers, tuning shops and purchases. `GT4_MEMCARD=DIR` is relative to the working directory.
 

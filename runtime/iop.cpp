@@ -530,6 +530,10 @@ int pressure_index(int bit) {
 extern "C" int gt4_replace_scePad2Read(int id, uint8_t *data) {
     if (!link_pad(id & 1, data)) std::memcpy(data, g_pad[id & 1], 18);
     static const std::vector<ScriptedPress> script = pad_script();
+    // GT4_TRACE_PAD=all: every read of pad 1, with its VBlank (how often a screen polls the pad)
+    static const bool every = std::getenv("GT4_TRACE_PAD") && !std::strcmp(std::getenv("GT4_TRACE_PAD"), "all");
+    if (every && (id & 1) == 0)
+        log_info("pad: read at VBlank %u, socket %d, from %p", kernel_vblank_count(), id, __builtin_return_address(0));
     if ((id & 1) == 0 && !script.empty()) {
         const uint32_t now = kernel_vblank_count();
         for (const ScriptedPress &s : script)
