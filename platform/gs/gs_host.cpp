@@ -142,8 +142,13 @@ public:
             for (const auto& d : list.draws) reinterpreted += d.texture.reinterpreted ? 1 : 0;
             std::printf("[gsn] vblank %u: %u draws read a target in another format\n", count, reinterpreted);
             std::printf("[gsn] vblank %u: %zu draws (%u untextured, %u from memory, %u from targets), %zu vertices, %zu textures decoded, "
-                        "%zu targets, display %u/%u\n", count, list.draws.size(), untextured, memory, targets, list.vertices.size(),
-                        list.textures.size(), list.targets.size(), list.display.target1, list.display.target2);
+                        "%zu targets, display %u/%u (PMODE %llX SMODE2 %llX DISPFB1 %llX DISPLAY1 %llX DISPFB2 %llX DISPLAY2 %llX)\n",
+                        count, list.draws.size(), untextured, memory, targets, list.vertices.size(),
+                        list.textures.size(), list.targets.size(), list.display.target1, list.display.target2,
+                        (unsigned long long)list.display.pmode, (unsigned long long)list.display.smode2,
+                        (unsigned long long)list.display.dispfb1, (unsigned long long)list.display.display1,
+                        (unsigned long long)list.display.dispfb2, (unsigned long long)list.display.display2);
+            if (triggered) std::fflush(stdout);
         }
         if (native && publishNative) {
             if (!nativeWanted.load(std::memory_order_relaxed)) {
