@@ -7,14 +7,28 @@
 #include <cstring>
 #include <sstream>
 
+#if GT4_VU1_INTERPRETER
+#include "vu1_reference.h"
+#endif
+
 namespace gt4::ps2 {
 
-GraphicsStream::GraphicsStream(GsTarget& target) : gs(target), vif1(unit) {
+#if GT4_VU1_INTERPRETER
+struct GraphicsStream::Reference {
+    Vu1Reference tool;
+    explicit Reference(Vif1& vif) : tool(vif) {}
+};
+#endif
+
+GraphicsStream::GraphicsStream(GsTarget& target) : gs(target) {
     sink.owner = this;
-    unit.setGifSink(&sink);
+    rendererSink.owner = this;
     vif1.setGifSink(&sink);
     vif1.onPath3Mask = [this](bool masked) { if (!masked) releasePath3(); };
-    path1Stats = std::getenv("GT4_PATH1_STATS") != nullptr;
+    vif1.onBatch = [this](const Batch3d& batch) { runBatch(batch); };
+#if GT4_VU1_INTERPRETER
+    if (Vu1Reference::wanted()) reference = std::make_unique<Reference>(vif1);
+#endif
     if (const char* e = std::getenv("GT4_VRAM_DUMP")) {
         dumpFrame = static_cast<uint32_t>(std::strtoul(e, nullptr, 10));
         if (const char* list = std::strchr(e, ':'))
@@ -26,6 +40,49 @@ GraphicsStream::GraphicsStream(GsTarget& target) : gs(target), vif1(unit) {
             }
     }
     if (const char* e = std::getenv("GT4_GIF_LOG")) logFrame = static_cast<uint32_t>(std::strtoul(e, nullptr, 10));
+}
+
+GraphicsStream::~GraphicsStream() = default;
+
+// A batch for GT4's 3D renderers (VIF1 MSCAL).
+void GraphicsStream::runBatch(const Batch3d& batch) {
+    uint32_t continueAt = vif1.continueAt;
+#if GT4_VU1_INTERPRETER
+    if (reference && reference->tool.run(batch, renderers, rendererSink, continueAt, vif1.gt4Program())) {
+        vif1.continueAt = continueAt;
+        return;
+    }
+#endif
+    if (!vif1.gt4Program()) {   // another game's (or a test's) VU1 programs: nothing to draw them with
+        ++counters.unknownPrograms;
+        vif1.lastWarning = "a VU1 program image that is not GT4's (nothing drawn)";
+        return;
+    }
+    if (!renderers.run(batch, rendererSink, continueAt))
+        vif1.lastWarning = "no 3D renderer at entry " + std::to_string(batch.entry * 8);
+    vif1.continueAt = continueAt;
+}
+
+void GraphicsStream::sendPrimitives(const GsPrimitives& p) {
+    countPacket();
+    ++counters.primitiveRuns;
+    counters.primitiveVertices += p.count;
+    if (frameIndex == logFrame)
+        std::printf("primitives %u: PRIM %#x (%s), %zu vertices\n", packetIndex - 1, p.prim, p.setPrim ? "set" : "kept", p.count);
+    // The registers they leave, for saveState.
+    if (p.setPrim) shadowReg(0x00, p.prim & 0x7FF);
+    if (p.count) {
+        const GsVertex& v = p.vertices[p.count - 1];
+        uint32_t s, t, q;
+        std::memcpy(&s, &v.s, 4);
+        std::memcpy(&t, &v.t, 4);
+        std::memcpy(&q, &v.q, 4);
+        shadowReg(0x02, s | static_cast<uint64_t>(t) << 32);
+        shadowReg(0x01, v.rgba | static_cast<uint64_t>(q) << 32);
+        packedQ = q;
+        if (p.fog) shadowReg(0x0A, static_cast<uint64_t>(v.fog & 0xFF) << 56);
+    }
+    gs.primitives(p);
 }
 
 void GraphicsStream::dumpVram(const char* tag) {
@@ -40,13 +97,19 @@ void GraphicsStream::dumpVram(const char* tag) {
     }
 }
 
-void GraphicsStream::sendGif(uint32_t path, const uint8_t* data, size_t bytes) {
+// GT4_VRAM_DUMP counts what goes to the GS: GIF packets and runs of primitives.
+void GraphicsStream::countPacket() {
     if (frameIndex == dumpFrame && std::find(dumpAt.begin(), dumpAt.end(), packetIndex) != dumpAt.end())
         dumpVram(std::to_string(packetIndex).c_str());
+    ++packetIndex;
+}
+
+void GraphicsStream::sendGif(uint32_t path, const uint8_t* data, size_t bytes) {
+    countPacket();
     if (frameIndex == logFrame) {
         uint64_t tag[2] = {};
         if (bytes >= 16) std::memcpy(tag, data, 16);
-        std::printf("GIF %u: path %u, %zu bytes, tag %016llx %016llx, program %#x\n", packetIndex, path, bytes,
+        std::printf("GIF %u: path %u, %zu bytes, tag %016llx %016llx, program %#x\n", packetIndex - 1, path, bytes,
                     static_cast<unsigned long long>(tag[1]), static_cast<unsigned long long>(tag[0]),
                     path == 1 ? vif1.lastProgram : 0);
         // and the packets themselves, to gif_FRAME.bin: u32 path (and the VU1 program << 8 for
@@ -64,7 +127,6 @@ void GraphicsStream::sendGif(uint32_t path, const uint8_t* data, size_t bytes) {
             std::fflush(out);
         }
     }
-    ++packetIndex;
     shadowGif(path, data, bytes);
     gs.gif(path, data, bytes);
 }
@@ -147,7 +209,7 @@ struct StateReader {
     uint64_t u64() { uint64_t v; bytes(&v, 8); return v; }
 };
 constexpr uint32_t kStateMagic = 0x53345447;   // "GT4S"
-constexpr uint32_t kStateVersion = 1;
+constexpr uint32_t kStateVersion = 2;   // 1: VU1 memories and registers instead of the batch buffers
 constexpr size_t kVramBytes = 4u << 20;
 }  // namespace
 
@@ -157,12 +219,10 @@ std::vector<uint8_t> GraphicsStream::saveState(const uint8_t* vram) const {
     StateWriter w{out};
     w.u32(kStateMagic);
     w.u32(kStateVersion);
-    w.bytes(unit.micro, sizeof unit.micro);
-    w.bytes(unit.data, sizeof unit.data);
-    w.bytes(unit.vf, sizeof unit.vf);
-    w.bytes(&unit.acc, sizeof unit.acc);
-    w.bytes(unit.vi, sizeof unit.vi);
-    for (uint32_t v : {unit.i, unit.q, unit.p, unit.r, unit.mac, unit.status, unit.clip, unit.top, unit.itop, unit.pc()}) w.u32(v);
+    w.bytes(vif1.program.data(), Vif1::kProgramBytes);
+    w.bytes(vif1.buffers, sizeof vif1.buffers);
+    w.bytes(&renderers.constants, sizeof renderers.constants);
+    w.u32(vif1.continueAt);
     for (uint32_t v : {vif1.cl, vif1.wl, vif1.mode, vif1.mask, vif1.base, vif1.ofst, vif1.tops, vif1.itops, vif1.mark,
                        static_cast<uint32_t>(vif1.dbf), static_cast<uint32_t>(vif1.path3Masked)})
         w.u32(v);
@@ -179,18 +239,55 @@ std::vector<uint8_t> GraphicsStream::saveState(const uint8_t* vram) const {
 
 void GraphicsStream::restoreState(const uint8_t* payload, size_t size) {
     StateReader r{payload, size};
-    if (r.u32() != kStateMagic || r.u32() != kStateVersion) {
+    const uint32_t magic = r.u32(), version = r.u32();
+    if (magic != kStateMagic || (version != 1 && version != kStateVersion)) {
         std::fprintf(stderr, "Replay: a saved state of an unknown version (ignored)\n");
         return;
     }
-    r.bytes(unit.micro, sizeof unit.micro);
-    r.bytes(unit.data, sizeof unit.data);
-    r.bytes(unit.vf, sizeof unit.vf);
-    r.bytes(&unit.acc, sizeof unit.acc);
-    r.bytes(unit.vi, sizeof unit.vi);
-    for (uint32_t* v : {&unit.i, &unit.q, &unit.p, &unit.r, &unit.mac, &unit.status, &unit.clip, &unit.top, &unit.itop}) *v = r.u32();
-    unit.setPc(r.u32());
-    for (uint32_t* v : {&vif1.cl, &vif1.wl, &vif1.mode, &vif1.mask, &vif1.base, &vif1.ofst, &vif1.tops, &vif1.itops, &vif1.mark}) *v = r.u32();
+    r.bytes(vif1.program.data(), Vif1::kProgramBytes);
+    vif1.programChanged();
+    if (version == 1) {
+        // Version 1 kept VU1 itself: its data memory holds the two batch buffers, its registers vf23..vf31 the
+        // setup's constants, and the program counter where MSCNT goes on.
+        std::vector<uint8_t> data(16384);
+        uint32_t vf[32][4];
+        uint8_t skip[16 + 32];   // ACC, vi
+        r.bytes(data.data(), data.size());
+        r.bytes(vf, sizeof vf);
+        r.bytes(skip, sizeof skip);
+        uint32_t registers[10];   // i, q, p, r, mac, status, clip, top, itop, pc
+        for (uint32_t& v : registers) v = r.u32();
+        vif1.continueAt = registers[9];
+        renderers.constants = constantsFromRegisters(vf);
+        for (uint32_t* v : {&vif1.cl, &vif1.wl, &vif1.mode, &vif1.mask, &vif1.base, &vif1.ofst, &vif1.tops, &vif1.itops, &vif1.mark}) *v = r.u32();
+        for (uint32_t b = 0; b < 2; ++b) {
+            const uint32_t start = (vif1.base + (b ? vif1.ofst : 0)) & 0x3FF;
+            for (uint32_t q = 0; q < BatchBuffer::kQwords; ++q) std::memcpy(vif1.buffers[b].words[q], data.data() + ((start + q) & 0x3FF) * 16, 16);
+        }
+#if GT4_VU1_INTERPRETER
+        if (reference) reference->tool.restore(data.data(), vf, vif1.program);
+#endif
+    } else {
+        r.bytes(vif1.buffers, sizeof vif1.buffers);
+        r.bytes(&renderers.constants, sizeof renderers.constants);
+        vif1.continueAt = r.u32();
+        for (uint32_t* v : {&vif1.cl, &vif1.wl, &vif1.mode, &vif1.mask, &vif1.base, &vif1.ofst, &vif1.tops, &vif1.itops, &vif1.mark}) *v = r.u32();
+#if GT4_VU1_INTERPRETER
+        if (reference) {   // the reference's memory model from the batch buffers, its registers from the constants
+            std::vector<uint8_t> data(16384);
+            for (uint32_t b = 0; b < 2; ++b) {
+                const uint32_t start = (vif1.base + (b ? vif1.ofst : 0)) & 0x3FF;
+                for (uint32_t q = 0; q < BatchBuffer::kQwords; ++q) std::memcpy(data.data() + ((start + q) & 0x3FF) * 16, vif1.buffers[b].words[q], 16);
+            }
+            uint32_t vf[32][4] = {};
+            const Renderers3d::Constants& c = renderers.constants;
+            const Vec4* regs[9] = {&c.guard, &c.clamp, &c.scale, &c.offset, nullptr, &c.matrix[0], &c.matrix[1], &c.matrix[2], &c.matrix[3]};
+            for (int k = 0; k < 9; ++k)
+                if (regs[k]) std::memcpy(vf[23 + k], regs[k], 16);
+            reference->tool.restore(data.data(), vf, vif1.program);
+        }
+#endif
+    }
     vif1.dbf = r.u32() != 0;
     vif1.path3Masked = r.u32() != 0;
     r.bytes(vif1.row, sizeof vif1.row);
@@ -226,80 +323,6 @@ void GraphicsStream::restoreState(const uint8_t* payload, size_t size) {
     const uint64_t count = (packet.size() - 2) / 2;
     packet[0] = count | 1ull << 15 | 1ull << 60;   // NLOOP, EOP, PACKED with one register (A+D)
     sendGif(2, reinterpret_cast<const uint8_t*>(packet.data()), packet.size() * 8);
-}
-
-// PACKED RGBAQ (register 1) values of a PATH1 packet, counted by colour (debugging aid).
-void GraphicsStream::countColours(const uint8_t* data, size_t bytes) {
-    size_t q = 0;
-    const size_t n = bytes / 16;
-    while (q < n) {
-        uint64_t lo, hi;
-        std::memcpy(&lo, data + q * 16, 8);
-        std::memcpy(&hi, data + q * 16 + 8, 8);
-        ++q;
-        const uint32_t nloop = lo & 0x7FFF, flg = (lo >> 58) & 3;
-        uint32_t nreg = (lo >> 60) & 15;
-        if (!nreg) nreg = 16;
-        if (flg != 0) {
-            q += flg == 1 ? (nloop * nreg + 1) / 2 : nloop;
-            continue;
-        }
-        for (uint32_t l = 0; l < nloop && q < n; ++l)
-            for (uint32_t r = 0; r < nreg && q < n; ++r, ++q) {
-                const uint32_t reg = (hi >> (4 * r)) & 15;
-                uint32_t w[4];
-                std::memcpy(w, data + q * 16, 16);
-                if (reg == 0xE && ((w[2] & 0xFF) == 0x4C || (w[2] & 0xFF) == 0x4D)) {  // A+D FRAME: fbp, psm
-                    const uint32_t key = 0x40000000u | (w[0] & 0x1FF) | ((w[0] >> 24) & 0x3F) << 12;
-                    auto it = std::find_if(texCounts.begin(), texCounts.end(), [key](const auto& e) { return e.first == key; });
-                    if (it != texCounts.end()) ++it->second;
-                    else texCounts.push_back({key, 1});
-                    continue;
-                }
-                if (reg == 0xE && ((w[2] & 0xFF) == 6 || (w[2] & 0xFF) == 7)) {  // A+D TEX0: psm, cpsm, tfx, tcc
-                    const uint64_t t = w[0] | static_cast<uint64_t>(w[1]) << 32;
-                    const uint32_t key = 0x80000000u | static_cast<uint32_t>((t >> 20) & 0x3F) | static_cast<uint32_t>((t >> 51) & 0xF) << 8 |
-                                         static_cast<uint32_t>((t >> 35) & 3) << 12 | static_cast<uint32_t>((t >> 34) & 1) << 14;
-                    auto it = std::find_if(texCounts.begin(), texCounts.end(), [key](const auto& e) { return e.first == key; });
-                    if (it != texCounts.end()) ++it->second;
-                    else texCounts.push_back({key, 1});
-                    continue;
-                }
-                if (reg != 1) continue;
-                const uint32_t c = (w[0] & 0xFF) | (w[1] & 0xFF) << 8 | (w[2] & 0xFF) << 16 | (w[3] & 0xFF) << 24;
-                {
-                    const uint32_t prog = vif1.lastProgram;
-                    auto pc = std::find_if(programCounts.begin(), programCounts.end(), [prog](const auto& e) { return e.first == prog; });
-                    if (pc == programCounts.end()) { programCounts.push_back({prog, {0, 0}}); pc = programCounts.end() - 1; }
-                    if ((c & 0xFFFFFF) == 0) ++pc->second.first;
-                    ++pc->second.second;
-                }
-                auto it = std::find_if(colourCounts.begin(), colourCounts.end(), [c](const auto& e) { return e.first == c; });
-                if (it != colourCounts.end()) ++it->second;
-                else if (colourCounts.size() < 4096) colourCounts.push_back({c, 1});
-            }
-    }
-}
-
-void GraphicsStream::reportColours(uint32_t frame) {
-    if (colourCounts.empty()) return;
-    std::sort(colourCounts.begin(), colourCounts.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
-    std::printf("PATH1 colours, frame %u:", frame);
-    for (size_t i = 0; i < colourCounts.size() && i < 12; ++i) {
-        const uint32_t c = colourCounts[i].first;
-        std::printf(" (%u,%u,%u,%u)x%u", c & 0xFF, (c >> 8) & 0xFF, (c >> 16) & 0xFF, c >> 24, colourCounts[i].second);
-    }
-    std::printf("\n  TEX0 (psm cpsm tfx tcc):");
-    for (const auto& [k, count] : texCounts) {
-        if (k & 0x80000000u) std::printf(" (%#x %#x %u %u)x%u", k & 0x3F, (k >> 8) & 0xF, (k >> 12) & 3, (k >> 14) & 1, count);
-        else std::printf(" FRAME(fbp %#x psm %#x)x%u", k & 0x1FF, (k >> 12) & 0x3F, count);
-    }
-    std::printf("\n  programs (black/all vertices):");
-    for (const auto& [prog, c] : programCounts) std::printf(" %#x %u/%u", prog, c.first, c.second);
-    std::printf("\n");
-    programCounts.clear();
-    colourCounts.clear();
-    texCounts.clear();
 }
 
 void GraphicsStream::releasePath3() {
@@ -359,7 +382,6 @@ void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload)
         if (size >= 4) std::memcpy(&field, payload, 4);
         if (size >= 8) std::memcpy(&count, payload + 4, 4);
         ++counters.vsyncs;
-        if (path1Stats) reportColours(static_cast<uint32_t>(counters.vsyncs));
         if (!heldPath3.empty()) {   // still masked at the end of the frame: do not lose the data
             ++counters.path3ForcedAtVsync;
             releasePath3();
@@ -412,12 +434,15 @@ void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload)
 std::string GraphicsStream::describe() const {
     std::ostringstream out;
     const auto& v = vif1.stats;
+    const auto& r = renderers.stats;
     out << counters.records << " records, " << counters.vsyncs << " vsyncs, GIF packets P1/P2/P3 "
         << counters.gifPackets[1] << "/" << counters.gifPackets[2] << "/" << counters.gifPackets[3] << " ("
         << (counters.gifBytes + 1023) / 1024 << " KiB PATH3), VIF1 " << counters.vif1Bytes / 1024 << " KiB: " << v.unpacks
-        << " unpacks, " << v.microprograms << " VU1 programs (" << v.vuCycles << " cycles, " << v.runaways
-        << " runaways), " << v.directQwords << " DIRECT qwords, " << v.mpgInstructions << " MPG instructions, "
-        << v.unknownCodes << " unknown codes; " << counters.privWrites << " privileged writes, " << counters.reads
+        << " unpacks, " << v.microprograms << " 3D batches (" << r.batches << " drawn, " << counters.primitiveRuns << " primitive runs, "
+        << counters.primitiveVertices << " vertices, " << r.clipped << " clipped triangles, " << r.skipped + counters.unknownPrograms
+        << " without a renderer, " << r.unexpectedTags << " unexpected tags, " << r.countMismatch << " count mismatches, "
+        << r.oversized << " oversized, " << v.outsideBatch << " qwords outside the batch buffers), " << v.directQwords
+        << " DIRECT qwords, " << v.mpgInstructions << " MPG instructions, " << v.unknownCodes << " unknown codes; " << counters.privWrites << " privileged writes, " << counters.reads
         << " GS reads, " << counters.path3Held << " PATH3 records held by MSKPATH3 (" << counters.path3ForcedAtVsync
         << " released at VSYNC)";
     if (!vif1.lastWarning.empty()) out << "; last VIF warning: " << vif1.lastWarning;

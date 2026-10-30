@@ -1,9 +1,10 @@
 # GT4's frames in gt4_host
 
 `gt4_host` displays what the game draws: it takes the graphics stream of `gt4_game.exe` (the game's own code
-on the PS2 memory map, `docs/ARCHITECTURE.md`) over the shared-memory link, runs it through VIF1 and GT4's
-VU1 programs in C++ into the native renderer (`docs/NATIVE_RENDERER.md`), which draws it with Vulkan into
-the display pipeline (`docs/RENDERING.md`). The game never renders itself; the host never runs game logic.
+on the PS2 memory map, `docs/ARCHITECTURE.md`) over the shared-memory link, decodes its VIF1 stream into 3D
+batches that GT4's renderers (native code, `docs/VU1_PROGRAMS.md`) turn into primitives for the native
+renderer (`docs/NATIVE_RENDERER.md`), which draws them with Vulkan into the display pipeline
+(`docs/RENDERING.md`). The game never renders itself; the host never runs game logic.
 No GS is emulated: paraLLEl-GS, the GS emulator the host used until 2026-10-30, is only a test reference now
 (`GT4_GS_REFERENCE`, below).
 
@@ -12,9 +13,10 @@ gt4_game.exe (32-bit)                         gt4_host.exe (64-bit)
  DMA-kick replacements walk the DMA chains     GameLink (platform/gs/link_host.*): section, process, rings
  GIF PATH3, VIF1 stream, GS_PRIV, VSYNC  ==>    copies records out of the ring (worker thread)
                                                  GraphicsStream (stream.*)
- pad state, GS events, GS_IMAGE          <==      VIF1 (vif1.*)  -> UNPACK into VU1 memory, DIRECT -> PATH2
-                                                  VU1 (vu1_native.*) -> GT4's programs in C++, XGKICK -> PATH1
-                                                  front end (gsnative/gs_frontend.*): PATH1/2/3, privileged
+ pad state, GS events, GS_IMAGE          <==      VIF1 (vif1.*) -> 3D batches (UNPACK into two batch buffers,
+                                                   MSCAL), DIRECT -> PATH2
+                                                  3D renderers (renderers3d.*) -> primitives with GS state
+                                                  front end (gsnative/gs_frontend.*): primitives, PATH2/3, privileged
                                                    registers, SIGNAL/FINISH/LABEL, GS -> host reads
                                                  GsHost (gs_host.*) -> every frame list, in order
                                                    -> GsnScene (render/gsn_scene.*): Vulkan, at a render scale
@@ -154,38 +156,52 @@ commit `cc6184af` with Granite `16e7395f`; `cmake/HostDependencies.cmake`) and b
 paraLLEl-GS's after the same transfers). gt4_host never links it; without the option the host's volk
 loader is `gt4-volk`.
 
-## VIF1 + VU1
+## VIF1 and GT4's 3D renderers
 
-GT4's 3D runs through VU1 microprograms the game uploads with VIF1 `MPG`. They run natively, in C++
-(`platform/gs/vu1_native.cpp`, described in `docs/VU1_PROGRAMS.md`), bit for bit as the reference
-interpreter computes them. The interpreters are development and test tools behind the CMake option `GT4_VU1_INTERPRETER` (OFF by
-default, so the host has no PS2 code): `GT4_VU1=interp|ref`, `GT4_VU1_DIFF=1|native`, `GT4_VU1_TRACE`,
-`GT4_VU1_INVENTORY` and the tests that check the native programs. Without it only GT4's native programs run (a
-micro image that is not GT4's draws nothing).
+GT4's 3D ran through VU1 microprograms the game uploads with VIF1 `MPG`. On the host they are native renderers
+(`platform/gs/renderers3d.cpp`, described in `docs/VU1_PROGRAMS.md`): no VU1 memory, registers, interpreter or
+XGKICK in `gt4_host` (`docs/NATIVE_ONLY.md`).
 
-- **VIF1** (`platform/gs/vif1.*`): NOP, STCYCL, OFFSET, BASE, ITOP, STMOD (offset, difference, mode 3),
-  MSKPATH3 (GT4 emits it, `004A1950`: PATH3 records that arrive while it is set are held and sent at the
-  unmask, or at the VBlank if it is never lifted), MARK, FLUSHE/FLUSH/
-  FLUSHA (nothing to wait for: VU1 runs synchronously), MSCAL/MSCALF/MSCNT (with the TOPS/ITOPS double-buffer
-  swap), STMASK, STROW, STCOL, MPG, DIRECT/DIRECTHL (-> PATH2), and UNPACK in every format (S/V2/V3/V4 x
-  32/16/8, V4-5) with sign/zero extension, masking (data/row/column/protect), skipping and filling writes,
-  and FLG (+TOPS). A command may span records.
-- **VU1** (`platform/gs/vu1.*`): 16 KiB micro / 16 KiB data memory; every upper instruction (ADD, SUB,
-  MUL, MADD, MSUB with broadcast/I/Q/ACC forms, MAX, MINI, OPMULA, OPMSUB, ITOF/FTOI 0/4/12/15, ABS, CLIP,
-  NOP) and lower instruction (LQ/SQ/LQI/SQI/LQD/SQD, ILW/ISW/ILWR/ISWR, integer ALU, MOVE, MR32, MFIR, MTIR,
-  flag instructions, branches and jumps with delay slots, DIV/SQRT/RSQRT/WAITQ, the EFU set with
-  MFP/WAITP, random numbers, XTOP/XITOP, XGKICK -> PATH1); the I bit; E-bit termination after the delay
-  slot. Model: one pair per cycle; FMAC results 4 cycles after issue with stalls on dependent reads; MAC,
-  status and clip flags visible to lower-slot instructions 4 cycles after the producing instruction; Q after
-  7 (DIV, SQRT) or 13 (RSQRT) cycles and P after the EFU latency; a branch directly after the instruction
-  that wrote its VI register reads the previous value; when both slots write the same VF register the lower
-  one is dropped. Floats follow the VU: no denormals, infinities or NaNs (inputs clamp, results saturate to
-  +-max with O, underflow gives a signed zero with U), arithmetic computed in double and rounded toward
-  zero. XGKICK sends the whole packet at once.
-- **Not modelled**: VU0 / VIF0 (records counted only), XGKICK running concurrently with later
-  instructions, the D/T debug bits, VIF interrupts (`I` bit) and stalls, exact EFU results (host libm).
-- **Provenance**: written for this project from the public documentation; PCSX2 (GPL-3.0+) consulted for
-  undocumented timing details (`THIRD_PARTY_NOTICES.md`).
+- **VIF1** (`platform/gs/vif1.*`): decodes the game's VIF codes into what they carry. UNPACK in every format
+  (S/V2/V3/V4 x 32/16/8, V4-5) with sign/zero extension, masking (STMASK, STROW, STCOL: data/row/column/protect),
+  STMOD (offset, difference, mode 3), skipping and filling writes (STCYCL); FLG writes relative to the current
+  batch buffer: BASE and BASE + OFFSET take turns at each MSCAL/MSCALF (MSCNT goes on where the last renderer
+  ended). Each buffer keeps what it was last sent and what the renderers decoded into it (GT4 re-sends only
+  what changes, and draws some batches twice: `docs/VU1_PROGRAMS.md`). An MSCAL hands the batch to the
+  renderers (`Vif1::onBatch`). DIRECT/DIRECTHL go to the GS as PATH2; MSKPATH3 (GT4 emits it, `004A1950`: PATH3
+  records that arrive while it is set are held and sent at the unmask, or at the VBlank if it is never lifted);
+  ITOP, OFFSET, BASE, MARK, NOP, FLUSHE/FLUSH/FLUSHA (nothing to wait for). MPG: the uploaded image is kept
+  only to check it is GT4's (another image draws nothing). A command may span records.
+- **3D renderers** (`platform/gs/renderers3d.*`): the entry table, the setup constants (kept for the entries
+  that skip the setup), the lighting chain (decompression and 15 lighting bodies), the six strip renderers with
+  back-face culling and the polygon clipper, and the screen grids, in plain float arithmetic; where a VU number
+  rule matters for the picture the code states it (`docs/VU1_PROGRAMS.md`). Output through `PrimitiveSink`
+  (`gs_primitives.h`): runs of vertices with PRIM from the batch's GIF tag (ST/Q, RGBA, XYZ/F and ADC as the
+  GS registers receive them), and the GS packets the game wrote (a batch's state header, a screen grid's
+  template with its stepped fields), whole. The host's front end takes the vertices through
+  `GsFrontend::setPrim` / `vertex`.
+- **Provenance**: VIF written for this project from the public documentation; PCSX2 (GPL-3.0+) consulted for
+  undocumented details of UNPACK (`THIRD_PARTY_NOTICES.md`). The renderers were written from GT4's micro image.
+
+### The VU1 reference (development builds)
+
+`cmake -DGT4_VU1_INTERPRETER=ON` (OFF by default) builds `tools/vu1ref/` into the host: a VU1 memory model fed by
+what VIF1 decodes (`Vif1::Observer`), the interpreter (`vu1.cpp`, with the VU's pipeline timing), a second
+interpreter (`vu1_ref.cpp`) and the bit-exact C++ port of GT4's programs that the host ran until 2026-10-30
+(`vu1_exact.cpp`, VU arithmetic in `vu_float.h`). `tools/vu1ref/vu1_reference.*` puts them beside the native path:
+
+- `GT4_VU1=exact|interp|ref`: draw with that reference (GIF packets on PATH1, the old path); a micro image
+  that is not GT4's always runs in the interpreter (the tests' toy programs).
+- `GT4_VU1_DIFF=1` (`=interp`, `=ref`): every batch also runs in the reference; both outputs are compared as GS
+  register writes and vertices (what the front end makes its draws and vertex lists of): identical, within float
+  rounding (an eighth of a pixel and 1/4096 of the distance from the window's centre, Z by 64 + Z/8192 of
+  2^24, colours by 2, ST by 1e-3, the same ADC), or beyond; a table per entry and lighting body at exit.
+  `GT4_VU1_DIFF_DETAIL=1` prints the first differences, `GT4_VU1_DIFF_DUMP=ENTRY` a differing batch's inputs as
+  the buffer and as VU memory hold them. The frame is drawn from the native output.
+- `GT4_VU1_INVENTORY=DIR`: the interpreter runs everything and records each program (`vu1_inventory.h`).
+- `tests/vu1_native_fuzz.cpp` (ctest `vu1_native_fuzz`, needs `GT4_VU1_IMAGE=path`): random batches through every
+  entry and lighting block; the exact port must match the interpreter, the native renderers are compared and
+  reported per ITOP.
 
 ## Tests
 
@@ -193,7 +209,8 @@ All in `ctest` (`tools\build_windows.cmd` runs them):
 
 | Test | What | GPU |
 |---|---|---|
-| `ps2gfx` | VU1 arithmetic (ADD, broadcast MUL, MULA+MADD, DIV+WAITQ+MULq, FTOI4), branch delay slot and the VI read quirk, clip-flag latency, overflow saturation and flags, XGKICK packet bytes; VIF1 UNPACK formats, row/column/protect masking, offset mode, skipping and filling writes, FLG/TOPS double buffering, a command split across records, DIRECT -> PATH2; the transform microprogram (MPG + UNPACK + MSCAL) kicking the expected PATH1 packet; record decoding (GIF, PRIV, VSYNC, GS_READ -> GS_IMAGE); MSKPATH3 holding PATH3; capture write/replay; pad encoding. Prints the interpreter's speed. | no |
+| `ps2gfx` | VIF1 UNPACK formats, row/column/protect masking, offset mode, skipping and filling writes, FLG double buffering into the batch buffers, a command split across records, DIRECT -> PATH2; GT4's strip renderer on a hand-made batch (header packet first, window coordinates, Z, fog, ADC, colours, STQ); record decoding (GIF, PRIV, VSYNC, GS_READ -> GS_IMAGE); MSKPATH3 holding PATH3; capture write/replay; pad encoding. `GT4_VU1_INTERPRETER` builds add the interpreter's instructions and timing quirks, XGKICK, and a toy transform microprogram (MPG + UNPACK + MSCAL) kicking the expected PATH1 packet, and print the interpreter's speed. | no |
+| `vu1_native_fuzz` | `GT4_VU1_INTERPRETER` builds, with `GT4_VU1_IMAGE`: random batches, the bit-exact port against the interpreter and the native renderers against the interpreter (see above). | no |
 | `gs_host` | the native front end's events (FINISH, SIGNAL, LABEL with their IDs), a GS -> host read from memory and one of drawn pixels asked of the GPU (the frame list cut at it), a capture replayed through `GsHost` (the worker thread, lockstep) into one displayed frame list per VBlank. Writes the capture for the next test. | no |
 | `host_replay` | `gt4_host --headless --replay ... --preset original --capture` at 640 x 448 (the native renderer at 1x), then the PPM checked by pixel (`tests/host_replay.cmake`). | yes (77 = skipped) |
 | `gs_backend`, `gs_native` | `GT4_GS_REFERENCE` builds only: paraLLEl-GS by pixel (sprites, blending, textures, a CLUT, a download, events, a VU1 program), and the native GS memory model against it. | yes (77 = skipped) |
@@ -210,21 +227,18 @@ a missing ELF the game's exit code 2 is logged and the host returns 3.
 
 RX 7900 XTX, Release, Windows:
 
-- **VU1 interpreter**: about 30 million instruction pairs per second (about 75 million VU cycles per second
-  counting stalls) on the transform loop (`ps2gfx` prints it). The real VU1 runs at about 300 MHz, so a
-  frame that keeps VU1 busy would take about four times its real duration: acceptable for development, a
-  reason for native translation.
+- **3D renderers**: replaying 300 VBlanks of the race route headless at 640 x 448 takes 8.4 s with the native
+  renderers, 12.3 s with the bit-exact VU1 port they replace (2026-10-30). The interpreter (reference builds)
+  runs about 30 million instruction pairs per second.
 - **Native renderer**: see `docs/NATIVE_RENDERER.md` (a race frame at 2560 x 1440 in about 8 ms of GPU time).
 
 ## Next steps
 
-1. Run real GT4 streams as soon as the game draws (captures under `build/`), and fix what they reveal in
-   VIF/VU timing (XGKICK concurrency) and the interlace mode (see request 5). One ordering question needs
-   real data: records are processed whole and in arrival order, so a PATH3 transfer kicked after a VIF1
+1. One ordering question needs real data: records are processed whole and in arrival order, so a PATH3 transfer kicked after a VIF1
    chain that unmasks PATH3 in its middle lands after the whole chain, not at the unmask point. If GT4's
    frames show late textures, the VIF1 decoder can pause at an unmask until the next record is known.
-2. Motion vectors for the temporal upscalers: derive motion from the VU1 inputs (`docs/RENDERING.md`, scene
-   contract).
+2. Motion vectors for the temporal upscalers: the 3D renderers have each vertex's clip-space position and
+   could give the previous frame's too (`docs/RENDERING.md`, scene contract).
 3. SMODE1 from `SetGsCrt`.
 4. The GS command layer itself (`docs/NATIVE_ONLY.md` layer 5): the game's graphics library drawing through
    a native renderer interface instead of GS packets.

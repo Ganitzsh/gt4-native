@@ -1,5 +1,5 @@
 #pragma once
-// A second VU1 interpreter, used only as a reference to check vu1.cpp (GT4_VU1_DIFF, see vif1.cpp).
+// A second VU1 interpreter, used only as a reference to check vu1.cpp (GT4_VU1_DIFF=interp, see vu1_reference.cpp).
 // Adapted from the VU micro interpreter of ps2-web-recomp (runtime/src/vu_micro.cpp, include/ps2/fpu.hpp,
 // vu.hpp, vu_ops.hpp), MIT licence, Copyright (c) 2026 Samir Nuri; see THIRD_PARTY.md. Its model differs from
 // vu1.cpp on purpose: no FMAC/Q/P latencies (results are written at once), exact integer float arithmetic

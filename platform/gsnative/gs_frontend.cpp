@@ -839,6 +839,17 @@ void GsFrontend::packed(uint32_t r, uint64_t a, uint64_t b) {
     }
 }
 
+void GsFrontend::setPrim(uint32_t prim) { write(PRIM, prim & 0x7FF); }
+
+void GsFrontend::vertex(const InputVertex& v, bool withFog) {
+    write(ST, static_cast<uint64_t>(std::bit_cast<uint32_t>(v.s)) | static_cast<uint64_t>(std::bit_cast<uint32_t>(v.t)) << 32);
+    q = v.q;
+    write(RGBAQ, v.rgba | (static_cast<uint64_t>(std::bit_cast<uint32_t>(v.q)) << 32));
+    const uint64_t xy = (v.x & 0xFFFF) | static_cast<uint64_t>(v.y & 0xFFFF) << 16;
+    if (withFog) write(v.adc ? XYZF3 : XYZF2, xy | static_cast<uint64_t>(v.z & 0xFFFFFF) << 32 | static_cast<uint64_t>(v.fog & 0xFF) << 56);
+    else write(v.adc ? XYZ3 : XYZ2, xy | static_cast<uint64_t>(v.z) << 32);
+}
+
 void GsFrontend::gif(uint32_t path, const uint8_t* data, size_t bytes) {
     GifPath& g = gifPaths[path & 3];
     ++packetsThisFrame;

@@ -13,10 +13,10 @@ code with eeref.
 | Layer | What runs PS2 semantics | Size |
 |---|---|---|
 | 1. VU0 microprograms | done 2026-10-30: no VU0 model in the game; what each program did is plain float C++ in its callers (layer 1 below) | 14 entry points in one 0xA80-byte image, called from 19 functions |
-| 2. VU1 fallback | done 2026-10-29: no interpreter in the host (`GT4_VU1_INTERPRETER` OFF by default, a development option); the clipper's record overflow wraps natively | the C++ programs cover the 1,590 instructions GT4's image runs |
+| 2. VU1 | done 2026-10-29: no interpreter in the host; 2026-10-30: no VU1 model at all. GT4's programs are native renderers (`platform/gs/renderers3d.cpp`, plain floats) that read a batch and give the front end primitives; VIF1 is a decoder of the game's batches. The VU1 memory model, the interpreters and the bit-exact port live in `tools/vu1ref/`, built only with `GT4_VU1_INTERPRETER` (a development option) | the renderers cover the 1,590 instructions GT4's image runs |
 | 3. PS2 instructions in game code | done 2026-10-30: no VU0 macro, MMI or system instruction is left in the linked game code; every such function has a plain C++ copy in `game_src/` (the state the original kept in VU0 as plain globals, `runtime/shared_state.h`, `gt4_vec.h`; critical sections, $gp and timers through `gt4_interrupts_*`, `gt4_get_gp`, `gt4_cycle_count`), or a runtime replacement | 281 sources keep single FPU instructions (`sqrt.s`, `min.s`, `max.s`, `rsqrt.s`, `abs.s`), which game_cc writes as C expressions |
 | 4. Provisional drafts | C++ that compiles to nearly the original, not proven | 525 functions (the eeref audit of the ones a GT mode session runs: all agree or understood) |
-| 5. Hardware data paths | the game builds DMA chains, VIF and GIF packets; `runtime/gs.cpp` walks them, `gt4_host` decodes VIF1, runs the VU1 programs and renders GS primitives (texture formats, CLUTs, blending, Z as the GS defines them). Since 2026-10-30 the native renderer is the only one: paraLLEl-GS (a GS emulator) is out of gt4_host, a test reference behind `GT4_GS_REFERENCE`; the native front end raises SIGNAL/FINISH/LABEL and serves GS -> host reads, drawn pixels from the GPU (the car thumbnails GT4 renders and keeps) | the graphics library (pgl, 0x494578..) and the host's GS command layer (`platform/gsnative`, `platform/gs/vif1.*`) |
+| 5. Hardware data paths | the game builds DMA chains, VIF and GIF packets; `runtime/gs.cpp` walks them, `gt4_host` decodes VIF1 into 3D batches and renders GS primitives (texture formats, CLUTs, blending, Z as the GS defines them). Since 2026-10-30 the 3D path has no VU1 hardware model: GT4's renderers are native code that take a batch (positions, ST, colours or normals, constants, as the VIF unpacked them) and hand the front end vertices with their PRIM (`GsFrontend::setPrim` / `vertex`), no VU1 memory, registers, XGKICK or GIF packet in between; what the game itself wrote as GS packets (a batch's state header, the screen grids' templates, DIRECT, PATH3) is still parsed as GIF. Since 2026-10-30 the native renderer is the only one: paraLLEl-GS (a GS emulator) is out of gt4_host, a test reference behind `GT4_GS_REFERENCE`; the native front end raises SIGNAL/FINISH/LABEL and serves GS -> host reads, drawn pixels from the GPU (the car thumbnails GT4 renders and keeps) | the graphics library (pgl, 0x494578..) and the host's GS command layer (`platform/gsnative`, `platform/gs/vif1.*`) |
 | 6. EE platform | the EE kernel (threads, semaphores, interrupts, VBlank), SIF and IOP services as C++ implementations of the PS2 APIs; guest RAM identity-mapped at PS2 addresses; the gcc 2.9 ABI | runtime/ |
 
 Order: 1 and 2 first (bounded, mechanical to verify), then 3 (function by function, eeref-verified), 4
@@ -82,6 +82,22 @@ calls each, and replayed them on the original code: 65 agree, 4 within float dri
 001C1850, 001C18B0, 001C1C50, 001C1CA8 (the movie player's byte masks, XOR and negation).
 
 ## Layer 2: VU1 (done)
+
+2026-10-30, no VU1 model left in the host. The bit-exact C++ programs below still worked on a model of VU1 data
+memory and its registers, built GIF packets and kicked them to the front end, which parsed them again. They are
+now native renderers (`platform/gs/renderers3d.cpp`, docs/VU1_PROGRAMS.md): plain float arithmetic, with the VU
+number rules that matter for the picture written out (division by zero, the "infinite" clamp, FTOI truncation
+and the GS's bit fields of its words, the ADC bit, the culling flags, CLIP against |w|), the polygon clipper on
+a vector of vertices, output as primitives. `platform/gs/vif1.cpp` decodes VIF codes into two batch buffers
+(the double buffer as batch assembly) and keeps the MPG image only to check it is GT4's. What GT4 relies on in
+VU memory between batches is kept as batch data: lighting constants sent once per model, and the decoded
+vertices of a batch it draws twice (the chain writes them back into the buffer). Checked against the bit-exact
+port in the same binary (`GT4_VU1_DIFF=1`, reference build) on a race (337,079 batches, 11.7 million vertices)
+and an event screen with a car (381,654 batches, 17.5 million vertices): every difference is float rounding (a
+sixteenth of a pixel, Z by a few units of 2^24, a colour by 1, a knife-edge back-face or clip decision), and the
+frames replayed from captures of both are near-identical (docs/VU1_PROGRAMS.md).
+
+The history:
 
 GT4's VU1 programs were already C++ (`platform/gs/vu1_native.cpp`, docs/VU1_PROGRAMS.md); the interpreter
 remained as a fallback for one case, a clipped polygon whose records run past VU memory, which the C++ now

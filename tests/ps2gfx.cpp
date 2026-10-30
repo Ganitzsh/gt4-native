@@ -1,11 +1,15 @@
-// PS2 graphics front end on the CPU (no GPU): the VU1 interpreter, VIF1 decoding, the graphics stream
-// records, capture replay and the pad encoding. The GS itself is checked by tests/gs_backend.cpp.
+// PS2 graphics front end on the CPU (no GPU): VIF1 decoding into batches, GT4's 3D renderers, the graphics
+// stream records, capture replay and the pad encoding; in GT4_VU1_INTERPRETER builds also the VU1
+// interpreter (tools/vu1ref). The GS itself is checked by tests/gs_backend.cpp.
 #include "gs_packets.h"
 #include "link_host.h"
 #include "ps2_pad.h"
+#include "renderers3d.h"
 #include "stream.h"
 #include "vif1.h"
+#if GT4_VU1_INTERPRETER
 #include "vu1.h"
+#endif
 
 #include <chrono>
 #include <cmath>
@@ -16,7 +20,9 @@
 #include <vector>
 
 using namespace gt4::test;
+#if GT4_VU1_INTERPRETER
 using gt4::ps2::Vu1;
+#endif
 
 namespace {
 
@@ -39,6 +45,7 @@ struct Recorder final : gt4::ps2::GsTarget {
     }
 };
 
+#if GT4_VU1_INTERPRETER   // the VU1 interpreter's instructions
 void load(Vu1& vu, const vu::Program& program, uint32_t at = 0) {
     std::memcpy(vu.micro + at * 8, program.words.data(), program.words.size() * 4);
 }
@@ -59,8 +66,6 @@ uint32_t dataWord(const Vu1& vu, uint32_t qw, uint32_t c) {
 bool vecEquals(const Vu1& vu, uint32_t qw, float x, float y, float z, float w) {
     return dataFloat(vu, qw, 0) == x && dataFloat(vu, qw, 1) == y && dataFloat(vu, qw, 2) == z && dataFloat(vu, qw, 3) == w;
 }
-
-#if GT4_VU1_INTERPRETER   // the VU1 interpreter's instructions
 void testArithmetic() {
     using namespace vu;
     Vu1 unit;
@@ -214,10 +219,12 @@ void testXgkick() {
 
 #endif  // GT4_VU1_INTERPRETER
 
+// A qword of VIF1's batch buffers (buffer 0 starts at BASE, buffer 1 at BASE + OFFSET).
+uint32_t bufferWord(const gt4::ps2::Vif1& v, uint32_t buffer, uint32_t qw, uint32_t c) { return v.buffers[buffer].words[qw][c]; }
+
 void testVifUnpack() {
     using namespace vif;
-    Vu1 unit;
-    gt4::ps2::Vif1 v(unit);
+    gt4::ps2::Vif1 v;
     Stream s;
     // V4-32 at qword 0.
     const uint32_t v4[4] = {1, 2, 3, 4};
@@ -241,10 +248,10 @@ void testVifUnpack() {
     s.add(STMOD(0));
     const uint32_t col[4] = {7, 8, 9, 10};
     s.add(STCOL()).add(col, 16).add(STMASK()).add(0u | (1u << 2) | (2u << 4) | (3u << 6));   // x data, y row, z col, w protect
-    std::memset(unit.data + 6 * 16, 0xEE, 16);
+    std::memset(v.buffers[0].words[6], 0xEE, 16);
     s.add(UNPACK(3, 0, 1, 6, true)).add(v4b, 16);
     v.feed(s.bytes(), s.size());
-    auto word = [&](uint32_t qw, uint32_t c) { return dataWord(unit, qw, c); };
+    auto word = [&](uint32_t qw, uint32_t c) { return bufferWord(v, 0, qw, c); };
     expect(word(0, 0) == 1 && word(0, 3) == 4, "UNPACK V4-32");
     expect(word(1, 0) == 5 && word(1, 2) == 7, "UNPACK V3-32");
     expect(word(2, 0) == 0xFFFFFFFEu && word(2, 1) == 300 && word(2, 2) == 0xFFFFFFFEu && word(2, 3) == 300, "UNPACK V2-16 signed, x y x y");
@@ -255,38 +262,93 @@ void testVifUnpack() {
 
     // Skipping write (CL 2 > WL 1): every other qword; filling write (CL 1 < WL 2): the second of each
     // pair repeats the next element without consuming it.
-    Vu1 skipUnit;
-    gt4::ps2::Vif1 skip(skipUnit);
+    gt4::ps2::Vif1 skip;
     Stream k;
     const uint32_t two[8] = {1, 1, 1, 1, 2, 2, 2, 2};
     k.add(STCYCL(2, 1)).add(UNPACK(3, 0, 2, 0)).add(two, 32);
     k.add(STCYCL(1, 2)).add(UNPACK(3, 0, 4, 10)).add(two, 32);
     skip.feed(k.bytes(), k.size());
-    expect(dataWord(skipUnit, 0, 0) == 1 && dataWord(skipUnit, 1, 0) == 0 && dataWord(skipUnit, 2, 0) == 2, "skipping write");
-    expect(dataWord(skipUnit, 10, 0) == 1 && dataWord(skipUnit, 12, 0) == 2, "filling write consumes one element per cycle block");
+    expect(bufferWord(skip, 0, 0, 0) == 1 && bufferWord(skip, 0, 1, 0) == 0 && bufferWord(skip, 0, 2, 0) == 2, "skipping write");
+    expect(bufferWord(skip, 0, 10, 0) == 1 && bufferWord(skip, 0, 12, 0) == 2, "filling write consumes one element per cycle block");
 
     // Double buffering: FLG adds TOPS, which flips between BASE and BASE + OFFSET at each MSCAL.
-    Vu1 dbUnit;
-    gt4::ps2::Vif1 db(dbUnit);
-    vu::Program endOnly;
-    endOnly.end();
+    gt4::ps2::Vif1 db;
+    std::vector<uint32_t> tops;
+    db.onBatch = [&](const gt4::ps2::Batch3d& b) { tops.push_back(b.top); };
     Stream d;
-    d.add(BASE(100)).add(OFFSET(50)).mpg(endOnly, 0);
+    d.add(BASE(100)).add(OFFSET(50));
     d.add(UNPACK(3, 0, 1, 0, false, false, true)).add(v4, 16).add(MSCAL(0));
     d.add(UNPACK(3, 0, 1, 0, false, false, true)).add(v4b, 16).add(MSCAL(0));
     db.feed(d.bytes(), d.size());
-    expect(dataWord(dbUnit, 100, 0) == 1 && dataWord(dbUnit, 150, 0) == 1 && dataWord(dbUnit, 150, 1) == 1 &&
-           dataWord(dbUnit, 100, 3) == 4, "UNPACK FLG uses TOPS, flipped by MSCAL");
-    expect(dbUnit.top == 150, "XTOP sees the buffer of the last MSCAL");
+    expect(bufferWord(db, 0, 0, 0) == 1 && bufferWord(db, 1, 0, 0) == 1 && bufferWord(db, 1, 0, 1) == 1 &&
+           bufferWord(db, 0, 0, 3) == 4, "UNPACK FLG writes the current batch buffer, flipped by MSCAL");
+    expect(tops.size() == 2 && tops[0] == 100 && tops[1] == 150, "each MSCAL starts the batch of its buffer");
 
     // A command split across two feeds.
-    Vu1 splitUnit;
-    gt4::ps2::Vif1 split(splitUnit);
+    gt4::ps2::Vif1 split;
     Stream sp;
     sp.add(UNPACK(3, 0, 1, 3)).add(v4, 16);
     split.feed(sp.bytes(), 8);
     split.feed(sp.bytes() + 8, sp.size() - 8);
-    expect(dataWord(splitUnit, 3, 0) == 1 && dataWord(splitUnit, 3, 3) == 4, "UNPACK split across records");
+    expect(bufferWord(split, 0, 3, 0) == 1 && bufferWord(split, 0, 3, 3) == 4, "UNPACK split across records");
+}
+
+// GT4's strip renderer (entry 0x1B08: setup, GS state header, strip) on a hand-made batch: identity
+// transform, viewport offset 2048, one strip of three vertices.
+void testRenderers3d() {
+    gt4::ps2::BatchBuffer buffer;
+    auto put = [&](uint32_t q, float x, float y, float z, float w) {
+        const float v[4] = {x, y, z, w};
+        std::memcpy(buffer.words[q], v, 16);
+    };
+    auto putWords = [&](uint32_t q, uint32_t x, uint32_t y, uint32_t z, uint32_t w) {
+        const uint32_t v[4] = {x, y, z, w};
+        std::memcpy(buffer.words[q], v, 16);
+    };
+    const float xy[3][2] = {{100, 50}, {300, 50}, {100, 250}};
+    for (uint32_t k = 0; k < 3; ++k) {
+        put(k, xy[k][0], xy[k][1], 10, 1);
+        put(64 + k, 0.5f, 0.25f, 0, 0);
+        putWords(128 + k, 255, 0, 255, 128);
+    }
+    buffer.words[64][3] = 1;    // one strip
+    buffer.words[65][3] = 3;    // of three vertices (the distance from the first to the second-to-last, in qwords of output)
+    putWords(192, 3u | 0x8000u, (1u << 14) | (4u << 15) | (3u << 28), 0x412, 0);   // NLOOP 3, EOP, PRE, strip, ST RGBAQ XYZF2
+    for (uint32_t k = 0; k < 4; ++k) put(193 + k, k == 0, k == 1, k == 2, k == 3);  // the transform's columns
+    put(197, 1, 1, 1, 1);                                                          // scale
+    put(198, 2048, 2048, 0, 0);                                                    // offset
+    putWords(199, 0x7F7FFFFF, 0x7F7FFFFF, 0x7F7FFFFF, 0x7F7FFFFF);                 // no clamp
+    put(200, 1, 1, 1, 1);
+    putWords(217, 1u | 0x8000u, 1u << 28, 0xE, 0);   // the header: one A+D write
+    putWords(218, 0x12345, 0, 0x47, 0);               // TEST_1
+    struct Out final : gt4::ps2::PrimitiveSink {
+        std::vector<std::vector<uint8_t>> packets;
+        std::vector<gt4::ps2::GsVertex> vertices;
+        uint32_t prim = 0, runs = 0;
+        void packet(const uint8_t* gif, size_t bytes) override { packets.emplace_back(gif, gif + bytes); }
+        void primitives(const gt4::ps2::GsPrimitives& p) override {
+            ++runs;
+            prim = p.setPrim ? p.prim : ~0u;
+            vertices.assign(p.vertices, p.vertices + p.count);
+        }
+    } out;
+    gt4::ps2::Renderers3d renderers;
+    gt4::ps2::Batch3d batch;
+    batch.entry = 0x1B08 / 8;
+    batch.buffer = &buffer;
+    uint32_t continueAt = 0;
+    expect(renderers.run(batch, out, continueAt), "entry 0x1B08 is a renderer");
+    expect(out.packets.size() == 1 && out.packets[0].size() == 32 && out.packets[0][16] == 0x45, "the header packet goes first, whole");
+    expect(out.runs == 1 && out.prim == 4 && out.vertices.size() == 3, "one strip of three vertices with the tag's PRIM");
+    if (out.vertices.size() == 3) {
+        const auto& v = out.vertices;
+        expect(v[0].x == (100 + 2048) * 16 && v[0].y == (50 + 2048) * 16 && v[1].x == (300 + 2048) * 16 && v[2].y == (250 + 2048) * 16,
+               "window coordinates in 12.4");
+        expect(v[0].z == 10 && v[2].fog == 1, "Z and fog");
+        expect(v[0].adc && v[1].adc && !v[2].adc, "the first two vertices of a strip carry ADC");
+        expect(v[0].rgba == 0x80FF00FFu && v[2].s == 0.5f && v[2].t == 0.25f && v[2].q == 1.0f, "colour and STQ");
+    }
+    expect(continueAt == 0x2058 / 8, "MSCNT would go on after the strip renderer");
 }
 
 void testTransformMicroprogram() {
@@ -307,7 +369,7 @@ void testTransformMicroprogram() {
     expect(w[4] == 255 && w[5] == 0 && w[6] == 255 && w[7] == 0x80, "RGBAQ from the colour qword");
     expect(w[8] == (100 + 2048) * 16 && w[9] == (50 + 2048) * 16 && w[11] == 0, "vertex 0 transformed to 12.4 with the 2048 offset");
     expect(w[16] == (300 + 2048) * 16 && w[25] == (250 + 2048) * 16, "vertices 1 and 2");
-    expect(stream.vifStats().microprograms == 1 && stream.vifStats().runaways == 0, "one microprogram, ended normally");
+    expect(stream.vifStats().microprograms == 1, "one microprogram");
 }
 
 void testDirectAndRecords() {
@@ -447,8 +509,9 @@ int main() {
     testXgkick();
 #endif
     testVifUnpack();
+    testRenderers3d();
 #if GT4_VU1_INTERPRETER
-    testTransformMicroprogram();   // needs MSCAL to run the program
+    testTransformMicroprogram();   // a toy program: the interpreter runs it
 #endif
     testDirectAndRecords();
     testPath3Mask();

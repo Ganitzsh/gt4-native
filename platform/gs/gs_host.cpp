@@ -38,6 +38,13 @@ public:
     }
     void setEventSink(gsn::GsFrontend::EventSink sink) { native->setEventSink(std::move(sink)); }
     void gif(uint32_t path, const uint8_t* data, size_t bytes) override { native->gif(path, data, bytes); }
+    void primitives(const ps2::GsPrimitives& p) override {
+        if (p.setPrim) native->setPrim(p.prim);
+        for (size_t k = 0; k < p.count; ++k) {
+            const ps2::GsVertex& v = p.vertices[k];
+            native->vertex({v.s, v.t, v.q, v.rgba, v.x, v.y, v.z, v.fog, v.adc}, p.fog);
+        }
+    }
     void privileged(uint32_t offset, uint64_t value) override {
         // GT4_DISPFB=FBP[,FBW[,PSM]] (hex FBP): scan out that frame buffer instead (debugging: look at
         // an intermediate render target, e.g. the 3D before the post passes)

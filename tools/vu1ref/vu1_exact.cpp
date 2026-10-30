@@ -1,6 +1,6 @@
-// GT4's VU1 microprograms in C++ (see vu1_native.h). Addresses in comments are byte addresses in the
+// GT4's VU1 microprograms in C++ over the VU1 memory model, the test reference (see vu1_exact.h). Addresses in comments are byte addresses in the
 // micro image; "qword N" is TOP + N, the batch the VIF unpacked before MSCAL.
-#include "vu1_native.h"
+#include "vu1_exact.h"
 
 #include "vu_float.h"
 
@@ -326,7 +326,7 @@ void storeRecord(Batch& absolute, const ClipVertex& v) {
     storeLanes(absolute, v.address + 4u, v.minus, kXyz);
 }
 
-// Polygons whose clip records ran past qword 1023 (Vu1Native::Stats::clipperWraps).
+// Polygons whose clip records ran past qword 1023 (Vu1Exact::Stats::clipperWraps).
 uint64_t g_clipperWraps = 0;
 
 // Clips the triangle and writes its strip packet; kicks the packet before it (`pending`: the batch's state
@@ -955,7 +955,7 @@ void gridCounters(Batch& b) {
 
 }  // namespace
 
-bool Vu1Native::run(Vu1& vu, uint32_t pc) {
+bool Vu1Exact::run(Vu1& vu, uint32_t pc) {
     if (!imageKnown) {
         gt4Image = fnv(vu.micro, sizeof vu.micro) == kGt4Image;
         imageKnown = true;

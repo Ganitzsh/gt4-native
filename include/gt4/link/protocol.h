@@ -57,9 +57,11 @@ enum Gt4LinkRecordType {
  *   GT4_REC_GS_READ   after the GIF data that set TRXDIR = 1 (local -> host): the host replies GS_IMAGE
  *                     with the same id and qwc qwords of transfer data (zeros past the end of the area).
  *   GT4_REC_STATE     never on the link: the first record of a capture the host recorded from a later VBlank
- *                     (GT4_HOST_RECORD=PATH,FROM,COUNT). Version 1: VU1 memories and registers, VIF1
- *                     registers, the privileged and general GS registers last written, then GS memory
- *                     (4 MiB in address order); the replay restores them (stream.cpp).
+ *                     (GT4_HOST_RECORD=PATH,FROM,COUNT). Version 2: the uploaded VU1 program image, VIF1's
+ *                     two batch buffers, the 3D renderers' constants, VIF1 registers, the privileged and
+ *                     general GS registers last written, then GS memory (4 MiB in address order); version 1
+ *                     (until 2026-10-30) had VU1's memories and registers in place of the buffers and
+ *                     constants. The replay restores either (stream.cpp).
  *   GT4_REC_GS_EVENT  host -> game for SIGNAL / FINISH / LABEL written by any path (PATH1/2 included):
  *                     id = low 32 bits of the register value, value = the full 64-bit value.
  *   GT4_REC_PAD       26 bytes: u32 port, u32 connected, 18 bytes of libpad2 data; sent every host frame.

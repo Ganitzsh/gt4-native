@@ -1,9 +1,8 @@
 #pragma once
-// VU1: the vector unit's state (data memory, registers, TOP/ITOP, XGKICK to the GS sink), which GT4's
-// microprograms in C++ (vu1_native.cpp) work on; with the CMake option GT4_VU1_INTERPRETER (OFF by default,
-// development and test builds only) also a micro-mode interpreter, run(). GT4's 3D runs through VU1
-// microprograms the game uploads with VIF1 MPG; the interpreter ran them until they were written in C++, and
-// remains the reference those are checked against. Written for this project from the public VU
+// Test reference (GT4_VU1_INTERPRETER builds only, never in the default host): VU1's state (data memory,
+// registers, TOP/ITOP, XGKICK to the GS sink) and a micro-mode interpreter, run(). GT4's 3D ran through VU1
+// microprograms the game uploads with VIF1 MPG; the interpreter ran them until they were written in C++
+// (vu1_exact.cpp, then platform/gs/renderers3d.cpp), and remains the reference those are checked against. Written for this project from the public VU
 // documentation; behavioural details (flag and Q/P pipeline latencies, the integer-branch read of the
 // previous value, the result of a VF write by both slots) follow PCSX2's interpreter (GPL-3.0-or-later),
 // which was consulted as a reference. See docs/GS_BACKEND.md.
@@ -17,6 +16,8 @@
 // flag, underflow gives a signed zero with U), arithmetic rounds toward zero (computed in double
 // precision, then truncated; independent of the host FPU mode). XGKICK sends the GIF
 // packet at once (PATH1). The program ends after the instruction following the one with the E bit.
+#include "vif1.h"   // GifSink
+
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -25,13 +26,6 @@
 #include <functional>
 
 namespace gt4::ps2 {
-
-// Where VU1 (XGKICK, PATH1) and VIF1 (DIRECT, PATH2) send GIF data.
-class GifSink {
-public:
-    virtual ~GifSink() = default;
-    virtual void gif(uint32_t path, const uint8_t* data, size_t bytes) = 0;
-};
 
 union VuVector {
     float f[4];
@@ -72,7 +66,7 @@ public:
     bool runaway() const { return stoppedRunaway; }
     uint32_t pc() const { return tpc; }   // where MSCNT continues
     void setPc(uint32_t pc) { tpc = pc & 0x7FF; }   // a saved state restored (GraphicsStream::restoreState)
-    // XGKICK: sends the GIF packet at `qword` (PATH1); used by the native microprograms (vu1_native.cpp).
+    // XGKICK: sends the GIF packet at `qword` (PATH1); used by the native microprograms (vu1_exact.cpp).
     void kick(uint32_t qword) { xgkick(qword); }
 
     // VIF1 double-buffer pointers (XTOP / XITOP read them).
@@ -128,7 +122,7 @@ private:
     uint32_t* mem(uint32_t qword) { return reinterpret_cast<uint32_t*>(data + (qword & 0x3FF) * 16); }
     friend struct VuExec;
     friend struct Vu1Ref;
-    friend class Vu1Native;
+    friend class Vu1Exact;
 };
 
 }  // namespace gt4::ps2

@@ -132,6 +132,17 @@ public:
 
     GsFrontend();
     void gif(uint32_t path, const uint8_t* data, size_t bytes);
+    // Primitives from GT4's 3D renderers (platform/gs/renderers3d.h), with no GIF packet in between: PRIM when
+    // the batch's tag sets it, then per vertex the values the ST, RGBAQ and XYZF2 / XYZ2 registers receive
+    // (XYZF3 / XYZ3 when `adc`: the vertex completes no triangle).
+    struct InputVertex {
+        float s = 0, t = 0, q = 1;
+        uint32_t rgba = 0;
+        uint32_t x = 0, y = 0, z = 0, fog = 0;   // x, y in 12.4; z 24 bits with fog, 32 without
+        bool adc = false;
+    };
+    void setPrim(uint32_t prim);
+    void vertex(const InputVertex& v, bool withFog);
     void privileged(uint32_t offset, uint64_t value);
     // Ends the frame: `out` receives it (swapped, so its buffers are reused).
     void vsync(uint64_t vblank, FrameList& out);

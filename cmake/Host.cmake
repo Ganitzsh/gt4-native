@@ -157,22 +157,23 @@ else()
 endif()
 
 # PS2 graphics (docs/GS_BACKEND.md). gt4_ps2gfx is plain C++ (no GPU): the game link and capture
-# replay, the graphics stream, and VIF1 + VU1. gt4_gs adds the host that runs them on a worker thread into
-# the native renderer's front end (gt4_gsnative); the renderer's back end is part of gt4_host.
-# GT4's VU1 microprograms run natively (platform/gs/vu1_native.cpp), with no PS2 code in the host
-# (docs/NATIVE_ONLY.md). GT4_VU1_INTERPRETER builds the VU1 interpreters in, as development tools only:
-# GT4_VU1=interp|ref, GT4_VU1_DIFF, GT4_VU1_TRACE, GT4_VU1_INVENTORY and the tests that check the native
-# programs against them.
-option(GT4_VU1_INTERPRETER "Build the VU1 interpreters in (development and test tools)" OFF)
+# replay, the graphics stream, VIF1 decoding into batches and GT4's 3D renderers (platform/gs/renderers3d.cpp:
+# native code giving primitives to the front end; no VU1 model, docs/NATIVE_ONLY.md). gt4_gs adds the host that
+# runs them on a worker thread into the native renderer's front end (gt4_gsnative); the renderer's back end is
+# part of gt4_host. GT4_VU1_INTERPRETER adds the VU1 reference (tools/vu1ref: a VU1 memory model, the
+# interpreters and the bit-exact port of GT4's programs), development and test tools only: GT4_VU1=exact|interp|ref,
+# GT4_VU1_DIFF, GT4_VU1_INVENTORY and the tests that check the native renderers against them.
+option(GT4_VU1_INTERPRETER "Build the VU1 reference tools in (development and test builds)" OFF)
 find_package(Threads REQUIRED)
 add_library(gt4_ps2gfx STATIC
-    platform/gs/vu1.cpp
-    platform/gs/vu1_native.cpp
     platform/gs/vif1.cpp
+    platform/gs/renderers3d.cpp
     platform/gs/stream.cpp
     platform/gs/link_host.cpp)
 if(GT4_VU1_INTERPRETER)
-  target_sources(gt4_ps2gfx PRIVATE platform/gs/vu1_ref.cpp platform/gs/vu1_inventory.cpp)
+  target_sources(gt4_ps2gfx PRIVATE tools/vu1ref/vu1.cpp tools/vu1ref/vu1_exact.cpp tools/vu1ref/vu1_ref.cpp
+      tools/vu1ref/vu1_inventory.cpp tools/vu1ref/vu1_reference.cpp)
+  target_include_directories(gt4_ps2gfx PUBLIC tools/vu1ref)
 endif()
 target_include_directories(gt4_ps2gfx PUBLIC platform/gs)
 target_link_libraries(gt4_ps2gfx PUBLIC gt4_guest_abi Threads::Threads)
@@ -256,12 +257,12 @@ if(BUILD_TESTING)
   endif()
   add_test(NAME host_settings COMMAND gt4_host_settings_test)
 
-  # PS2 graphics on the CPU: VU1, VIF1, stream records, replay, pad (no GPU needed).
+  # PS2 graphics on the CPU: VIF1, GT4's 3D renderers, stream records, replay, pad (no GPU needed).
   add_executable(gt4_ps2gfx_test tests/ps2gfx.cpp)
   target_link_libraries(gt4_ps2gfx_test PRIVATE gt4_ps2gfx)
   add_test(NAME ps2gfx COMMAND gt4_ps2gfx_test)
-  # The native VU1 programs against the reference interpreter on random batches (GT4_VU1_INTERPRETER builds);
-  # needs GT4's micro image (game data, GT4_VU1_IMAGE=path), skipped (exit code 77) without it.
+  # The native 3D renderers and the bit-exact port against the reference interpreter on random batches
+  # (GT4_VU1_INTERPRETER builds); needs GT4's micro image (game data, GT4_VU1_IMAGE=path), skipped (77) without.
   set(gt4_vu1_tests)
   if(GT4_VU1_INTERPRETER)
     add_executable(gt4_vu1_native_fuzz tests/vu1_native_fuzz.cpp)

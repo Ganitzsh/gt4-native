@@ -34,7 +34,8 @@ mostly the field lines, which the native renderer does not jitter.
   `GT4_VRAM_DUMP=FRAME:PACKET,...|end` (the memory model at a packet) and `GT4_GS_READ_DUMP=DIR` (what each GS ->
   host read returned). A screen deep in the game is best
   studied offline: `GT4_HOST_RECORD=PATH,FROM,COUNT` (FROM = `trigger:FILE`: when FILE appears) records what the host receives over those VBlanks, with
-  the VU1, VIF1 and GS state at FROM first, and `gt4_host --replay PATH --frames N` then plays it at either
+  the VIF1 batch buffers, the 3D renderers' constants and the GS state at FROM first (captures from before
+  2026-10-30 hold VU1's memory and registers instead, and still replay), and `gt4_host --replay PATH --frames N` then plays it at either
   resolution (`--preset original` / `high`), the same frames every time.
 
 The menus' 2D keeps a centred 4:3 area in the game's 16:9 mode (game-side, gt4-native-game
@@ -67,8 +68,9 @@ game and serves GS -> host reads, drawn pixels through the back end: docs/GS_BAC
   T4HH, Z32/24/16/16S) from their page/block/column layouts; host-to-local, local-to-local and local-to-host
   transfers; texture decoding (CLUT CSM1/CSM2 and CSA, TEXA for 16 and 24-bit alpha). Checked against
   paraLLEl-GS's memory after the same transfers.
-- `gs_frontend`: the GIF parser (PACKED, REGLIST, IMAGE), both drawing contexts, the vertex queue (ADC,
-  strips and fans, sprites) and the register state, turned into a frame list: draws with their state,
+- `gs_frontend`: the GIF parser (PACKED, REGLIST, IMAGE), the 3D renderers' primitives (`setPrim`, `vertex`:
+  GT4's VU1 programs as native code give vertices directly, docs/VU1_PROGRAMS.md), both drawing contexts, the
+  vertex queue (ADC, strips and fans, sprites) and the register state, turned into a frame list: draws with their state,
   uploads, copies, and the display registers at VSYNC.
 
 Back end (Vulkan, recorded by the display pipeline as a scene source):

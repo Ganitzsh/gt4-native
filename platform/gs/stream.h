@@ -1,14 +1,16 @@
 #pragma once
 // The game -> host graphics stream (include/gt4/link/protocol.h): record framing and dispatch to the GS
-// back end, with VIF1 (and VU1, GT4_VU1_INTERPRETER) in between. Used both for the live link and for
-// --replay captures, which are the same records concatenated. No GPU code here.
+// back end, with VIF1 and GT4's 3D renderers in between. Used both for the live link and for --replay
+// captures, which are the same records concatenated. No GPU code here.
+#include "gs_primitives.h"
 #include "gt4/link/protocol.h"
+#include "renderers3d.h"
 #include "vif1.h"
-#include "vu1.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -17,6 +19,8 @@ namespace gt4::ps2 {
 // What the stream drives: the GS (implemented by the host over gs::Backend; tests use a recorder).
 class GsTarget : public GifSink {
 public:
+    // Primitives from GT4's 3D renderers (VU1's path on the PS2), in order with the GIF packets.
+    virtual void primitives(const GsPrimitives& p) { (void)p; }
     virtual void privileged(uint32_t offset, uint64_t value) = 0;
     // A VBlank: present the displayed frame. `field` is CSR.FIELD, `count` the game's VBlank counter.
     virtual void vsync(uint32_t field, uint32_t count) = 0;
@@ -38,6 +42,7 @@ using AudioWriter = std::function<void(uint32_t stream, uint32_t rate, const int
 class GraphicsStream {
 public:
     explicit GraphicsStream(GsTarget& target);
+    ~GraphicsStream();
     void setHostWriter(HostRecordWriter writer) { hostWriter = std::move(writer); }
     void setAudioWriter(AudioWriter writer) { audioWriter = std::move(writer); }
 
@@ -48,32 +53,47 @@ public:
     struct Stats {
         uint64_t records = 0, gifPackets[4] = {}, gifBytes = 0, vif1Bytes = 0, vif0Records = 0, privWrites = 0;
         uint64_t vsyncs = 0, reads = 0, logs = 0, audio = 0, unknown = 0;
+        uint64_t primitiveRuns = 0, primitiveVertices = 0;   // from the 3D renderers
+        uint64_t unknownPrograms = 0;   // batches started in a program image that is not GT4's (nothing drawn)
         uint64_t path3Held = 0, path3ForcedAtVsync = 0;   // PATH3 records held by MSKPATH3
     };
     const Stats& stats() const { return counters; }
     const Vif1::Stats& vifStats() const { return vif1.stats; }
+    const Renderers3d::Stats& rendererStats() const { return renderers.stats; }
     std::string describe() const;
-    Vu1& vu() { return unit; }
     Vif1& vif() { return vif1; }
+    Renderers3d& renderers3d() { return renderers; }
 
     // A capture taken mid-run (GT4_HOST_RECORD from a later VBlank) starts with a GT4_REC_STATE record:
-    // VU1 and VIF1, the GS registers last written and GS memory (`vram`, 4 MiB in address order), so that its
-    // replay starts where the live run was rather than with no microprograms. Taken at a VBlank.
+    // VIF1 and its batch buffers, the 3D renderers' constants, the GS registers last written and GS memory
+    // (`vram`, 4 MiB in address order), so that its replay starts where the live run was. Taken at a VBlank.
+    // Version 1 states (VU1 memories and registers, before 2026-10-30) are read too.
     std::vector<uint8_t> saveState(const uint8_t* vram) const;
     void restoreState(const uint8_t* payload, size_t size);
 
 private:
-    // PATH1 (XGKICK) and PATH2 (DIRECT) packets go to the GS through this, which counts them.
+    // PATH2 (DIRECT) packets go to the GS through this, which counts them.
     struct CountingSink final : GifSink {
         GraphicsStream* owner = nullptr;
         void gif(uint32_t path, const uint8_t* data, size_t bytes) override {
             ++owner->counters.gifPackets[path & 3];
-            if (path == 1 && owner->path1Stats) owner->countColours(data, bytes);
             owner->sendGif(path, data, bytes);
         }
     };
+    // The 3D renderers' output: the game's packets they pass on (as PATH1, VU1's path) and primitives.
+    struct RendererSink final : PrimitiveSink {
+        GraphicsStream* owner = nullptr;
+        void packet(const uint8_t* gif, size_t bytes) override {
+            ++owner->counters.gifPackets[1];
+            owner->sendGif(1, gif, bytes);
+        }
+        void primitives(const GsPrimitives& p) override { owner->sendPrimitives(p); }
+    };
+    void runBatch(const Batch3d& batch);
+    void sendPrimitives(const GsPrimitives& p);
     // Every GIF packet goes to the GS through this (GT4_VRAM_DUMP counts them).
     void sendGif(uint32_t path, const uint8_t* data, size_t bytes);
+    void countPacket();
     // GT4_VRAM_DUMP=FRAME:N1,N2,...: write GS memory to vram_FRAME_N.bin before GIF packet N of that
     // frame (packets counted from 0 after the previous VSYNC; "end" = at the VSYNC). GT4_GIF_LOG=FRAME
     // prints that frame's packets (index, path, size, first registers).
@@ -81,17 +101,16 @@ private:
     std::vector<uint32_t> dumpAt;
     bool dumpAtEnd = false;
     void dumpVram(const char* tag);
-    // GT4_PATH1_STATS: the most frequent vertex colours (RGBAQ) of VU1's PATH1 packets, per frame
-    bool path1Stats = false;
-    std::vector<std::pair<uint32_t, uint32_t>> colourCounts;   // colour, count
-    std::vector<std::pair<uint32_t, uint32_t>> texCounts;      // TEX0 psm/cpsm/tfx/tcc, count
-    std::vector<std::pair<uint32_t, std::pair<uint32_t, uint32_t>>> programCounts;  // program: black, all
-    void countColours(const uint8_t* data, size_t bytes);
-    void reportColours(uint32_t frame);
     GsTarget& gs;
     CountingSink sink;
-    Vu1 unit;
+    RendererSink rendererSink;
     Vif1 vif1;
+    Renderers3d renderers;
+#if GT4_VU1_INTERPRETER
+    // The reference tools (tools/vu1ref): GT4_VU1=ref|interp draws with them, GT4_VU1_DIFF=1 compares.
+    struct Reference;
+    std::unique_ptr<Reference> reference;
+#endif
     HostRecordWriter hostWriter;
     AudioWriter audioWriter;
     Stats counters;

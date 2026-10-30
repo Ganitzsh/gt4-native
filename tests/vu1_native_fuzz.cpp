@@ -1,18 +1,27 @@
-// The native VU1 microprograms (platform/gs/vu1_native.cpp) against the reference interpreter
-// (vu1_ref.cpp), on random batches: every entry of GT4's table, every lighting chain ITOP can select,
-// both VIF buffers, and the two screen-grid programs. The PATH1 packets and the data memory below the
-// clipper's scratch area (qword 870 x, y included) must be identical.
+// GT4's VU1 programs in C++ against the reference interpreter (vu1_ref.cpp), on random batches: every entry
+// of GT4's table, every lighting chain ITOP can select, both VIF buffers, and the two screen-grid programs.
+// - The bit-exact port (tools/vu1ref/vu1_exact.cpp): the PATH1 packets and the data memory below the
+//   clipper's scratch area (qword 870 x, y included) must be identical.
+// - The host's renderers (platform/gs/renderers3d.cpp, plain floats, primitives): compared as GS register
+//   writes and vertices (Vu1Reference::classify), colours left out (random colour words overflow when lit,
+//   and the GS keeps the low byte, which rounding decides). Random geometry puts many triangles on knife
+//   edges: zero area (a back-face test on its sign), and behind the eye, where a point the clipper puts on
+//   one plane (z = -w with w < 0) lies on another too (z = |w|) and rounding decides whether it is clipped
+//   again; so this reports the differences, and fails past 2% of the drawn vertices beyond rounding.
 //
 // Needs GT4's micro image, which is game data: GT4_VU1_IMAGE=path (the images/*.bin a GT4_VU1_INVENTORY
 // run writes). Without it the test is skipped (exit code 77). Optional: GT4_VU1_FUZZ_ROUNDS (default 60).
+#include "renderers3d.h"
 #include "vu1.h"
-#include "vu1_native.h"
+#include "vu1_exact.h"
 #include "vu1_ref.h"
+#include "vu1_reference.h"
 
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <random>
 #include <string>
@@ -20,10 +29,20 @@
 
 using gt4::ps2::GifSink;
 using gt4::ps2::Vu1;
-using gt4::ps2::Vu1Native;
+using gt4::ps2::Vu1Exact;
 using gt4::ps2::Vu1Ref;
 
 namespace {
+
+// The host renderers' output as events.
+struct Events final : gt4::ps2::PrimitiveSink {
+    std::vector<gt4::ps2::Vu1Reference::Event> events;
+    void packet(const uint8_t* gif, size_t bytes) override { gt4::ps2::Vu1Reference::decodeGif(gif, bytes, events); }
+    void primitives(const gt4::ps2::GsPrimitives& p) override {
+        if (p.setPrim) events.push_back({false, 0x00, p.prim, {}, false});
+        for (size_t k = 0; k < p.count; ++k) events.push_back({true, 0, 0, p.vertices[k], p.fog});
+    }
+};
 
 struct Collect final : GifSink {
     std::vector<uint8_t> bytes;
@@ -195,9 +214,11 @@ int main() {
     const int rounds = std::getenv("GT4_VU1_FUZZ_ROUNDS") ? std::atoi(std::getenv("GT4_VU1_FUZZ_ROUNDS")) : 60;
     auto native = std::make_unique<Vu1>();
     auto ref = std::make_unique<Vu1Ref>();
-    Vu1Native programs;
+    Vu1Exact programs;
     Rng r(12345);
     uint64_t runs = 0, notNative = 0, failures = 0, wrapped = 0, wrappedDiffer = 0;
+    std::map<std::string, gt4::ps2::Vu1Reference::Count> hostCounts;
+    auto buffer = std::make_unique<gt4::ps2::BatchBuffer>();
     auto check = [&](uint32_t pc, uint32_t top, uint32_t itop, const char* what) {
         vu->top = top;
         vu->itop = itop;
@@ -218,6 +239,42 @@ int main() {
         ref->load(*vu);
         ref->sink = nullptr;
         ref->run(pc);
+        {   // the host's renderers on the same batch and constants
+            for (uint32_t q = 0; q < gt4::ps2::BatchBuffer::kQwords; ++q) std::memcpy(buffer->words[q], vu->data + ((top + q) & 1023) * 16, 16);
+            gt4::ps2::Renderers3d renderers;
+            uint32_t vf[32][4];
+            std::memcpy(vf, vu->vf, sizeof vf);
+            renderers.constants = gt4::ps2::constantsFromRegisters(vf);
+            const gt4::ps2::Batch3d batch{pc, buffer.get(), itop, top};
+            Events host;
+            uint32_t continueAt = 0;
+            renderers.run(batch, host, continueAt);
+            std::vector<gt4::ps2::Vu1Reference::Event> reference;
+            gt4::ps2::Vu1Reference::decodeGif(ref->kicks.data(), ref->kicks.size(), reference);
+            size_t first = 0;
+            char key[64];
+            std::snprintf(key, sizeof key, "%s, ITOP %04X", what, itop * 8);
+            const auto verdict =
+                gt4::ps2::Vu1Reference::classify(reference, host.events, hostCounts[key], first, std::getenv("GT4_VU1_FUZZ_SHOW") ? key : nullptr, false);
+            // GT4_VU1_FUZZ_DUMP=N: every event of the first N runs beyond rounding.
+            static int dumps = std::getenv("GT4_VU1_FUZZ_DUMP") ? std::atoi(std::getenv("GT4_VU1_FUZZ_DUMP")) : 0;
+            static const char* dumpOnly = std::getenv("GT4_VU1_FUZZ_DUMP_ONLY");   // a part of the key, e.g. "ITOP 10A8"
+            if (verdict == gt4::ps2::Vu1Reference::Verdict::Differ && dumps > 0 && (!dumpOnly || std::strstr(key, dumpOnly))) {
+                --dumps;
+                std::printf("DUMP %s entry %04X top %u: %zu reference events, %zu host, first difference %zu\n", key, pc * 8, top, reference.size(),
+                            host.events.size(), first);
+                for (size_t k = 0; k < std::max(reference.size(), host.events.size()); ++k)
+                    for (const auto* list : {&reference, &host.events}) {
+                        if (k >= list->size()) continue;
+                        const auto& e = (*list)[k];
+                        if (e.vertex)
+                            std::printf("  %s %3zu x %5u y %5u z %8u f %3u adc %d rgba %08X stq %g %g %g\n", list == &reference ? "ref " : "host", k, e.v.x,
+                                        e.v.y, e.v.z, e.v.fog, e.v.adc, e.v.rgba, e.v.s, e.v.t, e.v.q);
+                        else
+                            std::printf("  %s %3zu reg %02X = %016llX\n", list == &reference ? "ref " : "host", k, e.reg, (unsigned long long)e.value);
+                    }
+            }
+        }
         const bool kicks = nativeKicks.bytes != ref->kicks;
         const bool data = std::memcmp(native->data, ref->data, 870 * 16 + 8) != 0;
         if (wraps) {
@@ -287,5 +344,20 @@ int main() {
                 "%llu of them differ from the reference\n",
                 (unsigned long long)runs, (unsigned long long)failures, (unsigned long long)notNative, (unsigned long long)wrapped,
                 (unsigned long long)wrappedDiffer);
-    return failures ? 1 : 0;
+    uint64_t hostVertices = 0, hostFar = 0;
+    for (const auto& [what, c] : hostCounts) {
+        std::printf("vu1_native_fuzz: host renderers, %s: %llu runs, %llu identical, %llu within rounding, %llu beyond; %llu vertices, "
+                    "%llu beyond rounding (%llu drawn), %llu wrapped\n",
+                    what.c_str(), (unsigned long long)c.runs, (unsigned long long)c.identical, (unsigned long long)c.close,
+                    (unsigned long long)c.differ, (unsigned long long)c.vertices, (unsigned long long)c.far, (unsigned long long)c.farDrawn,
+                    (unsigned long long)c.wraps);
+        if (c.differ) std::printf("    max |dxy| %u, |dz| %u, colour %u, fog %u, ST %.2g\n", c.maxXy, c.maxZ, c.maxColour, c.maxFog, c.maxSt);
+        hostVertices += c.vertices;
+        hostFar += c.farDrawn;
+    }
+    std::printf("vu1_native_fuzz: host renderers: %llu of %llu vertices drawn beyond rounding\n", (unsigned long long)hostFar,
+                (unsigned long long)hostVertices);
+    const bool hostFailed = hostFar * 50 > hostVertices;
+    if (hostFailed) std::fprintf(stderr, "FAILED: the host renderers differ beyond rounding for more than 2%% of the vertices\n");
+    return failures || hostFailed ? 1 : 0;
 }

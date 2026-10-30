@@ -1,7 +1,7 @@
 #pragma once
 // The VU's float arithmetic, exactly: no denormals, infinities or NaNs (inputs flush to zero, results
 // saturate to +-max), products and sums truncated toward zero. Shared by the reference interpreter
-// (vu1_ref.cpp) and the native microprograms (vu1_native.cpp), which compute with VuF so that they give
+// (vu1_ref.cpp) and the native microprograms (vu1_exact.cpp), which compute with VuF so that they give
 // the interpreter's results bit for bit.
 //
 // The integer algorithms come from ps2-web-recomp (include/ps2/fpu.hpp), MIT licence, Copyright (c) 2026
