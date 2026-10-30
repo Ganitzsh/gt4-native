@@ -14,7 +14,7 @@ code with eeref.
 |---|---|---|
 | 1. VU0 microprograms | done 2026-10-29: C++ (`runtime/native/vu0_programs.cpp`), no interpreter in the game | 14 entry points in one 0xA80-byte image, called from 19 functions |
 | 2. VU1 fallback | done 2026-10-29: no interpreter in the host (`GT4_VU1_INTERPRETER` OFF by default, a development option); the clipper's record overflow wraps natively | the C++ programs cover the 1,590 instructions GT4's image runs |
-| 3. PS2 instructions in game code | `tools/game_toolchain/asm_translate.py` turns VU0 macro, MMI and multi-instruction asm into C over an emulated register file (`compat/game/gt4_asm.h`) | 157 sources: 55 matched, 6 game_src copies, 96 provisional drafts (single FPU instructions with a C meaning, `sqrt.s`, `min.s`..., are plain C already) |
+| 3. PS2 instructions in game code | done 2026-10-30: no VU0 macro, MMI or system instruction is left in the linked game code; every such function has a plain C++ copy in `game_src/` (VU0 state as named shared vectors, `gt4_vec.h`; critical sections, $gp and timers through `gt4_interrupts_*`, `gt4_get_gp`, `gt4_cycle_count`), or a runtime replacement | 281 sources keep single FPU instructions (`sqrt.s`, `min.s`, `max.s`, `rsqrt.s`, `abs.s`), which game_cc writes as C expressions |
 | 4. Provisional drafts | C++ that compiles to nearly the original, not proven | 525 functions (the eeref audit of the ones a GT mode session runs: all agree or understood) |
 | 5. Hardware data paths | the game builds DMA chains, VIF and GIF packets; `runtime/gs.cpp` walks them, `gt4_host` decodes VIF1, runs the VU1 programs and renders GS primitives (texture formats, CLUTs, blending, Z as the GS defines them) | the graphics library (pgl, 0x494578..) and the host's GS layer |
 | 6. EE platform | the EE kernel (threads, semaphores, interrupts, VBlank), SIF and IOP services as C++ implementations of the PS2 APIs; guest RAM identity-mapped at PS2 addresses; the gcc 2.9 ABI | runtime/ |
@@ -23,7 +23,15 @@ Order: 1 and 2 first (bounded, mechanical to verify), then 3 (function by functi
 alongside (matching or proving drafts), then 5 (the game's graphics library drawing through a native
 renderer interface instead of GS packets), then 6.
 
-## Layer 3: PS2 instructions in game code (next)
+## Layer 3: PS2 instructions in game code (done)
+
+State 2026-10-30: every linked function with such asm rewritten in `game_src/` (VU0 macro code, MMI packing and saturation, PLZCW, EE
+FPU library code, pref/sync/cache, ei/di/Status critical sections, $gp), each checked with `GT4_DIFFTEST`
+(`tools/eeref/difftest_*.cpp`, 78 tests, 300 random cases each) and the ones a race reaches by recorded calls
+replayed on the original code (`tools/eeref/replay.py`, `known.txt` for the understood differences). The
+register file of `compat/game/gt4_asm.h` is no longer used by linked game code.
+
+The history of this layer:
 
 The game keeps state in VU0's registers across functions, so these functions are rewritten in groups that share a
 register, and the register becomes a named piece of C++ state once all of its users are rewritten.

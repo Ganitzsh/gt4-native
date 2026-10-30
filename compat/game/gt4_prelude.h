@@ -58,9 +58,30 @@ unsigned int __gt4_ee_mfc0 (int reg);    /* mfc0 rt, $reg (Status = 12, TagLo = 
 void *__gt4_ee_get_gp (void);            /* the module's $gp (GetGp) */
 void __gt4_ee_set_gp (void *gp);         /* SetGp */
 void __gt4_ee_break (int code);          /* break: the debugger trap */
+/* The same, as plain C for native sources (game_src/) written without asm (runtime/eeops.cpp):
+ * - gt4_interrupts_enabled: Status.EIE as game code reads it (mfc0 $12 & 0x10000): whether the
+ *   calling thread has interrupts enabled; also 1 inside an interrupt handler, where the EE masks
+ *   them with EXL instead (so "if enabled: disable, ..., enable" runs its di/ei there too);
+ * - gt4_in_interrupt: inside an interrupt handler (Status.EXL);
+ * - gt4_interrupts_disable / gt4_interrupts_enable: di / ei;
+ * - gt4_cycle_count: the Count register (mfc0 $9), the CPU clock (twice the bus clock);
+ * - gt4_get_gp / gt4_set_gp: the module's $gp ($28). */
+int gt4_interrupts_enabled (void);
+int gt4_in_interrupt (void);
+void gt4_interrupts_disable (void);
+void gt4_interrupts_enable (void);
+unsigned int gt4_cycle_count (void);
+void *gt4_get_gp (void);
+void gt4_set_gp (void *gp);
 #ifdef __cplusplus
 }
 #endif
+/* Status.IE (mfc0 $12 & 1), which libstream's lock, cache and thread helpers test to tell an interrupt
+ * handler (the EE kernel runs handlers with IE clear) and then take the kernel's i-variants. The
+ * translated mfc0 has always read IE = 1 (runtime/eeops.cpp), so natively they take their thread
+ * path everywhere; this keeps that. `!gt4_in_interrupt ()` would be the faithful value (a behaviour
+ * change: those functions would then run their interrupt-context path inside handlers). */
+static __inline__ int gt4_status_ie (void) { return 1; }
 
 /* min.s/max.s compare as the EE FPU does, as sign-magnitude integers: it has no NaN or infinity, so
  * 0x7FFFFFFF is its largest value, not a NaN. */

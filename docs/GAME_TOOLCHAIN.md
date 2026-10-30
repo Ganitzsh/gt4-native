@@ -223,7 +223,10 @@ assemblies; all with `--keep-s`); `census.jsonl` (`file, profile, lang, ok, stag
   become a compiler barrier (`asm volatile ("" ::: "memory")`); `li %0, IMM` a constant; the EE
   kernel's privileged instructions become calls into the native runtime, declared in
   `gt4_prelude.h`: `__gt4_ee_ei()`, `__gt4_ee_di()`, `__gt4_ee_mfc0(reg)`, `__gt4_ee_get_gp()`,
-  `__gt4_ee_set_gp(gp)`, `__gt4_ee_break(code)`.
+  `__gt4_ee_set_gp(gp)`, `__gt4_ee_break(code)`. Native sources written without asm (`game_src/`)
+  use their plain-C forms instead: `gt4_interrupts_enabled()` (Status.EIE as the game reads it),
+  `gt4_in_interrupt()`, `gt4_interrupts_disable()`/`gt4_interrupts_enable()`, `gt4_cycle_count()`
+  (Count), `gt4_get_gp()`/`gt4_set_gp()`, and `gt4_status_ie()` (Status.IE, always 1 natively).
 - **Every other asm statement** (several instructions, MMI, COP2/VU0 macro mode, explicit
   registers, asm in a single-line `#define`) goes to `tools/game_toolchain/asm_translate.py`, which
   turns it into C when it knows all its instructions (else it is left alone and the compile fails as

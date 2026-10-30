@@ -25,3 +25,5 @@
 004A5F00  sine and cosine of runtime/native's angle reduction (as 004A5EB0)
 00499948  screen coordinates 1/16 pixel apart: eeref runs program 0x700 in SSE arithmetic (round to nearest), the native code on the x87 (toward zero, as the VU)
 00499D00  as 00499948
+003E8790  arg0+0x48/0x4C hold addresses of its stack buffers (the original stack in eeref, the native stack natively)
+003E8438  packed screen coordinates 1/16 pixel apart on extreme random inputs (as 00499948); recorded race calls agree

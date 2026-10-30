@@ -1,10 +1,13 @@
 /* compiler: ee-gcc2.96-no-strict-aliasing */
-/* Native code for 003E3ED0 (unmatched; from the decomp's draft, corrected against the original): computes
+/* Native version of 003E3ED0 (unmatched; from the decomp's draft, corrected against the original): computes
  * and applies a collision impulse to a body at a contact point (relative velocity from the body's spin and
  * the other object's motion, normal from D_00621D28, inertia from the body table at D_006D6054), returning
- * the impulse.  The draft's default restitution was 0.05f (0x3D4CCCCD); the original loads 0x3D4CCCCC
- * (lui 0x3D4C / ori 0xCCCC at 0x3E40A8), one ulp lower. */
-typedef unsigned int u128 __attribute__((mode(TI)));
+ * the impulse. Leaves the transpose of the body's matrix (shared vectors 20..23) in 24..27, which func_003E2220
+ * uses to take the normal into body space.
+ * Native correction kept from the earlier native copy: the draft's default restitution was 0.05f (0x3D4CCCCD);
+ * the original loads 0x3D4CCCCC (lui 0x3D4C / ori 0xCCCC at 0x3E40A8), one ulp lower. */
+#include "gt4_vec.h"
+extern "C" void *memcpy(void *, const void *, unsigned int);
 struct V { float x,y,z,w; };
 struct Body { char pad[28]; float x,y,z; V angular; char pad2[12]; unsigned char index; char pad3[15]; float impulse; };
 extern char *D_006D6054;
@@ -14,6 +17,17 @@ extern "C" void func_003E21D8(void*,void*) throw();
 extern "C" void func_003E2220(void*,void*) throw();
 extern V D_00621D28[];
 extern "C" int func_003E43B8(Body*,int,V*);
+
+/* shared vectors 24..27 = the transpose of 20..23 (vmove, then qmfc2/pextlw/pextuw/pcpyld/pcpyud/qmtc2): every
+ * lane, copied as bits */
+static inline void transpose_20_to_24() {
+    unsigned int m[4][4], t[4][4];
+    memcpy(m, gt4_vec(20), 64);
+    for (int r = 0; r < 4; r++)
+        for (int k = 0; k < 4; k++) t[k][r] = m[r][k];
+    memcpy(gt4_vec(24), t, 64);
+}
+
 extern "C" float func_003E3ED0(Body *body,int index,int side,V *hit,char *other) {
  V a,b,c,d,e,f,g;
  float *q=(float*)(other+0x454);
@@ -30,27 +44,7 @@ extern "C" float func_003E3ED0(Body *body,int index,int side,V *hit,char *other)
  d.x+=body->x; d.y+=body->y; d.z+=body->z;
  e.x=d.x-c.x; e.y=d.y-c.y; e.z=d.z-c.z;
  V *normal=&D_00621D28[side*5+func_003E43B8(body,side,hit)];
- u128 r0,r1,r2,r3,t0,t1,t2,t3;
- __asm__ volatile("vmove.xyzw $vf24, $vf20");
- __asm__ volatile("vmove.xyzw $vf25, $vf21");
- __asm__ volatile("vmove.xyzw $vf26, $vf22");
- __asm__ volatile("vmove.xyzw $vf27, $vf23");
- __asm__ volatile("qmfc2.ni %0, $vf24":"=r"(r0));
- __asm__ volatile("qmfc2.ni %0, $vf25":"=r"(r1));
- __asm__ volatile("qmfc2.ni %0, $vf26":"=r"(r2));
- __asm__ volatile("qmfc2.ni %0, $vf27":"=r"(r3));
- __asm__ volatile("pextlw %0, %1, %2":"=r"(t0):"r"(r1),"r"(r0));
- __asm__ volatile("pextuw %0, %1, %2":"=r"(t1):"r"(r1),"r"(r0));
- __asm__ volatile("pextlw %0, %1, %2":"=r"(t2):"r"(r3),"r"(r2));
- __asm__ volatile("pextuw %0, %1, %2":"=r"(t3):"r"(r3),"r"(r2));
- __asm__ volatile("pcpyld %0, %1, %2":"=r"(r0):"r"(t2),"r"(t0));
- __asm__ volatile("pcpyud %0, %1, %2":"=r"(r1):"r"(t0),"r"(t2));
- __asm__ volatile("pcpyld %0, %1, %2":"=r"(r2):"r"(t3),"r"(t1));
- __asm__ volatile("pcpyud %0, %1, %2":"=r"(r3):"r"(t1),"r"(t3));
- __asm__ volatile("qmtc2.ni %0, $vf24"::"r"(r0));
- __asm__ volatile("qmtc2.ni %0, $vf25"::"r"(r1));
- __asm__ volatile("qmtc2.ni %0, $vf26"::"r"(r2));
- __asm__ volatile("qmtc2.ni %0, $vf27"::"r"(r3));
+ transpose_20_to_24();
  float bounce=0x1.999998p-5f; /* 0x3D4CCCCC */
  func_003E2220(&f,normal); func_003E2140(&g,point,&f);
  float ix=*(float*)(p+4)*1.5f;

@@ -36,6 +36,16 @@ unsigned int __gt4_ee_mfc0(int reg) {
 void *__gt4_ee_get_gp(void) { return t_gp; }
 void __gt4_ee_set_gp(void *gp) { t_gp = gp; }
 
+// The same as plain C, for native sources (game_src/) written without asm (compat/game/gt4_prelude.h).
+// gt4_interrupts_enabled is Status.EIE as __gt4_ee_mfc0(12) gives it: also set inside an interrupt handler.
+int gt4_interrupts_enabled(void) { return kernel_in_interrupt() || kernel_interrupts_enabled(); }
+int gt4_in_interrupt(void) { return kernel_in_interrupt(); }
+void gt4_interrupts_disable(void) { kernel_di(); }
+void gt4_interrupts_enable(void) { kernel_ei(); }
+unsigned int gt4_cycle_count(void) { return static_cast<unsigned int>(kernel_bus_cycles() * 2); }
+void *gt4_get_gp(void) { return t_gp; }
+void gt4_set_gp(void *gp) { t_gp = gp; }
+
 void __gt4_ee_break(int code) { fatal("game code executed a break instruction (code %d)", code); }
 
 // mtc0 (tools/game_toolchain/asm_translate.py): the performance counter control (25), Wired (6),
