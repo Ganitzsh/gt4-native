@@ -46,6 +46,12 @@ void gt4_gfx_batch_frame(void *context);
 void gt4_gfx_batch_write(void *context, unsigned int qword, const void *data, int count, unsigned int lanes);
 void gt4_gfx_batch_model(void *context, const void *source, int qwords, unsigned int mask);
 void gt4_gfx_batch_run(void *context, unsigned int entry, unsigned int itop);
+/* `num` elements of the compact format `format` (include/gt4/unpack.h: 0x60 | components - 1 << 2 | 32/16/8-bit,
+ * + 0x10 masked) from `data` into the batch from qword `qword`, unsigned when `usn`, with the cycle (cl, wl), the
+ * lane `mask` and `row` (null: zeros). */
+void gt4_gfx_batch_unpack(void *context, unsigned int qword, unsigned int format, int num, int usn, unsigned int cl,
+                          unsigned int wl, unsigned int mask, const unsigned int *row, const void *data);
+#define GT4_KEEP_ITOP 0xFFFFFFFFu
 #ifdef __cplusplus
 }
 #endif

@@ -10,12 +10,15 @@
 #include "../log.h"
 #include "gt4/link/protocol.h"
 #include "gt4/gfx.h"
+#include "gt4/unpack.h"
 
 #include <windows.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <vector>
 
 using namespace gt4::rt;
 namespace gfx = gt4::gfx;
@@ -203,6 +206,56 @@ void gt4_gfx_batch_model(uint32_t context, uint32_t source, int qwords, uint32_t
     append(context, gfx::kBatchModel, &m, sizeof m);
 }
 
+// `num` elements of GT4's compact format `format` (gt4/unpack.h) from `data` into the batch from `qword` on, with
+// the cycle (cl, wl), the lane mask and the row (null: zeros), as the game's VIF UNPACK codes did: batch writes,
+// one per run of quadwords with the same lanes.
+void gt4_gfx_batch_unpack(uint32_t context, uint32_t qword, uint32_t format, int num, int usn, uint32_t cl, uint32_t wl, uint32_t mask,
+                          const uint32_t *row, const void *data) {
+    if (num <= 0) return;
+    uint32_t rowCopy[4] = {};
+    if (row) std::memcpy(rowCopy, row, 16);
+    const uint32_t col[4] = {};
+    const uint32_t words = gfx::unpackWords(format, static_cast<uint32_t>(num), cl, wl);
+    // The data, read as far as it is mapped (a game array at the very top of a native stack is read past its end
+    // when the count is rounded up; on the PS2 other memory followed): zeros past it.
+    static thread_local std::vector<uint8_t> bytes;
+    bytes.assign(size_t(words) * 4, 0);
+    if (data && words) {
+        const uint8_t *src = static_cast<const uint8_t *>(data);
+        size_t done = 0;
+        while (done < bytes.size()) {
+            MEMORY_BASIC_INFORMATION mbi;
+            if (!VirtualQuery(src + done, &mbi, sizeof mbi) || mbi.State != MEM_COMMIT || (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD))) break;
+            const size_t avail = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize - reinterpret_cast<uintptr_t>(src + done);
+            const size_t take = std::min(avail, bytes.size() - done);
+            std::memcpy(bytes.data() + done, src + done, take);
+            done += take;
+        }
+    }
+    struct Run {
+        uint32_t first = 0, lanes = 0, count = 0;
+        uint32_t values[256 * 4];
+    };
+    static thread_local Run run;
+    run.count = 0;
+    auto flush = [&] {
+        if (run.count) gt4_gfx_batch_write(context, qword + run.first, run.values, static_cast<int>(run.count), run.lanes);
+        run.count = 0;
+    };
+    gfx::unpackExpand(format, static_cast<uint32_t>(num), usn != 0, cl, wl, mask, 0, rowCopy, col, bytes.data(), bytes.size(), [&](uint32_t offset, const uint32_t value[4], unsigned lanes) {
+                          if (!lanes) return;
+                          if (run.count && (lanes != run.lanes || offset != run.first + run.count || run.count == 256)) flush();
+                          if (!run.count) {
+                              run.first = offset;
+                              run.lanes = lanes;
+                          }
+                          std::memcpy(run.values + 4 * run.count, value, 16);
+                          ++run.count;
+                      });
+    flush();
+}
+
+// The batch run (itop 0xFFFFFFFF: the lighting chain the last run had).
 void gt4_gfx_batch_run(uint32_t context, uint32_t entry, uint32_t itop) {
     const gfx::BatchRun r{entry, itop};
     append(context, gfx::kBatchRun, &r, sizeof r);

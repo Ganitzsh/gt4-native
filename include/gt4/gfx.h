@@ -468,7 +468,7 @@ struct BatchModel {
 };
 
 // The batch just filled is drawn by the renderer at `entry` (its address in 8-byte units, GT4's program layout),
-// with the lighting chain `itop`; the next batch fills the other buffer.
+// with the lighting chain `itop` (0xFFFFFFFF: the previous run's); the next batch fills the other buffer.
 struct BatchRun {
     uint32_t entry;
     uint32_t itop;

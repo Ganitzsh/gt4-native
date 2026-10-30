@@ -1,6 +1,8 @@
 // VIF1 command decoding (see vif1.h).
 #include "vif1.h"
 
+#include "gt4/unpack.h"
+
 #include <algorithm>
 #include <cstring>
 
@@ -9,13 +11,6 @@ namespace gt4::ps2 {
 namespace {
 
 constexpr uint32_t cmdOf(uint32_t code) { return (code >> 24) & 0x7F; }
-
-// Bytes of one UNPACK element: (32 >> vl) * (vn + 1) / 8; V4-5 is 2.
-uint32_t elementBytes(uint32_t cmd) {
-    const uint32_t vn = (cmd >> 2) & 3, vl = cmd & 3;
-    if (vn == 3 && vl == 3) return 2;
-    return ((32u >> vl) * (vn + 1)) / 8;
-}
 
 // FNV-1a of GT4's micro program image (NTSC-U v1.01, 16 KiB as uploaded at boot).
 constexpr uint64_t kGt4Program = 0x8B6E3B5747FAFFF5ull;
@@ -64,13 +59,9 @@ void Vif1::feed(const uint8_t* bytes, size_t size) {
 }
 
 uint32_t Vif1::unpackWords(uint32_t code, uint32_t cycleCl, uint32_t cycleWl) {
-    const uint32_t cmd = cmdOf(code);
     uint32_t num = (code >> 16) & 0xFF;
     if (!num) num = 256;
-    const uint32_t writeLength = cycleWl ? cycleWl : 256;
-    uint32_t elements = num;
-    if (cycleCl < writeLength) elements = cycleCl * (num / writeLength) + std::min(num % writeLength, cycleCl);
-    return (elements * elementBytes(cmd) + 3) / 4;
+    return gfx::unpackWords(cmdOf(code), num, cycleCl, cycleWl);
 }
 
 bool Vif1::step() {
@@ -197,7 +188,7 @@ void Vif1::batchModel(const uint8_t* bytes, size_t size, uint32_t modelMask) {
 }
 
 void Vif1::batchRun(uint32_t entry, uint32_t itop) {
-    itops = itop & 0x3FF;
+    if (itop != 0xFFFFFFFFu) itops = itop & 0x3FF;
     start(entry);
 }
 
@@ -223,37 +214,13 @@ void Vif1::start(uint32_t address) {
 
 void Vif1::unpack(uint32_t code, const uint32_t* source) {
     const uint32_t cmd = cmdOf(code);
-    const uint32_t vn = (cmd >> 2) & 3, vl = cmd & 3;
-    const bool masked = (cmd >> 4) & 1;
     const bool usn = (code >> 14) & 1;
     const bool relative = (code >> 15) & 1;   // FLG: from the start of the current batch buffer
     uint32_t num = (code >> 16) & 0xFF;
     if (!num) num = 256;
-    uint32_t address = code & 0x3FF;
+    const uint32_t address = code & 0x3FF;
     if (!relative) ++stats.absoluteUnpacks;
-    const uint32_t writeLength = wl ? wl : 256;
-    const bool fill = cl < writeLength;
-    const uint32_t bytesPerElement = elementBytes(cmd);
-    const uint32_t dataWords = unpackWords(code, cl, wl);
-    const uint8_t* bytes = reinterpret_cast<const uint8_t*>(source);
-    const size_t dataBytes = size_t(dataWords) * 4;
-    const bool v45 = vn == 3 && vl == 3;
-    const uint32_t componentBytes = v45 ? 2 : (4u >> vl);
-
-    auto component = [&](size_t offset) -> uint32_t {
-        if (offset + componentBytes > dataBytes) return 0;   // past the end of the data (V3 W): zero
-        switch (componentBytes) {
-        case 4: { uint32_t v; std::memcpy(&v, bytes + offset, 4); return v; }
-        case 2: {
-            uint16_t v; std::memcpy(&v, bytes + offset, 2);
-            return usn ? v : static_cast<uint32_t>(static_cast<int32_t>(static_cast<int16_t>(v)));
-        }
-        default: {
-            const uint8_t v = bytes[offset];
-            return usn ? v : static_cast<uint32_t>(static_cast<int32_t>(static_cast<int8_t>(v)));
-        }
-        }
-    };
+    const size_t dataBytes = size_t(gfx::unpackWords(cmd, num, cl, wl)) * 4;
     // Where a qword goes: relative addresses are in the current buffer; absolute ones (GT4 has none) in the
     // buffer whose VU address range holds them.
     const uint32_t current = dbf ? 1 : 0;
@@ -271,69 +238,20 @@ void Vif1::unpack(uint32_t code, const uint32_t* source) {
         }
         return nullptr;
     };
-
-    size_t dataOffset = 0;
-    uint32_t cycle = 0;
-    for (uint32_t n = 0; n < num; ++n) {
-        uint32_t value[4];
-        if (v45) {
-            uint16_t v = 0;
-            if (dataOffset + 2 <= dataBytes) std::memcpy(&v, bytes + dataOffset, 2);
-            value[0] = (v & 0x001Fu) << 3;
-            value[1] = (v & 0x03E0u) >> 2;
-            value[2] = (v & 0x7C00u) >> 7;
-            value[3] = (v & 0x8000u) >> 8;
-        } else if (vn == 0) {
-            value[0] = value[1] = value[2] = value[3] = component(dataOffset);
-        } else if (vn == 1) {
-            value[0] = value[2] = component(dataOffset);
-            value[1] = value[3] = component(dataOffset + componentBytes);
-        } else {   // V3 and V4 both read four components (V3's W is the next element's first)
-            for (uint32_t c = 0; c < 4; ++c) value[c] = component(dataOffset + c * componentBytes);
-        }
-        uint32_t vuAddress = 0;
-        uint32_t* destination = destinationOf(address & 0x3FF, vuAddress);
-        uint32_t scratch[4] = {};
-        if (!destination) {
-            ++stats.outsideBatch;
-            destination = scratch;
-        }
-        const uint32_t maskCycle = std::min(cycle, 3u);
-        unsigned lanes = 0;
-        for (uint32_t f = 0; f < 4; ++f) {
-            const uint32_t m = masked ? (mask >> (maskCycle * 8 + f * 2)) & 3 : 0;
-            switch (m) {
-            case 0:
-                switch (v45 ? 0 : mode) {
-                case 1: destination[f] = value[f] + row[f]; break;
-                case 2: row[f] += value[f]; destination[f] = row[f]; break;
-                case 3: row[f] = value[f]; destination[f] = value[f]; break;
-                default: destination[f] = value[f]; break;
-                }
-                lanes |= 1u << f;
-                break;
-            case 1: destination[f] = row[f]; lanes |= 1u << f; break;
-            case 2: destination[f] = col[maskCycle]; lanes |= 1u << f; break;
-            default: break;   // write protected
-            }
-        }
+    gfx::unpackExpand(cmd, num, usn, cl, wl, mask, mode, row, col, reinterpret_cast<const uint8_t*>(source), dataBytes,
+                      [&](uint32_t offset, const uint32_t value[4], unsigned lanes) {
+                          uint32_t vuAddress = 0;
+                          uint32_t* destination = destinationOf((address + offset) & 0x3FF, vuAddress);
+                          if (!destination) {
+                              ++stats.outsideBatch;
+                              return;
+                          }
+                          for (uint32_t f = 0; f < 4; ++f)
+                              if ((lanes >> f) & 1) destination[f] = value[f];
 #if GT4_VU1_INTERPRETER
-        if (observer) observer->unpacked(vuAddress, destination, lanes);
+                          if (observer) observer->unpacked(vuAddress, destination, lanes);
 #endif
-        (void)lanes;
-        ++address;
-        ++cycle;
-        if (fill) {
-            if (cycle <= cl) dataOffset += bytesPerElement;
-            else if (cycle == writeLength) cycle = 0;
-        } else {
-            dataOffset += bytesPerElement;
-            if (cycle >= writeLength) {
-                address += cl - writeLength;
-                cycle = 0;
-            }
-        }
-    }
+                      });
 }
 
 }  // namespace gt4::ps2
