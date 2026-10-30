@@ -152,6 +152,7 @@ void GsFrontend::draw(const gfx::DrawRecord& d, const gfx::Vertex* vertices) {
             q = v.q;
         }
         if (d.flags & gfx::kDrawUv) reg[UV] = v.u | static_cast<uint64_t>(v.v) << 16;
+        if (d.flags & gfx::kDrawAttributesOnly) continue;
         const uint64_t xy = v.x | static_cast<uint64_t>(v.y) << 16;
         if (fog) write(v.kick ? XYZF2 : XYZF3, xy | static_cast<uint64_t>(v.z & 0xFFFFFF) << 32 | static_cast<uint64_t>(v.fog) << 56);
         else write(v.kick ? XYZ2 : XYZ3, xy | static_cast<uint64_t>(v.z) << 32);

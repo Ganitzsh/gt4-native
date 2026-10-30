@@ -494,7 +494,8 @@ static_assert(sizeof(Vertex) == 32);
 // vertices' fog applies; without it Z has 32 bits and the fog of the last vertex that had one stays. The
 // colour (with Q), S, T and Q, and U and V come from the vertices when kDrawColor, kDrawSt and kDrawUv say so;
 // otherwise the values the previous vertices left apply.
-enum DrawFlags : uint32_t { kDrawPrim = 1, kDrawFog = 2, kDrawColor = 4, kDrawSt = 8, kDrawUv = 16 };
+enum DrawFlags : uint32_t { kDrawPrim = 1, kDrawFog = 2, kDrawColor = 4, kDrawSt = 8, kDrawUv = 16,
+                            kDrawAttributesOnly = 32 /* the vertices' attributes are set, nothing is drawn */ };
 struct DrawRecord {
     uint16_t prim;    // PrimFlags
     uint16_t count;

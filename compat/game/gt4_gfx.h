@@ -24,6 +24,7 @@ struct gt4_vertex {
 #define GT4_DRAW_COLOR 4
 #define GT4_DRAW_ST 8
 #define GT4_DRAW_UV 16
+#define GT4_DRAW_ATTRIBUTES_ONLY 32   /* the vertices' colour, S T Q, U V are set; nothing is drawn */
 
 #ifdef __cplusplus
 extern "C" {
