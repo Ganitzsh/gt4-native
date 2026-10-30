@@ -21,6 +21,7 @@ Writes LINK_REPORT.txt next to the executable.
 import argparse
 import collections
 import csv
+import json
 import os
 import re
 import subprocess
@@ -144,31 +145,80 @@ def name_newer_headers(rt, obj):
     return any(os.path.getmtime(os.path.join(rt, h)) > t for h in os.listdir(rt) if h.endswith(".h"))
 
 
+_NM_CACHE = {}       # object path -> [mtime, defined [[type, name]], undefined [name]]
+_NM_CACHE_FILE = None
+
+
+def nm_cache_load(out):
+    """The per-object nm results of earlier links (gen/nm_cache.json), reused while an object is unchanged."""
+    global _NM_CACHE_FILE
+    _NM_CACHE_FILE = os.path.join(out, "gen", "nm_cache.json")
+    try:
+        with open(_NM_CACHE_FILE) as f:
+            _NM_CACHE.update(json.load(f))
+    except (OSError, ValueError):
+        pass
+
+
+def nm_cache_save():
+    if _NM_CACHE_FILE:
+        os.makedirs(os.path.dirname(_NM_CACHE_FILE), exist_ok=True)
+        with open(_NM_CACHE_FILE, "w") as f:
+            json.dump(_NM_CACHE, f)
+
+
+def nm_objects(objs):
+    """{object: (defined [(type, name)], undefined [name])}, from the cache or nm."""
+    result, todo = {}, []
+    for o in objs:
+        c = _NM_CACHE.get(o)
+        m = os.path.getmtime(o)
+        if c and c[0] == m:
+            result[o] = (c[1], c[2])
+        else:
+            todo.append((o, m))
+    chunks = [todo[i:i + 150] for i in range(0, len(todo), 150)]
+
+    def one(chunk):
+        paths = [o for o, _ in chunk]
+        return chunk, run([tool("nm"), "-A", "--defined-only", "-g"] + paths, env=mingw_env()),             run([tool("nm"), "-A", "-u"] + paths, env=mingw_env())
+
+    with ThreadPoolExecutor(8) as ex:
+        for chunk, d_out, u_out in ex.map(one, chunks):
+            found = {o: ([], []) for o, _ in chunk}
+            key = {os.path.normcase(os.path.normpath(o)): o for o, _ in chunk}
+            for line in d_out.splitlines():
+                path, _, rest = line.rpartition(":")
+                parts = rest.split()
+                path = key.get(os.path.normcase(os.path.normpath(path)))
+                if len(parts) == 3 and parts[1] in "TDBRCV" and path:
+                    found[path][0].append([parts[1], parts[2]])
+            for line in u_out.splitlines():
+                path, _, rest = line.rpartition(":")
+                parts = rest.split()
+                path = key.get(os.path.normcase(os.path.normpath(path)))
+                if parts and parts[0] == "U" and path:
+                    found[path][1].append(parts[1])
+            for o, m in chunk:
+                result[o] = found[o]
+                _NM_CACHE[o] = [m, found[o][0], found[o][1]]
+    return result
+
+
 def nm_symbols(objs, every=False):
     """{object: (defined globals, undefined)} with COFF names (leading underscore). every: each defined name maps
     to the list of all the objects defining it (else to the first)."""
     defined, undefined = {}, collections.defaultdict(list)
-    chunks = [objs[i:i + 150] for i in range(0, len(objs), 150)]
-
-    def one(chunk):
-        return run([tool("nm"), "-A", "--defined-only", "-g"] + chunk, env=mingw_env()), \
-            run([tool("nm"), "-A", "-u"] + chunk, env=mingw_env())
-
-    with ThreadPoolExecutor(8) as ex:
-        for d_out, u_out in ex.map(one, chunks):
-            for line in d_out.splitlines():
-                path, _, rest = line.rpartition(":")
-                parts = rest.split()
-                if len(parts) == 3 and parts[1] in "TDBRCV":
-                    if every:
-                        defined.setdefault(parts[2], []).append(path)
-                    else:
-                        defined.setdefault(parts[2], path)
-            for line in u_out.splitlines():
-                path, _, rest = line.rpartition(":")
-                parts = rest.split()
-                if parts and parts[0] == "U":
-                    undefined[parts[1]].append(path)
+    per = nm_objects(objs)
+    for o in objs:
+        defs, undefs = per[o]
+        for _, name in defs:
+            if every:
+                defined.setdefault(name, []).append(o)
+            else:
+                defined.setdefault(name, o)
+        for name in undefs:
+            undefined[name].append(o)
     return defined, undefined
 
 
@@ -591,6 +641,7 @@ def main():
                     "original code, translated, for GT4_ORIG (tools/eeref/orig_bridge.cpp)")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
+    nm_cache_load(a.out)
     rt_objs = compile_runtime(a.out) + compile_eeorig(a.out, a.eeorig)
     exclude = set()
     if a.exclude:
@@ -673,6 +724,7 @@ def main():
            "-L" + os.path.join(FFMPEG, "lib")] + ["-l" + n for n in FFMPEG_LIBS] + ["-lbcrypt"]
     if a.eeorig:  # the translated code's RAM and scratchpad are the guest's, at their PS2 addresses
         cmd += ["-Wl,--defsym,__ZN3ps25g_ramE=0", "-Wl,--defsym,__ZN3ps25g_sprE=0x70000000"]
+    nm_cache_save()
     run(cmd, env=mingw_env())
     with open(os.path.join(a.out, "LINK_REPORT.txt"), "w") as f:
         f.write(f"game objects: {len(game_objs)} ({len(dropped)} left out for runtime replacements)\n")

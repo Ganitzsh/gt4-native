@@ -69,6 +69,23 @@ void GraphicsStream::records(const uint8_t* data, size_t bytes) {
                 ++counters.badRecords;
             }
             break;
+        case gfx::kUpload:
+            if (h.bytes >= sizeof(gfx::UploadRecord)) {
+                gfx::UploadRecord u;
+                std::memcpy(&u, payload, sizeof u);
+                auto it = std::find_if(recordData.begin(), recordData.end(), [&](const RecordData& d) { return d.source == u.source; });
+                ++counters.uploads;
+                if (it == recordData.end()) {
+                    ++counters.uploadsWithoutData;
+                    gs.upload(u, nullptr, 0);
+                } else {
+                    gs.upload(u, it->bytes.data(), std::min<size_t>(it->bytes.size(), size_t(u.qwords) * 16));
+                    recordData.erase(it);
+                }
+            } else {
+                ++counters.badRecords;
+            }
+            break;
         default: ++counters.badRecords; break;
         }
         ++counters.gfxRecords;
@@ -374,6 +391,7 @@ std::array<gfx::StateRecord, 2> GraphicsStream::nativeState() const {
         out[k].contextGroups = ((1u << gfx::kContextGroups) - 1) << (16 * k);
         out[k].shared = nativeShared;
         out[k].context = nativeContexts[k];
+        out[k].palette = nativeContexts[k].texture;
     }
     return out;
 }
@@ -414,6 +432,16 @@ void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload)
         counters.vif1Bytes += size;
         vif1.feed(payload, size);
         break;
+    case GT4_REC_GFX_DATA: {
+        if (size < 8) break;
+        uint32_t head[2];
+        std::memcpy(head, payload, 8);
+        RecordData d;
+        d.source = head[0];
+        d.bytes.assign(payload + 8, payload + 8 + std::min<size_t>(head[1], size - 8));
+        recordData.push_back(std::move(d));
+        break;
+    }
     case GT4_REC_VIF0:
         ++counters.vif0Records;   // VU0 micro mode: not used by the renderer (logged in the statistics)
         break;
@@ -500,7 +528,9 @@ std::string GraphicsStream::describe() const {
         << counters.primitiveVertices << " vertices, " << r.clipped << " clipped triangles, " << r.skipped + counters.unknownPrograms
         << " without a renderer, " << r.unexpectedTags << " unexpected tags, " << r.countMismatch << " count mismatches, "
         << r.oversized << " oversized, " << v.outsideBatch << " qwords outside the batch buffers), " << v.directQwords
-        << " DIRECT qwords, " << v.mpgInstructions << " MPG instructions, " << v.unknownCodes << " unknown codes; " << counters.privWrites << " privileged writes, " << counters.reads
+        << " DIRECT qwords, " << v.mpgInstructions << " MPG instructions, " << v.unknownCodes << " unknown codes; "
+        << counters.gfxRecords << " native records (" << counters.uploads << " uploads, " << counters.uploadsWithoutData
+        << " without data, " << counters.badRecords << " bad); " << counters.privWrites << " privileged writes, " << counters.reads
         << " GS reads, " << counters.path3Held << " PATH3 records held by MSKPATH3 (" << counters.path3ForcedAtVsync
         << " released at VSYNC)";
     if (!vif1.lastWarning.empty()) out << "; last VIF warning: " << vif1.lastWarning;

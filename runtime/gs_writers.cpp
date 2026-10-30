@@ -611,6 +611,8 @@ struct Vif {
                 wl = (imm >> 8) & 0xFF;
             } else if (cmd == 0x20) {
                 mode = 4, left = 1;
+            } else if (cmd == 0x08) {  // native records (include/gt4/gfx.h), counted as VIF codes
+                mode = imm ? 4 : 0, left = 4 * imm;
             } else if (cmd == 0x30 || cmd == 0x31) {
                 mode = 4, left = 4;
             } else if (cmd == 0x4A) {

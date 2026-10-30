@@ -189,6 +189,8 @@ public:
     // The state groups of include/gt4/gfx.h: a state record from the game (the shared groups, then the
     // context groups of both contexts in bit order, from one source context).
     void applyState(const gfx::StateRecord& r);
+    // An upload record: `bytes` of packed pixels into graphics memory.
+    void upload(const gfx::UploadRecord& u, const uint8_t* data, size_t bytes);
 
 private:
     GsMemory mem;

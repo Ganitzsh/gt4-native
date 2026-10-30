@@ -26,6 +26,8 @@ public:
     virtual void privileged(uint32_t offset, uint64_t value) = 0;
     // Native drawing state from the game (include/gt4/gfx.h), in order with the packets.
     virtual void state(const gfx::StateRecord& r) { (void)r; }
+    // Pixels into graphics memory (`bytes` of packed pixels; fewer when the game's data was short).
+    virtual void upload(const gfx::UploadRecord& u, const uint8_t* data, size_t bytes) { (void)u; (void)data; (void)bytes; }
     // A VBlank: present the displayed frame. `field` is CSR.FIELD, `count` the game's VBlank counter.
     virtual void vsync(uint32_t field, uint32_t count) = 0;
     // GS -> EE transfer data (after TRXDIR = 1), `qwc` qwords into `out`.
@@ -61,6 +63,7 @@ public:
         uint64_t unknownPrograms = 0;   // batches started in a program image that is not GT4's (nothing drawn)
         uint64_t path3Held = 0, path3ForcedAtVsync = 0;   // PATH3 records held by MSKPATH3
         uint64_t gfxRecords = 0, badRecords = 0;   // native records in the VIF1 stream (include/gt4/gfx.h)
+        uint64_t uploads = 0, uploadsWithoutData = 0;
     };
     const Stats& stats() const { return counters; }
     const Vif1::Stats& vifStats() const { return vif1.stats; }
@@ -101,6 +104,12 @@ private:
     gfx::Context nativeContexts[2];
     std::array<gfx::StateRecord, 2> nativeState() const;
     void applyNative(const gfx::StateRecord& r);
+    // The bytes records refer to (GT4_REC_GFX_DATA), by game address, until their record takes them.
+    struct RecordData {
+        uint32_t source = 0;
+        std::vector<uint8_t> bytes;
+    };
+    std::vector<RecordData> recordData;
     void sendPrimitives(const GsPrimitives& p);
     // Every GIF packet goes to the GS through this (GT4_VRAM_DUMP counts them).
     void sendGif(uint32_t path, const uint8_t* data, size_t bytes);

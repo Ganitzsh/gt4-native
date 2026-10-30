@@ -37,6 +37,7 @@ enum Gt4LinkRecordType {
     GT4_REC_SPU2_RAM = 9,   /* SPU2 RAM write: u32 address, then bytes */
     GT4_REC_LOG = 10,       /* text */
     GT4_REC_STATE = 11,     /* host captures only: the state a capture taken mid-run starts from (GraphicsStream::saveState) */
+    GT4_REC_GFX_DATA = 12,  /* bytes a native record refers to (include/gt4/gfx.h): u32 game address, u32 bytes, then the bytes */
     /* host -> game */
     GT4_REC_PAD = 64,       /* u32 port, u32 connected, 18 bytes libpad2 data (DualShock 2 layout) */
     GT4_REC_GS_EVENT = 65,  /* u32 kind (0 FINISH, 1 SIGNAL, 2 LABEL), u32 id, u64 value */

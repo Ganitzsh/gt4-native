@@ -117,6 +117,26 @@ void GsFrontend::applyState(const gfx::StateRecord& r) {
     gfx::applyState(shared, contexts, r, [this](uint32_t context, uint32_t group) { contextGroupSet(context, group); });
 }
 
+void GsFrontend::upload(const gfx::UploadRecord& u, const uint8_t* data, size_t bytes) {
+    GsMemory::Transfer t;
+    t.dbp = u.base;
+    t.dbw = u.width;
+    t.dpsm = u.format;
+    t.dsax = u.x;
+    t.dsay = u.y;
+    t.rrw = u.w;
+    t.rrh = u.h;
+    static const bool logTransfers = std::getenv("GT4_GSN_XFER") != nullptr;
+    if (logTransfers)
+        std::printf("[gsn upload] dst %X/%u psm %X (%u,%u) %ux%u, %zu bytes from %08X\n", t.dbp, t.dbw, t.dpsm, t.dsax, t.dsay, t.rrw, t.rrh,
+                    bytes, u.source);
+    mem.beginWrite(t);
+    memoryWritten(t.dbp, t.dbw, t.dpsm, t.dsax, t.dsay, t.rrw, t.rrh, false);
+    ++stats.uploads;
+    if (bytes) imageWritten(data, bytes);
+    imageActive = false;
+}
+
 void GsFrontend::write(uint32_t r, uint64_t value) {
     r &= 0x7F;
     // Drawing state: into the native state (include/gt4/gfx.h).

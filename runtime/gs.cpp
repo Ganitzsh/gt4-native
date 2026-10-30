@@ -11,6 +11,7 @@
 // CSR.FIELD toggles as on an interlaced NTSC display.
 #include "audio.h"
 #include "gs_writers.h"
+#include "gt4/gfx.h"
 #include "guest.h"
 #include "gt4/link/protocol.h"
 #include "kernel.h"
@@ -26,6 +27,8 @@
 #include <vector>
 
 using namespace gt4::rt;
+
+void send_record_data(const std::vector<uint8_t> &part);  // below, with the VIF1 scanner
 
 namespace {
 
@@ -223,6 +226,7 @@ using WaitFn = int (*)(int);
 void send_out(int channel, const std::vector<uint8_t> &out) {
     if (!out.empty()) {
         if (channel == 1) {
+            send_record_data(out);
             link_send(GT4_REC_VIF1, out.data(), static_cast<uint32_t>(out.size()));
         } else if (channel == 0) {
             link_send(GT4_REC_VIF0, out.data(), static_cast<uint32_t>(out.size()));
@@ -324,6 +328,8 @@ struct VifScan {
             n = 1 + 2 * (num ? num : 256);
         } else if (cmd == 0x50 || cmd == 0x51) {
             n = 1 + 4 * size_t(imm ? imm : 65536);
+        } else if (cmd == 0x08) {  // native records (include/gt4/gfx.h)
+            n = 1 + 4 * size_t(imm);
         } else if (cmd >= 0x60) {
             const uint32_t vn = (cmd >> 2) & 3, vl = cmd & 3, count0 = num ? num : 256;
             const uint32_t count = wl <= cl ? count0 : cl * (count0 / wl) + std::min(count0 % wl, cl);
@@ -332,6 +338,34 @@ struct VifScan {
         return std::min(n, left);
     }
 };
+
+// The bytes the native records of a VIF1 stream part refer to (uploads: their pixels in game memory), sent
+// ahead of the part (GT4_REC_GFX_DATA).
+void send_record_data(const std::vector<uint8_t> &part) {
+    const uint32_t *w = reinterpret_cast<const uint32_t *>(part.data());
+    const size_t nw = part.size() / 4;
+    VifScan scan;
+    for (size_t pos = 0; pos < nw;) {
+        const uint32_t cmd = (w[pos] >> 24) & 0x7F;
+        const size_t n = scan.length(w + pos, nw - pos);
+        if (cmd == 0x08 && n > 1) {
+            const uint8_t *records = part.data() + (pos + 1) * 4;
+            const size_t bytes = (n - 1) * 4;
+            for (size_t at = 0; at + sizeof(gt4::gfx::Header) <= bytes;) {
+                gt4::gfx::Header h;
+                std::memcpy(&h, records + at, sizeof h);
+                if (h.type == gt4::gfx::kUpload && h.bytes >= sizeof(gt4::gfx::UploadRecord)) {
+                    gt4::gfx::UploadRecord u;
+                    std::memcpy(&u, records + at + sizeof h, sizeof u);
+                    const uint32_t head[2] = {u.source, u.qwords * 16};
+                    link_send(GT4_REC_GFX_DATA, head, sizeof head, mem(u.source, false), u.qwords * 16);
+                }
+                at += size_t(gt4::gfx::recordQwords(h.bytes)) * 16;
+            }
+        }
+        pos += n;
+    }
+}
 
 // The GS events of a VIF1 stream's DIRECT packets (standalone runs: no host to report them).
 void scan_vif_direct(const std::vector<uint8_t> &part, bool &finish, bool &signal) {

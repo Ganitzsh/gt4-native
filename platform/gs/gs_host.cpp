@@ -39,6 +39,7 @@ public:
     void setEventSink(gsn::GsFrontend::EventSink sink) { native->setEventSink(std::move(sink)); }
     void gif(uint32_t path, const uint8_t* data, size_t bytes) override { native->gif(path, data, bytes); }
     void state(const gfx::StateRecord& r) override { native->applyState(r); }
+    void upload(const gfx::UploadRecord& u, const uint8_t* data, size_t bytes) override { native->upload(u, data, bytes); }
     void primitives(const ps2::GsPrimitives& p) override {
         if (p.setPrim) native->setPrim(p.prim);
         for (size_t k = 0; k < p.count; ++k) {

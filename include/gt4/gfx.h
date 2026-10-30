@@ -14,6 +14,7 @@
 // with one dirty bit per group): a state record carries the groups that changed, applied in bit order.
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 
@@ -278,7 +279,8 @@ constexpr uint32_t kStreamCode = 0x08000000u;   // VIF command 0x08
 
 enum RecordType : uint32_t {
     kNop = 0,
-    kState = 1,   // StateRecord
+    kState = 1,    // StateRecord
+    kUpload = 2,   // UploadRecord
 };
 
 struct Header {
@@ -292,7 +294,11 @@ struct StateRecord {
     uint32_t contextGroups;   // bits 0..12 context 1, 16..28 context 2 (ContextGroup)
     Shared shared;
     Context context;
+    Texture palette;          // the palette group's fields (TEX2: format and palette), apart from context.texture (TEX0)
 };
+// One layout for the 32-bit runtime and the 64-bit host.
+static_assert(sizeof(Texture) == 14 && sizeof(Context) == 88 && sizeof(Shared) == 32);
+static_assert(sizeof(StateRecord) == 144 && offsetof(StateRecord, context) == 40 && offsetof(StateRecord, palette) == 128);
 
 // Copies one group's fields.
 inline void copySharedGroup(Shared& to, const Shared& from, uint32_t group) {
@@ -318,7 +324,7 @@ inline void copySharedGroup(Shared& to, const Shared& from, uint32_t group) {
     }
 }
 
-inline void copyContextGroup(Context& to, const Context& from, uint32_t group) {
+inline void copyContextGroup(Context& to, const Context& from, const Texture& palette, uint32_t group) {
     switch (group) {
     case kFrame:
         to.colorBase = from.colorBase;
@@ -368,12 +374,12 @@ inline void copyContextGroup(Context& to, const Context& from, uint32_t group) {
         to.sampler.maxV = from.sampler.maxV;
         break;
     case kPalette:
-        to.texture.format = from.texture.format;
-        to.texture.clutBase = from.texture.clutBase;
-        to.texture.clutFormat = from.texture.clutFormat;
-        to.texture.clutStorage = from.texture.clutStorage;
-        to.texture.clutOffset = from.texture.clutOffset;
-        to.texture.clutLoad = from.texture.clutLoad;
+        to.texture.format = palette.format;
+        to.texture.clutBase = palette.clutBase;
+        to.texture.clutFormat = palette.clutFormat;
+        to.texture.clutStorage = palette.clutStorage;
+        to.texture.clutOffset = palette.clutOffset;
+        to.texture.clutLoad = palette.clutLoad;
         break;
     case kFilter:
         to.sampler.lodFixed = from.sampler.lodFixed;
@@ -405,10 +411,23 @@ void applyState(Shared& shared, Context (&contexts)[2], const StateRecord& r, F&
     for (uint32_t context = 0; context < 2; ++context)
         for (uint32_t g = 0; g < kContextGroups; ++g)
             if ((r.contextGroups >> (16 * context + g)) & 1) {
-                copyContextGroup(contexts[context], r.context, g);
+                copyContextGroup(contexts[context], r.context, r.palette, g);
                 groupSet(context, g);
             }
 }
+
+// Pixels from the game's memory into graphics memory: a w x h rectangle at (x, y) of the surface at `base`
+// (blocks), `width` (64-pixel units), in `format`; `qwords` x 16 bytes of packed pixels at `source` (a game
+// address). The game's runtime sends those bytes ahead of the record (GT4_REC_GFX_DATA): the host takes them
+// when it reaches the record.
+struct UploadRecord {
+    uint16_t base;
+    uint8_t width, format;
+    uint16_t x, y, w, h;
+    uint32_t source;
+    uint32_t qwords;
+};
+static_assert(sizeof(UploadRecord) == 20);
 
 constexpr uint32_t recordQwords(uint32_t payload) { return (static_cast<uint32_t>(sizeof(Header)) + payload + 15) / 16; }
 
