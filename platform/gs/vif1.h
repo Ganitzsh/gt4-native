@@ -90,6 +90,7 @@ public:
         uint64_t unknownCodes = 0;
         uint64_t outsideBatch = 0;      // unpacked qwords outside both batch buffers (dropped)
         uint64_t absoluteUnpacks = 0;   // UNPACK without FLG (placed by address in a buffer)
+        uint64_t streamCodes[128] = {};  // codes by command in the stream itself (not in model packets)
     } stats;
     std::string lastWarning;
     uint32_t lastProgram = 0;   // byte address of the last renderer started (statistics)
@@ -110,6 +111,7 @@ private:
     std::vector<uint32_t> pending;    // words not yet consumed
     size_t pos = 0;
     bool programKnown = false, programIsGt4 = false;
+    bool inModel = false;   // decoding a model packet (batchModel)
 
     // Returns false when the command at `pos` needs more words than are available.
     bool step();

@@ -4,7 +4,10 @@
    (scissor, frames, offsets, alpha, test, zbuf...), then three passes of 8x4 textured sprites through a
    CLUT (each with its own RGBAQ), and eight TEX0_2/PRIM/UV/XYZ entries, closed by an UNPACK header with
    the screen rectangle derived from the scissor value; finally flags bits in the work area's word 0x1D8.
+   Natively the set-up block becomes state records and the grid (program 0x3D50 on that block) is drawn by
+   gt4_gfx_grid (compat/game/gt4_gfx.h): the packet is built in place as before, then replaced by the records.
    Callers (func_004A7D90, func_004A7FA8) declare it (int, int, int, int, int, int, long, int, int, int). */
+#include "gt4_gfx.h"
 typedef unsigned int u32;
 typedef int s32;
 typedef unsigned long u64;   /* 64-bit in the EE data model, natively too */
@@ -202,4 +205,21 @@ extern "C" void func_004A81A8(u32 a0, u32 a1, s32 a2, u32 a3, u32 t0, u32 t1, u6
         s3[0x10 / 4] = tex0_idx;
     }
     *(u64 *)(spr + 0x1D8) |= 0x3107FB07FBUL;
+
+    /* natively: the set-up's register pairs (t4 + 0x30 .. 0x120) as state, then the grid on its block (the qwords
+       the UNPACK would have sent, from hdr + 16); the packet area is reused for the records */
+    {
+        const int pairs = 16;
+        const int blockQwords = pk.total + 6;
+        unsigned long long *state = (unsigned long long *)__builtin_alloca(pairs * 16);
+        char *block = (char *)__builtin_alloca(blockQwords * 16);
+        for (int k = 0; k < pairs; k++) {
+            state[2 * k] = ((u64 *)(t4 + 0x30 + 16 * k))[0];
+            state[2 * k + 1] = ((u64 *)(t4 + 0x30 + 16 * k))[1];
+        }
+        for (int k = 0; k < blockQwords * 16; k++) block[k] = (hdr + 16)[k];
+        *(char **)(spr + 0x1F8) = t4;
+        gt4_gfx_set(spr, state, pairs);
+        gt4_gfx_grid(spr, 0x3D50, block, blockQwords);
+    }
 }

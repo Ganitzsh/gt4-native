@@ -52,6 +52,9 @@ void gt4_gfx_batch_run(void *context, unsigned int entry, unsigned int itop);
 void gt4_gfx_batch_unpack(void *context, unsigned int qword, unsigned int format, int num, int usn, unsigned int cl,
                           unsigned int wl, unsigned int mask, const unsigned int *row, const void *data);
 #define GT4_KEEP_ITOP 0xFFFFFFFFu
+/* A screen grid (program 0x3D50 or 0x3EA0): `qwords` of `block` as GT4's grid programs read them (parameters at
+ * qword 0, the packet template at qword 0 .y), drawn piece by piece. */
+void gt4_gfx_grid(void *context, unsigned int program, const void *block, int qwords);
 #ifdef __cplusplus
 }
 #endif

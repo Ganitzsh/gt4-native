@@ -630,6 +630,12 @@ void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload)
 
 std::string GraphicsStream::describe() const {
     std::ostringstream out;
+    if (std::getenv("GT4_VIF_CODES")) {   // (debugging) the VIF codes game code still wrote, by command
+        out << "VIF codes in the stream:";
+        for (int c = 0; c < 128; ++c)
+            if (vif1.stats.streamCodes[c]) out << " " << std::hex << c << std::dec << ":" << vif1.stats.streamCodes[c];
+        out << "; ";
+    }
     const auto& v = vif1.stats;
     const auto& r = renderers.stats;
     out << counters.records << " records, " << counters.vsyncs << " vsyncs, GIF packets P1/P2/P3 "

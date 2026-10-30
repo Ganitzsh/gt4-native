@@ -140,6 +140,131 @@ void draw(uint32_t context, uint32_t prim, uint32_t flags, const gfx::Vertex *v,
     append(context, gfx::kDraw, &d, sizeof d, v, n * static_cast<uint32_t>(sizeof(gfx::Vertex)));
 }
 
+}  // namespace
+
+extern "C" void gt4_gfx_set(uint32_t context, const uint64_t *pairs, int n);
+
+namespace {
+
+// Plays a packet template in GT4's packet format (the screen grids', gt4_gfx_grid): tags with a count, an end
+// bit, optionally the primitive, and either register/value pairs (PACKED; GT4's templates use the address+data
+// form) or register lists (REGLIST, two 64-bit values per quadword); the drawing state they set becomes state
+// records, the vertex attributes and positions draw records.
+void play_template(uint32_t context, const uint32_t *t, uint32_t qwords) {
+    uint32_t prim = 0;
+    bool primPending = false, fog = false;
+    bool colorSet = false, stSet = false, uvSet = false;   // attributes the template sets (the others stay as they were)
+    gfx::Vertex cur{};
+    cur.q = 1.0f;
+    std::vector<gfx::Vertex> verts;
+    std::vector<uint64_t> pairs;
+    auto flushVerts = [&] {
+        if (verts.empty() && !primPending) return;
+        draw(context, prim,
+             (primPending ? gfx::kDrawPrim : 0) | (fog ? gfx::kDrawFog : 0) | (colorSet ? gfx::kDrawColor : 0) | (stSet ? gfx::kDrawSt : 0) |
+                 (uvSet ? gfx::kDrawUv : 0),
+             verts.data(), static_cast<uint32_t>(verts.size()));
+        verts.clear();
+        primPending = false;
+    };
+    auto flushState = [&] {
+        if (pairs.empty()) return;
+        gt4_gfx_set(context, pairs.data(), static_cast<int>(pairs.size() / 2));
+        pairs.clear();
+    };
+    auto bits = [](uint32_t u) {
+        float f;
+        std::memcpy(&f, &u, 4);
+        return f;
+    };
+    auto reg = [&](uint32_t address, uint64_t v) {
+        bool isShared = false;
+        uint32_t ctx = 0, group = 0;
+        if (gfx::groupOfRegister(address, isShared, ctx, group)) {
+            flushVerts();
+            pairs.push_back(v);
+            pairs.push_back(address);
+            return;
+        }
+        switch (address) {
+        case 0x00: flushState(); flushVerts(); prim = static_cast<uint32_t>(v) & 0x7FF; primPending = true; return;
+        case 0x01:
+            if (!colorSet) flushVerts();
+            colorSet = true;
+            cur.rgba = static_cast<uint32_t>(v);
+            cur.q = bits(static_cast<uint32_t>(v >> 32));
+            return;
+        case 0x02:
+            if (!stSet) flushVerts();
+            stSet = true;
+            cur.s = bits(static_cast<uint32_t>(v));
+            cur.t = bits(static_cast<uint32_t>(v >> 32));
+            return;
+        case 0x03:
+            if (!uvSet) flushVerts();
+            uvSet = true;
+            cur.u = static_cast<uint16_t>(v & 0xFFFF);
+            cur.v = static_cast<uint16_t>((v >> 16) & 0xFFFF);
+            return;
+        case 0x0A: cur.fog = static_cast<uint8_t>(v >> 56); return;
+        case 0x04: case 0x0C: case 0x05: case 0x0D: {   // XYZF2, XYZF3, XYZ2, XYZ3
+            flushState();
+            const bool f = address == 0x04 || address == 0x0C;
+            if (f != fog && (!verts.empty() || primPending)) flushVerts();
+            fog = f;
+            gfx::Vertex v2 = cur;
+            v2.x = static_cast<uint16_t>(v);
+            v2.y = static_cast<uint16_t>(v >> 16);
+            v2.z = f ? static_cast<uint32_t>((v >> 32) & 0xFFFFFF) : static_cast<uint32_t>(v >> 32);
+            if (f) v2.fog = static_cast<uint8_t>(v >> 56);
+            v2.kick = address == 0x04 || address == 0x05;
+            verts.push_back(v2);
+            return;
+        }
+        default: return;   // TEXFLUSH, NOP and the like: nothing to keep
+        }
+    };
+    static const uint8_t kListRegister[16] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0xFF, 0x0C, 0x0D, 0xFF, 0xFF};
+    uint32_t q = 0;
+    while (q < qwords) {
+        const uint64_t tag = t[q * 4] | static_cast<uint64_t>(t[q * 4 + 1]) << 32;
+        const uint64_t regs = t[q * 4 + 2] | static_cast<uint64_t>(t[q * 4 + 3]) << 32;
+        ++q;
+        const uint32_t nloop = tag & 0x7FFF, flg = (tag >> 58) & 3;
+        uint32_t nreg = (tag >> 60) & 0xF;
+        if (!nreg) nreg = 16;
+        if ((tag >> 46) & 1) reg(0x00, (tag >> 47) & 0x7FF);
+        if (flg == 0) {   // PACKED: GT4's templates use the address+data form
+            for (uint32_t l = 0; l < nloop; ++l)
+                for (uint32_t r = 0; r < nreg && q < qwords; ++r, ++q) {
+                    const uint32_t d = (regs >> (4 * r)) & 0xF;
+                    const uint64_t lo = t[q * 4] | static_cast<uint64_t>(t[q * 4 + 1]) << 32;
+                    if (d == 0xE) {
+                        reg(t[q * 4 + 2] & 0x7F, lo);
+                    } else if (d != 0xF) {
+                        static int warned = 0;
+                        if (warned++ < 4) log_warn("pgl: a packet template with PACKED register %x (only address+data is played)", d);
+                    }
+                }
+        } else if (flg == 1) {   // REGLIST
+            uint32_t k = 0;
+            const uint32_t total = nloop * nreg;
+            for (; k < total && q < qwords; ++k) {
+                const uint32_t d = (regs >> (4 * (k % nreg))) & 0xF;
+                const uint64_t v = t[q * 4 + (k & 1) * 2] | static_cast<uint64_t>(t[q * 4 + (k & 1) * 2 + 1]) << 32;
+                if (kListRegister[d] != 0xFF) reg(kListRegister[d], v);
+                if (k & 1) ++q;
+            }
+            if (k & 1) ++q;
+        } else {
+            q += nloop;
+        }
+        if ((tag >> 15) & 1) break;
+    }
+    flushState();
+    flushVerts();
+}
+
 // A vertex at (x, y) (1/16 pixel) with the library's packed Z and fog word (XYZF: Z in the low 24 bits).
 gfx::Vertex vertex_zf(uint32_t x, uint32_t y, uint32_t zf, bool kick) {
     gfx::Vertex v{};
@@ -253,6 +378,85 @@ void gt4_gfx_batch_unpack(uint32_t context, uint32_t qword, uint32_t format, int
                           ++run.count;
                       });
     flush();
+}
+
+// The screen grids (004A81A8, 004A9470): the game builds a block (the grid's parameters at qword 0, a packet
+// template in GT4's packet format at the offset in qword 0 .y) for one of two programs that send the template
+// piece by piece with fields of it stepped before each piece (the steps are float additions on fields that hold
+// packed integers: the exponents stay fixed, so the mantissas count). Here the program runs natively and each
+// piece is played as state and draw records.
+void gt4_gfx_grid(uint32_t context, uint32_t program, const void *block, int qwords) {
+    if (qwords <= 0) return;
+    std::vector<uint32_t> b(size_t(qwords) * 4);
+    std::memcpy(b.data(), block, b.size() * 4);
+    auto word = [&](uint32_t q, int lane) -> uint32_t { return q < static_cast<uint32_t>(qwords) ? b[q * 4 + lane] : 0; };
+    auto half = [&](uint32_t q, int lane) { return static_cast<uint16_t>(word(q, lane)); };
+    auto vu = [](uint32_t bits) {   // the VU's reading of a float: no denormals, no infinities
+        if (!(bits & 0x7F800000u)) bits &= 0x80000000u;
+        if ((bits & 0x7F800000u) == 0x7F800000u) bits = (bits & 0x80000000u) | 0x7F7FFFFFu;
+        float f;
+        std::memcpy(&f, &bits, 4);
+        return f;
+    };
+    auto fl = [&](uint32_t q, int lane) { return vu(word(q, lane)); };
+    // the template: from its offset to its end tag (EOP)
+    const uint32_t start = half(0, 1);
+    uint32_t length = 0;
+    while (length < 1024) {
+        const uint32_t w0 = word(start + length, 0), w1 = word(start + length, 1);
+        const uint32_t nloop = w0 & 0x7FFF, flg = (w1 >> 26) & 3;
+        uint32_t nreg = (w1 >> 28) & 0xF;
+        if (!nreg) nreg = 16;
+        length += 1 + (flg == 0 ? nloop * nreg : flg == 1 ? (nloop * nreg + 1) / 2 : nloop);
+        if ((w0 >> 15) & 1) break;
+    }
+    std::vector<uint32_t> tpl(size_t(length) * 4);
+    for (uint32_t q = 0; q < length; ++q)
+        for (int k = 0; k < 4; ++k) tpl[q * 4 + k] = word(start + q, k);
+    auto set = [&](uint32_t q, int lane, float value) {
+        if (q < length) std::memcpy(&tpl[q * 4 + lane], &value, 4);
+    };
+    auto play = [&] { play_template(context, tpl.data(), length); };
+    if (program == 0x3D50) {   // rows of columns: a counter at qword (1 .x) .x; eight vertex pairs from (1 .y) get z ramps
+        float field = fl(2, 0), rampStart = fl(4, 2), rampStep = fl(4, 3), secondStart = fl(5, 2), secondStep = fl(5, 3);
+        const float colStep = fl(2, 1), rowStep = fl(2, 2);
+        const uint32_t target = half(1, 0), firstVertex = half(1, 1);
+        for (uint32_t row = 0, rows = half(3, 3); row <= rows; ++row) {
+            float z2 = rampStart, z3 = secondStart;
+            for (uint32_t column = 0, columns = half(3, 2); column <= columns; ++column) {
+                set(target, 0, field);
+                for (uint32_t k = 0, v = firstVertex; k < 8; ++k, v += 3) {
+                    set(v + 1, 2, z2);
+                    z2 = z2 + rampStep;
+                    set(v + 2, 2, z3);
+                    z3 = z3 + secondStep;
+                }
+                field = field + colStep;
+                play();
+            }
+            field = field + rowStep;
+            rampStart *= 16.0f;
+            rampStep *= 16.0f;
+            secondStart *= 16.0f;
+            secondStep *= 16.0f;
+        }
+    } else if (program == 0x3EA0) {   // pieces: four fields (word x of the qwords at qword 1's halves) step by counters
+        float field[4], step[4];
+        for (int k = 0; k < 4; ++k) {
+            field[k] = fl(2 + k, 0);
+            step[k] = fl(2 + k, 1);
+        }
+        for (uint32_t piece = 0, pieces = half(2, 2); piece <= pieces; ++piece) {
+            for (int k = 0; k < 4; ++k) {
+                set(half(1, k), 0, field[k]);
+                field[k] = field[k] + step[k];
+            }
+            play();
+        }
+    } else {
+        static int warned = 0;
+        if (warned++ < 4) log_warn("pgl: grid program %04x unknown (nothing drawn)", program);
+    }
 }
 
 // The batch run (itop 0xFFFFFFFF: the lighting chain the last run had).
@@ -492,6 +696,14 @@ void gt4_replace_func_00105FD8(uint32_t self) {
     guest_ref<uint32_t>(self + 8) = size;
     guest_ref<uint32_t>(self + 12) = 0;
 }
+
+// 004A12B8(channel, offset, size, source): uploaded a VU microprogram (MPG codes by DMA). GT4's VU1 programs are
+// native renderers on the host (platform/gs/renderers3d.cpp): nothing to upload.
+void gt4_replace_func_004A12B8(int, int, int, uint32_t) {}
+
+// 004A72C0(context, mask): set the lane mask the next masked batch data use (VIF STMASK) and kept it at +0x40.
+// The batch records carry their mask (gt4_gfx_batch_unpack, gt4_gfx_batch_model): only the bookkeeping is left.
+void gt4_replace_func_004A72C0(uint32_t context, uint32_t mask) { guest_ref<uint32_t>(context + 0x40) = mask; }
 
 // 004A2038(mode): after an upload, paired a VIF1 FLUSH|I (004A1F60) with a PATH3 IRQ tag (004A1FA8) so that the
 // draws after it waited for the upload on PATH3 (modes 0, 1, 2: which side waits for which). Uploads are records

@@ -1,6 +1,10 @@
 /* compiler: ee-gcc2.96-no-strict-aliasing */
-/* Native correction of the provisional draft build/swarm/o2/004a9470_best.cpp (argument widths, argcheck.py width/retwidth): func_004A9108 takes (B *, long, long) and func_004A90A8 (Packet *, u64, u64, u64): GIF tag fields, 64-bit natively; the draft declared them int, which shifted the later arguments. */
+/* Native correction of the provisional draft build/swarm/o2/004a9470_best.cpp (argument widths, argcheck.py width/retwidth): func_004A9108 takes (B *, long, long) and func_004A90A8 (Packet *, u64, u64, u64): GIF tag fields, 64-bit natively; the draft declared them int, which shifted the later arguments.
+ * Natively the set-up block becomes state records and an attribute-only draw record (its colour), and the grid
+ * (program 0x3EA0 on the block) is drawn by gt4_gfx_grid (compat/game/gt4_gfx.h): the packet is built in place as
+ * before, then replaced by the records. */
 #include "spr.h"
+#include "gt4_gfx.h"
 typedef unsigned int u32;
 typedef unsigned long u64;
 struct Packet { char *begin, *ptr; int n, headers, count; char pad[12]; };
@@ -145,4 +149,32 @@ extern "C" void func_004A9470(u32 a,u32 b,u32 c,u32 d,u32 e,u32 f,u32 g,u64 scis
  meta[20]=d|0x40000000;
  meta[21]=0x34800000;
  st->flags|=0x003007df07dfUL;
+
+ /* natively: the set-up's register pairs (base + 0x30 ..: 17 state registers, then the colour) and the grid on
+    its block (the qwords the UNPACK would have sent, from start + 16); the packet area is reused for the records */
+ {
+  const int pairs = 17;
+  const int blockQwords = packet.headers + packet.count + 6;
+  unsigned long long *state = (unsigned long long *)__builtin_alloca(pairs * 16);
+  char *block = (char *)__builtin_alloca(blockQwords * 16);
+  for (int k = 0; k < pairs; k++) {
+   state[2 * k] = q[2 + 2 * k];
+   state[2 * k + 1] = q[3 + 2 * k];
+  }
+  for (int k = 0; k < blockQwords * 16; k++) block[k] = (start + 16)[k];
+  st->ptr = base;
+  gt4_gfx_set(st, state, pairs);
+  struct gt4_vertex colour;
+  colour.x = colour.y = 0;
+  colour.z = 0;
+  colour.rgba = (u32)q[36];
+  colour.s = colour.t = 0.0f;
+  colour.q = 0.0f;
+  colour.u = colour.v = 0;
+  colour.fog = 0;
+  colour.kick = 0;
+  colour.pad = 0;
+  gt4_gfx_draw(st, 0, GT4_DRAW_COLOR | GT4_DRAW_ATTRIBUTES_ONLY, &colour, 1);
+  gt4_gfx_grid(st, 0x3EA0, block, blockQwords);
+ }
 }

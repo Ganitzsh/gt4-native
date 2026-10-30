@@ -39,7 +39,8 @@ bool Vif1::gt4Program() {
     if (!programKnown) {
         uint64_t h = 0xCBF29CE484222325ull;
         for (const uint8_t byte : program) h = (h ^ byte) * 0x100000001B3ull;
-        programIsGt4 = h == kGt4Program;
+        // GT4's, or none uploaded (the native game sends none: its renderers are the host's)
+        programIsGt4 = h == kGt4Program || std::all_of(program.begin(), program.end(), [](uint8_t b) { return b == 0; });
         programKnown = true;
     }
     return programIsGt4;
@@ -73,6 +74,7 @@ bool Vif1::step() {
     auto need = [&](size_t words) { return available >= 1 + words; };
     size_t consumed = 1;
     ++stats.codes;
+    if (!inModel) ++stats.streamCodes[cmd];
     if (cmd >= 0x60) {   // UNPACK
         const uint32_t words = unpackWords(code, cl, wl);
         if (!need(words)) { --stats.codes; return false; }
@@ -178,7 +180,9 @@ void Vif1::batchModel(const uint8_t* bytes, size_t size, uint32_t modelMask) {
     outer.swap(pending);
     const size_t outerPos = pos;
     pos = 0;
+    inModel = true;
     feed(bytes, size);
+    inModel = false;
     if (!pending.empty()) {
         lastWarning = "a model packet ends inside a command";
         pending.clear();
