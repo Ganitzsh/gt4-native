@@ -86,6 +86,33 @@ void GraphicsStream::records(const uint8_t* data, size_t bytes) {
                 ++counters.badRecords;
             }
             break;
+        case gfx::kRead:
+            if (h.bytes >= sizeof(gfx::ReadRecord)) {
+                gfx::ReadRecord r;
+                std::memcpy(&r, payload, sizeof r);
+                gs.read(r);
+            } else {
+                ++counters.badRecords;
+            }
+            break;
+        case gfx::kDraw: {
+            gfx::DrawRecord d;
+            if (h.bytes < sizeof d) {
+                ++counters.badRecords;
+                break;
+            }
+            std::memcpy(&d, payload, sizeof d);
+            if (h.bytes < sizeof d + size_t(d.count) * sizeof(gfx::Vertex)) {
+                ++counters.badRecords;
+                break;
+            }
+            std::vector<gfx::Vertex>& v = drawVertices;
+            v.resize(d.count);
+            if (d.count) std::memcpy(v.data(), payload + sizeof d, size_t(d.count) * sizeof(gfx::Vertex));
+            gs.draw(d, v.data());
+            ++counters.draws;
+            break;
+        }
         default: ++counters.badRecords; break;
         }
         ++counters.gfxRecords;
@@ -432,6 +459,9 @@ void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload)
         counters.vif1Bytes += size;
         vif1.feed(payload, size);
         break;
+    case GT4_REC_GFX:
+        records(payload, size);
+        break;
     case GT4_REC_GFX_DATA: {
         if (size < 8) break;
         uint32_t head[2];
@@ -530,7 +560,7 @@ std::string GraphicsStream::describe() const {
         << r.oversized << " oversized, " << v.outsideBatch << " qwords outside the batch buffers), " << v.directQwords
         << " DIRECT qwords, " << v.mpgInstructions << " MPG instructions, " << v.unknownCodes << " unknown codes; "
         << counters.gfxRecords << " native records (" << counters.uploads << " uploads, " << counters.uploadsWithoutData
-        << " without data, " << counters.badRecords << " bad); " << counters.privWrites << " privileged writes, " << counters.reads
+         << " without data, " << counters.draws << " draws, " << counters.badRecords << " bad); " << counters.privWrites << " privileged writes, " << counters.reads
         << " GS reads, " << counters.path3Held << " PATH3 records held by MSKPATH3 (" << counters.path3ForcedAtVsync
         << " released at VSYNC)";
     if (!vif1.lastWarning.empty()) out << "; last VIF warning: " << vif1.lastWarning;

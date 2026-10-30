@@ -9,6 +9,7 @@
  * vector 15), as the original's VU0 microprogram 0x678 does. RGBAQ = those bytes with Q = 1.0,
  * XYZF2 = x, y (16 bits each), (z >> 4) in 24 bits and (w >> 4) in the top 8. The original
  * software-pipelines the loop; natively each vertex runs in turn (see func_0049A360.cpp). */
+#include "gt4_gfx.h"
 #include "gt4_vec.h"
 extern "C" void gt4_menu_band_widen(char *xyz, int stride, int n); /* runtime/sdk.cpp: centred menus in the wide mode */
 
@@ -33,23 +34,8 @@ extern "C" void func_0049A4F8(Ctx *ctx, int flags, int n, int pos, int colors)
     const char *src1 = (const char *)pos;
     const char *src3 = (const char *)colors;
     unsigned long long prim = (unsigned long long)(long long)(int)(((unsigned int)ctx->prim | (unsigned int)flags) & ~0x11u);
-    int qwc = n + 3;
-    char *p = ctx->packet;
-
-    if (qwc != 0) {
-        put32(p + 0, (unsigned int)qwc | 0x10000000u);
-        put32(p + 8, 0x11000000u);
-        put32(p + 12, (unsigned int)qwc | 0x50000000u);
-        put32(p + 4, 0);
-        ctx->packet = ctx->packet + (qwc << 4) + 16;
-    }
-    put64(p + 0x10, 0x1400000000000001ull);
-    put64(p + 0x18, 0);
-    put64(p + 0x20, prim);
-    put64(p + 0x38, 0x41);
-    put64(p + 0x30, ((unsigned long long)(long long)n | 0x8000) | 0x2400000000000000ull);
-
-    char *v = p + 0x40;
+    struct gt4_vertex *out = (struct gt4_vertex *)__builtin_alloca(n * sizeof(struct gt4_vertex));
+    struct gt4_vertex *v = out;
     do {
         int xyzw[4];
         float rgba[4];
@@ -58,11 +44,17 @@ extern "C" void func_0049A4F8(Ctx *ctx, int flags, int n, int pos, int colors)
             rgba[k] = getf(src3 + 4 * k);
         src1 += 8;
         src3 += 16;
-        put32(v + 0, gt4_colour_2d(rgba));
-        put32(v + 4, 0x3F800000u);
-        put32(v + 8, ((unsigned int)xyzw[0] & 0xFFFF) | ((unsigned int)xyzw[1] << 16));
-        put32(v + 12, (((unsigned int)xyzw[2] >> 4) & 0xFFFFFF) | ((((unsigned int)xyzw[3] >> 4) & 0xFF) << 24));
-        v += 16;
+        v->x = (unsigned short)xyzw[0];
+        v->y = (unsigned short)xyzw[1];
+        gt4_vertex_zf(v, (((unsigned int)xyzw[2] >> 4) & 0xFFFFFF) | ((((unsigned int)xyzw[3] >> 4) & 0xFF) << 24));
+        v->rgba = gt4_colour_2d(rgba);
+        v->s = v->t = 0.0f;
+        v->q = 1.0f;
+        v->u = v->v = 0;
+        v->kick = 1;
+        v->pad = 0;
+        v++;
     } while (--n != 0);
-    gt4_menu_band_widen(p + 0x40 + 8, 16, count);
+    gt4_menu_band_widen((char *)&out[0].x, sizeof(struct gt4_vertex), count);
+    gt4_gfx_draw(ctx, (unsigned int)prim, GT4_DRAW_PRIM | GT4_DRAW_FOG | GT4_DRAW_COLOR, out, count);
 }

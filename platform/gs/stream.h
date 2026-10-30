@@ -28,6 +28,10 @@ public:
     virtual void state(const gfx::StateRecord& r) { (void)r; }
     // Pixels into graphics memory (`bytes` of packed pixels; fewer when the game's data was short).
     virtual void upload(const gfx::UploadRecord& u, const uint8_t* data, size_t bytes) { (void)u; (void)data; (void)bytes; }
+    // A read of graphics memory (the pixels follow in readTransfer, asked for by GT4_REC_GS_READ).
+    virtual void read(const gfx::ReadRecord& r) { (void)r; }
+    // Primitives (`d.count` vertices).
+    virtual void draw(const gfx::DrawRecord& d, const gfx::Vertex* vertices) { (void)d; (void)vertices; }
     // A VBlank: present the displayed frame. `field` is CSR.FIELD, `count` the game's VBlank counter.
     virtual void vsync(uint32_t field, uint32_t count) = 0;
     // GS -> EE transfer data (after TRXDIR = 1), `qwc` qwords into `out`.
@@ -63,7 +67,7 @@ public:
         uint64_t unknownPrograms = 0;   // batches started in a program image that is not GT4's (nothing drawn)
         uint64_t path3Held = 0, path3ForcedAtVsync = 0;   // PATH3 records held by MSKPATH3
         uint64_t gfxRecords = 0, badRecords = 0;   // native records in the VIF1 stream (include/gt4/gfx.h)
-        uint64_t uploads = 0, uploadsWithoutData = 0;
+        uint64_t uploads = 0, uploadsWithoutData = 0, draws = 0;
     };
     const Stats& stats() const { return counters; }
     const Vif1::Stats& vifStats() const { return vif1.stats; }
@@ -110,6 +114,7 @@ private:
         std::vector<uint8_t> bytes;
     };
     std::vector<RecordData> recordData;
+    std::vector<gfx::Vertex> drawVertices;
     void sendPrimitives(const GsPrimitives& p);
     // Every GIF packet goes to the GS through this (GT4_VRAM_DUMP counts them).
     void sendGif(uint32_t path, const uint8_t* data, size_t bytes);

@@ -29,6 +29,7 @@
 using namespace gt4::rt;
 
 void send_record_data(const std::vector<uint8_t> &part);  // below, with the VIF1 scanner
+size_t next_read(const std::vector<uint8_t> &part, size_t from, gt4::gfx::ReadRecord &read);
 
 namespace {
 
@@ -222,10 +223,31 @@ void raise_gs_events(bool finish, bool signal) {
 
 using WaitFn = int (*)(int);
 
-// What a channel delivered, to the host.
+// What a channel delivered, to the host. VIF1's is cut after each read record: the host draws what came
+// before, then the pixels are read into game memory (link_read_image), before the stream goes on.
 void send_out(int channel, const std::vector<uint8_t> &out) {
     if (!out.empty()) {
         if (channel == 1) {
+            gt4::gfx::ReadRecord read;
+            size_t at = 0;
+            for (size_t end; (end = next_read(out, at, read)) != 0; at = end) {
+                const std::vector<uint8_t> piece(out.begin() + static_cast<ptrdiff_t>(at), out.begin() + static_cast<ptrdiff_t>(end));
+                send_record_data(piece);
+                link_send(GT4_REC_VIF1, piece.data(), static_cast<uint32_t>(piece.size()));
+                std::vector<uint8_t> pixels(static_cast<size_t>(read.qwords) * 16);
+                link_read_image(read.qwords, pixels.data());   // zeros without a host
+                const bool spr = (read.destination & 0x70000000) == 0x70000000;
+                for (uint32_t q = 0; q < read.qwords; ++q)
+                    std::memcpy(mem(read.destination + q * 16, spr), &pixels[q * 16], 16);
+            }
+            if (at) {
+                if (at < out.size()) {
+                    const std::vector<uint8_t> rest(out.begin() + static_cast<ptrdiff_t>(at), out.end());
+                    send_record_data(rest);
+                    link_send(GT4_REC_VIF1, rest.data(), static_cast<uint32_t>(rest.size()));
+                }
+                return;
+            }
             send_record_data(out);
             link_send(GT4_REC_VIF1, out.data(), static_cast<uint32_t>(out.size()));
         } else if (channel == 0) {
@@ -365,6 +387,33 @@ void send_record_data(const std::vector<uint8_t> &part) {
         }
         pos += n;
     }
+}
+
+// The end (in bytes) of the first record block at or after `from` that holds a read record, with that record;
+// 0 when there is none.
+size_t next_read(const std::vector<uint8_t> &part, size_t from, gt4::gfx::ReadRecord &read) {
+    const uint32_t *w = reinterpret_cast<const uint32_t *>(part.data());
+    const size_t nw = part.size() / 4;
+    VifScan scan;
+    for (size_t pos = 0; pos < nw;) {
+        const uint32_t cmd = (w[pos] >> 24) & 0x7F;
+        const size_t n = scan.length(w + pos, nw - pos);
+        if (cmd == 0x08 && n > 1 && pos * 4 >= from) {
+            const uint8_t *records = part.data() + (pos + 1) * 4;
+            const size_t bytes = (n - 1) * 4;
+            for (size_t at = 0; at + sizeof(gt4::gfx::Header) <= bytes;) {
+                gt4::gfx::Header h;
+                std::memcpy(&h, records + at, sizeof h);
+                if (h.type == gt4::gfx::kRead && h.bytes >= sizeof read) {
+                    std::memcpy(&read, records + at + sizeof h, sizeof read);
+                    return (pos + n) * 4;
+                }
+                at += size_t(gt4::gfx::recordQwords(h.bytes)) * 16;
+            }
+        }
+        pos += n;
+    }
+    return 0;
 }
 
 // The GS events of a VIF1 stream's DIRECT packets (standalone runs: no host to report them).

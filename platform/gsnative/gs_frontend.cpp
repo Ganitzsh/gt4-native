@@ -137,6 +137,27 @@ void GsFrontend::upload(const gfx::UploadRecord& u, const uint8_t* data, size_t 
     imageActive = false;
 }
 
+void GsFrontend::draw(const gfx::DrawRecord& d, const gfx::Vertex* vertices) {
+    if (d.flags & gfx::kDrawPrim) write(PRIM, d.prim & 0x7FF);
+    const bool fog = d.flags & gfx::kDrawFog;
+    for (uint32_t k = 0; k < d.count; ++k) {
+        const gfx::Vertex& v = vertices[k];
+        if (d.flags & gfx::kDrawColor) {
+            q = v.q;
+            reg[RGBAQ] = v.rgba | static_cast<uint64_t>(std::bit_cast<uint32_t>(v.q)) << 32;
+        }
+        if (d.flags & gfx::kDrawSt) {   // S, T and Q
+            st[0] = v.s;
+            st[1] = v.t;
+            q = v.q;
+        }
+        if (d.flags & gfx::kDrawUv) reg[UV] = v.u | static_cast<uint64_t>(v.v) << 16;
+        const uint64_t xy = v.x | static_cast<uint64_t>(v.y) << 16;
+        if (fog) write(v.kick ? XYZF2 : XYZF3, xy | static_cast<uint64_t>(v.z & 0xFFFFFF) << 32 | static_cast<uint64_t>(v.fog) << 56);
+        else write(v.kick ? XYZ2 : XYZ3, xy | static_cast<uint64_t>(v.z) << 32);
+    }
+}
+
 void GsFrontend::write(uint32_t r, uint64_t value) {
     r &= 0x7F;
     // Drawing state: into the native state (include/gt4/gfx.h).
@@ -266,6 +287,30 @@ void GsFrontend::transferStarted(uint32_t dir) {
         memoryWritten(t.dbp, t.dbw, t.dpsm, t.dsax, t.dsay, t.rrw, t.rrh);
         ++stats.copies;
     } else if (dir == 1) {
+        readStarted(t);
+    }
+}
+
+void GsFrontend::read(const gfx::ReadRecord& r) {
+    GsMemory::Transfer t;
+    t.sbp = r.base;
+    t.sbw = r.width;
+    t.spsm = r.format;
+    t.ssax = r.x;
+    t.ssay = r.y;
+    t.rrw = r.w;
+    t.rrh = r.h;
+    t.dir = 0;
+    static const bool logTransfers = std::getenv("GT4_GSN_XFER") != nullptr;
+    if (logTransfers)
+        std::printf("[gsn read] src %X/%u psm %X (%u,%u) %ux%u to %08X\n", t.sbp, t.sbw, t.spsm, t.ssax, t.ssay, t.rrw, t.rrh, r.destination);
+    imageActive = false;
+    readStarted(t);
+}
+
+// A GS -> host read starts: the packed pixels from the memory model, or from the GPU where a draw made them.
+void GsFrontend::readStarted(const GsMemory::Transfer& t) {
+    {
         readData = mem.read(t);
         readPos = 0;
         // Whether a draw wrote any of the source pages after the last transfer into them.

@@ -40,6 +40,8 @@ public:
     void gif(uint32_t path, const uint8_t* data, size_t bytes) override { native->gif(path, data, bytes); }
     void state(const gfx::StateRecord& r) override { native->applyState(r); }
     void upload(const gfx::UploadRecord& u, const uint8_t* data, size_t bytes) override { native->upload(u, data, bytes); }
+    void draw(const gfx::DrawRecord& d, const gfx::Vertex* vertices) override { native->draw(d, vertices); }
+    void read(const gfx::ReadRecord& r) override { native->read(r); }
     void primitives(const ps2::GsPrimitives& p) override {
         if (p.setPrim) native->setPrim(p.prim);
         for (size_t k = 0; k < p.count; ++k) {

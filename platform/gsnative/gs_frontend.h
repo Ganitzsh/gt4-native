@@ -191,6 +191,10 @@ public:
     void applyState(const gfx::StateRecord& r);
     // An upload record: `bytes` of packed pixels into graphics memory.
     void upload(const gfx::UploadRecord& u, const uint8_t* data, size_t bytes);
+    // A draw record: primitives.
+    void draw(const gfx::DrawRecord& d, const gfx::Vertex* vertices);
+    // A read record: the pixels for readTransfer.
+    void read(const gfx::ReadRecord& r);
 
 private:
     GsMemory mem;
@@ -273,6 +277,7 @@ private:
     void markWritten(uint32_t targetId, uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x0, uint32_t x1, uint32_t y0, uint32_t y1);
     TextureSource textureFor(const DrawState& s);
     void transferStarted(uint32_t dir);
+    void readStarted(const GsMemory::Transfer& t);
     // GS memory written by a transfer (changed: its pixels are known to differ; uploads say so as their
     // data arrives, imageWritten): the pages' owners and generations.
     void memoryWritten(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y, uint32_t w, uint32_t h, bool changed = true);

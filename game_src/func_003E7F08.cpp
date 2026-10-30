@@ -5,8 +5,10 @@
  * into view space, kept between 0.01 and the config's far distance when its projected circle (size * 1.2071068)
  * touches the [-1, 1] screen square and is under 2.4142134 wide. Sorts the kept ones by depth (unless the config's
  * mode is 0x48), sets up the GS state and the screen matrix (into the stack buffer s->matrix points to while the
- * particles are drawn), opens a packet and draws each one (func_003E8610, or 003E8790 for size 3 or less in
- * mode 0). The prefetches (pref) are left out. */
+ * particles are drawn), sets the primitive (func_004A5BE0(4)) and draws each one (func_003E8610, or 003E8790 for size
+ * 3 or less in mode 0). The prefetches (pref) are left out. The original opened a DIRECT packet that the particles
+ * filled; natively the primitive and each particle are draw records (compat/game/gt4_gfx.h). */
+#include "gt4_gfx.h"
 #include "gt4_vec.h"
 typedef unsigned long u64;
 struct E { float x,y,z; int index; };
@@ -81,14 +83,7 @@ extern "C" void func_003E7F08(Self *s, int mode, int group) {
     func_004A7550(s->matrix);
     func_004A7454();
     func_0049FE28();
-    s->cursor = s->start = (u64 *)func_004A5B90(0);
-    u64 *tag = alloc(&s->cursor);
-    tag[1] = 14;
-    tag[0] = 0x1000000000008001UL;
-    u64 *p = alloc(&s->cursor);
-    const unsigned v = func_004A5BE0(4);
-    p[1] = 0;
-    p[0] = v;
+    gt4_gfx_draw((void *)0x70002000, func_004A5BE0(4), GT4_DRAW_PRIM, 0, 0);
     switch (mode) {
     case 0:
         for (int i = 0; i < count; ++i) {
@@ -100,7 +95,6 @@ extern "C" void func_003E7F08(Self *s, int mode, int group) {
         for (int i = 0; i < count; ++i) func_003E8610(s, arr + i);
         break;
     }
-    func_004A5B90(((unsigned)s->cursor - (unsigned)s->start) >> 4);
     func_004A5400();
     func_004AB040(6);
     func_004A29A8(1);

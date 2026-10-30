@@ -281,6 +281,8 @@ enum RecordType : uint32_t {
     kNop = 0,
     kState = 1,    // StateRecord
     kUpload = 2,   // UploadRecord
+    kDraw = 3,     // DrawRecord, then its vertices
+    kRead = 4,     // ReadRecord
 };
 
 struct Header {
@@ -428,6 +430,46 @@ struct UploadRecord {
     uint32_t qwords;
 };
 static_assert(sizeof(UploadRecord) == 20);
+
+// Pixels from graphics memory into the game's memory: a w x h rectangle at (x, y) of the surface at `base`,
+// `width`, in `format`, packed (`qwords` x 16 bytes) to `destination` (a game address). What was drawn before
+// the record is in it. The game's runtime asks the host for the pixels when it reaches the record.
+struct ReadRecord {
+    uint16_t base;
+    uint8_t width, format;
+    uint16_t x, y, w, h;
+    uint32_t destination;
+    uint32_t qwords;
+};
+static_assert(sizeof(ReadRecord) == 20);
+
+// A vertex: position in 1/16 pixel in the drawing context's coordinates (its origin, at 2048 pixels on
+// GT4's screens, included), depth, colour (R in the low byte, alpha 0x80 = 1), texture coordinates as S, T,
+// Q (perspective) or U, V (texels in 1/16, with kTexelCoords), fog (255: none).
+struct Vertex {
+    uint16_t x, y;
+    uint32_t z;
+    uint32_t rgba;
+    float s, t, q;
+    uint16_t u, v;
+    uint8_t fog;
+    uint8_t kick;   // 0: the vertex starts or continues a strip without drawing (the first ones of a strip)
+    uint16_t pad;
+};
+static_assert(sizeof(Vertex) == 32);
+
+// Primitives: `count` Vertex follow. With kDrawPrim the primitive attributes are set to `prim` first (a new
+// strip); without it the vertices continue the current primitive. With kDrawFog Z has 24 bits and the
+// vertices' fog applies; without it Z has 32 bits and the fog of the last vertex that had one stays. The
+// colour (with Q), S, T and Q, and U and V come from the vertices when kDrawColor, kDrawSt and kDrawUv say so;
+// otherwise the values the previous vertices left apply.
+enum DrawFlags : uint32_t { kDrawPrim = 1, kDrawFog = 2, kDrawColor = 4, kDrawSt = 8, kDrawUv = 16 };
+struct DrawRecord {
+    uint32_t prim;    // PrimFlags
+    uint32_t count;
+    uint32_t flags;   // DrawFlags
+    uint32_t pad;
+};
 
 constexpr uint32_t recordQwords(uint32_t payload) { return (static_cast<uint32_t>(sizeof(Header)) + payload + 15) / 16; }
 

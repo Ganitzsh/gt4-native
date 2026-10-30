@@ -5,8 +5,10 @@
  * and a GS packet goes to the scratchpad cursor (+0x1F8, advanced by 8 quadwords): DMA cnt tag with VIF FLUSH and
  * DIRECT, a GIF tag with PRIM = flags (+0x4A) | 0x114 and RGBAQ = the colour at +0xC24 with Q = 1.0, then a REGLIST
  * GIF tag and per corner UV = (u * 16 + 0.5, v * 16 + 0.5) truncated, XYZF2 = x, y (16 bits each), z (24 bits),
- * w (8 bits). The z lane the original passes the program is the sign extension of x's bits (the upper word of the
+ * w (8 bits). Natively the sprite is a draw record (compat/game/gt4_gfx.h) with those values instead of the packet.
+ * The z lane the original passes the program is the sign extension of x's bits (the upper word of the
  * GPR mfc1 filled): 0, or 0xFFFFFFFF, which the VU reads as -FLT_MAX; it meets row 18 (0 in the sprite path). */
+#include "gt4_gfx.h"
 #include "gt4_vec.h"
 #include "spr.h"
 typedef unsigned int u32;
@@ -50,11 +52,6 @@ static void screen_point(int out[4], float x, float y, float z) {
     }
 }
 
-/* XYZF2: x, y (16 bits each), z (24 bits), w (8 bits) */
-static inline void put_xyzf(u32 *d, const int *s) {
-    d[0] = ((u32)s[0] & 0xFFFF) | ((u32)s[1] << 16);
-    d[1] = ((u32)s[2] & 0xFFFFFF) | ((u32)s[3] << 24);
-}
 
 extern "C" void func_00499948(float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1) {
     Spr *s = (Spr *)spr_base();
@@ -73,33 +70,23 @@ extern "C" void func_00499948(float x0, float y0, float x1, float y1, float u0, 
     t = u1 * 16.0f;
     const int iu1 = gt4_ftoi(t + 0.5f, 0);
 
-    u32 *p = (u32 *)s->cursor;
+    /* a strip of four corners: TME, FST, the colour with Q = 1; the first two only start it */
     const u32 flags = (u32)(unsigned short)(s->flags | 0x114);
-    const u32 color = s->color;
-    p[0] = 0x10000007;
-    p[3] = 0x50000007;
-    p[2] = 0x11000000;
-    p[1] = 0;
-    s->cursor += 0x80;
-    p[4] = 1;
-    p[5] = 0x24000000;
-    p[6] = 0x10;
-    p[7] = 0;
-    p[8] = flags;
-    p[9] = 0;
-    p[10] = color;
-    p[11] = 0x3F800000;
-    p[14] = 0x4343C3C3;
-    p[15] = 0;
-    p[12] = 0x8001;
-    p[13] = 0x84000000;
     const int u[4] = {iu0, iu1, iu0, iu1};
     const int v[4] = {iv0, iv0, iv1, iv1};
+    struct gt4_vertex out[4];
     for (int k = 0; k < 4; ++k) {
-        u32 *q = p + 16 + 4 * k;
-        ((unsigned short *)q)[0] = (unsigned short)u[k];
-        ((unsigned short *)q)[1] = (unsigned short)v[k];
-        q[1] = 0;
-        put_xyzf(q + 2, c[k]);
+        struct gt4_vertex *o = &out[k];
+        o->x = (unsigned short)c[k][0];
+        o->y = (unsigned short)c[k][1];
+        gt4_vertex_zf(o, ((u32)c[k][2] & 0xFFFFFF) | ((u32)c[k][3] << 24));
+        o->rgba = s->color;
+        o->s = o->t = 0.0f;
+        o->q = 1.0f;
+        o->u = (unsigned short)u[k];
+        o->v = (unsigned short)v[k];
+        o->kick = k >= 2;
+        o->pad = 0;
     }
+    gt4_gfx_draw(s, flags, GT4_DRAW_PRIM | GT4_DRAW_FOG | GT4_DRAW_COLOR | GT4_DRAW_UV, out, 4);
 }
