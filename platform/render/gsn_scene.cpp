@@ -114,6 +114,29 @@ struct GsnScene::Impl {
     std::vector<vk::Image*> reinterpretImages;            // this frame's, per reinterpretation
     std::vector<bool> built;
     vk::Pipeline reinterpret;
+    // Lighting of the game's 3D scenes (docs/LIGHTING.md, GsnScene::setLighting).
+    struct Lighting {
+        float occlusion = 0.0f;      // 0: no ambient occlusion
+        uint32_t directions = 6;
+        float grade = 0.0f;          // 0: the game's colours
+        float tanX = 0.433f * 4.0f / 3.0f, tanY = 0.433f;
+    } lighting;
+    vk::Pipeline aoPass, lightPass;
+    vk::Image aoImage, litImage;
+    // A Z buffer's depth plane as a sampled view (kept with the image's other views, destroyed with it).
+    VkImageView depthView(vk::Image& image) {
+        if (!image.mipViews.empty()) return image.mipViews[0];
+        VkImageViewCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        info.image = image.image;
+        info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        info.format = image.format;
+        info.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+        VkImageView view = VK_NULL_HANDLE;
+        vk::check(vkCreateImageView(device.device, &info, nullptr, &view), "vkCreateImageView(depth)");
+        image.mipViews.push_back(view);
+        return view;
+    }
     // GT4_GSN_DUMP=VBLANK: every colour target after that frame, read back and written as gsn_<vblank>_<id>.ppm
     // (colour / 255 as 8-bit RGB) once the GPU is done with it.
     struct Dump {
@@ -177,6 +200,10 @@ struct GsnScene::Impl {
         for (auto& [size, pool] : reinterpretPool)
             for (auto& i : pool.images) vk::destroy(device, *i);
         vk::destroy(device, reinterpret);
+        vk::destroy(device, aoPass);
+        vk::destroy(device, lightPass);
+        vk::destroy(device, aoImage);
+        vk::destroy(device, litImage);
         for (auto& [key, p] : pipelines) vk::destroy(device, p);
         vk::destroy(device, display);
         vk::destroy(device, stencilPrep);
@@ -272,7 +299,7 @@ struct GsnScene::Impl {
         vk::ImageDesc desc;
         desc.format = t.depth ? kDepth : kColour;
         desc.extent = {g.width * sx, g.height * sy};
-        desc.usage = t.depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+        desc.usage = t.depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT
                              : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                                    VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         desc.name = t.depth ? "gsn depth" : "gsn target";
@@ -550,6 +577,72 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         vkCmdEndRendering(command);
     };
 
+    // Lighting (docs/LIGHTING.md): a 3D scene complete in its target (the front end's Light command) gets its
+    // ambient occlusion from its Z buffer and the enhanced grade, computed into litImage and copied back.
+    auto relight = [&](const gsn::FrameList::Lighting& l) {
+        auto ct = targets.find(l.target), dt = targets.find(l.depth);
+        if (ct == targets.end() || dt == targets.end() || ct->second.depth || !dt->second.depth) return;
+        vk::Image& colour = ct->second.image;
+        vk::Image& depth = dt->second.image;
+        if (!colour.valid() || !depth.valid()) return;
+        end();
+        VkExtent2D e{std::min(colour.extent.width, depth.extent.width), std::min(colour.extent.height, depth.extent.height)};
+        if (l.width && l.height) e = {std::min(e.width, l.width * sx), std::min(e.height, l.height * sy)};
+        auto ensure = [&](vk::Image& image, VkFormat format, VkImageUsageFlags usage, const char* name) {
+            if (image.valid() && image.extent.width >= e.width && image.extent.height >= e.height) return;
+            if (image.valid()) retire(image);
+            vk::ImageDesc desc;
+            desc.format = format;
+            desc.extent = {std::max(e.width, image.extent.width), std::max(e.height, image.extent.height)};
+            desc.usage = usage;
+            desc.name = name;
+            image = vk::createImage(device, desc);
+        };
+        ensure(aoImage, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, "gsn occlusion");
+        ensure(litImage, kColour, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, "gsn lit");
+        const VkImageView depthOnly = depthView(depth);
+        constexpr float kZScale = 1.6e6f;
+        static const uint32_t lightView = std::getenv("GT4_LIGHT_VIEW") ? static_cast<uint32_t>(std::atoi(std::getenv("GT4_LIGHT_VIEW"))) : 0;   // GT4's 3D Z = 1.6e6 / view distance (24-bit Z; race captures)
+        vk::toSampled(b, colour, vk::kCompute);
+        vk::toSampled(b, depth, vk::kCompute);
+        vk::toStorage(b, aoImage, true);
+        b.flush(command);
+        if (lighting.occlusion > 0.0f) {
+            vk::bind(command, aoPass);
+            vk::Descriptors().sampled(0, depthOnly, samplers[0]).storage(1, aoImage.view).push(command, aoPass);
+            struct {
+                float size[2], tanHalf[2], zScale, radius, intensity, maxPixels;
+                uint32_t directions, pad;
+            } k{{float(e.width), float(e.height)}, {lighting.tanX, lighting.tanY}, kZScale, 1.2f, 1.4f, 40.0f * float(sy),
+                lighting.directions, 0};
+            vk::pushConstants(command, aoPass, k);
+            vk::dispatch2D(command, e.width, e.height);
+        }
+        vk::toSampled(b, aoImage, vk::kCompute);
+        vk::toStorage(b, litImage, true);
+        b.flush(command);
+        vk::bind(command, lightPass);
+        vk::Descriptors()
+            .sampled(0, colour.view, samplers[0])
+            .sampled(1, aoImage.view, samplers[0])
+            .sampled(2, depthOnly, samplers[0])
+            .storage(3, litImage.view)
+            .push(command, lightPass);
+        struct {
+            float size[2], occlusion, zScale, grade, contrast, vibrance, warmth;
+            uint32_t view;
+        } k{{float(e.width), float(e.height)}, lighting.occlusion, kZScale, lighting.grade, 1.18f, 0.3f, 1.0f, lightView};
+        vk::pushConstants(command, lightPass, k);
+        vk::dispatch2D(command, e.width, e.height);
+        b.image(litImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_READ_BIT);
+        b.image(colour, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        b.flush(command);
+        VkImageCopy copy{};
+        copy.srcSubresource = copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        copy.extent = {e.width, e.height, 1};
+        vkCmdCopyImage(command, litImage.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, colour.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+    };
+
     // Reinterpreted textures: built from their target when a draw first needs them.
     const size_t count = frame.reinterpretations.size();
     built.assign(count, false);
@@ -661,6 +754,10 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
     long executed = 0;
     for (size_t at = 0; at < frame.commands.size(); ++at) {
         const auto& cmd = frame.commands[at];
+        if (cmd.kind == gsn::FrameList::Command::Kind::Light) {
+            if ((lighting.occlusion > 0.0f || lighting.grade > 0.0f) && cmd.index < frame.lights.size()) relight(frame.lights[cmd.index]);
+            continue;
+        }
         if (cmd.kind != gsn::FrameList::Command::Kind::Draw) continue;
         if (limit >= 0 && executed++ >= limit) break;
         const gsn::Draw& d = frame.draws[cmd.index];
@@ -979,6 +1076,15 @@ bool GsnScene::hasFrame() const { return impl->any; }
 void GsnScene::setScale(uint32_t scale) { impl->scaleSetting = scale; }
 void GsnScene::setAnisotropy(int anisotropy) { impl->makeMipSamplers(static_cast<float>(anisotropy)); }
 
+void GsnScene::setLighting(float occlusion, uint32_t directions, float grade, float aspect) {
+    Impl::Lighting& l = impl->lighting;
+    l.occlusion = occlusion;
+    l.directions = std::max(directions, 1u);
+    l.grade = grade;
+    l.tanY = 0.433f;   // GT4's monitor presets: about 23.4 degrees above and below the centre (docs/WIDESCREEN.md)
+    l.tanX = l.tanY * (aspect > 0.0f ? aspect : 4.0f / 3.0f);
+}
+
 void GsnScene::prepare(const SceneFormats& formats) {
     Impl& s = *impl;
     vkDeviceWaitIdle(s.device.device);
@@ -1005,6 +1111,14 @@ void GsnScene::prepare(const SceneFormats& formats) {
     stencil.dynamics = {VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE, VK_DYNAMIC_STATE_STENCIL_OP, VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK,
                         VK_DYNAMIC_STATE_STENCIL_WRITE_MASK, VK_DYNAMIC_STATE_STENCIL_REFERENCE};
     s.stencilPrep = vk::createGraphics(s.device, stencil);
+    if (!s.aoPass.valid())
+        s.aoPass = vk::createCompute(s.device, shaders::gsn_ao_comp(),
+                                     {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE}, 40, "gsn occlusion");
+    if (!s.lightPass.valid())
+        s.lightPass = vk::createCompute(s.device, shaders::gsn_light_comp(),
+                                        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
+                                        36, "gsn light");
     if (!s.reinterpret.valid())
         s.reinterpret = vk::createCompute(s.device, shaders::gsn_reinterpret_comp(),
                                           {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,

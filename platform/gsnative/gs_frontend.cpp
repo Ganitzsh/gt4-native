@@ -51,6 +51,7 @@ void FrameList::clear() {
     vertices.clear();
     draws.clear();
     commands.clear();
+    lights.clear();
     textures.clear();
     reinterpretations.clear();
     retiredTextures.clear();
@@ -532,6 +533,16 @@ void GsFrontend::emit(const Vertex* v, uint32_t n, Topology topology) {
     if (s.c.colorKeep != 0xFFFFFFFFu) markWritten(colour, s.c.colorBase, width, s.c.colorFormat, left, right, top, bottom);
     if (depth && s.c.depthWrite) markWritten(depth, s.c.depthBase, width, s.c.depthFormat, left, right, top, bottom);
     const TextureSource texture = ((prim >> 4) & 1) ? textureFor(s) : TextureSource{};
+    // A 3D scene's target read into another one (GT4's post effects, its composite into the display buffer)
+    // is complete: the point for lighting it.
+    if (texture.kind == TextureSource::Kind::Target && texture.id != colour) sceneRead(texture.id);
+    if (depth && !((prim >> 8) & 1) && (prim & 7) != 6) {
+        Scene& scene = scenes[colour];
+        ++scene.draws;
+        scene.depth = depth;
+        scene.width = std::max<uint32_t>(scene.width, scissorX1 + 1);
+        scene.height = std::max<uint32_t>(scene.height, scissorY1 + 1);
+    }
     // Batch with the previous draw when nothing changed.
     if (!frame.commands.empty() && frame.commands.back().kind == FrameList::Command::Kind::Draw) {
         Draw& last = frame.draws[frame.commands.back().index];
@@ -555,6 +566,23 @@ void GsFrontend::emit(const Vertex* v, uint32_t n, Topology topology) {
     frame.commands.push_back({FrameList::Command::Kind::Draw, static_cast<uint32_t>(frame.draws.size())});
     frame.draws.push_back(d);
     ++stats.draws;
+}
+
+// A target read as a texture into another: when it holds a 3D scene of the screen's size (64 depth-tested
+// perspective draws or more since it was last lit; not the small environment and reflection maps), a Light
+// command before this draw.
+void GsFrontend::sceneRead(uint32_t target) {
+    auto it = scenes.find(target);
+    if (it == scenes.end() || it->second.draws < 64) return;
+    for (const Target& t : targets) {
+        if (t.id != target) continue;
+        if (t.bw * 64 >= 512 && t.height >= 384) {
+            frame.commands.push_back({FrameList::Command::Kind::Light, static_cast<uint32_t>(frame.lights.size())});
+            frame.lights.push_back({target, it->second.depth, it->second.width, it->second.height});
+        }
+        break;
+    }
+    it->second = {};
 }
 
 uint32_t GsFrontend::targetFor(uint32_t bp, uint32_t psm, bool depth, uint32_t heightNeeded, uint32_t bw) {
@@ -1050,6 +1078,7 @@ void GsFrontend::resetTextures() {
 
 void GsFrontend::vsync(uint64_t vblank, FrameList& out) {
     packetsThisFrame = 0;
+    scenes.clear();
     // The texture pack switched on or off: every texture decodes again, with or without its replacement.
     const bool wanted = replacementsWanted.load() && texturePack && texturePack->isOpen();
     if (wanted != replacementsOn) {

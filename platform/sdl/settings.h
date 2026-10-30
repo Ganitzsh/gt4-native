@@ -26,6 +26,7 @@ enum class TextureFilter : uint8_t { Point, Bilinear, Trilinear };
 enum class Tonemapper : uint8_t { Original, Reinhard, Aces, AgX, AgXPunchy, PbrNeutral };
 // Original: what the PS2 game draws (with the R1 renderer, the game's own GS output for that effect).
 enum class EffectQuality : uint8_t { Original, Off, Low, Medium, High, Ultra };
+enum class LightingMode : uint8_t { Original, Enhanced };
 enum class Preset : uint8_t { Original, Low, Medium, High, Ultra, Custom };
 // The AI's catch-up (GT4's "slow car boost": cars behind sped up, cars ahead slowed down, by event).
 enum class AiCatchUp : uint8_t { Original, Reduced, Off };
@@ -80,6 +81,7 @@ struct Settings {
     EffectQuality particles = EffectQuality::High;
     EffectQuality skyFog = EffectQuality::High;
     EffectQuality ambientOcclusion = EffectQuality::Medium;
+    LightingMode lighting = LightingMode::Original;   // the game's 3D scenes graded as a modern renderer's
 
     // [post]
     Tonemapper tonemapper = Tonemapper::AgXPunchy;
@@ -119,6 +121,7 @@ const char* name(WindowMode);
 const char* name(VSync);
 const char* name(Tonemapper);
 const char* name(EffectQuality);
+const char* name(LightingMode);
 const char* name(TextureFilter);
 const char* name(HudLayout);
 const char* name(AiCatchUp);

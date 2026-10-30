@@ -1,0 +1,67 @@
+#version 460
+// The game's 3D scene relit (docs/LIGHTING.md), before its post effects and HUD: the ambient occlusion of
+// gsn_ao.comp, blurred over a 4 x 4 block among pixels at about the same distance, darkens the scene in
+// linear light; the enhanced grade then gives it more contrast and colour, as a modern renderer's filmic
+// response would: a contrast curve on luminance around middle grey with a soft shoulder, vibrance (more for
+// muted colours), cool shadows and warm highlights. Targets hold colour / 255 and alpha / 128.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D scene;
+layout(set = 0, binding = 1) uniform sampler2D occlusion;
+layout(set = 0, binding = 2) uniform sampler2D depthBuffer;   // GS Z / 2^32
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D result;
+layout(push_constant) uniform Light {
+    vec2 size;
+    float aoStrength;   // 0: no occlusion
+    float zScale;
+    float grade;        // 0: the game's colours; 1: the enhanced grade
+    float contrast, vibrance, warmth;
+    uint view;          // debugging (GT4_LIGHT_VIEW): 1 the occlusion, 2 the view distance in 10 m bands
+} p;
+
+const vec3 kLuma = vec3(0.2126, 0.7152, 0.0722);
+
+float distanceAt(ivec2 q) {
+    const float z = texelFetch(depthBuffer, q, 0).r * 4294967296.0;
+    return z > 0.5 ? p.zScale / z : 1e30;
+}
+
+void main() {
+    const ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    const ivec2 last = ivec2(p.size) - 1;
+    if (any(greaterThan(q, last))) return;
+    const vec4 c = texelFetch(scene, q, 0);
+    vec3 linear = pow(max(c.rgb, vec3(0.0)), vec3(2.2));
+    if (p.aoStrength > 0.0) {
+        const float d = distanceAt(q);
+        float sum = 0.0, weights = 0.0;
+        for (int y = -2; y < 2; ++y)
+            for (int x = -2; x < 2; ++x) {
+                const ivec2 s = clamp(q + ivec2(x, y), ivec2(0), last);
+                const float w = abs(distanceAt(s) - d) < 0.05 * d ? 1.0 : 0.02;
+                sum += texelFetch(occlusion, s, 0).r * w;
+                weights += w;
+            }
+        linear *= mix(1.0, sum / weights, p.aoStrength);
+    }
+    if (p.grade > 0.0) {
+        vec3 x = linear;
+        // Vibrance: muted colours gain the most saturation.
+        const float high = max(x.r, max(x.g, x.b)), low = min(x.r, min(x.g, x.b));
+        const float saturation = (high - low) / (high + 1e-4);
+        const float luma = dot(x, kLuma);
+        x = max(mix(vec3(luma), x, 1.0 + p.vibrance * (1.0 - saturation)), vec3(0.0));
+        // Contrast around middle grey (in log space), with a shoulder that keeps highlights from clipping.
+        const float l = max(dot(x, kLuma), 1e-5);
+        float graded = 0.18 * pow(l / 0.18, p.contrast);
+        graded = graded > 0.6 ? 0.6 + (graded - 0.6) / (1.0 + (graded - 0.6) * 0.8) : graded;
+        x *= graded / l;
+        // Cool shadows, warm highlights.
+        const float t = smoothstep(0.02, 0.5, graded);
+        x *= mix(vec3(1.0 - 0.03 * p.warmth, 1.0 - 0.01 * p.warmth, 1.0 + 0.04 * p.warmth),
+                 vec3(1.0 + 0.04 * p.warmth, 1.0, 1.0 - 0.04 * p.warmth), t);
+        linear = mix(linear, x, p.grade);
+    }
+    if (p.view == 1u) linear = vec3(texelFetch(occlusion, q, 0).r);
+    if (p.view == 2u) { const float d = distanceAt(q); linear = vec3(d < 5.0 ? 1.0 : 0.0, d < 20.0 ? 1.0 : 0.0, d < 80.0 ? 1.0 : 0.0); }
+    imageStore(result, q, vec4(pow(linear, vec3(1.0 / 2.2)), c.a));
+}

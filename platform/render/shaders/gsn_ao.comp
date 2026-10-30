@@ -1,0 +1,70 @@
+#version 460
+// Ambient occlusion of the game's 3D scene from its Z buffer (docs/LIGHTING.md), at the render scale: each
+// pixel's view-space position from GT4's Z (Z = scale / distance: GT4's 3D renderers write Z proportional to
+// 1 / w), its normal from the nearer neighbours, then occluders in a disc of a fixed world radius around it
+// (horizon-based: per direction the highest occluder above the surface, fading out to the radius). The pattern rotates per pixel
+// (interleaved gradient noise); gsn_light.comp blurs it away.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D depthBuffer;   // GS Z / 2^32
+layout(set = 0, binding = 1, rgba8) uniform writeonly image2D occlusion;
+layout(push_constant) uniform Ao {
+    vec2 size;        // the target's render pixels
+    vec2 tanHalf;     // tan of half the field of view, across and down
+    float zScale;     // view distance = zScale / Z
+    float radius;     // world radius of the occluders looked for
+    float intensity;
+    float maxPixels;  // the disc's radius in render pixels at most
+    uint directions;  // four samples each
+} p;
+
+float distanceAt(ivec2 q) {
+    const float z = texelFetch(depthBuffer, q, 0).r * 4294967296.0;
+    return z > 0.5 ? p.zScale / z : 1e30;
+}
+
+vec3 positionAt(ivec2 q, float d) {
+    const vec2 ndc = (vec2(q) + 0.5) / p.size * 2.0 - 1.0;
+    return vec3(ndc * p.tanHalf * d, d);
+}
+
+void main() {
+    const ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    const ivec2 last = ivec2(p.size) - 1;
+    if (any(greaterThan(q, last))) return;
+    const float d = distanceAt(q);
+    // Nothing drawn, or the sky: unoccluded.
+    const float r2 = p.radius * p.radius;
+    const float pixels = min(p.radius / (d * p.tanHalf.y) * p.size.y * 0.5, p.maxPixels);
+    if (d > 1e4 || pixels < 1.5) {
+        imageStore(occlusion, q, vec4(1.0));
+        return;
+    }
+    const vec3 P = positionAt(q, d);
+    const ivec2 l = max(q - ivec2(1, 0), ivec2(0)), r = min(q + ivec2(1, 0), last);
+    const ivec2 u = max(q - ivec2(0, 1), ivec2(0)), b = min(q + ivec2(0, 1), last);
+    const float dl = distanceAt(l), dr = distanceAt(r), du = distanceAt(u), db = distanceAt(b);
+    const vec3 ex = abs(dr - d) < abs(dl - d) ? positionAt(r, dr) - P : P - positionAt(l, dl);
+    const vec3 ey = abs(db - d) < abs(du - d) ? positionAt(b, db) - P : P - positionAt(u, du);
+    vec3 n = normalize(cross(ex, ey));
+    if (dot(n, P) > 0.0) n = -n;   // towards the camera
+    const float noise = fract(52.9829189 * fract(dot(vec2(q), vec2(0.06711056, 0.00583715))));
+    // Per direction, the highest occluder above the surface's plane (the sine of its elevation, faded with
+    // distance): the horizon of horizon-based AO; the occlusion is their mean.
+    float occluded = 0.0;
+    for (uint i = 0u; i < p.directions; ++i) {
+        const float angle = (float(i) + noise) * 6.2831853 / float(p.directions);
+        const vec2 direction = vec2(cos(angle), sin(angle));
+        float horizon = 0.0;
+        for (int j = 0; j < 4; ++j) {
+            const float t = (float(j) + fract(noise * 3.7 + float(j) * 0.618)) / 4.0 * pixels + 1.0;
+            const ivec2 s = q + ivec2(direction * t);
+            if (any(lessThan(s, ivec2(0))) || any(greaterThan(s, last))) break;
+            const vec3 v = positionAt(s, distanceAt(s)) - P;
+            const float vv = dot(v, v);
+            horizon = max(horizon, max(r2 - vv, 0.0) / r2 * max(dot(v, n) * inversesqrt(vv + 1e-6) - 0.1, 0.0));
+        }
+        occluded += horizon;
+    }
+    const float ao = clamp(1.0 - p.intensity * occluded / float(p.directions), 0.0, 1.0);
+    imageStore(occlusion, q, vec4(ao));
+}

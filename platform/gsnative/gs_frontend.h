@@ -112,9 +112,16 @@ struct Display {
 // One frame: commands in the game's order.
 struct FrameList {
     struct Command {
-        enum class Kind : uint8_t { Draw, Clear } kind = Kind::Draw;
-        uint32_t index = 0;   // into draws
+        enum class Kind : uint8_t { Draw, Clear, Light } kind = Kind::Draw;
+        uint32_t index = 0;   // into draws (Light: into lights)
     };
+    // A 3D scene complete in its target (the next draw reads it into another): the back end may relight it
+    // there with its Z buffer (docs/LIGHTING.md).
+    struct Lighting {
+        uint32_t target = 0, depth = 0;
+        uint32_t width = 0, height = 0;   // the scene's area from the target's corner (its 3D draws' scissor), GS pixels
+    };
+    std::vector<Lighting> lights;
     std::vector<Vertex> vertices;
     std::vector<Draw> draws;
     std::vector<Command> commands;
@@ -287,6 +294,12 @@ private:
     std::unordered_map<TextureName, ReplacementTexture, TextureNameHash> replacementTextures;
     uint32_t replacementTexture(const TextureName& name, const ReplacementImage& image);
     std::unordered_map<uint64_t, Cached> textureCache;
+    // Per target this frame: its depth-tested 3D draws since it was last lit, and their Z buffer (lighting).
+    struct Scene {
+        uint32_t draws = 0, depth = 0, width = 0, height = 0;
+    };
+    std::unordered_map<uint32_t, Scene> scenes;
+    void sceneRead(uint32_t target);
     uint32_t nextTexture = 1;
     uint64_t frameCount = 0;
 

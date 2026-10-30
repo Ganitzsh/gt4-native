@@ -102,6 +102,15 @@ std::vector<Item> buildItems(bool game) {
     items.push_back(choice("Anisotropic filtering", "texture.anisotropy",
         {{"1", "Off"}, {"2", "2x"}, {"4", "4x"}, {"8", "8x"}, {"16", "16x"}},
         "Sharper textures at grazing angles (roads), on mipmapped textures."));
+    if (game) {
+        items.push_back(choice("Ambient occlusion", "effects.ambient_occlusion",
+            {{"off", "Off"}, {"low", "Low"}, {"medium", "Medium"}, {"high", "High"}, {"ultra", "Ultra"}},
+            "Darkens the 3D scene where geometry hides the sky (under cars, in corners, against walls), from its "
+            "depth. The PS2 had none."));
+        items.push_back(choice("Lighting", "effects.lighting", {{"original", "Original"}, {"enhanced", "Enhanced"}},
+            "Enhanced: the 3D scene graded as a modern renderer would (more contrast, a soft highlight roll-off, "
+            "richer colour, cool shadows and warm highlights). The HUD keeps its colours."));
+    }
     if (game)
         items.push_back(choice("HD textures", "texture.hd_pack", kOnOff,
             "A texture pack's high-resolution replacements of the game's textures (PCSX2 format, SCUS-97328)."));

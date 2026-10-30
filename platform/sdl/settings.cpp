@@ -151,6 +151,7 @@ const std::vector<const char*> kTonemappers{"original", "reinhard", "aces", "agx
 const std::vector<const char*> kEffects{"original", "off", "low", "medium", "high", "ultra"};
 const std::vector<const char*> kPresets{"original", "low", "medium", "high", "ultra", "custom"};
 const std::vector<const char*> kCatchUp{"original", "reduced", "off"};
+const std::vector<const char*> kLighting{"original", "enhanced"};
 
 const std::vector<Option>& options() {
     static const std::vector<Option> table = [] {
@@ -253,8 +254,13 @@ const std::vector<Option>& options() {
             "Sky and fog: original = linear distance fog (the GS fog of the PS2); low = exponential height fog; "
             "medium..ultra = height fog with sun in-scattering."));
         o.push_back(enumOption("effects.ambient_occlusion", &Settings::ambientOcclusion, kEffects,
-            "Ambient occlusion (an enhancement; the PS2 had none), planned as ground-truth AO (GTAO) with 4..16 "
-            "directions. Schema only for now: not rendered yet."));
+            "Ambient occlusion (an enhancement; the PS2 had none): the game's 3D scenes darkened where geometry "
+            "occludes the sky, from their Z buffer; low to ultra take 4, 6, 8 or 12 directions and darken more. "
+            "original and off: none."));
+        o.push_back(enumOption("effects.lighting", &Settings::lighting, kLighting,
+            "original: the game's own colours; enhanced: its 3D scenes graded as a modern renderer's filmic "
+            "response (more contrast around middle grey, a soft highlight shoulder, vibrance, cool shadows and "
+            "warm highlights), before its HUD."));
         o.push_back(enumOption("post.tonemapper", &Settings::tonemapper, kTonemappers,
             "HDR to display: original (clamp, as the PS2), reinhard (luminance), aces (Hill fit), agx and "
             "agx_punchy (Sobotka, Wrensch fit), pbr_neutral (Khronos PBR Neutral)."));
@@ -385,6 +391,7 @@ const char* name(WindowMode v) { return kWindowModes[static_cast<size_t>(v)]; }
 const char* name(VSync v) { return kVSync[static_cast<size_t>(v)]; }
 const char* name(Tonemapper v) { return kTonemappers[static_cast<size_t>(v)]; }
 const char* name(EffectQuality v) { return kEffects[static_cast<size_t>(v)]; }
+const char* name(LightingMode v) { return kLighting[static_cast<size_t>(v)]; }
 const char* name(TextureFilter v) { return kFilters[static_cast<size_t>(v)]; }
 const char* name(HudLayout v) { return kHud[static_cast<size_t>(v)]; }
 const char* name(AiCatchUp v) { return kCatchUp[static_cast<size_t>(v)]; }

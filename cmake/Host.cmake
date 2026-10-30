@@ -51,6 +51,8 @@ gt4_shader(gsn_frag ${S}/gsn.frag frag)
 gt4_shader(gsn_display_frag ${S}/gsn_display.frag frag)
 gt4_shader(gsn_stencil_frag ${S}/gsn_stencil.frag frag)
 gt4_shader(gsn_reinterpret_comp ${S}/gsn_reinterpret.comp comp)
+gt4_shader(gsn_ao_comp ${S}/gsn_ao.comp comp)
+gt4_shader(gsn_light_comp ${S}/gsn_light.comp comp)
 # Post-processing and output.
 gt4_shader(msaa_resolve_comp ${S}/msaa_resolve.comp comp)
 gt4_shader(exposure_histogram_comp ${S}/exposure_histogram.comp comp)

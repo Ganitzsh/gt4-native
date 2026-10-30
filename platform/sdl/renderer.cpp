@@ -798,6 +798,19 @@ struct Renderer::Impl {
             // render.gs = original: the PS2's own resolution (one render pixel per GS pixel); native: the
             // nearest whole scale to the render resolution.
             gsnScene->setScale(settings.gsRenderer == gt4::GsRenderer::Original ? 1 : 0);
+            // Lighting (docs/LIGHTING.md): occlusion strength and directions by level, the enhanced grade.
+            float occlusion = 0.0f;
+            uint32_t directions = 6;
+            switch (settings.ambientOcclusion) {
+            case gt4::EffectQuality::Low: occlusion = 0.5f; directions = 4; break;
+            case gt4::EffectQuality::Medium: occlusion = 0.7f; directions = 6; break;
+            case gt4::EffectQuality::High: occlusion = 0.85f; directions = 8; break;
+            case gt4::EffectQuality::Ultra: occlusion = 1.0f; directions = 12; break;
+            default: break;
+            }
+            float aspect = gt4::aspectValue(settings.aspect);
+            if (aspect <= 0.0f) aspect = extent.height ? static_cast<float>(extent.width) / static_cast<float>(extent.height) : 4.0f / 3.0f;
+            gsnScene->setLighting(occlusion, directions, settings.lighting == gt4::LightingMode::Enhanced ? 1.0f : 0.0f, aspect);
         }
         scene->setControls(stick, action);
         scene->apply(settings);

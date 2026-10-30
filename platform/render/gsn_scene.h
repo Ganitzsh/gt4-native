@@ -30,6 +30,9 @@ public:
     void setScale(uint32_t scale);
     // Anisotropic filtering of mipmapped textures (texture.anisotropy; 1 = off). Waits for the GPU on a change.
     void setAnisotropy(int anisotropy);
+    // Lighting of the game's 3D scenes (docs/LIGHTING.md): ambient occlusion strength 0..1 (0 = off) and its
+    // sample directions, the enhanced grade 0..1 (0 = the game's colours), the display's aspect.
+    void setLighting(float occlusion, uint32_t directions, float grade, float aspect);
 
     void prepare(const SceneFormats& formats) override;
     void recordPrepass(VkCommandBuffer command, const SceneView& view) override;
