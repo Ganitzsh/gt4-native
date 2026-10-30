@@ -502,6 +502,8 @@ namespace {
 std::atomic<bool> g_paused{false};
 std::atomic<int64_t> g_paused_ticks{0};   // QPC ticks spent paused before the current pause
 int64_t g_pause_started = 0;
+std::atomic<bool> g_stalled{false};       // kernel_add_stall was used: the clock is kept monotonic
+std::atomic<uint64_t> g_last_cycles{0};
 }  // namespace
 
 uint64_t kernel_bus_cycles() {
@@ -510,7 +512,21 @@ uint64_t kernel_bus_cycles() {
     int64_t ticks = now.QuadPart;
     if (g_paused.load(std::memory_order_acquire)) ticks = g_pause_started;
     ticks -= g_qpc_start.QuadPart + g_paused_ticks.load(std::memory_order_acquire);
-    return static_cast<uint64_t>(ticks * (kBusHz / g_qpc_freq.QuadPart));
+    uint64_t cycles = static_cast<uint64_t>(ticks * (kBusHz / g_qpc_freq.QuadPart));
+    if (g_stalled.load(std::memory_order_relaxed)) {  // a stall taken off may not turn the clock back
+        uint64_t prev = g_last_cycles.load();
+        while (cycles > prev && !g_last_cycles.compare_exchange_weak(prev, cycles)) {}
+        cycles = std::max(cycles, prev);
+    }
+    return cycles;
+}
+
+// Time the game did not run (a debugging tool's faults, GT4_GS_WRITERS), taken off the bus clock like a pause,
+// so that VBlank-driven game logic stays closer to its usual pace while the tool slows the game down.
+void kernel_add_stall(int64_t qpc_ticks) {
+    if (qpc_ticks <= 0) return;
+    g_stalled.store(true, std::memory_order_relaxed);
+    g_paused_ticks.fetch_add(qpc_ticks, std::memory_order_acq_rel);
 }
 
 void kernel_set_paused(bool paused) {

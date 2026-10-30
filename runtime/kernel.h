@@ -54,5 +54,8 @@ uint64_t kernel_bus_cycles();
 void kernel_set_paused(bool paused);  // the host's settings menu: stops the bus clock (VBlanks, alarms)
 bool kernel_paused();
 uint32_t kernel_vblank_count();
+// Takes time the game did not run (a debugging tool's own cost, GT4_GS_WRITERS) off the bus clock; safe in an
+// exception handler. Once it has been used, the clock is kept from going back.
+void kernel_add_stall(int64_t qpc_ticks);
 
 }  // namespace gt4::rt

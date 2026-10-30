@@ -10,6 +10,7 @@
 // At every VBlank the GS privileged registers the game wrote are sent with a frame marker, and
 // CSR.FIELD toggles as on an interlaced NTSC display.
 #include "audio.h"
+#include "gs_writers.h"
 #include "guest.h"
 #include "gt4/link/protocol.h"
 #include "kernel.h"
@@ -62,6 +63,7 @@ struct Chain {
     int sp = 0;
     bool tte = false;
     uint32_t last_tag = 0;  // bits 0-31 of the last tag read (CHCR.TAG is its upper half)
+    int channel = -1;       // for GT4_GS_WRITERS (gs_writers.cpp)
 };
 
 // Walks a chain from c.tadr, appending what the channel delivers. With stop_irq, stops after the
@@ -83,7 +85,16 @@ int walk(Chain &c, std::vector<uint8_t> &out, bool stop_irq, bool one = false) {
         const bool irq = (lo >> 31) & 1;
         const uint32_t addr = static_cast<uint32_t>(lo >> 32) & 0x7FFFFFFF;  // mem() aligns the PS2 forms
         const bool spr = (lo >> 63) & 1;
-        if (tte) out.insert(out.end(), tag + 8, tag + 16);  // the tag's upper half (VIF codes) goes first
+        // what the channel delivers, also to GT4_GS_WRITERS when it is set
+        auto put = [&](const uint8_t *p, uint32_t n, bool by_ref) {
+            append(out, p, n);
+            if (gsw::g_on) gsw::data(c.channel, p, n * 16, by_ref);
+        };
+        if (gsw::g_on) gsw::tag(c.channel, tag);
+        if (tte) {
+            out.insert(out.end(), tag + 8, tag + 16);  // the tag's upper half (VIF codes) goes first
+            if (gsw::g_on) gsw::data(c.channel, tag + 8, 8, false);
+        }
         if (tte && tag[15] == 0x4A) {  // an MPG (VU1 microprogram upload) in the tag
             g_chain_has_mpg = true;
             static int mpg_logged = 0;
@@ -105,36 +116,36 @@ int walk(Chain &c, std::vector<uint8_t> &out, bool stop_irq, bool one = false) {
         bool end = false;
         switch (id) {
         case 0:  // refe: QWC from ADDR, then end
-            append(out, mem(addr, spr), qwc);
+            put(mem(addr, spr), qwc, true);
             end = true;
             break;
         case 1:  // cnt: QWC after the tag, next tag after the data
-            append(out, tag + 16, qwc);
+            put(tag + 16, qwc, false);
             next = tadr + 16 + qwc * 16;
             break;
         case 2:  // next: QWC after the tag, next tag at ADDR
-            append(out, tag + 16, qwc);
+            put(tag + 16, qwc, false);
             next = addr;
             spr_tag = spr;
             break;
         case 3:  // ref
         case 4:  // refs: QWC from ADDR, next tag after this one
-            append(out, mem(addr, spr), qwc);
+            put(mem(addr, spr), qwc, true);
             next = tadr + 16;
             break;
         case 5:  // call: QWC after the tag, push the address after the data, next tag at ADDR
-            append(out, tag + 16, qwc);
+            put(tag + 16, qwc, false);
             if (sp >= 2) return -1;
             asr[sp++] = tadr + 16 + qwc * 16;
             next = addr;
             break;
         case 6:  // ret: QWC after the tag, pop
-            append(out, tag + 16, qwc);
+            put(tag + 16, qwc, false);
             if (sp == 0) end = true;
             else next = asr[--sp];
             break;
         case 7:  // end
-            append(out, tag + 16, qwc);
+            put(tag + 16, qwc, false);
             end = true;
             break;
         }
@@ -157,12 +168,13 @@ int walk(Chain &c, std::vector<uint8_t> &out, bool stop_irq, bool one = false) {
 }
 
 // The whole chain at once (VIF0/VIF1, and GIF chains without tag interrupts).
-bool walk_chain(uint32_t tadr, bool tte, std::vector<uint8_t> &out) {
+bool walk_chain(uint32_t tadr, bool tte, std::vector<uint8_t> &out, int channel) {
     g_chain_has_mpg = false;
     Chain c;
     c.tadr = tadr & 0x7FFFFFFF;
     c.spr_tag = (tadr & 0x80000000) != 0;
     c.tte = tte;
+    c.channel = channel;
     return walk(c, out, false) == 0;
 }
 
@@ -252,6 +264,7 @@ void on_vblank(uint32_t count) {
     g_field ^= 1;
     auto &csr = guest_ref<uint32_t>(kGsCsr);
     csr = (csr & ~(1u << 13)) | (g_field << 13);
+    if (gsw::g_on) gsw::vblank(count);
     audio_vblank();
     if (link_capture_finished() && !link_connected()) {  // a standalone capture run ends with its window
         link_capture_close();
@@ -381,7 +394,9 @@ void dma_after_handler() {
         if (g_dma.gif_busy && g_dma.gif_stopped) {
             g_dma.gif_stopped = false;
         } else if (!g_dma.gif_busy) {  // started by the handler: the chain at D2_TADR
+            if (gsw::g_on) gsw::kick(2, nullptr, nullptr);
             g_dma.gif = Chain();
+            g_dma.gif.channel = 2;
             g_dma.gif.tadr = tadr_of(2) & 0x7FFFFFFF;
             g_dma.gif.spr_tag = (tadr_of(2) & 0x80000000) != 0;
             g_dma.gif.tte = (chcr_of(2) & 0x40) != 0;
@@ -518,6 +533,7 @@ void vif1_start(std::vector<uint8_t> &out) {
 void vif1_start_chain(uint32_t address, bool spr, bool tte) {
     vif1_begin();
     g_dma.vif_chain = Chain();
+    g_dma.vif_chain.channel = 1;
     g_dma.vif_chain.tadr = address;
     g_dma.vif_chain.spr_tag = spr;
     g_dma.vif_chain.tte = tte;
@@ -531,6 +547,10 @@ extern "C" void gt4_replace_func_004A1140(int channel, uint32_t address, int qwc
     start_flag(channel);
     std::vector<uint8_t> out;
     append(out, mem(address, false), static_cast<uint32_t>(qwc));
+    if (gsw::g_on) {
+        gsw::kick(channel, __builtin_return_address(0), __builtin_frame_address(0));
+        gsw::data(channel, mem(address, false), static_cast<uint32_t>(qwc) * 16, false);
+    }
     if (channel == 1) vif1_start(out);
     else finish_transfer(channel, out);
 }
@@ -539,6 +559,7 @@ extern "C" void gt4_replace_func_004ABA50(int channel, uint32_t address) {
     reinterpret_cast<WaitFn>(guest_ptr(0x004A0F68))(channel);
     KernelScope ks;
     start_flag(channel);
+    if (gsw::g_on) gsw::kick(channel, __builtin_return_address(0), __builtin_frame_address(0));
     const uint32_t regs = guest_ref<uint32_t>(kDmaChanTable + 4 * channel);
     // the registers as the original sets them: QWC 0, TADR (scratchpad: bit 31), CHCR source chain
     // started, TTE/TIE kept (its handler reads the mode and the last tag)
@@ -550,6 +571,7 @@ extern "C" void gt4_replace_func_004ABA50(int channel, uint32_t address) {
     const uint32_t chcr = guest_ref<uint32_t>(regs);
     if (channel == 2) {  // GIF: stops at its IRQ tags (CHCR.TIE) and goes on in step with VIF1
         g_dma.gif = Chain();
+        g_dma.gif.channel = 2;
         g_dma.gif.tadr = address;
         g_dma.gif.spr_tag = spr_start;
         g_dma.gif.tte = (chcr & 0x40) != 0;
@@ -563,7 +585,7 @@ extern "C" void gt4_replace_func_004ABA50(int channel, uint32_t address) {
         return;
     }
     std::vector<uint8_t> out;
-    walk_chain(address, (chcr & 0x40) != 0, out);
+    walk_chain(address, (chcr & 0x40) != 0, out, channel);
     finish_transfer(channel, out);
 }
 
@@ -627,6 +649,7 @@ extern "C" int gt4_replace_func_004AB430(int) {
 namespace gt4::rt {
 
 void gs_init() {
+    gsw::init();  // GT4_GS_WRITERS (debugging)
     kernel_set_vblank_hook(on_vblank);
     kernel_set_interrupt_hook(dma_poll);
     guest_ref<uint32_t>(kGsCsr) = 0;

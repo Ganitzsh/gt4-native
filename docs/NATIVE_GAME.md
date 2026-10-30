@@ -111,6 +111,18 @@ address with `GT4_DMA_LOG`, then its writer with `gt4dbg --watch-write`. Provisi
 and an `order` or `other` draft can behave differently (004AB318 stored each value one A+D slot
 early; 004AA570 truncated its size to 16 bits).
 
+Who writes what the GS receives: `GT4_GS_WRITERS=FROM,FRAMES` (runtime/gs_writers.cpp, debugging only) measures, from
+VBlank FROM and over FRAMES frames, which game function wrote each 32-bit word the DMA channels delivered (DMA tags,
+VIF codes, a 3D batch's vertices, GIF tag, constants and state packet, DIRECT and PATH3 GIF tags, A+D writes by
+register group, REGLIST/PACKED vertices, IMAGE pixels), and who set the pgl shadow registers that the state flush
+packed. It write-protects the guest pages that held packet data and logs each write's function through an exception
+handler, so the game runs about ten times slower in the window. It writes `gs_writers_FROM.txt` (tab-separated
+`site`, `regs`, `prims`, `kick`, `value`, `setter` lines; `GT4_GS_WRITERS_DIR` sets the folder,
+`GT4_GS_WRITERS_IMAGE=1` also watches texture pixels). One window per run: a protected page of the shared RAM
+section becomes private to the main view, so afterwards the mirrors at 0x20000000 / 0x30000000 read stale data and the
+rest of the run is not reliable. The variable unset, nothing changes. The measurements of 2026-10-30 and what they
+mean for a native renderer interface: docs/GRAPHICS_API_PLAN.md.
+
 ## Status
 
 See PORT_TRACKER in gt4-decomp and the log below.
