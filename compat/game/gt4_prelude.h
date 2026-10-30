@@ -104,6 +104,13 @@ static __inline__ int __gt4_plzcw (int x)
 /* The low 32 bits of any value (an int, a 64-bit long, a 128-bit register struct). */
 #define __GT4_LO32(e) ({ __typeof__ (e) __gt4_t = (e); *(unsigned int *) &__gt4_t; })
 
+/* libgcc's longlong.h (the image's __muldi3 and __udivmoddi4 copies) defines umul_ppmm only for the MIPS
+ * (multu, mflo, mfhi): the 32 x 32 -> 64-bit product here, in C. Written with libgcc2's own UDItype and USItype,
+ * since libgcc2.c defines int, long and unsigned away (bogus_type). */
+#define umul_ppmm(w1, w0, u, v) \
+  do { UDItype __gt4_p = (UDItype) (USItype) (u) * (USItype) (v); \
+       (w1) = (USItype) (__gt4_p >> 32); (w0) = (USItype) __gt4_p; } while (0)
+
 /* The other asm statements the driver translates (multi-instruction, MMI, FPU, COP2, VU0 macro
  * mode...): tools/game_toolchain/asm_translate.py. */
 #include "gt4_asm.h"
