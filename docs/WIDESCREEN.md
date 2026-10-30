@@ -108,7 +108,12 @@ aspect ratio, which is how the pipeline already treats the test scene.
   (0x0039B3E8, 0x003A29A0); the anchoring offset +-96 -> +-(240 A - 320) x 0.9 (0x003AFDD8, 0x003AFD18,
   0x003AFD78; 0.9 keeps the PS2's own inset ratio, 96 / 106.67); the minimap -107 / 854 -> 320 -/+ 240 A
   (0x003A1970, 0x003D8518); 853.33 -> 480 A (0x003DA150); the font scale 0.75 -> (4/3) / A (0x0039F498). The
-  `aspect.safe_area` inset applies on top.
+  `aspect.safe_area` inset applies on top. Done in game_src for the projection (0x0039BB38), the three anchoring
+  functions, the race monitor (0x003DA150) and every 0.75 squeeze keyed on the wide flag (0x0039F498 the HUD font,
+  0x00393790, 0x00107328 the menu models, 0x00102B30 / 0x00103018 start-up, 0x003B80E8), all through
+  `gt4_wide_squeeze()` = (4/3) / A (runtime/sdk.cpp). Before it, 16:10 kept 16:9's 96-unit anchoring in a 768-unit
+  HUD and the corner panels left the screen (2026-10-30). Not yet: the minimap's -107 / 854 (asm only), split
+  screen (0x003A29A0) and the movie viewer 0x001AB4C0 (it reads the wide option itself).
 - **Menus** (0..640 orthographic): done the centred way. `game_src/func_00214FB0.cpp` gives the menus'
   orthographic projection 320 -/+ 240 x aspect in the wide mode, so their 640 x 480 layout keeps its shape in a
   centred 4:3 area (`--menus centered`, the game's default; gt4_host passes it only for `aspect.hud =
