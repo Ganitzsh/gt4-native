@@ -12,11 +12,11 @@ code with eeref.
 
 | Layer | What runs PS2 semantics | Size |
 |---|---|---|
-| 1. VU0 microprograms | done 2026-10-29: C++ (`runtime/native/vu0_programs.cpp`), no interpreter in the game | 14 entry points in one 0xA80-byte image, called from 19 functions |
+| 1. VU0 microprograms | done 2026-10-30: no VU0 model in the game; what each program did is plain float C++ in its callers (layer 1 below) | 14 entry points in one 0xA80-byte image, called from 19 functions |
 | 2. VU1 fallback | done 2026-10-29: no interpreter in the host (`GT4_VU1_INTERPRETER` OFF by default, a development option); the clipper's record overflow wraps natively | the C++ programs cover the 1,590 instructions GT4's image runs |
-| 3. PS2 instructions in game code | done 2026-10-30: no VU0 macro, MMI or system instruction is left in the linked game code; every such function has a plain C++ copy in `game_src/` (VU0 state as named shared vectors, `gt4_vec.h`; critical sections, $gp and timers through `gt4_interrupts_*`, `gt4_get_gp`, `gt4_cycle_count`), or a runtime replacement | 281 sources keep single FPU instructions (`sqrt.s`, `min.s`, `max.s`, `rsqrt.s`, `abs.s`), which game_cc writes as C expressions |
+| 3. PS2 instructions in game code | done 2026-10-30: no VU0 macro, MMI or system instruction is left in the linked game code; every such function has a plain C++ copy in `game_src/` (the state the original kept in VU0 as plain globals, `runtime/shared_state.h`, `gt4_vec.h`; critical sections, $gp and timers through `gt4_interrupts_*`, `gt4_get_gp`, `gt4_cycle_count`), or a runtime replacement | 281 sources keep single FPU instructions (`sqrt.s`, `min.s`, `max.s`, `rsqrt.s`, `abs.s`), which game_cc writes as C expressions |
 | 4. Provisional drafts | C++ that compiles to nearly the original, not proven | 525 functions (the eeref audit of the ones a GT mode session runs: all agree or understood) |
-| 5. Hardware data paths | the game builds DMA chains, VIF and GIF packets; `runtime/gs.cpp` walks them, `gt4_host` decodes VIF1, runs the VU1 programs and renders GS primitives (texture formats, CLUTs, blending, Z as the GS defines them) | the graphics library (pgl, 0x494578..) and the host's GS layer |
+| 5. Hardware data paths | the game builds DMA chains, VIF and GIF packets; `runtime/gs.cpp` walks them, `gt4_host` decodes VIF1, runs the VU1 programs and renders GS primitives (texture formats, CLUTs, blending, Z as the GS defines them). Since 2026-10-30 the native renderer is the only one: paraLLEl-GS (a GS emulator) is out of gt4_host, a test reference behind `GT4_GS_REFERENCE`; the native front end raises SIGNAL/FINISH/LABEL and serves GS -> host reads, drawn pixels from the GPU (the car thumbnails GT4 renders and keeps) | the graphics library (pgl, 0x494578..) and the host's GS command layer (`platform/gsnative`, `platform/gs/vif1.*`) |
 | 6. EE platform | the EE kernel (threads, semaphores, interrupts, VBlank), SIF and IOP services as C++ implementations of the PS2 APIs; guest RAM identity-mapped at PS2 addresses; the gcc 2.9 ABI | runtime/ |
 
 Order: 1 and 2 first (bounded, mechanical to verify), then 3 (function by function, eeref-verified), 4
@@ -27,9 +27,35 @@ renderer interface instead of GS packets), then 6.
 
 State 2026-10-30: every linked function with such asm rewritten in `game_src/` (VU0 macro code, MMI packing and saturation, PLZCW, EE
 FPU library code, pref/sync/cache, ei/di/Status critical sections, $gp), each checked with `GT4_DIFFTEST`
-(`tools/eeref/difftest_*.cpp`, 78 tests, 300 random cases each) and the ones a race reaches by recorded calls
-replayed on the original code (`tools/eeref/replay.py`, `known.txt` for the understood differences). The
-register file of `compat/game/gt4_asm.h` is no longer used by linked game code.
+(`tools/eeref/difftest_*.cpp`, 109 tests since 2026-10-30, 300 random cases each) and the ones a race reaches by recorded calls
+replayed on the original code (`tools/eeref/replay.py`, `known.txt` for the understood differences).
+
+2026-10-30, no VU0 model left at run time: the register file `__gt4_vu0`, `vcallms` and the matrix stack in VU0
+data memory are gone from the game.
+
+- The state functions share is plain data (`runtime/shared_state.h`, declared for game code in `gt4_vec.h`):
+  `gt4_shared_vectors[32][4]` (the original's vf0..vf31; `gt4_vec(n)`), `gt4_matrix_stack[256][4]` with its top
+  `gt4_matrix_stack_top` (the original's stack in VU0 data memory at vi13, in rows; the scratchpad's three matrix
+  sets keep their own tops, 004A5348), `gt4_random_state` (the R register of 004AC400 / 004AC41C). ACC, Q, I, the
+  flags and the other integer registers were temporaries or unused and have no counterpart.
+- The microprograms still called became plain functions: the sine (0x58) and the rotations about x, y, z (0x78,
+  0xB8, 0xF8) in `runtime/native/unit_00494578.cpp` (`sine`, `rotate_rows`), the 2D projection (0x678) as
+  `gt4_project_2d` / `gt4_colour_2d` in `gt4_vec.h` for 0049A200, 0049A360, 0049A4F8, 0049A6A0; push and pop
+  (0x900, 0x930) are 004A53F8 / 004A5400 on `gt4_matrix_stack`. They write only what callers read (the sine leaves
+  sin and cos in vector 1 for 004A5EB0, 004A5ED8, 004A5F00, 004A75D8, 0049F658).
+- Nothing else touches VU0 memory: the game's only VIF0 transfer is the micro image upload (004A12B8, MPG), which
+  `runtime/gs.cpp` hands to the host, which ignores it.
+- 22 linked functions still went through the asm translator's VU0 paths (20 sources the decomp moved back to
+  assembly, which game_cc recovers from its history, and RaceCarModel__virtual_37 / _41); they have `game_src/`
+  versions now: 0048D3E0, 0048D408, 0048D430, 0048D4C0, 0048D530, 0048D680, 0048D6C0, 0048D700, 0048DF98, 0048DFD8,
+  0048E018, 0048EB10, 00499F18, 0049E228, 0049E430, 0049E548, 0049EB90, 0049EE00, 0049F658, 003E33C0, 00390660,
+  003908C8. The translator refuses VU0 instructions now (`vnop`/`vwait*` excepted), so a source with VU0 code no
+  longer compiles natively until it has a rewrite.
+- The test tools keep a VU0 model of their own: `tools/eeref/vu0_programs.cpp` (the 14 programs in the VU's
+  arithmetic, which the GT4_ORIG bridge runs for the original code's `vcallms`; its data memory is
+  `gt4_matrix_stack`), `vu0_interp.cpp` and `vu0_state.h`. The bridge copies the shared vectors, the stack's top and
+  the random state to and from VU0's vf, vi13 and R at each crossing; GT4_RECORD files keep the old layout (the
+  shared state written as VU0 registers and data memory), so replay.py and eeref read them as before.
 
 The history of this layer:
 
@@ -66,16 +92,19 @@ identical to the reference.
 
 ## Layer 1: VU0 microprograms (done)
 
-`runtime/native/vu0_programs.cpp` has the 14 programs in C++, operation for operation in the interpreter's
+2026-10-30: the game runs none of this any more; its callers do what they need in plain float arithmetic (layer 3).
+What follows is the test reference, `tools/eeref/vu0_programs.cpp`.
+
+The 14 programs in C++, operation for operation in the interpreter's
 arithmetic (vu_float on operands and results, MAX/MINI on the bits, FTOI toward zero, Q at WAITQ), every register
 they write included. Checked against the interpreter, which is now a test tool (`tools/eeref/vu0_interp.cpp`):
 bit for bit on every call of two GT mode sessions (to GT Auto, and through the menus to the garage; the ten
 programs those reach), and on
 20,000 random states per program, edge values of the number format included (`eeref --vu0-fuzz 20000 --elf
 ...`; one changed bit in a constant makes every state of the programs using it differ). `tools/vu0_disasm.py`
-prints the micro image from the user's executable. A vcallms to any other address stops the game.
+prints the micro image from the user's executable. A vcallms to any other address stops the bridged call.
 
-| Entry | Called from |
+| Entry | Called from (in the original) |
 |---|---|
 | 0x58 | 004A7438 |
 | 0x78, 0xB8, 0xF8 | 004A7988, 004A79B0, 004A79D8 (hand-written VU0 helper library) |

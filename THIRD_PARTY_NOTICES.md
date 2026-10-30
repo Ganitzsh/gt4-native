@@ -43,18 +43,17 @@ fetched by CMake at pinned commits (`cmake/HostDependencies.cmake`) and are not 
 | SMAA | `third_party/smaa/` (vendored, unmodified) | MIT-style, Copyright (C) 2013 Jorge Jimenez, Jose I. Echevarria, Belen Masia, Fernando Navarro, Diego Gutierrez (`third_party/smaa/LICENSE.txt`) | SMAA 1x / T2x anti-aliasing: the shader and its precomputed area and search textures. |
 | SDL 3 | fetched, linked | zlib | Window, input, audio, timing. |
 | Vulkan-Headers | fetched, headers only | Apache-2.0 OR MIT | Vulkan API declarations. |
-| volk | fetched (at Granite's pinned commit), compiled into gt4_host | MIT | Vulkan function loader, shared by the host and the GS back end. |
+| volk | fetched (at Granite's pinned commit), compiled into gt4_host | MIT | Vulkan function loader. |
 | glslang | fetched, build tool only (nothing linked) | BSD-3-Clause and others (its LICENSE.txt) | Compiles the GLSL shaders to SPIR-V during the build. |
-| paraLLEl-GS | fetched (https://github.com/Arntzen-Software/parallel-gs, commit `cc6184af`), linked | LGPL-3.0-or-later, Copyright (c) 2024 Arntzen Software AS (Hans-Kristian Arntzen, Runar Heyer) | The GS back end: the PS2 Graphics Synthesizer emulated with Vulkan compute shaders (docs/GS_BACKEND.md). |
-| Granite | fetched as paraLLEl-GS's submodule (commit `16e7395f`), linked | MIT, Copyright (c) 2017-2026 Hans-Kristian Arntzen | paraLLEl-GS's Vulkan layer (device, memory, command buffers). Only Granite itself is fetched, not its own submodules. |
+| paraLLEl-GS | fetched only with the CMake option `GT4_GS_REFERENCE` (https://github.com/Arntzen-Software/parallel-gs, commit `cc6184af`), linked into two test programs, never into gt4_host | LGPL-3.0-or-later, Copyright (c) 2024 Arntzen Software AS (Hans-Kristian Arntzen, Runar Heyer) | A reference for the native renderer's tests: the PS2 Graphics Synthesizer emulated with Vulkan compute shaders (`tests/gs_backend.cpp`, `tests/gs_native.cpp`). |
+| Granite | fetched as paraLLEl-GS's submodule (commit `16e7395f`) with `GT4_GS_REFERENCE` only, linked into the same test programs | MIT, Copyright (c) 2017-2026 Hans-Kristian Arntzen | paraLLEl-GS's Vulkan layer (device, memory, command buffers). Only Granite itself is fetched, not its own submodules. |
 
 **paraLLEl-GS and the LGPL.** paraLLEl-GS is licensed under the GNU Lesser General Public License,
-version 3 or later. gt4_host links it statically and is itself distributed under the GPL-3.0 (LICENSE),
-which the LGPL permits (an LGPL-3.0 library may be combined into a GPL-3.0 program): the complete
-corresponding source of gt4_host, including the paraLLEl-GS revision it is built from
-(`cmake/HostDependencies.cmake`), is available under the GPL-3.0, so a recipient can modify paraLLEl-GS and
-relink. Binary distributions of gt4_host must carry this notice, the GPL-3.0 and LGPL-3.0 texts, and
-paraLLEl-GS's and Granite's copyright notices. paraLLEl-GS is used unmodified.
+version 3 or later. Since 2026-10-30 gt4_host does not contain it: only the reference tests of a
+`GT4_GS_REFERENCE` build link it (statically; they are GPL-3.0 programs like the rest of the project, which the
+LGPL permits), and they are not distributed. Should such a test binary be distributed, it must carry this
+notice, the GPL-3.0 and LGPL-3.0 texts, and paraLLEl-GS's and Granite's copyright notices, with the
+corresponding source (`cmake/HostDependencies.cmake` names the revision). paraLLEl-GS is used unmodified.
 
 **PCSX2 (reference only).** The VIF1 and VU1 interpreter of the development scaffold
 (`platform/gs/vif1.*`, `platform/gs/vu1.*`, CMake option `GT4_VU1_INTERPRETER`) was written for this

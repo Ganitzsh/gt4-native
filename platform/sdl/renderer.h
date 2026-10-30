@@ -1,7 +1,7 @@
 #pragma once
 // The host renderer: Vulkan device, presentation (a swapchain, or an offscreen image in headless mode),
-// frames in flight, captures, and the display pipeline (platform/render/pipeline.h) fed by the test scene.
-// The PS2 graphics translation (R1) will replace the test scene behind the same SceneSource interface.
+// frames in flight, captures, and the display pipeline (platform/render/pipeline.h) fed by the game's frames
+// from the native renderer (platform/render/gsn_scene.h), or by the test scene without a game.
 #include "settings.h"
 #include "settings_menu.h"
 
@@ -14,14 +14,14 @@
 
 struct SDL_Window;
 
-namespace gt4 { class TestScene; class GsScene; }
+namespace gt4 { class TestScene; }
 
 struct GpuInfo {
     uint32_t index = 0;
     std::string name, type, driver, api;
 };
 
-namespace gt4::gsn { struct FrameList; }
+namespace gt4::gsn { struct FrameList; struct ReadRequest; }
 
 class Renderer {
 public:
@@ -51,17 +51,13 @@ public:
     // A short message at the bottom of the screen (a setting changed by a key), for `seconds`.
     void showMessage(const std::string& text, float seconds = 2.5f);
     gt4::TestScene& scene();
-    // The PS2's displayed frame (GS back end) replaces the test scene and its HUD (docs/GS_BACKEND.md).
+    // The game's frames (the native renderer, docs/NATIVE_RENDERER.md) replace the test scene and its HUD.
     void useGameFrame(bool enabled);
-    void setGameFrame(uint32_t width, uint32_t height, const uint32_t* rgba);
-    // The native renderer's frame list (docs/NATIVE_RENDERER.md), shown instead of the GS back end's frame
-    // while useNativeFrames is on and once one has arrived. Swapped (the caller gets an old list's buffers
-    // back).
-    void setNativeFrame(gt4::gsn::FrameList& list);
-    void useNativeFrames(bool enabled);
-    // Reloads volk's global Vulkan functions for this renderer's instance and device (after another
-    // component, such as the GS back end's own device, loaded its own).
-    void reloadVulkanFunctions();
+    // The native renderer's frame lists in the game's order (moved in): all are drawn at the next frame.
+    void addNativeFrames(std::vector<gt4::gsn::FrameList>& lists);
+    // A GS -> host read of drawn pixels (gsn::GsFrontend::takeGpuRead): the lists added so far are drawn
+    // first. False when it cannot be served.
+    bool readGsTarget(const gt4::gsn::ReadRequest& request, std::vector<uint8_t>& out);
     const GpuInfo& gpu() const;
     double gpuMilliseconds() const;          // GPU time of the last finished frame (0 if unknown)
     double averageGpuMilliseconds() const;   // mean GPU time over every timed frame so far

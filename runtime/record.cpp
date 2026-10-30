@@ -3,7 +3,8 @@
 // VBLANK (default 0). Calls may nest (a function and its callees). For each, two files go to
 // GT4_RECORD_DIR (default "rec"). With GT4_RECORD_ROOT=ADDR, the functions are recorded only inside the
 // first recorded call of ADDR (itself recorded too): a step and the calls it makes, from one state.
-//   ADDR_N.pre   the arguments (the caller's 16 stack words), VU0's registers and memory, the
+//   ADDR_N.pre   the arguments (the caller's 16 stack words), the shared vectors, matrix stack and random
+//                state (in the layout of VU0's registers and memory, which the original kept them in), the
 //                scratchpad, the 32 MB of guest RAM and the caller's 64 KB of native stack (arguments
 //                often point at its locals), at the function's entry;
 //   ADDR_N.post  the same at its return (of RAM only the 4 KB pages that changed), with eax and edx
@@ -17,8 +18,8 @@
 #include "image.h"
 #include "kernel.h"
 #include "log.h"
-#include "native/vu0.h"
 #include "runtime.h"
+#include "shared_state.h"
 
 #include <windows.h>
 
@@ -48,6 +49,25 @@ struct RecHeader {
 
 constexpr uint32_t kVuMem = 0x11000000, kVuMemSize = 0x5000;  // VU0 micro (4 KB) and data (4 KB at +0x4000)
 constexpr uint32_t kPage = 0x1000;
+
+// The shared state in the layout of the VU0 register file the original kept it in (tools/eeref/vu0_state.h; eeref and
+// replay.py read it so): the shared vectors as vf0..vf31, the matrix stack's top as vi13, the random state as R.
+struct RecordedVu0 {
+    float vf[32][4];
+    float acc[4];
+    float q, i, p, pad0;
+    uint32_t r, clip;
+    uint32_t vi[32];
+};
+static_assert(sizeof(RecordedVu0) == 680);
+
+RecordedVu0 recorded_vu0() {
+    RecordedVu0 v{};
+    std::memcpy(v.vf, gt4_shared_vectors, sizeof v.vf);
+    v.r = gt4_random_state;
+    v.vi[13] = gt4_matrix_stack_top;
+    return v;
+}
 
 struct Hook {
     uint32_t addr;
@@ -100,7 +120,7 @@ void write_state(const Hook &hook, uint32_t index, uint32_t kind, const uint32_t
     h.ram_size = kRamSize;
     h.spr_size = kScratchpadSize;
     h.vu_size = kVuMemSize;
-    h.vu0_state_size = sizeof(Gt4Vu0State);
+    h.vu0_state_size = sizeof(RecordedVu0);
     h.stack_base = stack;
     h.stack_size = stack_window(stack);
     const auto *ram = static_cast<const uint8_t *>(guest_ptr(0));
@@ -137,7 +157,8 @@ void write_state(const Hook &hook, uint32_t index, uint32_t kind, const uint32_t
         h.ram_pages = static_cast<uint32_t>(pages.size() / (4 + kPage));
     }
     fwrite(&h, sizeof h, 1, f);
-    fwrite(&__gt4_vu0, sizeof(Gt4Vu0State), 1, f);
+    const RecordedVu0 vu0 = recorded_vu0();
+    fwrite(&vu0, sizeof vu0, 1, f);
     if (h.kind == 2) {
         fwrite(pages.data(), 1, pages.size(), f);
         for (size_t at = 0; at < pages.size(); at += 4 + kPage) {   // the next entry's reference
@@ -161,7 +182,9 @@ void write_state(const Hook &hook, uint32_t index, uint32_t kind, const uint32_t
         fwrite(pages.data(), 1, pages.size(), f);
     }
     fwrite(guest_ptr(kScratchpad), 1, kScratchpadSize, f);
-    fwrite(guest_ptr(kVuMem), 1, kVuMemSize, f);
+    fwrite(guest_ptr(kVuMem), 1, 0x4000, f);                    // VU0 micro memory (unused natively)
+    fwrite(gt4_matrix_stack, 1, sizeof gt4_matrix_stack, f);   // as VU0 data memory
+    static_assert(sizeof gt4_matrix_stack == kVuMemSize - 0x4000);
     fwrite(guest_ptr(h.stack_base), 1, h.stack_size, f);
     fclose(f);
 }

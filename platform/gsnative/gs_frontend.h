@@ -9,6 +9,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -109,8 +110,15 @@ struct FrameList {
     std::vector<Target> targets;          // every target known (created or grown this frame included)
     Display display;
     uint64_t vblank = 0;
+    bool displayed = false;   // ends at a VSYNC (display set); a list cut for a GS -> host read does not
     bool dump = false;   // debugging: the renderer writes this frame's targets out (GT4_GSN_TRIGGER)
     void clear();
+};
+
+// A GS -> host read of pixels a draw made: the rectangle of a colour target in GS pixels, wanted packed in
+// `psm` (the target's own format and layout), from the GPU.
+struct ReadRequest {
+    uint32_t target = 0, x = 0, y = 0, width = 0, height = 0, psm = 0;
 };
 
 // A frame that will not be drawn: its texture uploads and retirements move to the next one, `into`.
@@ -118,12 +126,32 @@ void carryOver(FrameList& dropped, FrameList& into);
 
 class GsFrontend {
 public:
+    // SIGNAL, FINISH and LABEL as packets of any path write them: kind 0 FINISH, 1 SIGNAL, 2 LABEL, with the
+    // register's value (include/gt4/link/protocol.h GT4_REC_GS_EVENT; the game applies CSR, IMR and SIGLBLID).
+    using EventSink = std::function<void(uint32_t kind, uint64_t value)>;
+
     GsFrontend();
     void gif(uint32_t path, const uint8_t* data, size_t bytes);
     void privileged(uint32_t offset, uint64_t value);
     // Ends the frame: `out` receives it (swapped, so its buffers are reused).
     void vsync(uint64_t vblank, FrameList& out);
     const GsMemory& memory() const { return mem; }
+    void setEventSink(EventSink sink) { events = std::move(sink); }
+    // GS -> host data of the transfer the last TRXDIR = 1 started, `qwc` qwords from where the previous call
+    // stopped (zeros past its end). Read from the memory model; `readFromTarget` says whether a page of it
+    // was last written by a draw (whose pixels only the GPU has: those bytes are stale here).
+    void readTransfer(void* out, uint32_t qwc);
+    bool readFromTarget() const { return readTarget; }
+    // When the read in progress is of one colour target in the target's own layout: the rectangle to read
+    // on the GPU (once; then cut the frame list there and give the pixels to setReadData).
+    bool takeGpuRead(ReadRequest& request);
+    void setReadData(std::vector<uint8_t> data);
+    // Ends the frame list at this point without a VSYNC (`out` receives it): what the GPU must draw before
+    // a read. The frame goes on in a new list.
+    void cut(FrameList& out);
+    // Replaces the whole of GS memory (4 MiB in address order: a saved state restored); every page becomes
+    // memory-owned and changed.
+    void restoreMemory(const void* data);
     // Forgets every decoded texture (after frames that were not drawn: their uploads never happened); the
     // next frame says so with resetTextures.
     void resetTextures();
@@ -132,6 +160,7 @@ public:
         uint64_t primitives = 0, draws = 0, uploads = 0, copies = 0, decoded = 0, targetReads = 0, reinterpreted = 0;
         uint64_t droppedDraws = 0;   // past the target limit (targetFor)
         uint64_t targetsReused = 0;  // slots given to a new buffer at the limit
+        uint64_t reads = 0, readsFromTargets = 0;   // LOCAL -> HOST transfers; those with drawn pages
     } stats;
 
 private:
@@ -158,6 +187,13 @@ private:
 
     // Image transfer (HOST -> LOCAL) in progress.
     bool imageActive = false;
+    // The LOCAL -> HOST transfer in progress: its packed pixels, how far they have been read.
+    std::vector<uint8_t> readData;
+    size_t readPos = 0;
+    bool readTarget = false;
+    ReadRequest gpuRead;
+    bool gpuReadPending = false;
+    EventSink events;
 
     // Targets and the owner of each 8 KiB page (0: memory; else a target id), with when it was written.
     std::vector<Target> targets;

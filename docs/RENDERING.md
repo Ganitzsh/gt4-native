@@ -6,9 +6,9 @@ layer and presentation. Until the game's own renderer exists (milestone R1, `doc
 from a procedural test scene (`platform/render/test_scene.cpp`, no game data) that exercises every stage: fine
 geometry (fence wires, gantry trusses), textures seen at grazing angles, moving cars with clear-coat paint,
 very bright emitters, a large depth range, an analytic sky and a 2D HUD. The R1 renderer plugs into the same
-interface (`platform/render/scene.h`, see "Scene contract"). With `--game` or `--replay` the scene is the PS2's
-displayed frame from the GS back end (`platform/render/gs_scene.cpp`, `docs/GS_BACKEND.md`): the game's own
-image, which the `original` preset shows unaltered.
+interface (`platform/render/scene.h`, see "Scene contract"). With `--game` or `--replay` the scene is the game's
+frames drawn by the native renderer (`platform/render/gsn_scene.cpp`, `docs/NATIVE_RENDERER.md`): the game's own
+image, which the `original` preset shows unaltered at the PS2's resolution.
 
 Rendering only observes game state (`docs/PLATFORM.md`): the scene advances only through `TestScene::tick()`
 at the game's fixed 60 Hz; frames interpolate between ticks, and no setting, frame rate or GPU feeds back into

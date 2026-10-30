@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 namespace gt4 {
 
@@ -18,9 +19,13 @@ public:
     GsnScene(const GsnScene&) = delete;
     GsnScene& operator=(const GsnScene&) = delete;
 
-    // The newest frame list (swapped: the caller gets the previous one's buffers back).
-    void setFrame(gsn::FrameList& list);
+    // Frame lists in the game's order (moved in): all of them are executed at the next frame, the last one
+    // with a VSYNC is shown.
+    void addFrames(std::vector<gsn::FrameList>& lists);
     bool hasFrame() const;
+    // A GS -> host read of drawn pixels: executes the pending lists at once (waiting for the GPU) and packs
+    // the target's rectangle as `request.psm`. False when it cannot (nothing prepared yet, no such target).
+    bool read(const gsn::ReadRequest& request, std::vector<uint8_t>& out);
     // Render pixels per GS pixel; 0 = from the render extent (the nearest integer, 1..8).
     void setScale(uint32_t scale);
     // Anisotropic filtering of mipmapped textures (texture.anisotropy; 1 = off). Waits for the GPU on a change.

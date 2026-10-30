@@ -3,6 +3,7 @@
 // public GS documentation.
 #include <cstdint>
 #include <cstring>
+#include <utility>
 #include <vector>
 
 namespace gt4::test {
@@ -103,6 +104,26 @@ struct Gif {
     size_t bytes() const { return q.size() * 8; }
     const void* data() const { return q.data(); }
 };
+
+constexpr uint32_t rgb(uint32_t r, uint32_t g, uint32_t b) { return r | (g << 8) | (b << 16); }
+
+// The tests' scene: context 1 draws into a 640 x 448 PSMCT32 frame at 0, no Z, whole-screen scissor.
+inline Gif setup() {
+    Gif g;
+    g.ad({{FRAME_1, frame(0, 10, PSMCT32)}, {ZBUF_1, zbuf(0x70, PSMZ24, true)}, {SCISSOR_1, scissor(0, 639, 0, 447)},
+          {XYOFFSET_1, xyoffset(2048 << 4, 2048 << 4)}, {TEST_1, test(true, 1)}, {PRMODECONT, 1}, {DTHE, 0},
+          {COLCLAMP, 1}, {TEX1_1, 0}});
+    return g;
+}
+
+inline void sprite(Gif& g, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1, uint64_t color, bool abe = false) {
+    g.reglist(prim(6, false, false, abe, false), {RGBAQ, XYZ2, XYZ2}, {color, xyz(x0, y0), xyz(x1, y1)});
+}
+
+// Privileged registers of a 640 x 448 interlaced display of the frame at 0. Interlaced with a full-height
+// buffer read every other line per field (FFMD = 0).
+inline constexpr std::pair<uint32_t, uint64_t> kDisplay[] = {
+    {0x00, pmode(true, false)}, {0x20, smode2(true, false)}, {0x70, dispfb(0, 10, PSMCT32)}, {0x80, display640x448()}, {0xE0, 0}};
 
 // --- VU1 microcode (encodings from the public VU instruction set) ---------------------------------------
 namespace vu {

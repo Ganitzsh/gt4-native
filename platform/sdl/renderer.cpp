@@ -4,7 +4,6 @@
 
 #include "display.h"
 
-#include "gs_scene.h"
 #include "overlay.h"
 #include "pipeline.h"
 #include "test_scene.h"
@@ -233,9 +232,7 @@ struct Renderer::Impl {
     int presentedBits = 8;
 
     std::unique_ptr<gt4::TestScene> scene;
-    std::unique_ptr<gt4::GsScene> gsScene;
-    std::unique_ptr<gt4::GsnScene> gsnScene;   // the native renderer, once it sends frames
-    bool native = false, shownNative = false;   // native frames wanted; shown (one has arrived)
+    std::unique_ptr<gt4::GsnScene> gsnScene;   // the native renderer: the game's frames
     bool gameFrame = false;
     std::unique_ptr<gt4::FramePipeline> pipeline;
     std::unique_ptr<gt4::Overlay> overlay;
@@ -253,7 +250,6 @@ struct Renderer::Impl {
         overlay.reset();
         pipeline.reset();
         scene.reset();
-        gsScene.reset();
         gsnScene.reset();
         if (!device.device) {
             if (surface) SDL_Vulkan_DestroySurface(instance, surface, nullptr);
@@ -363,7 +359,6 @@ struct Renderer::Impl {
             check(vkCreateQueryPool(device.device, &queries, nullptr, &timestamps), "vkCreateQueryPool");
         }
         scene = std::make_unique<gt4::TestScene>(device, pool);
-        gsScene = std::make_unique<gt4::GsScene>(device, pool);
         gsnScene = std::make_unique<gt4::GsnScene>(device, pool);
         pipeline = std::make_unique<gt4::FramePipeline>(device, pool);
         overlay = std::make_unique<gt4::Overlay>(device, pool);
@@ -794,17 +789,16 @@ struct Renderer::Impl {
             target.stage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
             target.access = VK_ACCESS_2_NONE;
         }
-        if (const bool show = native && gsnScene->hasFrame(); show != shownNative) {
-            shownNative = show;
-            sceneSwitched = true;   // between the GS back end's frame and the native renderer
-        }
-        gt4::SceneSource& active = !gameFrame   ? static_cast<gt4::SceneSource&>(*scene)
-                                   : shownNative ? static_cast<gt4::SceneSource&>(*gsnScene)
-                                                 : static_cast<gt4::SceneSource&>(*gsScene);
+        gt4::SceneSource& active = gameFrame ? static_cast<gt4::SceneSource&>(*gsnScene) : static_cast<gt4::SceneSource&>(*scene);
         if (sceneSwitched) { vkDeviceWaitIdle(device.device); pipeline.reset(); pipeline = std::make_unique<gt4::FramePipeline>(device, pool);
                              pipeline->prepareOutput(format, srgbFormat, static_cast<uint32_t>(presentedBits)); sceneSwitched = false; }
         pipeline->configure(settings, extent, active);
-        if (shownNative) gsnScene->setAnisotropy(settings.anisotropy);
+        if (gameFrame) {
+            gsnScene->setAnisotropy(settings.anisotropy);
+            // render.gs = original: the PS2's own resolution (one render pixel per GS pixel); native: the
+            // nearest whole scale to the render resolution.
+            gsnScene->setScale(settings.gsRenderer == gt4::GsRenderer::Original ? 1 : 0);
+        }
         scene->setControls(stick, action);
         scene->apply(settings);
         const gt4::SceneView view = pipeline->beginFrame(slot, frameCounter);
@@ -915,14 +909,9 @@ void Renderer::useGameFrame(bool enabled) {
     if (impl->gameFrame != enabled) impl->sceneSwitched = true;   // the pipeline prepares the new scene source
     impl->gameFrame = enabled;
 }
-void Renderer::setGameFrame(uint32_t width, uint32_t height, const uint32_t* rgba) { impl->gsScene->setFrame(width, height, rgba); }
-void Renderer::setNativeFrame(gt4::gsn::FrameList& list) {
-    impl->gsnScene->setFrame(list);
-}
-void Renderer::useNativeFrames(bool enabled) { impl->native = enabled; }
-void Renderer::reloadVulkanFunctions() {
-    volkLoadInstanceOnly(impl->instance);
-    volkLoadDevice(impl->device.device);
+void Renderer::addNativeFrames(std::vector<gt4::gsn::FrameList>& lists) { impl->gsnScene->addFrames(lists); }
+bool Renderer::readGsTarget(const gt4::gsn::ReadRequest& request, std::vector<uint8_t>& out) {
+    return impl->gsnScene->read(request, out);
 }
 const GpuInfo& Renderer::gpu() const { return impl->info; }
 double Renderer::gpuMilliseconds() const { return impl->gpuMs; }

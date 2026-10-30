@@ -324,10 +324,11 @@ def translate_asm(data, name=None):
     policy, tools/asm_policy.py) go through ASM_C: FPU min/max/sqrt/abs/rsqrt, mtc1/mfc1, plzcw,
     the barriers (sync, pref, cache: an empty asm with a memory clobber) and the EE kernel's
     privileged instructions (calls into the native runtime, see gt4_prelude.h). Every other
-    statement (several instructions, MMI, COP2/VU0 macro mode, explicit registers, asm in a
-    #define) goes to tools/game_toolchain/asm_translate.py, which turns it into C over 128-bit
-    register temporaries and the VU0 register file (compat/game/gt4_asm.h) when it knows all its
-    instructions; the statics it needs are declared at the top of the file."""
+    statement (several instructions, MMI, explicit registers, asm in a #define) goes to
+    tools/game_toolchain/asm_translate.py, which turns it into C over 128-bit register temporaries
+    (compat/game/gt4_asm.h) when it knows all its instructions (never VU0's: the game has no VU0
+    model; such functions are rewritten in game_src/); the statics it needs are declared at the top
+    of the file."""
     stmts = []
     for m in ASM_START.finditer(data):
         end = _close_paren(data, m.end())

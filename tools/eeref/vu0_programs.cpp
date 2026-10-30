@@ -1,23 +1,23 @@
-// GT4's VU0 microprograms, written in C++ (docs/NATIVE_ONLY.md, layer 1).
+// GT4's VU0 microprograms, written in C++ in the VU's arithmetic: a test reference (docs/NATIVE_ONLY.md, layer 1).
+// The game runs none of this: its callers have plain C++ versions of what they need (runtime/native/
+// unit_00494578.cpp: the sine and the rotations; compat/game/gt4_vec.h: the 2D projection; game_src/: the rest).
+// The GT4_ORIG bridge (orig_bridge.cpp) runs the original code's vcallms here, and `eeref --vu0-fuzz` checks these
+// against the interpreter (vu0_interp.cpp).
 //
 // The game uploads one VU0 micro image at boot (0xA80 bytes, 004A03C0) and starts its programs with vcallms
 // at 14 entry addresses. Each function below does what one program does, operation for operation in the
-// interpreter's arithmetic (runtime/native/vu0.cpp: operands and results through vu_float, MAX/MINI on the
-// bits, FTOI toward zero), so the registers and data memory it leaves are the interpreter's bit for bit;
-// GT4_VU0_DIFF=1 checks that on every call. Every register a program writes is written, temporaries
-// included: callers read results with qmfc2 and some keep using the registers afterwards.
+// interpreter's arithmetic (operands and results through vu_float, MAX/MINI on the bits, FTOI toward zero), so
+// the registers and data memory it leaves are the interpreter's bit for bit. Every register a program writes is
+// written, temporaries included: callers read results with qmfc2 and some keep using the registers afterwards.
 // tools/vu0_disasm.py prints the micro image these were written from (from the user's executable).
 #include "vu0_programs.h"
-
-#include "guest.h"
 
 #include <cmath>
 #include <cstring>
 
-namespace gt4::native {
+namespace vu0ref {
 namespace {
 
-constexpr uint32_t kDataMem = 0x11004000;
 constexpr int X = 1, Y = 2, Z = 4, W = 8, XYZW = 15;
 constexpr int ACC = -1;  // a destination: the accumulator
 
@@ -57,6 +57,7 @@ inline int32_t ftoi(float x) {
 // lane set computed, then stored), so a result may be one of its own operands.
 struct Vu0 {
     Gt4Vu0State &s;
+    unsigned char *data;  // VU0 data memory (4 KB)
     float *reg(int n) { return n == ACC ? s.acc : s.vf[n]; }
     void store(int d, const float *v, int mask) {
         if (d == 0) return;
@@ -117,7 +118,7 @@ struct Vu0 {
     }
     void ftoi(int ft, int fs, float scale, int mask) {
         float r[4];
-        for (int k = 0; k < 4; ++k) r[k] = fbits(static_cast<uint32_t>(gt4::native::ftoi(vu(s.vf[fs][k]) * scale)));
+        for (int k = 0; k < 4; ++k) r[k] = fbits(static_cast<uint32_t>(vu0ref::ftoi(vu(s.vf[fs][k]) * scale)));
         store(ft, r, mask);
     }
     void move(int ft, int fs) {
@@ -130,7 +131,7 @@ struct Vu0 {
     void rsqrt(int fs, char fsf, int ft, char ftf) {
         s.q = vu(vu_div(vu(s.vf[fs][lane(fsf)]), std::sqrt(std::fabs(vu(s.vf[ft][lane(ftf)])))));
     }
-    float *mem(uint32_t qw) { return static_cast<float *>(rt::guest_ptr(kDataMem + ((qw & 0xFF) << 4))); }
+    float *mem(uint32_t qw) { return reinterpret_cast<float *>(data + ((qw & 0xFF) << 4)); }
     void set_vi(int n, uint32_t v) {
         if (n) s.vi[n] = v & 0xFFFF;
     }
@@ -428,8 +429,8 @@ void prog_0930(Vu0 &v) {
 
 }  // namespace
 
-bool vu0_program(unsigned int addr, Gt4Vu0State &s) {
-    Vu0 v{s};
+bool vu0_program(unsigned int addr, Gt4Vu0State &s, void *data) {
+    Vu0 v{s, static_cast<unsigned char *>(data)};
     switch (addr) {
     case 0x58: prog_0058(v); return true;
     case 0x78: prog_0078(v); return true;
@@ -449,4 +450,4 @@ bool vu0_program(unsigned int addr, Gt4Vu0State &s) {
     }
 }
 
-}  // namespace gt4::native
+}  // namespace vu0ref

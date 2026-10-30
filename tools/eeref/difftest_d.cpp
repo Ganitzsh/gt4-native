@@ -1,15 +1,14 @@
 // Differential tests of batch D's native rewrites (game_src/func_004A*.cpp: the graphics library's sine and
 // cosine, clipping flags, lights and arctangent) against the original code. See difftest.h.
 //
-// Not tested here (the harness saves, restores and compares only its scratch area and the return):
-// - 004A5348, 004A6C58, 004A6E20, 004A70E8, 004ABD40 read and write the graphics library's state in the
-//   scratchpad (0x70002000; 004A6C58 and 004A70E8 build GS packets there): check with recorded calls;
-// - 004A53F8, 004A5400 (matrix push / pop), 004AC41C (random seed) leave their results only in VU0's registers
-//   and data memory, which the harness does not compare;
+// Not tested here:
+// - 004A6C58, 004A6E20, 004A70E8, 004ABD40 read and write the graphics library's state in the scratchpad
+//   (0x70002000; 004A6C58 and 004A70E8 build GS packets there): check with recorded calls;
 // - 004A20C8 waits on hardware registers.
+// (004A53F8, 004A5400, 004A5348 and 004AC41C: difftest_v.cpp.)
 #include "difftest.h"
 
-#include "native/vu0.h"
+#include "shared_state.h"
 
 #include <cstdint>
 
@@ -60,9 +59,9 @@ void atan2_args(std::uint32_t a[8]) {
     a[1] = bits(rnd() % 8 == 0 ? 0.0f : rndf(-100.0f, 100.0f));
 }
 
-// 004AC400 (): the next random number from VU0's R register.
+// 004AC400 (): the next random number from the random state (VU0's R register in the original).
 void random_state(std::uint32_t[8]) {
-    __gt4_vu0.r = 0x3F800000u | (rnd() & 0x7FFFFFu);
+    gt4_random_state = 0x3F800000u | (rnd() & 0x7FFFFFu);
 }
 
 const Register d0(Test{"004A5EB0", 0x004A5EB0, "f", 'f', true, angle_only});

@@ -16,11 +16,8 @@ asm statement comes here. A statement whose instructions are all known becomes a
   qmfc2 left in lo's register. So a plain variable that is an asm output and an asm input of the
   same file gets a shadow static holding the full register it was last given; an input takes the
   shadow when its low bytes still equal the variable's value;
-- VU0 registers are the program-wide __gt4_vu0 register file (runtime/native/vu0.cpp), which the
-  VU0 macro-mode instructions operate on; vcallms calls the runtime's VU0 programs (C++).
-
-Inside a single-line macro, `"... $vf" #n` stringification is kept as the C expression n (the VU
-register index), which the preprocessor substitutes.
+- VU0 (COP2) instructions are not translated (Unsupported): the game has no VU0 model at run time.
+  A function with VU0 code gets a plain C++ version in game_src/ (docs/VU0_REWRITE.md).
 
 translate(body, ctx) returns the C text (bytes) or None when an instruction is not known (the asm is
 then left as it is and the compile fails as before)."""
@@ -30,7 +27,6 @@ ABI = {"zero": 0, "at": 1, "v0": 2, "v1": 3, "a0": 4, "a1": 5, "a2": 6, "a3": 7,
        "t0": 8, "t1": 9, "t2": 10, "t3": 11, "t4": 12, "t5": 13, "t6": 14, "t7": 15,
        "s0": 16, "s1": 17, "s2": 18, "s3": 19, "s4": 20, "s5": 21, "s6": 22, "s7": 23,
        "t8": 24, "t9": 25, "k0": 26, "k1": 27, "gp": 28, "sp": 29, "fp": 30, "s8": 30, "ra": 31}
-FIELDS = "xyzw"
 
 
 class Unsupported(Exception):
@@ -317,26 +313,6 @@ class Stmt:
         off = self.imm(off) if off else "0"
         return "((char *) %s.w[0] + %s)" % (base, off)
 
-    def vf(self, a):
-        """(C array expression, field index or None) for $vfN, $vfNx, $vfN.x, ACC."""
-        if a.upper() == "ACC" or a == "$ACC":
-            return "__gt4_vu0.acc", None
-        m = re.match(r"^\$vf(\d+|\{\{\w+\}\})(?:\.?([xyzw]+))?$", a)
-        if not m:
-            raise Unsupported("vf " + a)
-        idx = m.group(1)
-        if idx.startswith("{{"):
-            idx = "(%s)" % idx[2:-2]
-        f = m.group(2)
-        return "__gt4_vu0.vf[%s]" % idx, (FIELDS.index(f) if f and len(f) == 1 else None)
-
-    def vi(self, a):
-        m = re.match(r"^\(?\$vi(\d+|\{\{\w+\}\})(\+\+|--)?\)?$", a)
-        if not m:
-            raise Unsupported("vi " + a)
-        idx = m.group(1)
-        return ("(%s)" % idx[2:-2]) if idx.startswith("{{") else idx
-
     def finish(self):
         pre = list(self.pre)
         if self.gp_read:
@@ -349,33 +325,17 @@ class Stmt:
         return "({ " + " ".join(self.decls + pre + self.body + post) + " (void) 0; })"
 
 
-def mask_of(dest):
-    if not dest:
-        return 15
-    m = 0
-    for c in dest:
-        if c not in FIELDS:
-            raise Unsupported("dest " + dest)
-        m |= 1 << FIELDS.index(c)
-    return m
-
-
-VU_ARITH = re.compile(r"^v(add|sub|mul|madd|msub|max|mini)(a?)([xyzwqi]?)$")
-VU_MOVE = {"vmove": 0, "vabs": 1, "vftoi0": 2, "vftoi4": 3, "vftoi12": 4, "vftoi15": 5,
-           "vitof0": 6, "vitof4": 7, "vitof12": 8, "vitof15": 9, "vmr32": 10}
+COP2 = {"qmtc2", "qmfc2", "cfc2", "ctc2", "lqc2", "sqc2", "bc2f", "bc2t", "bc2fl", "bc2tl"}
 MMI_LANES = {"padd": 0, "psub": 1, "pceq": 2, "pcgt": 3, "pmax": 4, "pmin": 5,
              "paddu": 6, "psubu": 7, "padds": 8, "psubs": 9}
-NOPS = {"sync", "sync.l", "sync.p", "nop", "ssnop", "vnop", "vwaitq", "vwaitp", "pref", "cache", "ehb"}
+NOPS = {"sync", "sync.l", "sync.p", "nop", "ssnop", "vnop", "vwaitq", "vwaitp", "pref", "cache", "ehb"}  # vnop, vwait*: no state
 
 
 def insn(st, mn, args):
     """Appends the C for one instruction to st.body."""
     B = st.body.append
     a = args
-    dest = None
-    if mn.startswith("v") and "." in mn:
-        mn, dest = mn.split(".", 1)
-    elif re.match(r"^(qmtc2|qmfc2|cfc2|ctc2)\.(i|ni)$", mn):
+    if re.match(r"^(qmtc2|qmfc2|cfc2|ctc2)\.(i|ni)$", mn):
         mn = mn.split(".")[0]
 
     def n(k):
@@ -384,144 +344,10 @@ def insn(st, mn, args):
 
     if mn in NOPS:
         return
-    # ---- VU0 macro mode ----
-    m = VU_ARITH.match(mn)
-    if m and mn not in VU_MOVE:
-        op, acc, bc = m.groups()
-        n(3)
-        mask = mask_of(dest)
-        d = "__gt4_vu0.acc" if acc else st.vf(a[0])[0]
-        if acc and a[0].upper() != "ACC":
-            raise Unsupported("acc form without ACC")
-        s = st.vf(a[1])[0]
-        if bc in ("q", "i"):
-            t, b = "&__gt4_vu0.%s" % bc, 0
-        else:
-            t, tf = st.vf(a[2])
-            b = FIELDS.index(bc) if bc else -1
-        B("__gt4_v%s (%s, %s, %s, %d, %d);" % (op, d, s, t, b, mask))
-        return
-    if mn in VU_MOVE:
-        n(2)
-        B("__gt4_vmove (%s, %s, %d, %d);" % (st.vf(a[0])[0], st.vf(a[1])[0], mask_of(dest), VU_MOVE[mn]))
-        return
-    if mn in ("vopmula", "vopmsub"):
-        n(3)
-        d = "__gt4_vu0.acc" if mn == "vopmula" else st.vf(a[0])[0]
-        B("__gt4_vopm (%s, %s, %s, %d);" % (d, st.vf(a[1])[0], st.vf(a[2])[0], mn == "vopmsub"))
-        return
-    if mn in ("vdiv", "vrsqrt"):
-        n(3)
-        (s, sf), (t, tf) = st.vf(a[1]), st.vf(a[2])
-        if sf is None or tf is None:
-            raise Unsupported("vdiv fields")
-        den = "%s[%d]" % (t, tf) if mn == "vdiv" else "__gt4_f_sqrt (__gt4_f_abs (%s[%d]))" % (t, tf)
-        B("__gt4_vu0.q = %s[%d] / %s;" % (s, sf, den))
-        return
-    if mn == "vsqrt":
-        n(2)
-        t, tf = st.vf(a[1])
-        B("__gt4_vu0.q = __gt4_f_sqrt (__gt4_f_abs (%s[%d]));" % (t, tf))
-        return
-    if mn == "vclipw":
-        n(2)
-        t, tf = st.vf(a[1])
-        B("__gt4_vclip (%s, %s[%d]);" % (st.vf(a[0])[0], t, 3 if tf is None else tf))
-        return
-    if mn == "vmfir":
-        n(2)
-        B("__gt4_vfill (%s, __gt4_f_bits ((unsigned int) (int) (short) __gt4_vu0.vi[%s]), %d);"
-          % (st.vf(a[0])[0], st.vi(a[1]), mask_of(dest)))
-        return
-    if mn == "vmtir":
-        n(2)
-        s, sf = st.vf(a[1])
-        B("__gt4_ctc2 (%s, __gt4_f_uint (%s[%d]) & 0xFFFF);" % (st.vi(a[0]), s, sf or 0))
-        return
-    if mn in ("viadd", "visub", "viand", "vior"):
-        n(3)
-        o = {"viadd": "+", "visub": "-", "viand": "&", "vior": "|"}[mn]
-        B("__gt4_ctc2 (%s, (__gt4_vu0.vi[%s] %s __gt4_vu0.vi[%s]) & 0xFFFF);"
-          % (st.vi(a[0]), st.vi(a[1]), o, st.vi(a[2])))
-        return
-    if mn in ("viaddi", "viaddiu", "visubiu"):
-        n(3)
-        o = "-" if mn == "visubiu" else "+"
-        B("__gt4_ctc2 (%s, (__gt4_vu0.vi[%s] %s %s) & 0xFFFF);" % (st.vi(a[0]), st.vi(a[1]), o, st.imm(a[2])))
-        return
-    if mn in ("vlqi", "vlqd", "vsqi", "vsqd"):
-        n(2)
-        load = mn.startswith("vlq")
-        v = st.vf(a[0] if load else a[0])[0]
-        p = st.vi(a[1] if load else a[1])
-        mask = mask_of(dest)
-        if mn.endswith("d"):
-            B("__gt4_vu0.vi[%s] = (__gt4_vu0.vi[%s] - 1) & 0xFFFF;" % (p, p))
-        if load:
-            B("{ float *__gt4_m = __GT4_VU0_MEM (__gt4_vu0.vi[%s]); __gt4_vmove (%s, __gt4_m, %d, 0); }"
-              % (p, v, mask))
-        else:
-            B("{ float *__gt4_m = __GT4_VU0_MEM (__gt4_vu0.vi[%s]); __gt4_vmove (__gt4_m, %s, %d, 0); }"
-              % (p, v, mask))
-        if mn.endswith("i"):
-            B("__gt4_vu0.vi[%s] = (__gt4_vu0.vi[%s] + 1) & 0xFFFF;" % (p, p))
-        return
-    if mn in ("vilwr", "viswr"):
-        n(2)
-        f = FIELDS.index(dest) if dest and len(dest) == 1 else 0
-        t, s = st.vi(a[0]), st.vi(a[1])
-        if mn == "vilwr":
-            B("__gt4_ctc2 (%s, ((unsigned int *) __GT4_VU0_MEM (__gt4_vu0.vi[%s]))[%d] & 0xFFFF);" % (t, s, f))
-        else:
-            mask = mask_of(dest)
-            for k in range(4):
-                if mask & (1 << k):
-                    B("((unsigned int *) __GT4_VU0_MEM (__gt4_vu0.vi[%s]))[%d] = __gt4_vu0.vi[%s] & 0xFFFF;" % (s, k, t))
-        return
-    if mn == "vrinit" or mn == "vrxor":
-        n(2)
-        s, sf = st.vf(a[1])
-        x = "__gt4_f_uint (%s[%d])" % (s, sf or 0)
-        if mn == "vrxor":
-            x = "(__gt4_vu0.r ^ %s)" % x
-        B("__gt4_vu0.r = 0x3F800000u | (%s & 0x7FFFFFu);" % x)
-        return
-    if mn in ("vrget", "vrnext"):
-        n(2)
-        if mn == "vrnext":
-            B("__gt4_vrnext ();")
-        B("__gt4_vfill (%s, __gt4_f_bits (__gt4_vu0.r), %d);" % (st.vf(a[0])[0], mask_of(dest)))
-        return
-    if mn == "vcallms":
-        n(1)
-        B("__gt4_vu0_callms (%s);" % st.imm(a[0]))
-        return
-    if mn == "vcallmsr":
-        B("__gt4_vu0_callms (__gt4_vu0.vi[27] * 8);")
-        return
-    # ---- COP2 transfers ----
-    if mn == "qmtc2":
-        n(2)
-        B("__gt4_qmtc2 (%s, &%s);" % (st.vf(a[1])[0], st.gpr(a[0])))
-        return
-    if mn == "qmfc2":
-        n(2)
-        B("__gt4_qmfc2 (&%s, %s);" % (st.gpr(a[0], True), st.vf(a[1])[0]))
-        return
-    if mn == "ctc2":
-        n(2)
-        B("__gt4_ctc2 (%s, %s.w[0]);" % (st.vi(a[1]), st.gpr(a[0])))
-        return
-    if mn == "cfc2":
-        n(2)
-        B("%s.sd[0] = (int) __gt4_cfc2 (%s);" % (st.gpr(a[0], True), st.vi(a[1])))
-        return
-    if mn in ("lqc2", "sqc2"):
-        n(2)
-        v = st.vf(a[0])[0]
-        p = "((__gt4_reg *) (%s))" % st.mem(a[1])   # unmasked: see __gt4_lq in compat/game/gt4_asm.h
-        B(("__gt4_qmtc2 (%s, %s);" % (v, p)) if mn == "lqc2" else ("__gt4_qmfc2 (%s, %s);" % (p, v)))
-        return
+    # ---- VU0 (COP2): not translated ----
+    if mn.startswith("v") or mn in COP2:
+        raise Unsupported("VU0 instruction %s: the game has no VU0 model; rewrite the function in C++ "
+                          "(docs/VU0_REWRITE.md)" % mn)
     # ---- FPU ----
     fp3 = {"add.s": "+", "sub.s": "-", "mul.s": "*", "div.s": "/"}
     if mn in fp3:

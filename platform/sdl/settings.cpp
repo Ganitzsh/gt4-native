@@ -144,7 +144,7 @@ const std::vector<const char*> kHud{"anchored", "centered", "stretched"};
 const std::vector<const char*> kQuality{"native", "ultra_quality", "quality", "balanced", "performance",
                                         "ultra_performance", "custom"};
 const std::vector<const char*> kUpscalers{"bilinear", "bicubic", "lanczos", "fsr1", "fsr2"};
-const std::vector<const char*> kGsRenderers{"emulated", "native"};
+const std::vector<const char*> kGsRenderers{"original", "native"};
 const std::vector<const char*> kAa{"off", "fxaa", "smaa", "smaa_t2x", "taa"};
 const std::vector<const char*> kFilters{"point", "bilinear", "trilinear"};
 const std::vector<const char*> kTonemappers{"original", "reinhard", "aces", "agx", "agx_punchy", "pbr_neutral"};
@@ -193,9 +193,8 @@ const std::vector<Option>& options() {
         o.push_back(floatOption("aspect.safe_area", &Settings::safeArea, 0.0f, 0.15f,
             "HUD inset from the content edges, as a fraction of the content height."));
         o.push_back(enumOption("render.gs", &Settings::gsRenderer, kGsRenderers,
-            "How the game's graphics are drawn: emulated = the PS2's graphics chip emulated at 640 x 448 "
-            "(paraLLEl-GS, the original look), native = the same commands drawn by the GPU at the render "
-            "resolution."));
+            "The resolution the game's graphics are drawn at: original = the PS2's own (640 x 448, one pixel per "
+            "PS2 pixel; `emulated` is accepted for it), native = the render resolution."));
         o.push_back(enumOption("render.quality", &Settings::quality, kQuality,
             "Render resolution relative to the output: native 1.0x, ultra_quality 1.3x, quality 1.5x, balanced "
             "1.7x, performance 2.0x, ultra_performance 3.0x smaller per axis; custom uses render.scale."));
@@ -298,7 +297,7 @@ const PresetTable& presetValues(Preset preset) {
     // Personal-taste effects (depth of field, motion blur, grain, vignette, aberration) belong only to the
     // PS2-faithful preset; the quality presets leave them as the player set them.
     static const PresetTable original{
-        {"render.gs", "emulated"}, {"render.quality", "native"}, {"render.upscaler", "bilinear"}, {"render.sharpness", "0"},
+        {"render.gs", "original"}, {"render.quality", "native"}, {"render.upscaler", "bilinear"}, {"render.sharpness", "0"},
         {"render.aa", "off"}, {"render.msaa", "1"}, {"texture.filter", "bilinear"}, {"texture.anisotropy", "1"},
         {"texture.lod_bias", "0"}, {"effects.shadows", "original"}, {"effects.reflections", "original"},
         {"effects.bloom", "original"}, {"effects.dof", "original"}, {"effects.motion_blur", "original"},
@@ -427,6 +426,8 @@ std::string setOption(Settings& settings, std::string_view key, std::string_view
         else settings.preset = Preset::Custom;
         return {};
     }
+    // render.gs = emulated (the GS emulator it once named, before the native renderer drew every preset).
+    if (option->key == std::string_view("render.gs") && lower(trim(value)) == "emulated") value = "original";
     if (auto error = option->set(settings, trim(value)); !error.empty()) return std::string(option->key) + ": " + error;
     if (isPresetMember(option->key)) settings.preset = detectPreset(settings);
     return {};

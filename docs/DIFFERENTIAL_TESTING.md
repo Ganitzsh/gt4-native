@@ -124,9 +124,9 @@ the user's game and stays in `build/`.
   copy could disagree with it (replay.py reports a file whose length disagrees with its header as `CORRUPT`).
 - What the reference models: the kernel calls whose effects are outside EE RAM (thread id and priority,
   wake-up, semaphores, cache flushes, interrupt masks, SIF DMA status) return what an uncontended kernel
-  would; VU0 microprograms (`vcallms`) run on the micro-mode interpreter (`tools/eeref/vu0_interp.cpp`, the
-  reference the game's C++ programs were checked against; `eeref --vu0-fuzz N --elf ...` compares the two on N
-  random states per program); the scratchpad
+  would; VU0 microprograms (`vcallms`) run on the micro-mode interpreter (`tools/eeref/vu0_interp.cpp`; the C++
+  programs in the VU's arithmetic, `tools/eeref/vu0_programs.cpp`, which the GT4_ORIG bridge runs, were checked
+  against it: `eeref --vu0-fuzz N --elf ...` compares the two on N random states per program); the scratchpad
   and VU memory are mapped. A call still running after 2^28 instructions stops as `spinning` (it waits on a
   hardware register or another thread; it prints `$s0` and the words at `$s0+0x18`, a lock's owner and count in
   the libraries' mutex); other syscalls and EE hardware registers stop it or read 0. GetThreadId returns the

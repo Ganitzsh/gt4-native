@@ -1,6 +1,6 @@
 // The VU0 micro-mode interpreter, a test reference (docs/NATIVE_ONLY.md, layer 1): eeref runs vcallms with
-// it, and `eeref --vu0-fuzz N` checks GT4's VU0 programs in C++ (runtime/native/vu0_programs.cpp) against it.
-// It ran the game's VU0 microprograms until those were ported; the game has no interpreter now.
+// it, and `eeref --vu0-fuzz N` checks GT4's VU0 programs in C++ (vu0_programs.cpp, also a test reference) against it.
+// It ran the game's VU0 microprograms until those were ported; the game has no VU0 model now.
 //
 // Micro memory: the game uploads its VU0 microcode once, in 004A03C0 (graphics library start-up): 0xA80 bytes
 // from 0x006D3280 to VU0 address 0, through VIF0 MPG (004A12B8). The first vcallms copies that block from
@@ -18,7 +18,7 @@
 // Unknown instructions stop with their address and encoding.
 #include "vu0_interp.h"
 
-#include "../../runtime/native/vu0_programs.h"
+#include "vu0_programs.h"
 #include "guest.h"
 #include "log.h"
 
@@ -27,6 +27,11 @@
 #include <cstring>
 
 using namespace gt4::rt;
+
+Gt4Vu0State __gt4_vu0 = {
+    {{0.0f, 0.0f, 0.0f, 1.0f}},  // vf0 = (0, 0, 0, 1)
+    {0, 0, 0, 0}, 0.0f, 0.0f, 0.0f, 0.0f, 0x3F800000u, 0, {0},
+};
 
 namespace {
 
@@ -466,7 +471,7 @@ void vu0_interpret(unsigned int addr) {
 }
 
 // eeref --vu0-fuzz N: each of GT4's programs runs N times from random registers and data memory, in C++
-// (runtime/native/vu0_programs.cpp) and in this interpreter, and the results are compared, the programs
+// (vu0_programs.cpp) and in this interpreter, and the results are compared, the programs
 // no recorded scene reaches included. Returns how many programs differed.
 long vu0_fuzz(long trials) {
     long programs_differing = 0;
@@ -511,7 +516,7 @@ long vu0_fuzz(long trials) {
             static uint8_t inputs[0x1000];   // the data memory the interpreter starts from
             std::memcpy(inputs, mem, sizeof inputs);
             Gt4Vu0State native = in;
-            gt4::native::vu0_program(addr, native);
+            vu0ref::vu0_program(addr, native, mem);
             static uint8_t out[0x1000];
             std::memcpy(out, mem, sizeof out);
             std::memcpy(mem, inputs, sizeof inputs);

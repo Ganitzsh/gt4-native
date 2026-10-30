@@ -73,12 +73,12 @@ std::vector<Item> buildItems(bool game) {
     items.push_back(choice("Preset", "graphics.preset",
         {{"original", "Original (PS2)"}, {"low", "Low"}, {"medium", "Medium"}, {"high", "High"}, {"ultra", "Ultra"},
          {"custom", "Custom"}},
-        "Original keeps the PS2 look: the emulated graphics chip at 640 x 448. The others draw the game on the "
-        "GPU at your resolution."));
+        "Original keeps the PS2 look: the game drawn at the PS2's 640 x 448. The others draw it at your "
+        "resolution."));
     if (game)
-        items.push_back(choice("Renderer", "render.gs", {{"emulated", "PS2 (emulated GS)"}, {"native", "Native (GPU)"}},
-            "PS2: the graphics chip emulated at its own resolution, the original image. Native: the same "
-            "drawing done by the GPU at the render resolution."));
+        items.push_back(choice("Renderer", "render.gs", {{"original", "PS2 resolution"}, {"native", "Native resolution"}},
+            "PS2 resolution: drawn at the PS2's own 640 x 448, the original image. Native: drawn at the render "
+            "resolution."));
     items.push_back(choice("Render resolution", "render.quality",
         {{"native", "100%"}, {"ultra_quality", "77%"}, {"quality", "67%"}, {"balanced", "59%"},
          {"performance", "50%"}, {"ultra_performance", "33%"}, {"custom", "Custom"}},

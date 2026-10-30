@@ -72,8 +72,13 @@ struct GsnScene::Impl {
     const vk::Device& device;
     VkCommandPool pool;
     SceneFormats formats;
-    gsn::FrameList frame;
-    bool fresh = false, any = false;
+    // Frame lists not drawn yet, in the game's order: all are executed (their draws make what later frames
+    // and GS -> host reads see); the last displayed one is shown.
+    std::vector<gsn::FrameList> pending;
+    gsn::FrameList frame;   // the list being executed
+    uint32_t listIndex = 0;   // its position in this submission (per-list buffers)
+    bool any = false;
+    VkExtent2D lastExtent{640, 448};   // the render extent of the last frame (the scale of reads between frames)
     // Render pixels per GS pixel, per axis: the anamorphic 16:9 frame gets more across than down.
     uint32_t scaleSetting = 0, sx = 1, sy = 1;
 
@@ -97,7 +102,8 @@ struct GsnScene::Impl {
     vk::Image blank;                     // 1 x 1 for untextured draws
     vk::Image feedback;                  // a copy of a target a draw samples while drawing into it
     vk::Image scratchDepth;              // stencil for destination-alpha tests without a Z buffer
-    std::array<vk::Buffer, kSlots> vertexBuffers{}, staging{}, clutBuffers{}, indexBuffers{};
+    // Per frame slot and per list executed in it (list * kSlots + slot).
+    std::vector<vk::Buffer> vertexBuffers, staging, clutBuffers, indexBuffers;
     struct Pool {
         std::vector<std::unique_ptr<vk::Image>> images;
         size_t used = 0;
@@ -244,8 +250,7 @@ struct GsnScene::Impl {
     void ensureTarget(const gsn::Target& t) {
         GpuTarget& g = targets[t.id];
         if (g.image.valid() && (g.generation != t.generation || g.depth != t.depth)) {   // the slot holds a new buffer
-            vkDeviceWaitIdle(device.device);
-            vk::destroy(device, g.image);
+            retire(g.image);
             g = GpuTarget{};
         }
         g.generation = t.generation;
@@ -257,10 +262,7 @@ struct GsnScene::Impl {
             g.psm = t.psm;
             return;
         }
-        if (g.image.valid()) {
-            vkDeviceWaitIdle(device.device);   // still sampled by a frame in flight
-            vk::destroy(device, g.image);
-        }
+        if (g.image.valid()) retire(g.image);   // still used by frames in flight or earlier lists of this one
         g.width = std::max(g.width, width);
         g.height = std::max(g.height, height);
         g.depth = t.depth;
@@ -290,8 +292,10 @@ struct GsnScene::Impl {
         }
     }
 
-    vk::Buffer& buffer(std::array<vk::Buffer, kSlots>& ring, uint32_t slot, VkDeviceSize bytes, VkBufferUsageFlags usage) {
-        vk::Buffer& b = ring[slot % kSlots];
+    vk::Buffer& buffer(std::vector<vk::Buffer>& ring, uint32_t slot, VkDeviceSize bytes, VkBufferUsageFlags usage) {
+        const size_t index = size_t(listIndex) * kSlots + slot % kSlots;
+        if (ring.size() <= index) ring.resize(index + 1);
+        vk::Buffer& b = ring[index];
         if (b.size < bytes) {
             if (b.buffer) {
                 vkDeviceWaitIdle(device.device);
@@ -302,12 +306,16 @@ struct GsnScene::Impl {
         return b;
     }
 
-    void uploadTextures(VkCommandBuffer command, uint32_t slot) {
+    // An image replaced while frames in flight, or lists recorded earlier in this command buffer, may still use
+    // it: destroyed by sweepGraveyard once no submission can.
+    void retire(vk::Image& image) {
+        graveyard.emplace_back(uploads, image);
+        image = vk::Image{};
+    }
+
+    // Once per submission: retired images the frames in flight can no longer sample are destroyed.
+    void sweepGraveyard() {
         ++uploads;
-        if (frame.resetTextures) {
-            for (auto& [id, t] : textures) graveyard.emplace_back(uploads, t.image);
-            textures.clear();
-        }
         for (auto it = graveyard.begin(); it != graveyard.end();) {
             if (it->first + kSlots + 1 <= uploads) {
                 vk::destroy(device, it->second);
@@ -315,6 +323,13 @@ struct GsnScene::Impl {
             } else {
                 ++it;
             }
+        }
+    }
+
+    void uploadTextures(VkCommandBuffer command, uint32_t slot) {
+        if (frame.resetTextures) {
+            for (auto& [id, t] : textures) graveyard.emplace_back(uploads, t.image);
+            textures.clear();
         }
         VkDeviceSize bytes = 4;
         for (const auto& t : frame.textures) bytes += VkDeviceSize(t.pixels.size()) * 4;
@@ -325,10 +340,7 @@ struct GsnScene::Impl {
         for (auto& t : frame.textures) {
             GpuTexture& g = textures[t.id];
             if (!g.image.valid() || g.width != t.width || g.height != t.height || g.levels != t.levels) {
-                if (g.image.valid()) {
-                    vkDeviceWaitIdle(device.device);
-                    vk::destroy(device, g.image);
-                }
+                if (g.image.valid()) retire(g.image);
                 vk::ImageDesc desc;
                 desc.format = VK_FORMAT_R8G8B8A8_UNORM;
                 desc.extent = {t.width, t.height};
@@ -425,6 +437,8 @@ struct GsnScene::Impl {
     }
 
     void execute(VkCommandBuffer command, uint32_t slot);
+    // Executes every pending list in order into `command` (the scale from `extent`), then empties the queue.
+    void executePending(VkCommandBuffer command, uint32_t slot, VkExtent2D extent);
 
     // The GS pixels the display shows: DISPLAY's size over MAGH; interlaced with FFMD = 1 (field mode) each
     // field shows every line of a half-height buffer.
@@ -683,8 +697,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
                     if (d.texture.id == d.target) {   // drawing into what it samples: from a copy
                         end();
                         if (!feedback.valid() || feedback.extent.width < image->extent.width || feedback.extent.height < image->extent.height) {
-                            vkDeviceWaitIdle(device.device);
-                            vk::destroy(device, feedback);
+                            if (feedback.valid()) retire(feedback);
                             vk::ImageDesc desc;
                             desc.format = kColour;
                             desc.extent = image->extent;
@@ -788,8 +801,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
             depthId = ~0u;
             if (!scratchDepth.valid() || scratchDepth.extent.width < colourTarget.image.extent.width ||
                 scratchDepth.extent.height < colourTarget.image.extent.height) {
-                vkDeviceWaitIdle(device.device);
-                vk::destroy(device, scratchDepth);
+                if (scratchDepth.valid()) retire(scratchDepth);
                 vk::ImageDesc desc;
                 desc.format = kDepth;
                 desc.extent = colourTarget.image.extent;
@@ -866,7 +878,8 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         }
     }
     end();
-    // The displayed buffer, for recordMain.
+    // The displayed buffer, for recordMain (a list cut for a GS -> host read displays nothing).
+    if (!frame.displayed) return;
     displayTarget = frame.display.target2 ? frame.display.target2 : frame.display.target1;
     auto shown = targets.find(displayTarget);
     if (shown != targets.end()) {
@@ -938,11 +951,18 @@ void GsnScene::Impl::writeDump() {
 GsnScene::GsnScene(const vk::Device& device, VkCommandPool pool) : impl(std::make_unique<Impl>(device, pool)) {}
 GsnScene::~GsnScene() = default;
 
-void GsnScene::setFrame(gsn::FrameList& list) {
-    if (impl->fresh) gsn::carryOver(impl->frame, list);   // replaced before it was drawn
-    std::swap(impl->frame, list);
-    impl->fresh = true;
-    impl->any = true;
+void GsnScene::addFrames(std::vector<gsn::FrameList>& lists) {
+    Impl& s = *impl;
+    for (auto& list : lists) s.pending.push_back(std::move(list));
+    lists.clear();
+    // Not drawn for long (a minimised window draws nothing): the oldest lists' draws are dropped, their
+    // texture uploads kept.
+    constexpr size_t kMaxPending = 64;
+    while (s.pending.size() > kMaxPending) {
+        gsn::carryOver(s.pending[0], s.pending[1]);
+        s.pending.erase(s.pending.begin());
+    }
+    for (const auto& list : s.pending) s.any = s.any || list.displayed;
 }
 
 bool GsnScene::hasFrame() const { return impl->any; }
@@ -999,70 +1019,167 @@ void GsnScene::prepare(const SceneFormats& formats) {
     }
 }
 
-void GsnScene::recordPrepass(VkCommandBuffer command, const SceneView& view) {
-    Impl& s = *impl;
-    if (!s.fresh) return;   // the same frame list is not executed twice (its blends would apply again)
-    s.fresh = false;
+void GsnScene::Impl::executePending(VkCommandBuffer command, uint32_t slot, VkExtent2D extent) {
+    sweepGraveyard();
     // The nearest whole scale to the render extent per axis, from what the display shows (640 x 448, or 224
     // lines per field: GT4's race draws each field whole, so its lines get the full height).
-    uint32_t shownWidth, shownHeight;
-    Impl::displayedSize(s.frame.display, shownWidth, shownHeight);
+    const gsn::FrameList* shown = nullptr;
+    for (const auto& list : pending)
+        if (list.displayed) shown = &list;
     // GT4_GSN_SCALE=N (comparisons with the GS back end): that scale on both axes.
     static const uint32_t forced = std::getenv("GT4_GSN_SCALE") ? static_cast<uint32_t>(std::strtoul(std::getenv("GT4_GSN_SCALE"), nullptr, 10)) : 0;
-    if (forced) s.scaleSetting = forced;
-    const uint32_t wantedX = s.scaleSetting ? s.scaleSetting
-                                            : std::clamp<uint32_t>(static_cast<uint32_t>(std::lround(view.renderExtent.width / double(shownWidth))), 1, 8);
-    const uint32_t wantedY = s.scaleSetting ? s.scaleSetting
-                                            : std::clamp<uint32_t>(static_cast<uint32_t>(std::lround(view.renderExtent.height / double(shownHeight))), 1, 8);
-    if (wantedX != s.sx || wantedY != s.sy) {
-        vkDeviceWaitIdle(s.device.device);
-        for (auto& [id, t] : s.targets) vk::destroy(s.device, t.image);
-        s.targets.clear();
-        s.sx = wantedX;
-        s.sy = wantedY;
+    if (forced) scaleSetting = forced;
+    if (shown || scaleSetting) {
+        uint32_t shownWidth = 640, shownHeight = 448;
+        if (shown) displayedSize(shown->display, shownWidth, shownHeight);
+        const uint32_t wantedX = scaleSetting ? scaleSetting
+                                              : std::clamp<uint32_t>(static_cast<uint32_t>(std::lround(extent.width / double(shownWidth))), 1, 8);
+        const uint32_t wantedY = scaleSetting ? scaleSetting
+                                              : std::clamp<uint32_t>(static_cast<uint32_t>(std::lround(extent.height / double(shownHeight))), 1, 8);
+        if (wantedX != sx || wantedY != sy) {
+            vkDeviceWaitIdle(device.device);
+            for (auto& [id, t] : targets) vk::destroy(device, t.image);
+            targets.clear();
+            sx = wantedX;
+            sy = wantedY;
+        }
     }
+    writeDump();   // a dump recorded in an earlier submission is complete now
     vk::beginLabel(command, "gsn frame");
-    {
-        std::vector<uint32_t> created;
-        for (const gsn::Target& t : s.frame.targets) {
-            const bool existed = s.targets.count(t.id) && s.targets[t.id].image.valid();
-            const VkImage before = existed ? s.targets[t.id].image.image : VK_NULL_HANDLE;
-            s.ensureTarget(t);
-            if (!existed || s.targets[t.id].image.image != before) created.push_back(t.id);
+    for (listIndex = 0; listIndex < pending.size(); ++listIndex) {
+        std::swap(frame, pending[listIndex]);
+        {
+            std::vector<uint32_t> created;
+            for (const gsn::Target& t : frame.targets) {
+                const bool existed = targets.count(t.id) && targets[t.id].image.valid();
+                const VkImage before = existed ? targets[t.id].image.image : VK_NULL_HANDLE;
+                ensureTarget(t);
+                if (!existed || targets[t.id].image.image != before) created.push_back(t.id);
+            }
+            for (uint32_t id : created) clearNew(command, targets[id]);
         }
-        for (uint32_t id : created) s.clearNew(command, s.targets[id]);
+        uploadTextures(command, slot);
+        execute(command, slot);
+        retireTextures();
+        static const long dumpAt = std::getenv("GT4_GSN_DUMP") ? std::strtol(std::getenv("GT4_GSN_DUMP"), nullptr, 10) : -1;
+        static bool dumped = false;   // the first frame drawn at or after that VBlank
+        if (frame.displayed && (frame.dump || (!dumped && dumpAt >= 0 && static_cast<long>(frame.vblank) >= dumpAt))) {
+            dumped = dumped || !frame.dump;
+            dump.vblank = frame.vblank;
+            vk::Barriers b;
+            for (auto& [id, t] : targets) {
+                if (t.depth || !t.image.valid()) continue;
+                vk::Buffer buffer = vk::createBuffer(device, VkDeviceSize(t.image.extent.width) * t.image.extent.height * 8,
+                                                     VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, true);
+                b.image(t.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_READ_BIT);
+                b.flush(command);
+                VkBufferImageCopy copy{};
+                copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                copy.imageExtent = {t.image.extent.width, t.image.extent.height, 1};
+                vkCmdCopyImageToBuffer(command, t.image.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer.buffer, 1, &copy);
+                vk::toSampled(b, t.image, vk::kFragment);
+                b.flush(command);
+                dump.images.emplace_back(id, buffer);
+                dump.extents.push_back(t.image.extent);
+                dump.bps.push_back(0);
+            }
+            for (const gsn::Target& t : frame.targets)
+                for (size_t k = 0; k < dump.images.size(); ++k)
+                    if (dump.images[k].first == t.id) dump.bps[k] = t.bp;
+        }
     }
-    s.uploadTextures(command, view.slot);
-    s.writeDump();   // a dump recorded two frames ago is complete now
-    s.execute(command, view.slot);
-    s.retireTextures();
-    static const long dumpAt = std::getenv("GT4_GSN_DUMP") ? std::strtol(std::getenv("GT4_GSN_DUMP"), nullptr, 10) : -1;
-    static bool dumped = false;   // the first frame drawn at or after that VBlank (the host can skip frames)
-    if (s.frame.dump || (!dumped && dumpAt >= 0 && static_cast<long>(s.frame.vblank) >= dumpAt)) {
-        dumped = dumped || !s.frame.dump;
-        s.dump.vblank = s.frame.vblank;
+    // The executed lists' buffers go back to the queue's vector for reuse; the last one stays in `frame`.
+    pending.clear();
+    listIndex = 0;
+    // The displayed buffer is sampled by recordMain whatever the lists left it as (a read's copy, a draw).
+    if (auto it = targets.find(displayTarget); it != targets.end() && it->second.image.valid() && !it->second.depth) {
         vk::Barriers b;
-        for (auto& [id, t] : s.targets) {
-            if (t.depth || !t.image.valid()) continue;
-            vk::Buffer buffer = vk::createBuffer(s.device, VkDeviceSize(t.image.extent.width) * t.image.extent.height * 8,
-                                                 VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, true);
-            b.image(t.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_READ_BIT);
-            b.flush(command);
-            VkBufferImageCopy copy{};
-            copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            copy.imageExtent = {t.image.extent.width, t.image.extent.height, 1};
-            vkCmdCopyImageToBuffer(command, t.image.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer.buffer, 1, &copy);
-            vk::toSampled(b, t.image, vk::kFragment);
-            b.flush(command);
-            s.dump.images.emplace_back(id, buffer);
-            s.dump.extents.push_back(t.image.extent);
-            s.dump.bps.push_back(0);
-        }
-        for (const gsn::Target& t : s.frame.targets)
-            for (size_t k = 0; k < s.dump.images.size(); ++k)
-                if (s.dump.images[k].first == t.id) s.dump.bps[k] = t.bp;
+        vk::toSampled(b, it->second.image, vk::kFragment);
+        b.flush(command);
     }
     vk::endLabel(command);
+}
+
+void GsnScene::recordPrepass(VkCommandBuffer command, const SceneView& view) {
+    Impl& s = *impl;
+    s.lastExtent = view.renderExtent;
+    // Each list is executed once (its blends would apply again).
+    if (s.pending.empty()) return;
+    s.executePending(command, view.slot, view.renderExtent);
+}
+
+bool GsnScene::read(const gsn::ReadRequest& request, std::vector<uint8_t>& out) {
+    Impl& s = *impl;
+    if (!s.stencilPrep.valid() || !s.blank.valid()) return false;   // not prepared yet (no frame shown)
+    vkDeviceWaitIdle(s.device.device);   // the frames in flight are done: slot 0's buffers are free
+    vk::Uploader up(s.device, s.pool);
+    VkCommandBuffer command = up.command();
+    s.executePending(command, 0, s.lastExtent);
+    auto it = s.targets.find(request.target);
+    if (it == s.targets.end() || !it->second.image.valid() || it->second.depth) {
+        up.submit();
+        return false;
+    }
+    vk::Image& image = it->second.image;
+    const uint32_t x0 = std::min(request.x * s.sx, image.extent.width), y0 = std::min(request.y * s.sy, image.extent.height);
+    const uint32_t w = std::min(request.width * s.sx, image.extent.width - x0), h = std::min(request.height * s.sy, image.extent.height - y0);
+    vk::Buffer pixels = vk::createBuffer(s.device, std::max<VkDeviceSize>(VkDeviceSize(w) * h * 8, 8), VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, true);
+    vk::Barriers b;
+    if (w && h) {
+        b.image(image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_READ_BIT);
+        b.flush(command);
+        VkBufferImageCopy copy{};
+        copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        copy.imageOffset = {static_cast<int32_t>(x0), static_cast<int32_t>(y0), 0};
+        copy.imageExtent = {w, h, 1};
+        vkCmdCopyImageToBuffer(command, image.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, pixels.buffer, 1, &copy);
+        VkMemoryBarrier2 host{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        host.srcStageMask = vk::kTransfer;
+        host.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        host.dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT;
+        host.dstAccessMask = VK_ACCESS_2_HOST_READ_BIT;
+        VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dependency.memoryBarrierCount = 1;
+        dependency.pMemoryBarriers = &host;
+        vkCmdPipelineBarrier2(command, &dependency);
+    }
+    vk::toSampled(b, image, vk::kFragment);
+    b.flush(command);
+    up.submit();
+    // Each GS pixel is the render pixel at its own sample point (j / scale = x: the first of its sx x sy),
+    // stored as colour / 255 and alpha / 128 (gsn targets), packed in the target's format as the GS keeps it.
+    auto toFloat = [](uint16_t v) {
+        const uint32_t sign = (v >> 15) & 1, exponent = (v >> 10) & 31, mantissa = v & 1023;
+        const float f = exponent ? std::ldexp(static_cast<float>(mantissa | 1024), static_cast<int>(exponent) - 25)
+                                 : std::ldexp(static_cast<float>(mantissa), -24);
+        return sign ? -f : f;
+    };
+    const auto* half = static_cast<const uint16_t*>(pixels.mapped);
+    const uint32_t bytes = request.psm == gsn::PSMCT32 ? 4 : request.psm == gsn::PSMCT24 ? 3 : 2;
+    out.assign(size_t(request.width) * request.height * bytes, 0);
+    for (uint32_t y = 0; y < request.height; ++y)
+        for (uint32_t x = 0; x < request.width; ++x) {
+            const uint32_t px = x * s.sx, py = y * s.sy;
+            if (px >= w || py >= h) continue;
+            const uint16_t* p = half + (size_t(py) * w + px) * 4;
+            auto channel = [&](int c, float range) {
+                return static_cast<uint32_t>(std::clamp(toFloat(p[c]) * range + 0.5f, 0.0f, 255.0f));
+            };
+            const uint32_t r = channel(0, 255.0f), g = channel(1, 255.0f), bl = channel(2, 255.0f), a = channel(3, 128.0f);
+            uint8_t* o = out.data() + (size_t(y) * request.width + x) * bytes;
+            if (bytes == 2) {
+                const uint32_t v = (r >> 3) | ((g >> 3) << 5) | ((bl >> 3) << 10) | ((a >> 7) << 15);
+                o[0] = static_cast<uint8_t>(v);
+                o[1] = static_cast<uint8_t>(v >> 8);
+            } else {
+                o[0] = static_cast<uint8_t>(r);
+                o[1] = static_cast<uint8_t>(g);
+                o[2] = static_cast<uint8_t>(bl);
+                if (bytes == 4) o[3] = static_cast<uint8_t>(a);
+            }
+        }
+    vk::destroy(s.device, pixels);
+    return true;
 }
 
 void GsnScene::recordMain(VkCommandBuffer command, const SceneView& view) {

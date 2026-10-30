@@ -1,7 +1,7 @@
 /* compiler: ee-gcc2.96-no-strict-aliasing */
 /* Native version of 0049FFA0 (VU0 asm): resets the graphics library's state block. 004A7454 sets the current
  * matrix (shared vectors 28..31) to the identity, which is copied into the three matrix slots at +0xED0, +0xF10 and
- * +0xF50; the matrix stack pointer (VU0 vi13) goes back to 0; then the defaults: +0xFC0..+0xFCC = D_006AF790,
+ * +0xF50; the matrix stack's top (the original's VU0 vi13) goes back to 0; then the defaults: +0xFC0..+0xFCC = D_006AF790,
  * +0x2DC, +0xFD8, +0xFDC = 1, +0xFD0, +0xFD4 = 0.5, +0xFBC = 255, halfwords +0xF90/F92/F94 = 0, 0x40, 0x50, bytes
  * +0 = 1, +1 = +3 = 0, +0x2D8 = 0, and D_00628DC0 = D_00628DC8. */
 #include "gt4_vec.h"
@@ -44,7 +44,7 @@ extern "C" void func_0049FFA0(Self *self) {
     func_004A7454();
     for (int k = 0; k < 3; ++k)
         for (int r = 0; r < 4; ++r) memcpy(self->m[k][r], gt4_vec(28 + r), 16);
-    __gt4_vu0.vi[13] = 0;
+    gt4_matrix_stack_top = 0;
     const f32 v = D_006AF790;
     self->f2DC = 1.0f;
     self->hF92 = 0x40;

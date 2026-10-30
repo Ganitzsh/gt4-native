@@ -136,7 +136,7 @@ int main() {
         check(menu.input(Input::Left, m).changed && m.preset == Preset::High, "left moves it back");
         menu.input(Input::Down, m);
         check(selectedLabel() == "Renderer", "down selects the next row");
-        check(menu.input(Input::Left, m).changed && m.gsRenderer == GsRenderer::Emulated && m.preset == Preset::Custom,
+        check(menu.input(Input::Left, m).changed && m.gsRenderer == GsRenderer::Original && m.preset == Preset::Custom,
               "the renderer changes, the preset becomes custom");
         menu.input(Input::Down, m);
         menu.input(Input::Down, m);

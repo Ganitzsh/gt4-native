@@ -7,10 +7,9 @@
  *     value is sign-extended into it, as the EE keeps it; the non-multimedia instructions write the
  *     low 64 bits and keep the high 64 (EE), the MMI ones all 128;
  *   - a floating-point register ("f", $f0...) is a float;
- *   - VU0 (COP2: $vf0-31, ACC, $vi0-31, Q, I, R, P) is one register file for the whole program,
- *     __gt4_vu0, defined by the native runtime (runtime/native/vu0.cpp), whose vcallms runs GT4's VU0
- *     microprograms (vcallms).  VU0 float arithmetic is single precision here (x87 with the
- *     runtime's precision control), in the VU's number format (__gt4_vu_float).
+ *   - VU0 (COP2) instructions are not translated: the game has no VU0 model at run time.  A function
+ *     with VU0 code gets a plain C++ version in game_src/ (docs/VU0_REWRITE.md); the state the
+ *     original kept in VU0 is runtime/shared_state.h's.
  */
 #ifndef GT4_ASM_H
 #define GT4_ASM_H
@@ -27,21 +26,9 @@ typedef union {
   float f[4];
 } __gt4_reg;
 
-/* The VU0 register file (layout shared with runtime/native/vu0.h). */
-struct __gt4_vu0_state {
-  float vf[32][4];
-  float acc[4];
-  float q, i, p, pad0;
-  unsigned int r;          /* the random register: 0x3F800000 | 23 random bits */
-  unsigned int clip;       /* clipping flags (vi18) */
-  unsigned int vi[32];     /* integer registers 0-15, control registers 16-31 (cfc2/ctc2) */
-};
-
 #ifdef __cplusplus
 extern "C" {
 #endif
-extern struct __gt4_vu0_state __gt4_vu0;
-void __gt4_vu0_callms (unsigned int addr);  /* vcallms: run the VU0 microprogram at addr (bytes) */
 void __gt4_ee_mtc0 (int reg, unsigned int value);
 int __gt4_ee_syscall (int number, unsigned int a0, unsigned int a1, unsigned int a2, unsigned int a3);
 #ifdef __cplusplus
@@ -301,156 +288,5 @@ static __inline__ int __gt4_f_toint (float x)
     return 0x7FFFFFFF;
   return (int) x;
 }
-
-/* ---- VU0 --------------------------------------------------------------------------------------- */
-
-/* The VU's floats have no infinities, NaNs or denormals: exponent 255 is an ordinary exponent (read
- * as the largest IEEE float of that sign) and a denormal is zero.  Arithmetic takes its operands
- * through this and saturates its results with it, as runtime/native/vu0_programs.cpp does for microprograms
- * (a NaN there cost text glyphs their position: 00499948). */
-static __inline__ float __gt4_vu_float (float f)
-{
-  union { float f; unsigned int u; } v;
-  v.f = f;
-  if ((v.u & 0x7F800000u) == 0x7F800000u)
-    v.u = (v.u & 0x80000000u) | 0x7F7FFFFFu;
-  else if ((v.u & 0x7F800000u) == 0)
-    v.u &= 0x80000000u;
-  return v.f;
-}
-static __inline__ float __gt4_vu_bits (float f) { return f; }
-
-/* mask: x 1, y 2, z 4, w 8; bc: -1 for the full vector t, else the broadcast field of t.  IN and OUT
- * read the operands and write the result: __gt4_vu_float for arithmetic, __gt4_vu_bits for MAX and
- * MINI, which compare and keep the bits. */
-#define __GT4_VUOP_(NAME, EXPR, IN, OUT) \
-static __inline__ void NAME (float *d, const float *s, const float *t, int bc, int mask) \
-{ \
-  float r[4]; int k; \
-  for (k = 0; k < 4; k++) \
-    if (mask & (1 << k)) \
-      { float a = IN (s[k]), b = IN (t[bc < 0 ? k : bc]); r[k] = OUT (EXPR); } \
-  for (k = 0; k < 4; k++) \
-    if (mask & (1 << k)) \
-      d[k] = r[k]; \
-}
-#define __GT4_VUOP(NAME, EXPR) __GT4_VUOP_ (NAME, EXPR, __gt4_vu_float, __gt4_vu_float)
-__GT4_VUOP (__gt4_vadd, a + b)
-__GT4_VUOP (__gt4_vsub, a - b)
-__GT4_VUOP (__gt4_vmul, a * b)
-/* MAX/MINI compare as the VU does, as sign-magnitude integers: the VU has no NaN, so 0x7FFFFFFF
- * (the largest value, which the game uses as "no limit") is bigger than every float. */
-static __inline__ int __gt4_vu_order (float f)
-{
-  union { float f; int i; } u;
-  u.f = f;
-  return u.i ^ ((u.i >> 31) & 0x7FFFFFFF);
-}
-__GT4_VUOP_ (__gt4_vmax, __gt4_vu_order (a) > __gt4_vu_order (b) ? a : b, __gt4_vu_bits, __gt4_vu_bits)
-__GT4_VUOP_ (__gt4_vmini, __gt4_vu_order (a) < __gt4_vu_order (b) ? a : b, __gt4_vu_bits, __gt4_vu_bits)
-__GT4_VUOP (__gt4_vmadd, __gt4_vu_float (__gt4_vu0.acc[k]) + a * b)
-__GT4_VUOP (__gt4_vmsub, __gt4_vu_float (__gt4_vu0.acc[k]) - a * b)
-
-/* One-source operations: op 0 move, 1 abs, 2-5 ftoi0/4/12/15, 6-9 itof0/4/12/15, 10 mr32. */
-static __inline__ void __gt4_vmove (float *d, const float *s, int mask, int op)
-{
-  /* no static table: gcc 2.9 emits an inline function's static data in every object */
-  int fb = op >= 6 ? op - 6 : op - 2;
-  float scale = fb == 0 ? 1.0f : fb == 1 ? 16.0f : fb == 2 ? 4096.0f : 32768.0f;
-  float r[4]; int k;
-  for (k = 0; k < 4; k++)
-    if (mask & (1 << k))
-      {
-        float a = op == 10 ? s[(k + 1) & 3] : s[k];
-        if (op == 1)
-          a = __gt4_f_abs (a);
-        else if (op >= 2 && op <= 5)
-          a = __gt4_f_bits ((unsigned int) __gt4_f_toint (__gt4_vu_float (a) * scale));
-        else if (op >= 6 && op <= 9)
-          a = (float) (int) __gt4_f_uint (a) / scale;
-        r[k] = a;
-      }
-  for (k = 0; k < 4; k++)
-    if (mask & (1 << k))
-      d[k] = r[k];
-}
-
-/* vopmula (msub 0): ACC.xyz = s.yzx * t.zxy; vopmsub (msub 1): d.xyz = ACC.xyz - s.yzx * t.zxy. */
-static __inline__ void __gt4_vopm (float *d, const float *s, const float *t, int msub)
-{
-  float s0 = __gt4_vu_float (s[0]), s1 = __gt4_vu_float (s[1]), s2 = __gt4_vu_float (s[2]);
-  float t0 = __gt4_vu_float (t[0]), t1 = __gt4_vu_float (t[1]), t2 = __gt4_vu_float (t[2]);
-  float x = __gt4_vu_float (s1 * t2), y = __gt4_vu_float (s2 * t0), z = __gt4_vu_float (s0 * t1);
-  if (msub)
-    {
-      x = __gt4_vu_float (__gt4_vu_float (__gt4_vu0.acc[0]) - x);
-      y = __gt4_vu_float (__gt4_vu_float (__gt4_vu0.acc[1]) - y);
-      z = __gt4_vu_float (__gt4_vu_float (__gt4_vu0.acc[2]) - z);
-    }
-  d[0] = x; d[1] = y; d[2] = z;
-}
-
-static __inline__ void __gt4_vclip (const float *s, float w)
-{
-  unsigned int f = 0;
-  float aw = __gt4_f_abs (w);
-  if (s[0] > aw) f |= 1;
-  if (s[0] < -aw) f |= 2;
-  if (s[1] > aw) f |= 4;
-  if (s[1] < -aw) f |= 8;
-  if (s[2] > aw) f |= 16;
-  if (s[2] < -aw) f |= 32;
-  __gt4_vu0.clip = ((__gt4_vu0.clip << 6) | f) & 0xFFFFFF;
-}
-
-static __inline__ void __gt4_vrnext (void)
-{
-  unsigned int x = __gt4_vu0.r;
-  unsigned int bit = ((x >> 4) ^ (x >> 22)) & 1;
-  __gt4_vu0.r = 0x3F800000u | (((x << 1) | bit) & 0x7FFFFFu);
-}
-
-static __inline__ void __gt4_vfill (float *d, float v, int mask)
-{
-  int k;
-  for (k = 0; k < 4; k++)
-    if (mask & (1 << k))
-      d[k] = v;
-}
-
-static __inline__ void __gt4_qmtc2 (float *d, const __gt4_reg *s)
-{ int k; for (k = 0; k < 4; k++) d[k] = s->f[k]; }
-static __inline__ void __gt4_qmfc2 (__gt4_reg *d, const float *s)
-{ int k; for (k = 0; k < 4; k++) d->f[k] = s[k]; }
-
-/* cfc2/ctc2: the integer registers (16 bits) and the control registers. */
-static __inline__ unsigned int __gt4_cfc2 (int n)
-{
-  switch (n)
-    {
-    case 18: return __gt4_vu0.clip;
-    case 20: return __gt4_vu0.r;
-    case 21: return __gt4_f_uint (__gt4_vu0.i);
-    case 22: return __gt4_f_uint (__gt4_vu0.q);
-    case 23: return __gt4_f_uint (__gt4_vu0.p);
-    default: return n < 16 ? __gt4_vu0.vi[n] & 0xFFFF : __gt4_vu0.vi[n];
-    }
-}
-static __inline__ void __gt4_ctc2 (int n, unsigned int v)
-{
-  switch (n)
-    {
-    case 0: return;
-    case 18: __gt4_vu0.clip = v & 0xFFFFFF; return;
-    case 20: __gt4_vu0.r = 0x3F800000u | (v & 0x7FFFFF); return;
-    case 21: __gt4_vu0.i = __gt4_f_bits (v); return;
-    case 22: __gt4_vu0.q = __gt4_f_bits (v); return;
-    case 23: __gt4_vu0.p = __gt4_f_bits (v); return;
-    default: __gt4_vu0.vi[n] = n < 16 ? v & 0xFFFF : v; return;
-    }
-}
-
-/* VU0 data memory (4 KB at 0x11004000) for vlqi/vsqi/vilwr/viswr: addresses in quadwords. */
-#define __GT4_VU0_MEM(qw) ((float *) (0x11004000u + (((unsigned int) (qw) & 0xFF) << 4)))
 
 #endif

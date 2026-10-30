@@ -5,8 +5,10 @@
 //     static const difftest::Register r1({"003E21D8", 0x003E21D8, "ii", 'v', true, rotate_point});
 //
 // where the setup function fills the scratch area of guest RAM (and the shared vectors the function reads) with
-// random inputs and gives the arguments; both versions then run from that state, and the scratch area and the
-// return are compared (floats within 1e-5, or 1e-3 counted as drift, when `floats`).
+// random inputs and gives the arguments; both versions then run from that state, and what they leave is compared
+// (difftest.cpp, run(): the scratch area, the matrix stack, the scratchpad, the test's data region, shared vectors
+// 8..31, the matrix stack's top, the random state) with the return (floats within 1e-5, or 1e-3 counted as drift,
+// when `floats`).
 #include <cstdint>
 
 namespace difftest {
@@ -20,6 +22,9 @@ struct Test {
     char ret;            // v, i, w (64-bit), f; 's' a 16-byte structure (native: hidden pointer; not compared)
     bool floats;         // outputs are floats computed differently (VU arithmetic against x87)
     void (*setup)(std::uint32_t args[8]);   // a float argument as its bits (bits())
+    std::uint32_t data_addr = 0, data_size = 0;   // game data the function writes, compared too (saved and restored)
+    int loose_vector = -1, loose_lanes = 0;        // lanes (x 1, y 2, z 4, w 8) of one shared vector not compared:
+                                                   // what the original leaves there is a register's stale bits
 };
 
 void add(const Test &t);
@@ -35,7 +40,7 @@ std::uint8_t *ram(std::uint32_t addr);
 float *ramf(std::uint32_t addr);
 void fill(std::uint32_t at, std::uint32_t bytes);                                // random bytes
 void fill_floats(std::uint32_t at, std::uint32_t count, float lo, float hi);     // random floats
-// shared vectors (VU0's registers) first..last, every lane random in [lo, hi]
+// shared vectors first..last, every lane random in [lo, hi]
 void random_vectors(int first, int last, float lo, float hi);
 float *vec(int n);
 

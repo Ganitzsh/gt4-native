@@ -1,21 +1,23 @@
-# The GS back end: GT4's frames in gt4_host
+# GT4's frames in gt4_host
 
-`gt4_host` displays what the PS2 would have shown: it takes the graphics stream of `gt4_game.exe` (the
-game's own code on the PS2 memory map, `docs/ARCHITECTURE.md`) over the shared-memory link, runs it
-through a VIF1 + VU1 front end and a GS back end, reads out the displayed frame the way the CRTC does, and
-hands that frame to the display pipeline (`docs/RENDERING.md`) as the scene. The game never renders
-itself; the host never runs game logic.
+`gt4_host` displays what the game draws: it takes the graphics stream of `gt4_game.exe` (the game's own code
+on the PS2 memory map, `docs/ARCHITECTURE.md`) over the shared-memory link, runs it through VIF1 and GT4's
+VU1 programs in C++ into the native renderer (`docs/NATIVE_RENDERER.md`), which draws it with Vulkan into
+the display pipeline (`docs/RENDERING.md`). The game never renders itself; the host never runs game logic.
+No GS is emulated: paraLLEl-GS, the GS emulator the host used until 2026-10-30, is only a test reference now
+(`GT4_GS_REFERENCE`, below).
 
 ```
 gt4_game.exe (32-bit)                         gt4_host.exe (64-bit)
  DMA-kick replacements walk the DMA chains     GameLink (platform/gs/link_host.*): section, process, rings
  GIF PATH3, VIF1 stream, GS_PRIV, VSYNC  ==>    copies records out of the ring (worker thread)
                                                  GraphicsStream (stream.*)
- pad state, GS events, GS_IMAGE          <==      VIF1 (vif1.*)  -> UNPACK/MPG into VU1 memory, DIRECT -> PATH2
-                                                  VU1 (vu1.*)    -> microprograms, XGKICK -> PATH1
-                                                  GS back end (gs_backend.*): paraLLEl-GS, PATH1/2/3,
-                                                   privileged registers, VSYNC scanout -> CPU frame
-                                                 GsHost (gs_host.*) -> newest frame -> GsScene (render/gs_scene.*)
+ pad state, GS events, GS_IMAGE          <==      VIF1 (vif1.*)  -> UNPACK into VU1 memory, DIRECT -> PATH2
+                                                  VU1 (vu1_native.*) -> GT4's programs in C++, XGKICK -> PATH1
+                                                  front end (gsnative/gs_frontend.*): PATH1/2/3, privileged
+                                                   registers, SIGNAL/FINISH/LABEL, GS -> host reads
+                                                 GsHost (gs_host.*) -> every frame list, in order
+                                                   -> GsnScene (render/gsn_scene.*): Vulkan, at a render scale
                                                    -> display pipeline: upscaling, AA, post, 2D layer, output
 ```
 
@@ -37,21 +39,19 @@ gt4_host --headless --replay build\cap.bin --frames 120 --size 640x448 --preset 
 | `--game PATH` | Creates `Local\gt4_link_<host pid>`, starts `PATH --link NAME`, streams its frames. When the game exits (or crashes) its exit code is logged (`Link: gt4_game exited with code ... (0x...): access violation`), the host closes and returns 3 if the code was not 0. Closing the host sends `GT4_REC_HOST_CMD` 1 (quit) and terminates the game after 3 s. Windows only. |
 | `--game-args "ARGS"` | Extra game arguments after `--link NAME` (split on spaces, `"..."` groups). |
 | `--replay FILE` | Plays a capture instead of a game. Headless runs (`--fixed-step`) advance one VBlank per rendered frame, so `--frames N --capture` is reproducible; otherwise it plays at 59.94 Hz. `--replay-loop` restarts at the end. |
-| `--gs-ssaa N` | paraLLEl-GS super-sampling: 1 (faithful, default), 2, 4, 8, 16. |
-| `--gs-hires` | With 4x or more: scan out at twice the resolution (1280 x 896) from the super-samples. |
 
 - **Aspect**: the PS2 picture is a 4:3 TV image with non-square pixels (640 x 448), so `aspect.ratio`
   defaults to `4:3` in these modes; `--set aspect.ratio=...` overrides it. Widescreen belongs to the game
   (`docs/WIDESCREEN.md`).
-- **"Original" preset**: shows the GS frame unaltered. The frame is uploaded as an sRGB texture (so the
-  pipeline sees linear values), and with native resolution, no AA, the `original` (clamp) display transform,
-  fixed exposure and no dither the output encoding gives the same 8-bit values back; effects set to
-  `original` add nothing, because the game's image already contains its own glare and fog
-  (`SceneSource::drawsOriginalEffects`). Checked by `host_replay` (below): the sampled pixels come back
-  with their exact values (the check allows +-1).
-- **Other presets** apply the pipeline to the frame: upscaling (FSR 1/2, Lanczos...), AA, tone mapping,
-  bloom, sharpening. There are no motion vectors (zero) or depth for the GS frame yet, so the temporal paths
-  (TAA, FSR 2) only see a static image; see "Next steps".
+- **"Original" preset** (`render.gs = original`): the native renderer at the PS2's own resolution, one
+  render pixel per GS pixel, shown unaltered: native resolution, no AA, the `original` (clamp) display
+  transform, fixed exposure and no dither give the drawn 8-bit values back; effects set to `original` add
+  nothing, because the game draws its own glare and fog (`SceneSource::drawsOriginalEffects`). Checked by
+  `host_replay` (below): the sampled pixels come back with their exact values (the check allows +-1).
+  `render.gs = emulated`, from before, is read as `original`.
+- **Other presets** (`render.gs = native`) draw at the nearest whole scale to the render resolution and apply
+  the pipeline: upscaling (FSR 1/2, Lanczos...), AA, tone mapping, bloom, sharpening. There are no motion
+  vectors (zero) for the game's frames yet, so the temporal paths (TAA, FSR 2) only see a static image.
 - **Headless live runs** are paced at 59.94 Hz. The 2D overlay readout shows the link status (`F1` hides it).
 - **Keys** with a game: only `F1`-`F12` and `Alt+Enter` change settings; the rest is the pad.
 
@@ -116,43 +116,43 @@ polls `PAD`/`HOST_CMD` at VBlank. Requests:
    payload bytes per record today: it needs a larger buffer (or a direct copy into guest memory) for images.
 4. **VIF1 with TTE**: send the two upper words of each DMA tag before its data (as `walk_chain` does), as
    32-bit words; commands may span records.
-5. **Interlace mode**: the game calls `sceGsResetGraph(0, 1, 2, 1)` (FFMD = 1). paraLLEl-GS treats FFMD = 1
-   as "each field reads every line of a half-height buffer" (field rendering) and FFMD = 0 as "a
-   full-height buffer read every other line". Whichever GT4 really draws, paraLLEl-GS follows the registers;
-   if frames show only half the picture once the game renders, compare `DISPLAY.DH` and the buffer height.
+5. **Interlace mode**: the game calls `sceGsResetGraph(0, 1, 2, 1)` (FFMD = 1): each field reads every line
+   of a half-height buffer (field rendering); the native renderer gives such a field's lines the full output
+   height (`docs/NATIVE_RENDERER.md`).
 
-## GS back end
+## GS commands: the native renderer
 
-`platform/gs/gs_backend.*` wraps **paraLLEl-GS** (Arntzen Software, LGPL-3.0+, pinned commit `cc6184af`
-with Granite `16e7395f`; `cmake/HostDependencies.cmake`), a GS implemented in Vulkan compute shaders with
-precompiled SPIR-V. It builds with MSVC x64 and GCC as a library (`PARALLEL_GS_STANDALONE`; no SDL, no
-runtime shader compiler, no Fossilize, no RenderDoc hook).
+The worker thread feeds every GIF packet (PATH1 from VU1, PATH2 from VIF1 DIRECT, PATH3) and privileged
+register write to `gsn::GsFrontend` (`platform/gsnative/`), which keeps GS memory and the drawing state and
+makes one frame list per VBlank; `GsnScene` (`platform/render/gsn_scene.*`) draws the lists with Vulkan on the
+render thread. Design and state: `docs/NATIVE_RENDERER.md`. What the host owes the game besides pictures:
 
-- **Own Vulkan device**: Granite creates an instance and a device on the renderer's GPU (matched by name);
-  the GS runs on the worker thread. The host and Granite share one volk: Granite keeps per-device function
-  tables, and the renderer reloads its global pointers after the GS device is created
-  (`Renderer::reloadVulkanFunctions`).
-- **Requirements** (checked; otherwise `--game/--replay` fail with the reason and the GPU tests skip):
-  descriptor indexing, timeline semaphores, buffer device address, 8/16-bit storage, int16, scalar block
-  layout, subgroup operations with size control 4..64, 32 KiB shared memory. Works on the RX 7900 XTX and
-  the integrated Radeon of the test machine.
-- **Input**: `gif(path, data)` per path (paraLLEl-GS keeps per-path GIFtag state, so packets may be split),
-  privileged registers into its register file (CSR writes clear the event bits), `vsync(field)`.
-- **Scanout** at each `VSYNC`: paraLLEl-GS reads both circuits (PMODE, DISPFB1/2, DISPLAY1/2, BGCOLOR,
-  SMODE1/2) with `force_progressive` and `anti_blur` (as PCSX2's integration): interlaced content becomes one
-  progressive 640 x 448 frame, the two-circuit flicker filter is undone. The image is copied to the CPU
-  (640 x 448 x 4 bytes, one fence per VBlank) and published to the main thread, which uploads it into the
-  pipeline's scene. External-memory sharing would remove the copy (next steps).
-- **Events**: SIGNAL, FINISH and LABEL writes reach `GS_EVENT`. **GS -> EE**: after TRXDIR = 1,
-  `readTransfer(qwc)` returns the transfer FIFO (`GS_READ` -> `GS_IMAGE`).
-- **Super-sampling** (`--gs-ssaa`, `--gs-hires`) is paraLLEl-GS's; 1x is the faithful default.
-- A GIFtag's PRE/PRIM fields only apply in PACKED mode (hardware behaviour, followed by paraLLEl-GS).
+- **Events**: SIGNAL, FINISH and LABEL, as packets of any path write them, go to the game as `GS_EVENT
+  {kind, id, value}` (the game applies CSR, IMR and SIGLBLID: `runtime/link.cpp` `gs_event`).
+- **GS -> host reads** (`GS_READ` -> `GS_IMAGE`): GT4 renders car thumbnails at a race's loading (six
+  opponents, front 96 x 64 and side 64 x 32, and the player's car 64 x 64, into 16-bit targets) and reads
+  them into EE memory. A read of pages a draw wrote, of one colour target in its own layout, is served by
+  the GPU: the front end cuts the frame list at the read (`GsFrontend::cut`), the worker hands it with the
+  rectangle to the render thread (`GsHost::takeReadRequest`) and waits; the renderer draws every list not
+  drawn yet, copies the rectangle back and packs it in the target's format (`GsnScene::read`), one GS pixel
+  per render pixel at its own sample point. Other reads come from the memory model. A replay has no game
+  to answer, so its reads stay in memory. Against paraLLEl-GS on the race route: the 38 reads give the same
+  pictures, 89 % of the pixels identical, 99.6 % within 4/32 per channel (`GT4_GS_READ_DUMP=DIR` writes
+  what each read returned).
+- **Every frame list is drawn**, in order, even when the render thread falls behind (the host queues them;
+  the renderer executes all pending ones before showing the newest): later frames and reads see what each
+  one drew. Past 64 queued lists (a minimised window) the oldest lists' draws are dropped, their texture
+  uploads kept.
+- **State save** (`GT4_HOST_RECORD` from a later VBlank): GS memory comes from the front end's model.
 
-### Fallback
+### paraLLEl-GS as a test reference
 
-The task allowed a minimal GS of our own if paraLLEl-GS proved unsuitable. It did not: the licence is
-GPL-compatible (LGPL-3.0+, not MIT as first assumed; see `THIRD_PARTY_NOTICES.md`), it builds on 64-bit
-Windows with MSVC 14.44 and on Linux, and it passes the pixel tests. No own GS was written.
+`cmake -DGT4_GS_REFERENCE=ON` (off by default) fetches **paraLLEl-GS** (Arntzen Software, LGPL-3.0+, pinned
+commit `cc6184af` with Granite `16e7395f`; `cmake/HostDependencies.cmake`) and builds `gt4_gs_reference`
+(`platform/gs/gs_backend.*`, a GS implemented in Vulkan compute shaders on its own device) for two tests:
+`gs_backend` (paraLLEl-GS by pixel) and `gs_native` (the native renderer's GS memory model against
+paraLLEl-GS's after the same transfers). gt4_host never links it; without the option the host's volk
+loader is `gt4-volk`.
 
 ## VIF1 + VU1
 
@@ -194,8 +194,9 @@ All in `ctest` (`tools\build_windows.cmd` runs them):
 | Test | What | GPU |
 |---|---|---|
 | `ps2gfx` | VU1 arithmetic (ADD, broadcast MUL, MULA+MADD, DIV+WAITQ+MULq, FTOI4), branch delay slot and the VI read quirk, clip-flag latency, overflow saturation and flags, XGKICK packet bytes; VIF1 UNPACK formats, row/column/protect masking, offset mode, skipping and filling writes, FLG/TOPS double buffering, a command split across records, DIRECT -> PATH2; the transform microprogram (MPG + UNPACK + MSCAL) kicking the expected PATH1 packet; record decoding (GIF, PRIV, VSYNC, GS_READ -> GS_IMAGE); MSKPATH3 holding PATH3; capture write/replay; pad encoding. Prints the interpreter's speed. | no |
-| `gs_backend` | paraLLEl-GS by pixel: sprites and their exclusive edges, alpha blending, a textured triangle (PSMCT32, nearest), a CLUT texture (PSMT8 + PSMCT32 palette), a GS -> EE download, FINISH/SIGNAL events; a VU1 microprogram transforming a triangle and drawing it through XGKICK; a capture replayed through `GsHost` (the host's worker thread, lockstep). Writes the capture for the next test. | yes (77 = skipped) |
-| `host_replay` | `gt4_host --headless --replay ... --preset original --capture` at 640 x 448, then the PPM checked by pixel (`tests/host_replay.cmake`). | yes (skipped without the capture) |
+| `gs_host` | the native front end's events (FINISH, SIGNAL, LABEL with their IDs), a GS -> host read from memory and one of drawn pixels asked of the GPU (the frame list cut at it), a capture replayed through `GsHost` (the worker thread, lockstep) into one displayed frame list per VBlank. Writes the capture for the next test. | no |
+| `host_replay` | `gt4_host --headless --replay ... --preset original --capture` at 640 x 448 (the native renderer at 1x), then the PPM checked by pixel (`tests/host_replay.cmake`). | yes (77 = skipped) |
+| `gs_backend`, `gs_native` | `GT4_GS_REFERENCE` builds only: paraLLEl-GS by pixel (sprites, blending, textures, a CLUT, a download, events, a VU1 program), and the native GS memory model against it. | yes (77 = skipped) |
 
 Without a suitable GPU (CI) the GPU tests are reported as skipped. Captures and images go to the build
 directory (`gs_test_output/`), never into git; no game data is used by the tests.
@@ -213,10 +214,7 @@ RX 7900 XTX, Release, Windows:
   counting stalls) on the transform loop (`ps2gfx` prints it). The real VU1 runs at about 300 MHz, so a
   frame that keeps VU1 busy would take about four times its real duration: acceptable for development, a
   reason for native translation.
-- **GS + scanout + CPU copy**: the replay test scene (two sprites, a VU1 triangle) runs at about 1.7 ms per
-  VBlank including the fence wait and the 640 x 448 readback (1200 lockstep frames in 2.1 s); 3.2 ms with
-  4x SSAA. The display pipeline adds 0.18 ms GPU per frame with the original preset at 1440 x 1080.
-- paraLLEl-GS compiles some pipelines at first use (`Stalled compile` warnings in the log, 10-60 ms once).
+- **Native renderer**: see `docs/NATIVE_RENDERER.md` (a race frame at 2560 x 1440 in about 8 ms of GPU time).
 
 ## Next steps
 
@@ -225,10 +223,8 @@ RX 7900 XTX, Release, Windows:
    real data: records are processed whole and in arrival order, so a PATH3 transfer kicked after a VIF1
    chain that unmasks PATH3 in its middle lands after the whole chain, not at the unmask point. If GT4's
    frames show late textures, the VIF1 decoder can pause at an unmask until the next record is known.
-2. Share the scanout image with the renderer's device (Vulkan external memory, both devices are on the
-   same GPU) instead of the CPU copy.
-3. Motion vectors and depth for the temporal upscalers: with super-sampling, scan out high-resolution; for
-   FSR 2 / TAA on game frames, derive motion from the VU1 inputs (`docs/RENDERING.md`, scene contract).
-4. A faster VU1 path (predecoded instructions), then the native translation of GT4's microprograms that
-   retires the scaffold.
-5. GS events and downloads on the game side (requests 2 and 3), and SMODE1 from `SetGsCrt`.
+2. Motion vectors for the temporal upscalers: derive motion from the VU1 inputs (`docs/RENDERING.md`, scene
+   contract).
+3. SMODE1 from `SetGsCrt`.
+4. The GS command layer itself (`docs/NATIVE_ONLY.md` layer 5): the game's graphics library drawing through
+   a native renderer interface instead of GS packets.

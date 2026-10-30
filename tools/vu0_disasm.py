@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Disassembles GT4's VU0 micro image (the one runtime/native/vu0.cpp loads) from the user's executable.
+"""Disassembles GT4's VU0 micro image (the one the game uploads at boot, 004A03C0) from the user's executable.
 
     py tools/vu0_disasm.py --elf ...\\CORE.GT4.elf [--from 0x2E8] [--to 0x460]
 

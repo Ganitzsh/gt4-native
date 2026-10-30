@@ -1,10 +1,12 @@
 # The native renderer (R1)
 
-`gt4_host` shows GT4 two ways, chosen by `render.gs`. The `original` preset keeps paraLLEl-GS (`emulated`):
-the PS2's GS emulated bit for bit at 640 x 448, its frame handed to the display pipeline. Every other preset
-uses the native renderer (`native`): the same GS command stream drawn by Vulkan at the host's resolution,
-with the pipeline's anti-aliasing, upscaling and post-processing on top. The setting can change at any time:
-the front end always follows the stream. This page is its design and its state.
+`gt4_host` draws GT4 with the native renderer only: the game's GS command stream drawn by Vulkan, with the
+pipeline's anti-aliasing, upscaling and post-processing on top. `render.gs` picks the resolution: `original`
+(the `original` preset) one render pixel per GS pixel, the PS2's 640 x 448; `native` (every other preset) the
+nearest whole scale to the host's resolution. It can change at any time. Until 2026-10-30 the `original`
+preset showed paraLLEl-GS, a GS emulator; that is now only a test reference (`GT4_GS_REFERENCE`,
+docs/GS_BACKEND.md), and the numbers against it below were measured while it ran beside the native renderer.
+This page is the renderer's design and its state.
 
 ## State (2026-10-27)
 
@@ -28,11 +30,12 @@ mostly the field lines, which the native renderer does not jitter.
 - **No motion vectors yet**: the pipeline uses SMAA and FSR 1 in place of TAA and FSR 2 for these frames.
 - Debugging: `GT4_GSN=stats`, `GT4_GSN_DRAWS=BP|all`, `GT4_GSN_XFER` (transfers, CLUT loads, XYOFFSET),
   `GT4_GSN_TEXDUMP=TBP`, `GT4_GSN_DUMP=VBLANK` (targets), `GT4_GSN_LIMIT=K`, `GT4_GSN_VRAM=N` (front-end memory),
-  `GT4_GSN_TRIGGER=PATH` (live sessions: when that file appears, that frame's lines and targets), and
-  paraLLEl-GS's `GT4_VRAM_DUMP=FRAME:PACKET,...|end` for the reference. A screen deep in the game is best
+  `GT4_GSN_TRIGGER=PATH` (live sessions: when that file appears, that frame's lines and targets),
+  `GT4_VRAM_DUMP=FRAME:PACKET,...|end` (the memory model at a packet) and `GT4_GS_READ_DUMP=DIR` (what each GS ->
+  host read returned). A screen deep in the game is best
   studied offline: `GT4_HOST_RECORD=PATH,FROM,COUNT` (FROM = `trigger:FILE`: when FILE appears) records what the host receives over those VBlanks, with
-  the VU1, VIF1 and GS state at FROM first, and `gt4_host --replay PATH --frames N` then plays it in either
-  renderer (`--preset original` / `high`), the same frames every time.
+  the VU1, VIF1 and GS state at FROM first, and `gt4_host --replay PATH --frames N` then plays it at either
+  resolution (`--preset original` / `high`), the same frames every time.
 
 The menus' 2D keeps a centred 4:3 area in the game's 16:9 mode (game-side, gt4-native-game
 WIDESCREEN.md). Open: motion vectors, COLCLAMP = 0 (wrapping), Z formats as frames and textures (GT4's Z24
@@ -57,7 +60,8 @@ From the packets of whole frames (car select: 13,263 primitives in ~60 passes, `
 
 ## Design
 
-Front end (CPU, on the GS worker thread), `platform/gsnative/`:
+Front end (CPU, on the GS worker thread), `platform/gsnative/` (it also reports SIGNAL / FINISH / LABEL to the
+game and serves GS -> host reads, drawn pixels through the back end: docs/GS_BACKEND.md):
 
 - `gs_memory`: 4 MiB of GS local memory; addresses of every format (PSMCT32/24/16/16S, T8, T4, T8H, T4HL,
   T4HH, Z32/24/16/16S) from their page/block/column layouts; host-to-local, local-to-local and local-to-host

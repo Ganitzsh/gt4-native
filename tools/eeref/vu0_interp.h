@@ -1,6 +1,9 @@
 #pragma once
 // The VU0 micro-mode interpreter, a test reference (vu0_interp.cpp).
-#include "../../runtime/native/vu0.h"
+#include "vu0_state.h"
+
+// eeref's VU0 registers, which vu0_interpret runs on (defined in vu0_interp.cpp).
+extern Gt4Vu0State __gt4_vu0;
 
 // vcallms: runs the micro image's program at addr on __gt4_vu0 and the VU0 memory at 0x11000000.
 void vu0_interpret(unsigned int addr);

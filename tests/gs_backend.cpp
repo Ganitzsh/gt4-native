@@ -1,21 +1,13 @@
-// The GS back end (paraLLEl-GS) checked by pixel with synthetic GIF / VIF streams: a sprite, alpha
-// blending, a textured triangle, a CLUT (PSMT8) texture, a GS -> EE download, the FINISH/SIGNAL events,
-// a VU1 microprogram (VIF1 MPG + UNPACK + MSCAL, transform + XGKICK) and a capture replayed through the
-// host's graphics thread. Exits with 77 (skipped) when no Vulkan device meets paraLLEl-GS's requirements.
-//
-//   gt4_gs_backend_test [OUTPUT_DIR]           runs the checks; writes OUTPUT_DIR/replay.cap for the
-//                                               gt4_host replay test (tests/host_replay.cmake)
-//   gt4_gs_backend_test --check-ppm FILE        checks a gt4_host capture of that replay
+// The GS reference (paraLLEl-GS, GT4_GS_REFERENCE builds only: it is not part of gt4_host) checked by pixel
+// with synthetic GIF / VIF streams: a sprite, alpha blending, a textured triangle, a CLUT (PSMT8) texture, a
+// GS -> EE download, the FINISH/SIGNAL events and a VU1 microprogram (VIF1 MPG + UNPACK + MSCAL, transform +
+// XGKICK). Exits with 77 (skipped) when no Vulkan device meets paraLLEl-GS's requirements.
 #include "gs_backend.h"
-#include "gs_host.h"
 #include "gs_packets.h"
-#include "link_host.h"
 #include "stream.h"
 
 #include <cstdio>
 #include <cstdlib>
-#include <filesystem>
-#include <fstream>
 #include <string>
 #include <vector>
 
@@ -48,27 +40,6 @@ void expectPixel(const gt4::gs::DisplayFrame& f, uint32_t x, uint32_t y, uint32_
     expect(ok, what);
 }
 
-constexpr uint32_t rgb(uint32_t r, uint32_t g, uint32_t b) { return r | (g << 8) | (b << 16); }
-
-// Context 1 draws into a 640 x 448 PSMCT32 frame at 0, no Z, whole-screen scissor.
-Gif setup() {
-    Gif g;
-    g.ad({{FRAME_1, frame(0, 10, PSMCT32)}, {ZBUF_1, zbuf(0x70, PSMZ24, true)}, {SCISSOR_1, scissor(0, 639, 0, 447)},
-          {XYOFFSET_1, xyoffset(2048 << 4, 2048 << 4)}, {TEST_1, test(true, 1)}, {PRMODECONT, 1}, {DTHE, 0},
-          {COLCLAMP, 1}, {TEX1_1, 0}});
-    return g;
-}
-
-void sprite(Gif& g, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1, uint64_t color, bool abe = false) {
-    g.reglist(prim(6, false, false, abe, false), {RGBAQ, XYZ2, XYZ2}, {color, xyz(x0, y0), xyz(x1, y1)});
-}
-
-// Privileged registers of a 640 x 448 interlaced display of the frame at 0. Interlaced with a
-// full-height buffer read every other line per field (FFMD = 0), as paraLLEl-GS models it;
-// force_progressive scans it out as one 640 x 448 frame.
-const std::pair<uint32_t, uint64_t> kDisplay[] = {
-    {0x00, pmode(true, false)}, {0x20, smode2(true, false)}, {0x70, dispfb(0, 10, PSMCT32)}, {0x80, display640x448()}, {0xE0, 0}};
-
 void display(gt4::gs::Backend& gs) {
     for (const auto& [offset, value] : kDisplay) gs.writePrivileged(offset, value);
 }
@@ -84,72 +55,12 @@ struct Target final : gt4::ps2::GsTarget {
     void readTransfer(void* out, uint32_t qwc) override { gs.readTransfer(out, qwc); }
 };
 
-// The replayed scene: a grey background, a blue sprite (PATH3) and a magenta triangle drawn by the VU1
-// transform microprogram (PATH1), shown for two VBlanks.
+// The triangle the VU1 test's transform microprogram draws.
 const float kTriangle[3][2] = {{100, 60}, {340, 60}, {100, 300}};
-
-void writeReplay(const std::string& path) {
-    gt4::ps2::CaptureWriter writer(path);
-    const uint32_t three = 3;
-    Gif g = setup();
-    sprite(g, 0, 0, 640, 448, rgbaq(64, 64, 64, 0x80));
-    sprite(g, 400, 300, 600, 420, rgbaq(0, 0, 255, 0x80));
-    for (int field = 0; field < 2; ++field) {
-        writer.write(GT4_REC_GIF, &three, 4, g.data(), static_cast<uint32_t>(g.bytes()));
-        const vif::Stream s = transformStream(kTriangle, 255, 0, 255);
-        writer.write(GT4_REC_VIF1, s.bytes(), static_cast<uint32_t>(s.size()));
-        for (const auto& [offset, value] : kDisplay) {
-            struct { uint32_t reg, pad; uint64_t value; } priv{offset, 0, value};
-            writer.write(GT4_REC_GS_PRIV, &priv, sizeof(priv));
-        }
-        const uint32_t vs[2] = {static_cast<uint32_t>(field), static_cast<uint32_t>(field)};
-        writer.write(GT4_REC_VSYNC, vs, sizeof(vs));
-    }
-}
-
-// Pixels of the replayed scene, in a 640 x 448 image.
-struct Expected { uint32_t x, y, rgb; const char* what; };
-const Expected kReplayPixels[] = {
-    {20, 20, rgb(64, 64, 64), "replay background"},
-#if GT4_VU1_INTERPRETER
-    {150, 100, rgb(255, 0, 255), "replay VU1 triangle"},
-#else
-    {150, 100, rgb(64, 64, 64), "no VU1 triangle without the interpreter"},
-#endif
-    {500, 350, rgb(0, 0, 255), "replay PATH3 sprite"},
-    {330, 290, rgb(64, 64, 64), "outside the triangle"},
-};
-
-int checkPpm(const std::string& path) {
-    std::ifstream in(path, std::ios::binary);
-    std::string magic;
-    uint32_t width = 0, height = 0, maxValue = 0;
-    in >> magic >> width >> height >> maxValue;
-    in.get();
-    if (!in || magic != "P6" || maxValue != 255) {
-        std::fprintf(stderr, "check-ppm: %s is not a binary PPM\n", path.c_str());
-        return 1;
-    }
-    std::vector<unsigned char> rgbBytes(size_t(width) * height * 3);
-    in.read(reinterpret_cast<char*>(rgbBytes.data()), static_cast<std::streamsize>(rgbBytes.size()));
-    // The capture may be larger than 640 x 448 (scaled): sample at the same relative positions.
-    gt4::gs::DisplayFrame f;
-    f.width = width;
-    f.height = height;
-    f.rgba.resize(size_t(width) * height);
-    for (size_t i = 0; i < f.rgba.size(); ++i)
-        f.rgba[i] = rgbBytes[i * 3] | (rgbBytes[i * 3 + 1] << 8) | (rgbBytes[i * 3 + 2] << 16);
-    for (const auto& e : kReplayPixels)
-        expectPixel(f, e.x * width / 640, e.y * height / 448, e.rgb, e.what);
-    std::printf("check-ppm: %s %ux%u: %s\n", path.c_str(), width, height, failures ? "FAILED" : "matches");
-    return failures ? 1 : 0;
-}
 
 }  // namespace
 
-int main(int argc, char** argv) {
-    if (argc == 3 && std::string(argv[1]) == "--check-ppm") return checkPpm(argv[2]);
-    const std::string outputDir = argc > 1 ? argv[1] : "";
+int main() {
     std::string error;
     gt4::gs::BackendOptions options;
     if (const char* gpu = std::getenv("GT4_GS_GPU")) options.gpu = gpu;   // device index or name
@@ -268,32 +179,6 @@ int main(int argc, char** argv) {
         expectPixel(f, 150, 100, rgb(255, 0, 255), "VU1-transformed triangle (inside)");
         expectPixel(f, 330, 290, rgb(0, 0, 0), "VU1-transformed triangle (outside)");
         expect(stream.vifStats().microprograms == 1, "one VU1 microprogram ran");
-    }
-
-    // 6. The replay hook: a capture of the same kind of stream, played by the host's graphics thread.
-    {
-        const std::filesystem::path dir = outputDir.empty() ? std::filesystem::temp_directory_path() : std::filesystem::path(outputDir);
-        std::filesystem::create_directories(dir);
-        const std::string capture = (dir / "replay.cap").string();
-        writeReplay(capture);
-        gs.reset();   // one GS device at a time
-        gt4::gs::GsHost::Options hostOptions;
-        hostOptions.replayPath = capture;
-        hostOptions.lockstep = true;
-        hostOptions.backend = options;
-        auto host = gt4::gs::GsHost::create(hostOptions, error);
-        expect(host != nullptr, "GsHost opens the replay");
-        if (host) {
-            int frames = 0;
-            while (host->advance()) ++frames;
-            gt4::gs::DisplayFrame f;
-            uint64_t serial = 0;
-            expect(host->takeFrame(f, serial) && serial == 2, "two VBlanks replayed, the last frame displayed");
-            expect(f.width == 640 && f.height == 448, "replayed frame is 640 x 448");
-            for (const auto& p : kReplayPixels) expectPixel(f, p.x, p.y, p.rgb, p.what);
-            expect(host->finished(), "the replay ends");
-        }
-        if (outputDir.empty()) std::filesystem::remove(capture);
     }
 
     if (failures) {

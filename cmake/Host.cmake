@@ -149,7 +149,7 @@ target_include_directories(gt4_fsr2 PRIVATE ${GT4_FSR2_DIR} ${GT4_SHADER_OUT} pl
 target_compile_definitions(gt4_fsr2 PRIVATE VK_NO_PROTOTYPES FFX_GCC _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
     _CRT_SECURE_NO_WARNINGS)
 target_link_libraries(gt4_fsr2 PRIVATE Vulkan::Headers)
-target_link_libraries(gt4_fsr2 PRIVATE granite-volk-headers)
+target_link_libraries(gt4_fsr2 PRIVATE ${GT4_VOLK_HEADERS})
 if(MSVC)
   target_compile_options(gt4_fsr2 PRIVATE /W0 /FI${CMAKE_CURRENT_SOURCE_DIR}/platform/render/ffx_compat.h)
 else()
@@ -157,8 +157,8 @@ else()
 endif()
 
 # PS2 graphics (docs/GS_BACKEND.md). gt4_ps2gfx is plain C++ (no GPU): the game link and capture
-# replay, the graphics stream, and VIF1 + VU1. gt4_gs adds the GS back end, paraLLEl-GS on its own
-# Vulkan device, and the host that runs them on a worker thread.
+# replay, the graphics stream, and VIF1 + VU1. gt4_gs adds the host that runs them on a worker thread into
+# the native renderer's front end (gt4_gsnative); the renderer's back end is part of gt4_host.
 # GT4's VU1 microprograms run natively (platform/gs/vu1_native.cpp), with no PS2 code in the host
 # (docs/NATIVE_ONLY.md). GT4_VU1_INTERPRETER builds the VU1 interpreters in, as development tools only:
 # GT4_VU1=interp|ref, GT4_VU1_DIFF, GT4_VU1_TRACE, GT4_VU1_INVENTORY and the tests that check the native
@@ -186,14 +186,25 @@ if(MSVC)
 else()
   target_compile_options(gt4_gsnative PRIVATE -Wall -Wextra -Wpedantic)
 endif()
-add_library(gt4_gs STATIC platform/gs/gs_backend.cpp platform/gs/gs_host.cpp)
+add_library(gt4_gs STATIC platform/gs/gs_host.cpp)
 target_include_directories(gt4_gs PUBLIC platform/gs)
-target_link_libraries(gt4_gs PUBLIC gt4_ps2gfx gt4_gsnative PRIVATE parallel-gs)
+target_link_libraries(gt4_gs PUBLIC gt4_ps2gfx gt4_gsnative)
 if(MSVC)
   target_compile_options(gt4_ps2gfx PRIVATE /W4)
-  target_compile_options(gt4_gs PRIVATE /W3 /wd4267 /wd4244)
+  target_compile_options(gt4_gs PRIVATE /W4)
 else()
   target_compile_options(gt4_ps2gfx PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(gt4_gs PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+# GT4_GS_REFERENCE (cmake/HostDependencies.cmake): paraLLEl-GS behind gs_backend.h, for the tests that check
+# the native renderer against it. Nothing in gt4_host links it.
+if(GT4_GS_REFERENCE)
+  add_library(gt4_gs_reference STATIC platform/gs/gs_backend.cpp)
+  target_include_directories(gt4_gs_reference PUBLIC platform/gs)
+  target_link_libraries(gt4_gs_reference PUBLIC gt4_ps2gfx PRIVATE parallel-gs)
+  if(MSVC)
+    target_compile_options(gt4_gs_reference PRIVATE /W3 /wd4267 /wd4244)
+  endif()
 endif()
 
 add_executable(gt4_host
@@ -206,7 +217,6 @@ add_executable(gt4_host
     platform/render/vk.cpp
     platform/render/pipeline.cpp
     platform/render/test_scene.cpp
-    platform/render/gs_scene.cpp
     platform/render/gsn_scene.cpp
     platform/render/overlay.cpp
     platform/render/fsr2.cpp
@@ -217,7 +227,7 @@ target_include_directories(gt4_host PRIVATE platform/sdl platform/render ${GT4_S
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party
     ${GT4_FSR2_DIR})
 target_compile_definitions(gt4_host PRIVATE VK_NO_PROTOTYPES FFX_GCC)
-target_link_libraries(gt4_host PRIVATE SDL3::SDL3 Vulkan::Headers gt4_guest_abi gt4_fsr2 gt4_gs granite-volk granite-volk-headers)
+target_link_libraries(gt4_host PRIVATE SDL3::SDL3 Vulkan::Headers gt4_guest_abi gt4_fsr2 gt4_gs ${GT4_VOLK} ${GT4_VOLK_HEADERS})
 if(MSVC)
   target_compile_options(gt4_host PRIVATE /W4)
   # Generated SPIR-V tables and the volk loader are third-party style code: no warnings there.
@@ -260,24 +270,33 @@ if(BUILD_TESTING)
     set_tests_properties(vu1_native_fuzz PROPERTIES SKIP_RETURN_CODE 77)
     set(gt4_vu1_tests gt4_vu1_native_fuzz)
   endif()
-  # The GS back end checked by pixel, and a capture replayed through gt4_host (headless, "original"
-  # preset, compared by pixel): need a Vulkan GPU that meets paraLLEl-GS's requirements; skipped (exit
-  # code 77) where there is none, as on CI. Outputs go to the build directory.
-  add_executable(gt4_gs_backend_test tests/gs_backend.cpp)
-  target_link_libraries(gt4_gs_backend_test PRIVATE gt4_gs)
+  # The graphics host on the CPU (events, reads, a capture replayed into frame lists), and that capture drawn
+  # by gt4_host (headless, "original" preset, compared by pixel; needs a Vulkan GPU, skipped (77) without).
+  # Outputs go to the build directory.
+  add_executable(gt4_gs_host_test tests/gs_host.cpp)
+  target_link_libraries(gt4_gs_host_test PRIVATE gt4_gs)
   set(GT4_GS_TEST_OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/gs_test_output)
-  add_test(NAME gs_backend COMMAND gt4_gs_backend_test ${GT4_GS_TEST_OUTPUT})
-  set_tests_properties(gs_backend PROPERTIES SKIP_RETURN_CODE 77 FIXTURES_SETUP gs_replay_capture)
-  # The native renderer's GS memory model against paraLLEl-GS (needs the same GPU; skipped without).
-  add_executable(gt4_gs_native_test tests/gs_native.cpp)
-  target_link_libraries(gt4_gs_native_test PRIVATE gt4_gs gt4_gsnative)
-  add_test(NAME gs_native COMMAND gt4_gs_native_test)
-  set_tests_properties(gs_native PROPERTIES SKIP_RETURN_CODE 77)
+  add_test(NAME gs_host COMMAND gt4_gs_host_test ${GT4_GS_TEST_OUTPUT})
+  set_tests_properties(gs_host PROPERTIES FIXTURES_SETUP gs_replay_capture)
   add_test(NAME host_replay COMMAND ${CMAKE_COMMAND} -DHOST=$<TARGET_FILE:gt4_host>
-      -DCHECKER=$<TARGET_FILE:gt4_gs_backend_test> -DOUTPUT=${GT4_GS_TEST_OUTPUT}
+      -DCHECKER=$<TARGET_FILE:gt4_gs_host_test> -DOUTPUT=${GT4_GS_TEST_OUTPUT}
       -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/host_replay.cmake)
   set_tests_properties(host_replay PROPERTIES SKIP_RETURN_CODE 77 FIXTURES_REQUIRED gs_replay_capture)
-  foreach(test_target IN ITEMS gt4_ps2gfx_test gt4_gs_backend_test ${gt4_vu1_tests} gt4_gs_native_test)
+  set(gt4_gs_reference_tests)
+  if(GT4_GS_REFERENCE)
+    # paraLLEl-GS checked by pixel, and the native renderer's GS memory model against it: need a Vulkan GPU
+    # that meets paraLLEl-GS's requirements; skipped (exit code 77) where there is none.
+    add_executable(gt4_gs_backend_test tests/gs_backend.cpp)
+    target_link_libraries(gt4_gs_backend_test PRIVATE gt4_gs_reference)
+    add_test(NAME gs_backend COMMAND gt4_gs_backend_test)
+    set_tests_properties(gs_backend PROPERTIES SKIP_RETURN_CODE 77)
+    add_executable(gt4_gs_native_test tests/gs_native.cpp)
+    target_link_libraries(gt4_gs_native_test PRIVATE gt4_gs_reference gt4_gsnative)
+    add_test(NAME gs_native COMMAND gt4_gs_native_test)
+    set_tests_properties(gs_native PROPERTIES SKIP_RETURN_CODE 77)
+    set(gt4_gs_reference_tests gt4_gs_backend_test gt4_gs_native_test)
+  endif()
+  foreach(test_target IN ITEMS gt4_ps2gfx_test gt4_gs_host_test ${gt4_vu1_tests} ${gt4_gs_reference_tests})
     if(MSVC)
       target_compile_options(${test_target} PRIVATE /UNDEBUG /W4)
     else()

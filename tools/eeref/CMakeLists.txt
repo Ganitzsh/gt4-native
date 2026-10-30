@@ -19,10 +19,9 @@ add_executable(eerecomp
 if(GT4_EEREF_GEN)
     file(TO_CMAKE_PATH "${GT4_EEREF_GEN}" GT4_EEREF_GEN)
     file(GLOB GEN_SOURCES ${GT4_EEREF_GEN}/*.cpp)
-    # VU0 microprograms run on the interpreter (vu0_interp.cpp); the game's VU0 state and C++ programs are linked for
-    # --vu0-fuzz; shim/ maps the runtime code's guest addresses into eeref's memory
-    add_executable(eeref eeref.cpp ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/native/vu0.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/native/vu0_programs.cpp vu0_interp.cpp ${GEN_SOURCES})
+    # VU0 microprograms run on the interpreter (vu0_interp.cpp); the C++ programs (vu0_programs.cpp) are linked for
+    # --vu0-fuzz; shim/ maps the guest addresses of the code compiled here into eeref's memory
+    add_executable(eeref eeref.cpp vu0_programs.cpp vu0_interp.cpp ${GEN_SOURCES})
     target_include_directories(eeref PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/shim ${RECOMP}/runtime/include ${GT4_EEREF_GEN})
     # the units are large switch-and-goto functions: optimise without the slowest passes
     target_compile_options(eeref PRIVATE /O1 -Wno-everything)

@@ -57,7 +57,7 @@ device. The choices (status 2026-10-26):
 
 | PS2 piece | Replacement | Library | State |
 |---|---|---|---|
-| GS rasteriser | GS packets streamed to the host, drawn on the GPU | paraLLEl-GS (LGPL-3.0+) | done |
+| GS rasteriser | GS packets streamed to the host, drawn on the GPU | the native renderer (`docs/NATIVE_RENDERER.md`; paraLLEl-GS until 2026-10-30, now a test reference) | done |
 | VU1 microprograms | host interpreter; native translation later | own | interpreter |
 | IPU + Polyphony's MPEG player | the stream loop (`0054E3D8`) decodes PSS with FFmpeg into the game's picture queue (`runtime/native/movie.cpp`) | FFmpeg: libavformat `mpegps`, libavcodec `mpeg2video` (LGPL-2.1+) | video done |
 | Movie audio (PSS private stream 1) | decoded with the video, to the host mixer | FFmpeg `adpcm_psx` / PCM, SDL3 audio | todo |

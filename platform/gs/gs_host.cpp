@@ -1,4 +1,5 @@
-// PS2 graphics host: link / replay -> graphics stream -> GS back end, on a worker thread (see gs_host.h).
+// PS2 graphics host: link / replay -> graphics stream -> the native renderer's front end, on a worker thread
+// (see gs_host.h).
 #include "gs_host.h"
 
 #include "gs_frontend.h"
@@ -22,21 +23,21 @@ namespace gt4::gs {
 
 namespace {
 
-// The stream's GS, implemented by the back end.
-class BackendTarget final : public ps2::GsTarget {
+// A GS -> host read of drawn pixels, served by the render thread: the frame list cut at the read (drawn
+// first) and the rectangle; false when it could not be served in time.
+using ReadService = std::function<bool(gsn::FrameList& partial, const gsn::ReadRequest& request, std::vector<uint8_t>& out)>;
+
+// The stream's GS: the native renderer's front end, whose frame lists the render thread draws.
+class NativeTarget final : public ps2::GsTarget {
 public:
-    BackendTarget(Backend& gs, std::function<void(DisplayFrame&)> present, std::function<void(gsn::FrameList&)> presentNative)
-        : backend(gs), publish(std::move(present)), publishNative(std::move(presentNative)) {
-        // The native renderer's front end reads the stream too when its frames are wanted; GT4_GSN=stats
-        // prints a line per frame.
+    NativeTarget(std::function<void(gsn::FrameList&)> presentNative, ReadService readService)
+        : publishNative(std::move(presentNative)), serveRead(std::move(readService)), native(std::make_unique<gsn::GsFrontend>()) {
+        // GT4_GSN=stats prints a line per frame.
         const char* mode = std::getenv("GT4_GSN");
         stats = mode && !std::strcmp(mode, "stats");
-        if (stats || publishNative) native = std::make_unique<gsn::GsFrontend>();
     }
-    void gif(uint32_t path, const uint8_t* data, size_t bytes) override {
-        backend.gif(path, data, bytes);
-        if (native) native->gif(path, data, bytes);
-    }
+    void setEventSink(gsn::GsFrontend::EventSink sink) { native->setEventSink(std::move(sink)); }
+    void gif(uint32_t path, const uint8_t* data, size_t bytes) override { native->gif(path, data, bytes); }
     void privileged(uint32_t offset, uint64_t value) override {
         // GT4_DISPFB=FBP[,FBW[,PSM]] (hex FBP): scan out that frame buffer instead (debugging: look at
         // an intermediate render target, e.g. the 3D before the post passes)
@@ -46,11 +47,11 @@ public:
             std::sscanf(over, "%x,%u,%u", &fbp, &fbw, &psm);
             value = (value & ~0xFFFFFull) | fbp | (fbw << 9) | (static_cast<uint64_t>(psm) << 15);
         }
-        backend.writePrivileged(offset, value);
-        if (native) native->privileged(offset, value);
+        native->privileged(offset, value);
     }
     void vsync(uint32_t field, uint32_t count) override {
-        if (native) {
+        (void)field;
+        {
             // GT4_GSN_VRAM=N: the front end's GS memory at the end of the frame before VBlank N (gsn_vram_N.bin).
             static const long dumpAt = std::getenv("GT4_GSN_VRAM") ? std::strtol(std::getenv("GT4_GSN_VRAM"), nullptr, 10) : -1;
             if (static_cast<long>(count) == dumpAt)
@@ -150,65 +151,53 @@ public:
                         (unsigned long long)list.display.dispfb2, (unsigned long long)list.display.display2);
             if (triggered) std::fflush(stdout);
         }
-        if (native && publishNative) {
-            if (!nativeWanted.load(std::memory_order_relaxed)) {
-                resetPending = true;
-            } else if (resetPending) {   // the frames in between were not drawn: start the textures again
-                native->resetTextures();
-                resetPending = false;
-            } else {
-                publishNative(list);
+        // Both read circuits off (PMODE EN1 = EN2 = 0): nothing is displayed this VBlank.
+        if (!(list.display.pmode & 3)) ++blankFrames;
+        publishNative(list);
+    }
+    void readTransfer(void* out, uint32_t qwc) override {
+        // Pixels a draw made come from the GPU: the frame list so far is drawn, then the rectangle read back
+        // (once per transfer; the reads that follow continue in it).
+        gsn::ReadRequest request;
+        if (native->takeGpuRead(request)) {
+            bool served = false;
+            if (serveRead) {
+                gsn::FrameList partial;
+                native->cut(partial);
+                std::vector<uint8_t> pixels;
+                if ((served = serveRead(partial, request, pixels))) native->setReadData(std::move(pixels));
+            }
+            ++(served ? gpuReads : staleReads);
+            if (!served && staleReads == 1)
+                std::fprintf(stderr, "GS: a read of drawn pixels (target %u, %ux%u) was served from GS memory, without them\n",
+                             request.target, request.width, request.height);
+        }
+        native->readTransfer(out, qwc);
+        // GT4_GS_READ_DUMP=DIR (debugging): what each read returned, as DIR/gsread_N.bin.
+        if (static const char* dir = std::getenv("GT4_GS_READ_DUMP"); dir) {
+            static int n = 0;
+            if (FILE* f = std::fopen((std::string(dir) + "/gsread_" + std::to_string(n++) + ".bin").c_str(), "wb")) {
+                std::fwrite(out, 1, size_t(qwc) * 16, f);
+                std::fclose(f);
             }
         }
-        if (backend.vsync(field, count, frame)) publish(frame);
-        else ++blankFrames;
     }
-    void readTransfer(void* out, uint32_t qwc) override { backend.readTransfer(out, qwc); }
-    void readVram(void* out) override { backend.readVram(0, out, 4u << 20); }
-    void writeVram(const void* data) override {
-        // One PSMCT32 transfer 1024 pixels wide (BW 16) from block 0: its pixels cover GS memory exactly once.
-        const auto* words = static_cast<const uint32_t*>(data);
-        constexpr uint32_t kSide = 1024, kQwords = kSide * kSide / 4;
-        std::vector<uint64_t> packet{4 | 1ull << 60, 0xE};   // A+D x 4
-        auto ad = [&](uint64_t reg, uint64_t value) { packet.push_back(value); packet.push_back(reg); };
-        ad(0x50, 16ull << 48);                       // BITBLTBUF: DBP 0, DBW 16, DPSM CT32
-        ad(0x51, 0);                                 // TRXPOS
-        ad(0x52, kSide | uint64_t{kSide} << 32);     // TRXREG
-        ad(0x53, 0);                                 // TRXDIR: host to local
-        packet.reserve(packet.size() + kQwords * 2 + 2 * (kQwords / 0x7FFF + 1));
-        std::vector<uint32_t> pixels(kSide * kSide);
-        for (uint32_t y = 0; y < kSide; ++y)
-            for (uint32_t x = 0; x < kSide; ++x) pixels[y * kSide + x] = words[gsn::GsMemory::address32(0, 16, x, y) / 4];
-        for (uint32_t done = 0; done < kQwords;) {
-            const uint32_t n = std::min<uint32_t>(kQwords - done, 0x7FFF);
-            packet.push_back(n | (done + n == kQwords ? 1ull << 15 : 0) | 2ull << 58);   // IMAGE
-            packet.push_back(0);
-            const size_t at = packet.size();
-            packet.resize(at + size_t(n) * 2);
-            std::memcpy(&packet[at], pixels.data() + size_t(done) * 4, size_t(n) * 16);
-            done += n;
-        }
-        gif(2, reinterpret_cast<const uint8_t*>(packet.data()), packet.size() * 8);
-    }
-    uint64_t blankFrames = 0;
-    std::atomic<bool> nativeWanted{true};
+    void readVram(void* out) override { std::memcpy(out, native->memory().data(), gsn::GsMemory::kBytes); }
+    void writeVram(const void* data) override { native->restoreMemory(data); }
+    uint64_t blankFrames = 0, gpuReads = 0, staleReads = 0;
 private:
-    bool resetPending = false;
-    Backend& backend;
     std::function<void(gsn::FrameList&)> publishNative;
+    ReadService serveRead;
     std::unique_ptr<gsn::GsFrontend> native;
     gsn::FrameList list;
     bool stats = false;
-    std::function<void(DisplayFrame&)> publish;
-    DisplayFrame frame;
 };
 
 }  // namespace
 
 struct GsHost::Impl {
     Options options;
-    std::unique_ptr<Backend> backend;
-    std::unique_ptr<BackendTarget> target;
+    std::unique_ptr<NativeTarget> target;
     std::unique_ptr<ps2::GraphicsStream> stream;
     std::unique_ptr<ps2::GameLink> link;
     std::unique_ptr<ps2::ReplaySource> replay;
@@ -218,9 +207,6 @@ struct GsHost::Impl {
     int64_t gameOptions[8] = {-1, -1, -1, -1, -1, -1, -1, -1};   // gameplay option values sent (setGameOption)
 
     mutable std::mutex frameMutex;
-    std::condition_variable frameReady;
-    DisplayFrame latest;
-    uint64_t serial = 0;
 
     std::mutex stepMutex;
     std::condition_variable stepCondition;
@@ -230,23 +216,48 @@ struct GsHost::Impl {
     uint64_t replayFrame = 0;
     std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
 
-    gsn::FrameList nativeLatest;
-    uint64_t nativeSerial = 0, nativeTaken = 0;
-    void publishNative(gsn::FrameList& list) {
-        std::lock_guard<std::mutex> lock(frameMutex);
-        if (nativeTaken != nativeSerial) gsn::carryOver(nativeLatest, list);   // the frame not shown: keep its uploads
-        std::swap(nativeLatest, list);
-        ++nativeSerial;
+    // Frame lists not taken by the render thread yet, in order. Every list is drawn (later frames and GS ->
+    // host reads see what it draws); past kMaxQueued (a render thread that stopped taking them) the oldest
+    // lists' draws are dropped, their texture uploads kept.
+    std::vector<gsn::FrameList> queued;
+    static constexpr size_t kMaxQueued = 64;
+    void queue(gsn::FrameList& list) {
+        queued.push_back(std::move(list));
+        list = gsn::FrameList{};
+        while (queued.size() > kMaxQueued) {
+            gsn::carryOver(queued[0], queued[1]);
+            queued.erase(queued.begin());
+        }
     }
-
-    void publish(DisplayFrame& frame) {
+    void publishNative(gsn::FrameList& list) {
+        const bool displayed = list.displayed;
         {
             std::lock_guard<std::mutex> lock(frameMutex);
-            std::swap(latest, frame);
-            ++serial;
+            queue(list);
         }
-        ++vsyncs;
-        frameReady.notify_all();
+        if (displayed) ++vsyncs;
+    }
+
+    // GS -> host reads of drawn pixels, from the worker to the render thread (takeReadRequest/completeRead).
+    std::mutex readMutex;
+    std::condition_variable readDone;
+    gsn::ReadRequest readRequest;
+    uint64_t readAsked = 0, readTaken = 0, readAnswered = 0;
+    bool readOk = false;
+    std::vector<uint8_t> readResult;
+    bool serveRead(gsn::FrameList& partial, const gsn::ReadRequest& request, std::vector<uint8_t>& out) {
+        {
+            std::lock_guard<std::mutex> lock(frameMutex);
+            queue(partial);
+        }
+        std::unique_lock<std::mutex> lock(readMutex);
+        readRequest = request;
+        const uint64_t id = ++readAsked;
+        // The game waits up to 2 s for its pixels; the render thread takes the request within a frame.
+        if (!readDone.wait_for(lock, std::chrono::milliseconds(1500), [&] { return readAnswered == id || stop; })) return false;
+        if (readAnswered != id || !readOk) return false;
+        out = std::move(readResult);
+        return true;
     }
 
     // GT4_HOST_RECORD=PATH[,FROM[,COUNT]] (debugging): the records the host receives, VBlanks FROM..FROM+COUNT,
@@ -290,7 +301,7 @@ struct GsHost::Impl {
         if (recorder) {
             if (recorder->vsyncs >= recorder->from && recorder->vsyncs < recorder->from + recorder->count) {
                 if (!recorder->started && recorder->from) {   // mid-run: the state the replay starts from
-                    std::vector<uint8_t> vram(4u << 20);
+                    std::vector<uint8_t> vram(gsn::GsMemory::kBytes);
                     target->readVram(vram.data());
                     const std::vector<uint8_t> state = stream->saveState(vram.data());
                     recorder->out->write(GT4_REC_STATE, state.data(), static_cast<uint32_t>(state.size()));
@@ -380,6 +391,7 @@ GsHost::~GsHost() {
     if (!impl) return;
     impl->stop = true;
     impl->stepCondition.notify_all();
+    impl->readDone.notify_all();
     if (impl->worker.joinable()) impl->worker.join();
     impl->link.reset();   // asks the game to quit
     std::printf("GS: %s\n", summary().c_str());
@@ -389,8 +401,6 @@ GsHost::~GsHost() {
     std::fprintf(stderr, "GS: stream stopped\n");
     impl->target.reset();
     std::fprintf(stderr, "GS: front end stopped\n");
-    impl->backend.reset();
-    std::fprintf(stderr, "GS: stopped\n");
 }
 
 std::unique_ptr<GsHost> GsHost::create(const Options& options, std::string& error) {
@@ -406,16 +416,13 @@ std::unique_ptr<GsHost> GsHost::create(const Options& options, std::string& erro
         if (!h.replay) return nullptr;
         std::printf("Replay: %s, %zu VBlanks\n", options.replayPath.c_str(), h.replay->frames());
     }
-    h.backend = Backend::create(options.backend, error);
-    if (!h.backend) {
-        error = "GS back end: " + error;
-        return nullptr;
-    }
-    std::printf("GS: paraLLEl-GS on %s, %ux super-sampling\n", h.backend->deviceName().c_str(), options.backend.superSampling);
     Impl* raw = &h;
-    std::function<void(gsn::FrameList&)> native;
-    if (options.nativeRenderer) native = [raw](gsn::FrameList& list) { raw->publishNative(list); };
-    h.target = std::make_unique<BackendTarget>(*h.backend, [raw](DisplayFrame& f) { raw->publish(f); }, native);
+    // Reads of drawn pixels go to the render thread in a live game; a replay has no game to answer (its
+    // reads come from GS memory), and its lockstep would wait on the render thread that waits on it.
+    ReadService reads;
+    if (!options.gamePath.empty())
+        reads = [raw](gsn::FrameList& partial, const gsn::ReadRequest& r, std::vector<uint8_t>& out) { return raw->serveRead(partial, r, out); };
+    h.target = std::make_unique<NativeTarget>([raw](gsn::FrameList& list) { raw->publishNative(list); }, reads);
     h.stream = std::make_unique<ps2::GraphicsStream>(*h.target);
     if (options.audio)
         h.stream->setAudioWriter([sink = options.audio](uint32_t stream, uint32_t rate, const int16_t* frames, size_t count) {
@@ -429,16 +436,16 @@ std::unique_ptr<GsHost> GsHost::create(const Options& options, std::string& erro
         if (!h.link) return nullptr;
         ps2::GameLink* link = h.link.get();
         h.stream->setHostWriter([link](uint32_t type, const void* payload, uint32_t size) { link->write(type, payload, size); });
-        h.backend->setEventSink([raw, link](GsEventKind kind, uint64_t payload) {
-            struct { uint32_t kind, id; uint64_t value; } event{static_cast<uint32_t>(kind), static_cast<uint32_t>(payload), payload};
+        // SIGNAL / FINISH / LABEL as any path writes them: the game applies CSR, IMR and SIGLBLID.
+        h.target->setEventSink([raw, link](uint32_t kind, uint64_t payload) {
+            struct { uint32_t kind, id; uint64_t value; } event{kind, static_cast<uint32_t>(payload), payload};
             link->write(GT4_REC_GS_EVENT, &event, sizeof(event));
             ++raw->events;
         });
-        h.worker = std::thread([raw] { raw->backend->bindToCurrentThread(); raw->runLive(); });
+        h.worker = std::thread([raw] { raw->runLive(); });
     } else {
-        h.backend->setEventSink([raw](GsEventKind, uint64_t) { ++raw->events; });
-        h.worker = options.lockstep ? std::thread([raw] { raw->backend->bindToCurrentThread(); raw->runReplayLockstep(); })
-                                    : std::thread([raw] { raw->backend->bindToCurrentThread(); raw->runReplayRealTime(); });
+        h.target->setEventSink([raw](uint32_t, uint64_t) { ++raw->events; });
+        h.worker = options.lockstep ? std::thread([raw] { raw->runReplayLockstep(); }) : std::thread([raw] { raw->runReplayRealTime(); });
     }
     return host;
 }
@@ -456,22 +463,30 @@ bool GsHost::advance() {
     return !h.done;
 }
 
-bool GsHost::takeFrame(DisplayFrame& frame, uint64_t& serial) {
+bool GsHost::takeNativeFrames(std::vector<gsn::FrameList>& lists) {
     std::lock_guard<std::mutex> lock(impl->frameMutex);
-    if (impl->serial == serial || impl->latest.rgba.empty()) return false;
-    frame = impl->latest;
-    serial = impl->serial;
+    if (impl->queued.empty()) return false;
+    for (auto& list : impl->queued) lists.push_back(std::move(list));
+    impl->queued.clear();
     return true;
 }
 
-void GsHost::setNativeFrames(bool wanted) { impl->target->nativeWanted.store(wanted, std::memory_order_relaxed); }
-
-bool GsHost::takeNativeFrame(gsn::FrameList& list, uint64_t& serial) {
-    std::lock_guard<std::mutex> lock(impl->frameMutex);
-    if (impl->nativeSerial == serial) return false;
-    std::swap(list, impl->nativeLatest);
-    serial = impl->nativeTaken = impl->nativeSerial;
+bool GsHost::takeReadRequest(gsn::ReadRequest& request) {
+    std::lock_guard<std::mutex> lock(impl->readMutex);
+    if (impl->readTaken == impl->readAsked) return false;
+    impl->readTaken = impl->readAsked;
+    request = impl->readRequest;
     return true;
+}
+
+void GsHost::completeRead(bool ok, std::vector<uint8_t>&& pixels) {
+    {
+        std::lock_guard<std::mutex> lock(impl->readMutex);
+        impl->readAnswered = impl->readTaken;
+        impl->readOk = ok;
+        impl->readResult = std::move(pixels);
+    }
+    impl->readDone.notify_all();
 }
 
 void GsHost::sendPad(uint32_t port, bool connected, const uint8_t data[18]) {
@@ -501,7 +516,6 @@ void GsHost::setGameOption(uint32_t id, uint32_t value) {
 bool GsHost::live() const { return impl->link && impl->link->running(); }
 bool GsHost::finished() const { return impl->done; }
 int GsHost::gameExitCode() const { return impl->link && !impl->link->running() ? impl->link->exitCode() : 0; }
-std::string GsHost::deviceName() const { return impl->backend->deviceName(); }
 
 std::string GsHost::status() const {
     const Impl& h = *impl;
@@ -511,10 +525,6 @@ std::string GsHost::status() const {
             << "  vblanks " << h.vsyncs.load() << "  " << h.link->bytesReceived() / (1024 * 1024) << " MiB";
     } else if (h.replay) {
         out << "replay " << h.replayFrame << "/" << h.replay->frames() << (h.done ? " (end)" : "");
-    }
-    {
-        std::lock_guard<std::mutex> lock(h.frameMutex);
-        if (!h.latest.rgba.empty()) out << "  frame " << h.latest.width << "x" << h.latest.height;
     }
     return out.str();
 }
@@ -526,8 +536,8 @@ std::string GsHost::summary() const {
     out << h.vsyncs.load() << " frames displayed in " << seconds << " s, " << h.events.load() << " GS events; "
         << h.stream->describe();
     if (h.target && h.target->blankFrames) out << "; " << h.target->blankFrames << " VBlanks with no display";
-    const std::string timing = h.backend ? h.backend->statistics() : std::string();
-    if (!timing.empty()) out << "; GPU " << timing;
+    if (h.target && (h.target->gpuReads || h.target->staleReads))
+        out << "; " << h.target->gpuReads << " reads of drawn pixels from the GPU, " << h.target->staleReads << " from GS memory";
     return out.str();
 }
 

@@ -5,10 +5,10 @@
  * (n + 1) / 2 + 3, is not 0): DMA cnt tag, VIF FLUSH, VIF DIRECT; then a REGLIST GIF tag (NLOOP 1)
  * with PRIM = (ctx->prim (+0x4A) | flags) without TME and bit 0, and RGBAQ = the 0-255 colour
  * (+0xC20) with Q = 1.0; then a REGLIST GIF tag with NLOOP n, EOP, register XYZF2. Each vertex: the
- * 8 bytes at pos[i] go to vf1.xy, VU0 microprogram 0x678 transforms them (screen position, ftoi4)
+ * point (x, y) at pos[i] goes to the screen (gt4_project_2d: the original's VU0 microprogram 0x678)
  * and XYZF2 = x, y (16 bits each), (z >> 4) in 24 bits and (w >> 4) in the top 8. The original
  * software-pipelines the loop; natively each vertex runs in turn (see func_0049A360.cpp). */
-#include "gt4_asm.h" /* __gt4_vu0 (the VU0 registers) and __gt4_vu0_callms (vcallms) */
+#include "gt4_vec.h"
 extern "C" void gt4_menu_band_widen(char *xyz, int stride, int n); /* runtime/sdk.cpp: centred menus in the wide mode */
 
 struct Ctx {
@@ -22,10 +22,10 @@ struct Ctx {
 
 static inline void put32(char *p, unsigned int v) { *(unsigned int *)p = v; }
 static inline void put64(char *p, unsigned long long v) { *(unsigned long long *)p = v; }
-static inline unsigned int get32(const char *p)
+static inline float getf(const char *p)
 {
     const unsigned char *b = (const unsigned char *)p;
-    return b[0] | (b[1] << 8) | (b[2] << 16) | ((unsigned int)b[3] << 24);
+    return __gt4_bits_float(b[0] | (b[1] << 8) | (b[2] << 16) | ((unsigned int)b[3] << 24));
 }
 
 extern "C" void func_0049A200(Ctx *ctx, int flags, int n, int pos)
@@ -36,7 +36,6 @@ extern "C" void func_0049A200(Ctx *ctx, int flags, int n, int pos)
     unsigned long long prim = (unsigned long long)(long long)(int)(((unsigned int)ctx->prim | (unsigned int)flags) & ~0x11u);
     int qwc = ((n + 1) >> 1) + 3;
     char *p = ctx->packet;
-    unsigned int *vf1 = (unsigned int *)__gt4_vu0.vf[1];
 
     if (qwc != 0) {
         put32(p + 0, (unsigned int)qwc | 0x10000000u);
@@ -55,14 +54,11 @@ extern "C" void func_0049A200(Ctx *ctx, int flags, int n, int pos)
 
     char *v = p + 0x40;
     do {
-        vf1[0] = get32(src);
-        vf1[1] = get32(src + 4);
-        vf1[2] = 0;
-        vf1[3] = 0;
+        int xyzw[4];
+        gt4_project_2d(getf(src), getf(src + 4), xyzw);
         src += 8;
-        __gt4_vu0_callms(0x678);
-        put32(v + 0, (vf1[0] & 0xFFFF) | (vf1[1] << 16));
-        put32(v + 4, ((vf1[2] >> 4) & 0xFFFFFF) | (((vf1[3] >> 4) & 0xFF) << 24));
+        put32(v + 0, ((unsigned int)xyzw[0] & 0xFFFF) | ((unsigned int)xyzw[1] << 16));
+        put32(v + 4, (((unsigned int)xyzw[2] >> 4) & 0xFFFFFF) | ((((unsigned int)xyzw[3] >> 4) & 0xFF) << 24));
         v += 8;
     } while (--n != 0);
     gt4_menu_band_widen(p + 0x40 + 0, 8, count);

@@ -111,14 +111,25 @@ def compile_eeorig(out, gen):
     bridge = os.path.join(ROOT, "tools", "eeref", "orig_bridge.cpp")
     jobs.append((bridge, os.path.join(objdir, "orig_bridge.o"),
                  ["-I", os.path.join(ROOT, "runtime"), "-I", os.path.join(ROOT, "include")]))
+    # the original code's vcallms: GT4's VU0 programs in the VU's arithmetic (a test reference; the game has none)
+    jobs.append((os.path.join(ROOT, "tools", "eeref", "vu0_programs.cpp"), os.path.join(objdir, "vu0_programs.o"), []))
     for n in sorted(os.listdir(os.path.join(ROOT, "tools", "eeref"))):   # GT4_DIFFTEST's tests (difftest.h)
         if n.startswith("difftest") and n.endswith(".cpp"):
             jobs.append((os.path.join(ROOT, "tools", "eeref", n), os.path.join(objdir, n[:-4] + ".o"),
                          ["-I", os.path.join(ROOT, "runtime"), "-I", os.path.join(ROOT, "include")]))
 
+    # the bridge and the tests also depend on tools/eeref's headers and the runtime's shared state
+    eeref = os.path.join(ROOT, "tools", "eeref")
+    headers = [os.path.join(eeref, h) for h in os.listdir(eeref) if h.endswith(".h")] + \
+        [os.path.join(ROOT, "runtime", "shared_state.h")]
+    headers_time = max(os.path.getmtime(h) for h in headers)
+
     def build(job):
         src, obj, extra = job
-        if not (os.path.exists(obj) and os.path.getmtime(obj) >= os.path.getmtime(src)):
+        newest = os.path.getmtime(src)
+        if os.path.dirname(src) == eeref:
+            newest = max(newest, headers_time)
+        if not (os.path.exists(obj) and os.path.getmtime(obj) >= newest):
             run([tool("g++"), "-c"] + flags + extra + [src, "-o", obj], env=mingw_env())
         return obj
 

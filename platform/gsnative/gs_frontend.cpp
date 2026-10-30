@@ -20,6 +20,7 @@ enum Reg : uint32_t {
     PRMODECONT = 0x1A, PRMODE = 0x1B, TEXCLUT = 0x1C, TEXA = 0x3B, FOGCOL = 0x3D, TEXFLUSH = 0x3F,
     SCISSOR_1 = 0x40, ALPHA_1 = 0x42, DTHE = 0x45, COLCLAMP = 0x46, TEST_1 = 0x47, PABE = 0x49, FBA_1 = 0x4A,
     FRAME_1 = 0x4C, ZBUF_1 = 0x4E, BITBLTBUF = 0x50, TRXPOS = 0x51, TRXREG = 0x52, TRXDIR = 0x53, HWREG = 0x54,
+    SIGNAL = 0x60, FINISH = 0x61, LABEL = 0x62,
 };
 
 float asFloat(uint32_t bits) { return std::bit_cast<float>(bits); }
@@ -54,6 +55,7 @@ void FrameList::clear() {
     retiredTextures.clear();
     resetTextures = false;
     targets.clear();
+    displayed = false;
     dump = false;
 }
 
@@ -170,6 +172,10 @@ void GsFrontend::write(uint32_t r, uint64_t value) {
     case HWREG:
         if (imageActive) imageWritten(reinterpret_cast<const uint8_t*>(&value), 8);
         return;
+    case SIGNAL: case FINISH: case LABEL:
+        reg[r] = value;
+        if (events) events(r == FINISH ? 0 : r == SIGNAL ? 1 : 2, value);
+        return;
     default:
         if (r == XYOFFSET_1 || r == XYOFFSET_2) {   // GT4_GSN_XFER (debugging): offset changes
             static const bool logOffsets = std::getenv("GT4_GSN_XFER") != nullptr;
@@ -233,7 +239,87 @@ void GsFrontend::transferStarted(uint32_t dir) {
         mem.copy(t);   // a copy out of a render target is stale here (the target lives on the GPU)
         memoryWritten(t.dbp, t.dbw, t.dpsm, t.dsax, t.dsay, t.rrw, t.rrh);
         ++stats.copies;
+    } else if (dir == 1) {
+        readData = mem.read(t);
+        readPos = 0;
+        // Whether a draw wrote any of the source pages after the last transfer into them.
+        uint32_t pw, ph;
+        pageSize(t.spsm, pw, ph);
+        const uint32_t perRow = std::max<uint32_t>(1, (t.spsm == PSMT8 || t.spsm == PSMT4) ? t.sbw / 2 : t.sbw);
+        readTarget = false;
+        gpuReadPending = false;
+        uint32_t owner = 0;
+        bool oneOwner = true;
+        for (uint32_t py = t.ssay / ph; py <= (t.ssay + std::max<uint32_t>(t.rrh, 1) - 1) / ph; ++py)
+            for (uint32_t px = t.ssax / pw; px <= (t.ssax + std::max<uint32_t>(t.rrw, 1) - 1) / pw; ++px)
+                for (uint32_t extra = 0; extra < 2; ++extra) {
+                    if (extra && !(t.sbp % 32)) break;
+                    const uint32_t page = pages[(t.sbp / 32 + py * perRow + px + extra) & 511].target;
+                    if (!page) continue;
+                    readTarget = true;
+                    if (owner && page != owner) oneOwner = false;
+                    owner = page;
+                }
+        ++stats.reads;
+        if (readTarget) {
+            ++stats.readsFromTargets;
+            // GT4's reads (the car thumbnails it renders into 16-bit targets and keeps in EE memory) are of
+            // one target in its own layout: those pixels come from the GPU. Anything else stays the memory
+            // model's (stale where drawn).
+            const Target& o = targets[owner - 1];
+            if (oneOwner && !o.depth && o.bp == t.sbp && o.bw == t.sbw && o.psm == t.spsm &&
+                (t.spsm == PSMCT32 || t.spsm == PSMCT24 || t.spsm == PSMCT16 || t.spsm == PSMCT16S)) {
+                gpuRead = {owner, t.ssax, t.ssay, t.rrw, t.rrh, t.spsm};
+                gpuReadPending = true;
+            } else {
+                static bool warned = false;
+                if (!warned) {
+                    warned = true;
+                    std::fprintf(stderr, "gsn: a GS -> host read of drawn pixels in another layout (src %X/%u psm %X, target bp %X/%u "
+                                 "psm %X) is served from the memory model, without what was drawn\n", t.sbp, t.sbw, t.spsm, o.bp, o.bw, o.psm);
+                }
+            }
+        }
     }
+}
+
+bool GsFrontend::takeGpuRead(ReadRequest& request) {
+    if (!gpuReadPending) return false;
+    gpuReadPending = false;
+    request = gpuRead;
+    return true;
+}
+
+void GsFrontend::setReadData(std::vector<uint8_t> data) {
+    readData = std::move(data);
+    readPos = 0;
+}
+
+void GsFrontend::cut(FrameList& out) {
+    lastReinterpretation = {};
+    lastMemoryReinterpretation = {};
+    frame.targets = targets;
+    frame.displayed = false;
+    std::swap(out, frame);
+    frame.clear();
+}
+
+void GsFrontend::readTransfer(void* out, uint32_t qwc) {
+    auto* bytes = static_cast<uint8_t*>(out);
+    const size_t want = size_t(qwc) * 16;
+    const size_t have = readPos < readData.size() ? std::min(want, readData.size() - readPos) : 0;
+    if (have) std::memcpy(bytes, readData.data() + readPos, have);
+    std::memset(bytes + have, 0, want - have);
+    readPos += want;
+}
+
+void GsFrontend::restoreMemory(const void* data) {
+    std::memcpy(mem.data(), data, GsMemory::kBytes);
+    for (uint32_t page = 0; page < pages.size(); ++page) {
+        pages[page] = {0, ++serial};
+        ++pageGeneration[page];
+    }
+    ++uploads;
 }
 
 void GsFrontend::imageWritten(const uint8_t* bytes, size_t size) {
@@ -842,6 +928,7 @@ void GsFrontend::vsync(uint64_t vblank, FrameList& out) {
     lastReinterpretation = {};
     lastMemoryReinterpretation = {};
     frame.vblank = vblank;
+    frame.displayed = true;
     frame.targets = targets;
     Display& d = frame.display;
     d.pmode = priv[0x00];

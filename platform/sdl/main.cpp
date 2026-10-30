@@ -65,8 +65,6 @@ const char* kUsage =
     "  --replay FILE        display a capture of the game's graphics stream (gt4_game --capture) instead;\n"
     "                       with --fixed-step (headless) one VBlank per rendered frame, else 59.94 Hz\n"
     "  --replay-loop        start the replay again at its end\n"
-    "  --gs-ssaa N          GS super-sampling 1 (faithful, default), 2, 4, 8 or 16\n"
-    "  --gs-hires           with --gs-ssaa 4 or more: scan out at twice the resolution (1280 x 896)\n"
     "Interactive runs read and save the settings file in the user's preference directory; scripted runs\n"
     "(--frames, --smoke-test, --session-dir, --headless) start from the defaults unless --settings is given.\n"
     "Keys: F1 readout, F2 preset, F3 anti-aliasing, F4 upscaler, F5 render quality, F6 aspect ratio,\n"
@@ -77,8 +75,7 @@ const char* kUsage =
 
 struct Options {
     bool probe = false, smoke = false, headless = false, listGpus = false, listDisplays = false, listOptions = false;
-    bool fixedStep = false, audio = true, replayLoop = false, gsHires = false;
-    uint32_t gsSsaa = 1;
+    bool fixedStep = false, audio = true, replayLoop = false;
     std::string game, replay;
     std::vector<std::string> gameArgs;
     uint32_t frames = 0;
@@ -141,11 +138,6 @@ Options parse(int argc, char** argv) {
         else if (a == "--game-args") o.gameArgs = splitArguments(value(i));
         else if (a == "--replay") o.replay = value(i);
         else if (a == "--replay-loop") o.replayLoop = true;
-        else if (a == "--gs-hires") o.gsHires = true;
-        else if (a == "--gs-ssaa") {
-            if (!parseUnsigned(value(i), o.gsSsaa) || (o.gsSsaa != 1 && o.gsSsaa != 2 && o.gsSsaa != 4 && o.gsSsaa != 8 && o.gsSsaa != 16))
-                throw std::invalid_argument("--gs-ssaa takes 1, 2, 4, 8 or 16");
-        }
         else if (a == "--preset") o.sets.emplace_back("graphics.preset", value(i));
         else if (a == "--set") {
             const std::string pair = value(i);
@@ -531,23 +523,17 @@ int run(const Options& options) {
         return 0;
     }
 
-    // The game's frames: the GS back end (its own Vulkan device on the renderer's GPU) fed by a live game
-    // or a capture. Creating it loads volk's globals for its own instance, so the renderer reloads its own.
+    // The game's frames: the native renderer's frame lists from a live game or a capture (the GS host's
+    // worker thread follows the stream; the renderer draws the lists).
     std::unique_ptr<gt4::gs::GsHost> gs;
     SDL_AudioStream* gameAudio = nullptr;  // destroyed with the process (after the GS host stops)
     const bool lockstep = !options.replay.empty() && options.fixedStep;
-    gt4::gs::DisplayFrame gsFrame;
-    uint64_t gsSerial = 0;
-    gt4::gsn::FrameList nativeFrame;
-    uint64_t nativeSerial = 0;
+    std::vector<gt4::gsn::FrameList> nativeFrames;
     bool gameExited = false;
     if (gsMode) {
         gt4::gs::GsHost::Options gsOptions;
         gsOptions.gamePath = options.game;
         gsOptions.gameArgs = options.gameArgs;
-        // The native renderer's front end follows the stream whenever the game runs, so that render.gs can
-        // change at any time (docs/NATIVE_RENDERER.md); GT4_GSN=off leaves it out.
-        if (const char* gsn = std::getenv("GT4_GSN"); !gsn || std::strcmp(gsn, "off")) gsOptions.nativeRenderer = true;
         // A wide content shape switches on the game's own 16:9 mode, generalised to that aspect (the
         // game's --aspect: Hor+ 3D in the anamorphic 640 x 448 frame, which the host presents at the
         // aspect). Read at start-up: changing aspect.ratio later needs a restart of the game.
@@ -564,9 +550,6 @@ int run(const Options& options) {
         gsOptions.replayPath = options.replay;
         gsOptions.lockstep = lockstep;
         gsOptions.loop = options.replayLoop;
-        gsOptions.backend.gpu = renderer->gpu().name;
-        gsOptions.backend.superSampling = options.gsSsaa;
-        gsOptions.backend.highResolutionScanout = options.gsHires;
         // The game's sound to the default output (windowed runs: headless ones stay silent; the game
         // writes its mix to a WAV file with GT4_AUDIO_WAV). A session owns its own audio stream.
         if (options.audio && !options.headless && options.sessionDirectory.empty()) {
@@ -586,7 +569,6 @@ int run(const Options& options) {
         }
         std::string error;
         gs = gt4::gs::GsHost::create(gsOptions, error);
-        renderer->reloadVulkanFunctions();
         if (!gs) throw std::runtime_error(error);
         renderer->useGameFrame(true);
         if (window) SDL_SetWindowTitle(window->window, options.game.empty() ? "GT4 native host - replay" : "GT4 native host");
@@ -775,21 +757,21 @@ int run(const Options& options) {
             renderer.reset();
             renderer = makeRenderer(settings.gpu);
             activeGpu = settings.gpu;
-            if (gs) {   // the GS back end keeps its own device; show its frames on the new renderer
-                renderer->useGameFrame(true);
-                if (!gsFrame.rgba.empty()) renderer->setGameFrame(gsFrame.width, gsFrame.height, gsFrame.rgba.data());
-            }
+            if (gs) renderer->useGameFrame(true);
         }
         // The game's frames: in lockstep replay one VBlank per rendered frame; otherwise the newest one.
         if (gs) {
             if (lockstep) gs->advance();
-            if (gs->takeFrame(gsFrame, gsSerial)) renderer->setGameFrame(gsFrame.width, gsFrame.height, gsFrame.rgba.data());
-            // render.gs = native (GT4_GSN=render forces it): the native renderer's frames.
-            static const bool forceNative = [] { const char* e = std::getenv("GT4_GSN"); return e && !std::strcmp(e, "render"); }();
-            const bool wantNative = forceNative || settings.gsRenderer == gt4::GsRenderer::Native;
-            gs->setNativeFrames(wantNative);
-            renderer->useNativeFrames(wantNative);
-            if (wantNative && gs->takeNativeFrame(nativeFrame, nativeSerial)) renderer->setNativeFrame(nativeFrame);
+            if (gs->takeNativeFrames(nativeFrames)) renderer->addNativeFrames(nativeFrames);
+            // A read of drawn pixels the game waits for (the car thumbnails it renders and keeps): the lists up
+            // to it are drawn now and the pixels read back.
+            gt4::gsn::ReadRequest read;
+            if (gs->takeReadRequest(read)) {
+                if (gs->takeNativeFrames(nativeFrames)) renderer->addNativeFrames(nativeFrames);
+                std::vector<uint8_t> pixels;
+                const bool ok = renderer->readGsTarget(read, pixels);
+                gs->completeRead(ok, std::move(pixels));
+            }
             if (gs->live()) {
                 gs->setPaused(menu.isOpen());
                 gs->setGameOption(0, static_cast<uint32_t>(settings.aiCatchUp));   // runtime.h kOptionAiCatchUp

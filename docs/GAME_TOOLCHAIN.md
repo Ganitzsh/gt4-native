@@ -241,16 +241,17 @@ assemblies; all with `--keep-s`); `census.jsonl` (`file, profile, lang, ok, stag
   even when the C variable bound to it is smaller (`qmfc2 %0,$vf1 : "=r"(u64 lo)` then
   `pcpyud %0,%1,%1 : "=r"(hi) : "r"(lo)` reads lo's high half), a plain variable that is a register
   output and a register input in the same file gets a shadow static of its full register, used
-  while its low bytes still equal the variable. VU0 registers are one program-wide register file,
-  `__gt4_vu0` (`runtime/native/vu0.cpp`); `vcallms` runs GT4's VU0 programs in C++ (`runtime/native/vu0_programs.cpp`).
-  The semantics (MMI lanes and saturation, FPU incl. the EE's truncating `cvt.w.s`, VU0 FMAC with
-  dest masks and broadcasts, Q/I/R, clipping, VU0 integer and memory ops, COP2 moves, COP0 and
+  while its low bytes still equal the variable. VU0 (COP2) instructions are not translated
+  (2026-10-30): the game has no VU0 model at run time, and a function with VU0 code gets a plain C++
+  version in `game_src/` (docs/VU0_REWRITE.md); the state the original kept in VU0 (shared vectors,
+  the matrix stack, the random generator) is `runtime/shared_state.h`'s.
+  The semantics (MMI lanes and saturation, FPU incl. the EE's truncating `cvt.w.s`, COP0 and
   `syscall` as runtime calls) are C helpers in `compat/game/gt4_asm.h`, included by the prelude.
-  VU0 arithmetic, in macro and micro mode, uses the VU's number format (`__gt4_vu_float`): no
-  infinities, NaNs or denormals. The game relies on it: 00499948 places text glyphs from vectors
-  whose z holds a coordinate's sign-extended upper word (0xFFFFFFFF for a negative x), multiplied by
-  zero; as an IEEE NaN it spread, and each label lost the letters left of its origin.
-  A `#param` stringified into a VU register name in a macro (`"$vf" #n`) becomes the C index `n`.
+  The VU's number format still matters to the rewrites: no infinities, NaNs or denormals, and
+  0x7FFFFFFF is the largest value (the graphics library's "no clamp"), so MAX/MINI compare as the VU
+  orders floats (`__gt4_maxf`/`__gt4_minf`); 00499948 places text glyphs from vectors whose z holds a
+  coordinate's sign-extended upper word (0xFFFFFFFF for a negative x), multiplied by zero; as an IEEE
+  NaN it spread, and each label lost the letters left of its origin.
 - **C99 variadic macros** (`#define F(a, ...) ... __VA_ARGS__`) take gcc 2.9's named form.
 - **Register variables** (`register int i __asm__("$25")`) lose the binding; a file-scope one bound
   to `$28` becomes a macro reading the module's `$gp` from the runtime.
@@ -345,7 +346,7 @@ Symbol scan of all 30,189 objects (`nm`): no duplicate global definitions; the u
 
 Other things to keep in mind when linking and running:
 
-- All sources compile now (above); hand-written assembly the boot reaches gets native code in `runtime/native/` (one file per decomp unit), VU0 microprograms are C++ in `runtime/native/vu0_programs.cpp`.
+- All sources compile now (above); hand-written assembly the boot reaches gets native code in `runtime/native/` (one file per decomp unit); what the VU0 microprograms did is plain C++ in their callers (docs/NATIVE_ONLY.md).
 - 2.9 inlines less than 2.96; with `--export own` every out-of-line copy is local, so nothing
   collides, but the code is larger.
 - `delete[]` passes in-charge 0 instead of 2 to element destructors (classes with virtual bases

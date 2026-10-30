@@ -251,7 +251,7 @@ struct RecHeader {
     std::uint32_t ram_pages;  // .post: only the pages of RAM that changed (address, 4 KB each)
 };
 
-// runtime/native/vu0.h, Gt4Vu0State
+// The shared state as GT4_RECORD stores it (runtime/record.cpp), in the layout of vu0_state.h's Gt4Vu0State
 struct NativeVu0 {
     float vf[32][4];
     float acc[4];

@@ -8,14 +8,18 @@
 // first byte; the handler sends the call to gt4_orig_entry, which runs the original with the arguments from the
 // caller's stack and returns its result as the native function would (edx:eax, a float in eax). GT4_ORIG=all
 // makes every PS2 function address lead to the original code instead: the native game code then never runs.
-// Each thread has an EE stack buffer of its own; VU0's registers are copied in and out; vcallms runs on the
-// native VU0 interpreter.
+// Each thread has an EE stack buffer of its own. The game's shared state (runtime/shared_state.h) is where the
+// original kept it in VU0: the shared vectors are copied to and from VU0's vector registers, the matrix stack's top
+// to and from vi13, the random state to and from R, at each crossing between native and original code; the matrix
+// stack itself is the original code's VU0 data memory (vu0_data). The original code's vcallms runs GT4's VU0
+// programs in the VU's arithmetic (vu0_programs.cpp, a test reference the game does not link).
 #include "ps2/generated.hpp"
 
 #include "guest.h"
 #include "image.h"
 #include "log.h"
-#include "native/vu0.h"
+#include "shared_state.h"
+#include "vu0_programs.h"
 
 #include <windows.h>
 
@@ -162,7 +166,9 @@ void ctc2(Cpu &c, std::uint32_t reg, std::uint32_t value) {
 }
 bool vu0_busy(Cpu &) { return false; }
 void vu0_wait(Cpu &) {}
-std::uint8_t *vu0_data() { return reinterpret_cast<std::uint8_t *>(static_cast<uintptr_t>(0x11004000u)); }
+// VU0 data memory, where the original keeps the matrix stack: natively gt4_matrix_stack, the same 4 KB.
+std::uint8_t *vu0_data() { return reinterpret_cast<std::uint8_t *>(gt4_matrix_stack); }
+static_assert(sizeof gt4_matrix_stack == 0x1000);
 
 }  // namespace ps2
 
@@ -170,32 +176,18 @@ namespace {
 
 using namespace ps2;
 
+// The shared state from the original code's VU0 registers (after it ran) and back (before it runs). The VU0 registers
+// that are not shared state (the other vi, ACC, Q, I, P, the flags) stay the original code's own, in its Cpu.
 void vu0_to_native(const Vu0Regs &v) {
-    Gt4Vu0State &n = __gt4_vu0;
-    for (int k = 0; k < 32; ++k) std::memcpy(n.vf[k], v.vf[k].w, 16);
-    std::memcpy(n.acc, v.acc.w, 16);
-    for (int k = 0; k < 16; ++k) n.vi[k] = v.vi[k];
-    std::memcpy(&n.q, &v.q, 4);
-    std::memcpy(&n.i, &v.i, 4);
-    std::memcpy(&n.p, &v.p, 4);
-    n.r = 0x3F800000u | (v.r & 0x7FFFFFu);
-    n.clip = v.clip;
-    n.vi[16] = v.status;
-    n.vi[17] = v.mac;
+    for (int k = 0; k < 32; ++k) std::memcpy(gt4_shared_vectors[k], v.vf[k].w, 16);
+    gt4_matrix_stack_top = v.vi[13];
+    gt4_random_state = 0x3F800000u | (v.r & 0x7FFFFFu);
 }
 
 void vu0_from_native(Vu0Regs &v) {
-    const Gt4Vu0State &n = __gt4_vu0;
-    for (int k = 0; k < 32; ++k) std::memcpy(v.vf[k].w, n.vf[k], 16);
-    std::memcpy(v.acc.w, n.acc, 16);
-    for (int k = 0; k < 16; ++k) v.vi[k] = static_cast<std::uint16_t>(n.vi[k]);
-    std::memcpy(&v.q, &n.q, 4);
-    std::memcpy(&v.i, &n.i, 4);
-    std::memcpy(&v.p, &n.p, 4);
-    v.r = n.r & 0x7FFFFFu;
-    v.clip = n.clip;
-    v.status = n.vi[16];
-    v.mac = n.vi[17];
+    for (int k = 0; k < 32; ++k) std::memcpy(v.vf[k].w, gt4_shared_vectors[k], 16);
+    v.vi[13] = gt4_matrix_stack_top;
+    v.r = gt4_random_state & 0x7FFFFFu;
 }
 
 constexpr std::uint32_t kEeStackSize = 4u << 20;
@@ -220,9 +212,32 @@ const Sig &sig_of(std::uint32_t addr) {
 
 namespace ps2 {
 void vcallms(Cpu &c, std::uint32_t address) {
-    vu0_to_native(c.vu0);
-    __gt4_vu0_callms(address);
-    vu0_from_native(c.vu0);
+    Vu0Regs &v = c.vu0;
+    Gt4Vu0State s{};
+    for (int k = 0; k < 32; ++k) std::memcpy(s.vf[k], v.vf[k].w, 16);
+    std::memcpy(s.acc, v.acc.w, 16);
+    for (int k = 0; k < 16; ++k) s.vi[k] = v.vi[k];
+    std::memcpy(&s.q, &v.q, 4);
+    std::memcpy(&s.i, &v.i, 4);
+    std::memcpy(&s.p, &v.p, 4);
+    s.r = 0x3F800000u | (v.r & 0x7FFFFFu);
+    s.clip = v.clip;
+    s.vi[16] = v.status;
+    s.vi[17] = v.mac;
+    if (!vu0ref::vu0_program(address, s, vu0_data())) {
+        stop(c, c.pc, "vcallms to an address that is not one of GT4's VU0 programs");
+        return;
+    }
+    for (int k = 0; k < 32; ++k) std::memcpy(v.vf[k].w, s.vf[k], 16);
+    std::memcpy(v.acc.w, s.acc, 16);
+    for (int k = 0; k < 16; ++k) v.vi[k] = static_cast<std::uint16_t>(s.vi[k]);
+    std::memcpy(&v.q, &s.q, 4);
+    std::memcpy(&v.i, &s.i, 4);
+    std::memcpy(&v.p, &s.p, 4);
+    v.r = s.r & 0x7FFFFFu;
+    v.clip = s.clip;
+    v.status = s.vi[16];
+    v.mac = s.vi[17];
 }
 }  // namespace ps2
 
