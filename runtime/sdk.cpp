@@ -1,5 +1,6 @@
 // Replacements of Sony SDK functions linked in the image (config/sdk_functions.tsv in gt4-decomp):
 // a function named gt4_replace_<SDK name> takes over that function's address (tools/game_link.py).
+#include "guest.h"
 #include "kernel.h"
 #include "log.h"
 #include "runtime.h"
@@ -107,6 +108,14 @@ extern "C" int gt4_display_aspect_milli() {
     double w = 0, h = 1;
     if (std::sscanf(a, "%lf:%lf", &w, &h) < 1 || w <= 0 || h <= 0) return 0;
     return static_cast<int>(w / h * 1000.0 + 0.5);
+}
+
+// The x squeeze the game's 16:9 mode applies to what it lays out in frame pixels (fonts, menu models, sprites):
+// 0.75 = (4/3) / (16/9) there, (4/3) / aspect for the display's shape (game_src/func_0039F498.cpp and others).
+// Game code takes float results in eax: the bits are returned (guest.h, float_result).
+extern "C" uint32_t gt4_wide_squeeze() {
+    const int aspect = gt4_display_aspect_milli();
+    return gt4::rt::float_result(aspect >= 1500 ? static_cast<float>(4000.0 / 3.0 / aspect) : 0.75f);
 }
 
 // For game_src/func_00214FB0.cpp: 1 when the menus' 2D keeps a centred 4:3 area in the wide mode

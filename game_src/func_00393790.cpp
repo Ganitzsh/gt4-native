@@ -1,6 +1,7 @@
 /* compiler: ee-gcc2.96-no-strict-aliasing */
-/* Native version of 00393790 (from its matched source): its PLZCW (the power of two at or above the strip texture's
-   width) in plain C. */
+/* Native copy of 00393790 (matched), a textured quad: its 16:9-mode x squeeze 0.75 is (4/3) / aspect (gt4_wide_squeeze);
+ * the texture's power-of-two extent (PLZCW in the original) is computed portably. (docs/WIDESCREEN.md) */
+extern "C" float gt4_wide_squeeze(void);
 extern int D_006184F0;
 extern "C" int func_004997B0(int,unsigned,unsigned,void*);
 extern "C" int func_0049FD50(int,void*,void*,int,int,int);
@@ -8,12 +9,10 @@ extern "C" void func_004A1638(unsigned);
 extern "C" void func_004A4550(int,int);
 extern "C" void func_004A4810(int,unsigned,unsigned);
 extern "C" float *func_004A5B70(int);
-/* PLZCW of n-1 (its leading bits equal to the sign bit, less one) & 31, ^ 31: the bit length of n-1 (of ~(n-1)
-   when negative); 1 shifted by it is the power of two at or above n. */
-inline unsigned extentPower(unsigned n){unsigned x=n-1;if((int)x<0)x=~x;unsigned b=0;while(x){b++;x>>=1;}return 1U<<b;}
+inline unsigned extentPower(unsigned n){unsigned p=1;while(p<n)p<<=1;return p;}
 struct Obj { void *tex[2]; };
 extern "C" void func_00393790(Obj *self,int mode,float x0,float y0,float x1,float y1,float scale){
- if(D_006184F0) scale*=0.75f;
+ if(D_006184F0) scale*=gt4_wide_squeeze();
  unsigned w=mode==0?96:64;
  float half=((x1-x0)*0.25f)/((y1-y0)*scale);
  unsigned h=mode==0?64:32;
