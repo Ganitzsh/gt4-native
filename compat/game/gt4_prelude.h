@@ -73,6 +73,12 @@ void gt4_interrupts_enable (void);
 unsigned int gt4_cycle_count (void);
 void *gt4_get_gp (void);
 void gt4_set_gp (void *gp);
+/* - gt4_timer_count: what a load of EE timer n's COUNT (T0..T3_COUNT, 0x10000000 + 0x800 n) reads: the ticks
+ *   of the clock its Tn_MODE selects, from the runtime's clock (runtime/eeops.cpp);
+ * - gt4_not_native: stops the game with a report naming fn, its caller (pass __builtin_return_address (0)) and
+ *   why; for the game_src/ stubs of hardware paths the native program never runs (runtime/missing.cpp). */
+unsigned int gt4_timer_count (int timer);
+void gt4_not_native (unsigned int fn, const void *caller, const char *why) __attribute__ ((noreturn));
 #ifdef __cplusplus
 }
 #endif

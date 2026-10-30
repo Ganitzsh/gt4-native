@@ -49,6 +49,18 @@ extern "C" void gt4_missing(uint32_t fn, uint32_t caller) {
                  caller_fn);
 }
 
+// A game function the native program must never run: the game_src/ stub of a hardware path whose whole user the
+// runtime replaced (the IPU behind the movie loop 0054E3D8, runtime/native/movie.cpp). Reports the function, why,
+// and its caller as gt4_missing does, and stops whatever GT4_MISSING says: going on would mean the hardware it drives
+// silently did nothing.
+extern "C" void gt4_not_native(uint32_t fn, const void *caller, const char *why) {
+    uint32_t caller_fn = 0;
+    const char *caller_name = gt4::rt::native_name_for(reinterpret_cast<uintptr_t>(caller), &caller_fn);
+    gt4::rt::fatal("NOT NATIVE function %08x called from %s (%08x), host return address %08x: %s", fn,
+                   *caller_name ? caller_name : "?", caller_fn,
+                   static_cast<uint32_t>(reinterpret_cast<uintptr_t>(caller)), why ? why : "");
+}
+
 // A symbol the game code uses that has neither a native definition nor a known PS2 address
 // (tools/game_link.py makes a stub for each).
 extern "C" void gt4_unresolved(const char *name) {
