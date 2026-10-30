@@ -8,7 +8,9 @@
  * (+0x1F8, advanced by 5 quadwords): DMA cnt tag with VIF FLUSH and DIRECT, a GIF tag with PRIM = (flags (+0x4A) | 4)
  * without bit 4 and RGBAQ = the colour at +0xC20 with Q = 1.0, then XYZF2 per corner: x, y (16 bits each), z
  * (24 bits), w (8 bits). The z lane the original passes the program is the sign extension of x's bits (0, or
- * 0xFFFFFFFF, which the VU reads as -FLT_MAX); row 18 is 0, so it adds nothing. */
+ * 0xFFFFFFFF, which the VU reads as -FLT_MAX); row 18 is 0, so it adds nothing. Natively the corners are a draw
+ * record (compat/game/gt4_gfx.h) with those values instead of the packet: the first two only start the strip. */
+#include "gt4_gfx.h"
 #include "gt4_vec.h"
 #include "spr.h"
 extern "C" void *memcpy(void *, const void *, unsigned int);
@@ -59,11 +61,6 @@ static void screen_point(int out[4], float x, float y, float z) {
     }
 }
 
-/* XYZF2: x, y (16 bits each), z (24 bits), w (8 bits) */
-static inline void put_xyzf(u32 *d, const int *s) {
-    d[0] = ((u32)s[0] & 0xFFFF) | ((u32)s[1] << 16);
-    d[1] = ((u32)s[2] & 0xFFFFFF) | ((u32)s[3] << 24);
-}
 
 extern "C" void func_00499D00(char *m, float x, float y, float w, float h) {
     Scratch *s = (Scratch *)spr_base();
@@ -91,22 +88,19 @@ extern "C" void func_00499D00(char *m, float x, float y, float w, float h) {
     screen_point(pt[2], x, y2, sign_word(x));
     screen_point(pt[3], x2, y2, sign_word(x2));
 
-    u32 *p = (u32 *)s->cursor;
     const u32 flags = ((u32)s->flags | 4) & 0xFFEF;
-    const u32 color = s->color;
-    p[0] = 0x10000004;
-    p[2] = 0x11000000;
-    p[3] = 0x50000004;
-    p[1] = 0;
-    s->cursor += 0x50;
-    u32 *o = p + 4;
-    o[0] = 0x8001;
-    o[1] = 0x64000000;
-    o[2] = 0x44CC10;
-    o[3] = 0;
-    o[4] = flags;
-    o[5] = 0;
-    o[6] = color;
-    o[7] = 0x3F800000;
-    for (int k = 0; k < 4; ++k) put_xyzf(o + 8 + 2 * k, pt[k]);
+    struct gt4_vertex out[4];
+    for (int k = 0; k < 4; ++k) {
+        struct gt4_vertex *v = &out[k];
+        v->x = (unsigned short)pt[k][0];
+        v->y = (unsigned short)pt[k][1];
+        gt4_vertex_zf(v, ((u32)pt[k][2] & 0xFFFFFF) | ((u32)pt[k][3] << 24));
+        v->rgba = s->color;
+        v->s = v->t = 0.0f;
+        v->q = 1.0f;
+        v->u = v->v = 0;
+        v->kick = k >= 2;
+        v->pad = 0;
+    }
+    gt4_gfx_draw(s, flags, GT4_DRAW_PRIM | GT4_DRAW_FOG | GT4_DRAW_COLOR, out, 4);
 }

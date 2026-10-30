@@ -4,14 +4,17 @@
 // The library builds each frame in a packet buffer (context 0x70002000 + 0x1F8 is the write cursor) that
 // the frame's end sends as the VIF1 DMA chain. Until every producer is native, the native records go into
 // that buffer too, so that they stay in order with the packets that are left: a DMA CNT tag whose upper
-// half ends with the record code (gfx::kStreamCode | qwords), followed by the records.
+// half ends with the record code (gfx::kStreamCode | qwords), followed by the record.
 #include "../guest.h"
 #include "../link.h"
 #include "../log.h"
 #include "gt4/link/protocol.h"
 #include "gt4/gfx.h"
 
+#include <windows.h>
+
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 
 using namespace gt4::rt;
@@ -30,30 +33,40 @@ constexpr uint32_t kOutputFlags = 0x2C0;    // u64
 
 uint32_t &cursor(uint32_t context) { return guest_ref<uint32_t>(context + kCursor); }
 
-// The packet buffer fills from the cursor up; what is left of PATH3's chain grows down from +0x1FC. Records
-// take more room than some of the packets they replace (a 2D vertex: 32 bytes instead of 8 to 24).
+// The packet buffer fills from the cursor up; what is left of PATH3's area grows down from +0x1FC.
 void check_room(uint32_t context, uint32_t at, uint32_t bytes) {
     const uint32_t top = guest_ref<uint32_t>(context + 0x1FC);
     if ((at & 0x0FFFFFFF) + bytes <= (top & 0x0FFFFFFF)) return;
     static bool warned = false;
     if (!warned) {
         warned = true;
-        log_error("pgl: the frame's packet buffer is full (cursor %08x + %u bytes, top %08x): records overwrite PATH3's chain",
+        log_error("pgl: the frame's packet buffer is full (cursor %08x + %u bytes, top %08x): records overwrite what is above",
                   at, bytes, top);
     }
 }
 
-// Writes a DMA CNT tag with `codeWord2` and the record code in its upper half, then the records; returns the
-// address after them. `payload` holds the records (headers included), padded to whole qwords.
-uint32_t write_records(uint32_t at, uint32_t codeWord2, const void *payload, uint32_t qwords) {
-    check_room(kContext, at, 16 + qwords * 16);
+// Appends one record (`payload`, then `extra`) at the cursor of the library at `context`, behind its own DMA tag.
+// (Records written one after the other could share a block, but the library writes at the cursor and moves it
+// later in places, so a grown block can come to cover what was written meanwhile; the frame buffers are large
+// enough for a tag per record, 00105FD8.)
+void append(uint32_t context, uint32_t type, const void *payload, uint32_t bytes, const void *extra = nullptr,
+            uint32_t extraBytes = 0) {
+    const uint32_t total = bytes + extraBytes;
+    const uint32_t qwords = gfx::recordQwords(total);
+    const uint32_t at = cursor(context);
+    check_room(context, at, 16 + qwords * 16);
     uint32_t *tag = static_cast<uint32_t *>(guest_ptr(at));
-    tag[0] = qwords | 0x10000000u;   // CNT
+    tag[0] = 0x10000000u | qwords;   // CNT
     tag[1] = 0;
-    tag[2] = codeWord2;
+    tag[2] = 0;
     tag[3] = gfx::kStreamCode | qwords;
-    std::memcpy(guest_ptr(at + 16), payload, qwords * 16);
-    return at + 16 + qwords * 16;
+    uint8_t *out = static_cast<uint8_t *>(guest_ptr(at + 16));
+    const gfx::Header h = gfx::header(type, total);
+    std::memcpy(out, &h, sizeof h);
+    if (bytes) std::memcpy(out + sizeof h, payload, bytes);
+    if (extraBytes) std::memcpy(out + sizeof h + bytes, extra, extraBytes);
+    std::memset(out + sizeof h + total, 0, qwords * 16 - sizeof h - total);
+    cursor(context) = at + 16 + qwords * 16;
 }
 
 // The size in qwords of a w x h transfer in `format` (004A4CF0).
@@ -69,50 +82,41 @@ uint32_t transfer_qwords(uint32_t format, uint32_t w, uint32_t h) {
     }
 }
 
-struct UploadBlock {
-    gfx::Header header;
-    gfx::UploadRecord upload;
-    uint8_t pad[4];
-};
-static_assert(sizeof(UploadBlock) == 32);
-
 // An upload record for `destination` (the library's form: base | width << 16 | format << 24).
-UploadBlock upload_block(uint32_t destination, uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t source, uint32_t qwords) {
-    UploadBlock block{};
-    block.header = {gfx::kUpload, static_cast<uint32_t>(sizeof(gfx::UploadRecord))};
-    block.upload.base = static_cast<uint16_t>(destination & 0x3FFF);
-    block.upload.width = static_cast<uint8_t>((destination >> 16) & 0x3F);
-    block.upload.format = static_cast<uint8_t>((destination >> 24) & 0x3F);
-    block.upload.x = static_cast<uint16_t>(x);
-    block.upload.y = static_cast<uint16_t>(y);
-    block.upload.w = static_cast<uint16_t>(w);
-    block.upload.h = static_cast<uint16_t>(h);
-    block.upload.source = source & 0x0FFFFFFF;
-    block.upload.qwords = qwords;
-    return block;
+gfx::UploadRecord upload_record(uint32_t destination, uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t source, uint32_t qwords) {
+    gfx::UploadRecord u{};
+    u.base = static_cast<uint16_t>(destination & 0x3FFF);
+    u.width = static_cast<uint8_t>((destination >> 16) & 0x3F);
+    u.format = static_cast<uint8_t>((destination >> 24) & 0x3F);
+    u.x = static_cast<uint16_t>(x);
+    u.y = static_cast<uint16_t>(y);
+    u.w = static_cast<uint16_t>(w);
+    u.h = static_cast<uint16_t>(h);
+    u.source = source & 0x0FFFFFFF;
+    u.qwords = qwords;
+    return u;
+}
+
+void append_upload(uint32_t context, const gfx::UploadRecord &u) { append(context, gfx::kUpload, &u, sizeof u); }
+
+gfx::StateRecord empty_state() {
+    gfx::StateRecord r;
+    std::memset(&r, 0, sizeof r);
+    r.shared = gfx::Shared();
+    r.context = gfx::Context();
+    r.palette = gfx::Texture();
+    return r;
 }
 
 // A state record of the groups 004AB350 would flush now (and its bookkeeping: the groups leave the dirty
 // set and join the flushed set); false when nothing is to be flushed.
-struct StateBlock {
-    gfx::Header header;
-    gfx::StateRecord state;
-    uint8_t pad[(16 - (sizeof(gfx::Header) + sizeof(gfx::StateRecord)) % 16) % 16];
-};
-static_assert(sizeof(StateBlock) % 16 == 0);
-
-bool take_state(uint32_t context, StateBlock &block) {
+bool take_state(uint32_t context, gfx::StateRecord &r) {
     uint64_t &dirty = guest_ref<uint64_t>(context + kDirty);
     const uint64_t flush = dirty & guest_ref<uint64_t>(context + kEnabled);
     if (!flush) return false;
     dirty &= ~flush;
     guest_ref<uint64_t>(context + kFlushed) |= flush;
-    std::memset(&block, 0, sizeof block);
-    block.header = {gfx::kState, static_cast<uint32_t>(sizeof(gfx::StateRecord))};
-    gfx::StateRecord &r = block.state;
-    r.shared = gfx::Shared();
-    r.context = gfx::Context();
-    r.palette = gfx::Texture();
+    r = empty_state();
     r.sharedGroups = static_cast<uint32_t>(flush >> 32) & 0x3FF;
     r.contextGroups = (static_cast<uint32_t>(flush) & 0x1FFF) | ((static_cast<uint32_t>(flush >> 16) & 0x1FFF) << 16);
     for (uint32_t g = 0; g < gfx::kSharedGroups; ++g)
@@ -127,26 +131,10 @@ bool take_state(uint32_t context, StateBlock &block) {
     return true;
 }
 
-// Writes a draw record (primitives) at the cursor of the library at `context`.
+// A draw record (primitives) at the cursor of the library at `context`.
 void draw(uint32_t context, uint32_t prim, uint32_t flags, const gfx::Vertex *v, uint32_t n) {
-    const uint32_t payload = static_cast<uint32_t>(sizeof(gfx::DrawRecord) + n * sizeof(gfx::Vertex));
-    const uint32_t qwords = gfx::recordQwords(payload);
-    uint32_t at = cursor(context);
-    check_room(context, at, 16 + qwords * 16);
-    uint32_t *tag = static_cast<uint32_t *>(guest_ptr(at));
-    tag[0] = qwords | 0x10000000u;   // CNT
-    tag[1] = 0;
-    tag[2] = 0;
-    tag[3] = gfx::kStreamCode | qwords;
-    uint8_t *out = static_cast<uint8_t *>(guest_ptr(at + 16));
-    const gfx::Header h{gfx::kDraw, payload};
-    const gfx::DrawRecord d{prim, n, flags, 0};
-    std::memcpy(out, &h, sizeof h);
-    std::memcpy(out + sizeof h, &d, sizeof d);
-    std::memcpy(out + sizeof h + sizeof d, v, n * sizeof(gfx::Vertex));
-    const uint32_t used = static_cast<uint32_t>(sizeof h) + payload;
-    std::memset(out + used, 0, qwords * 16 - used);
-    cursor(context) = at + 16 + qwords * 16;
+    const gfx::DrawRecord d{static_cast<uint16_t>(prim), static_cast<uint16_t>(n), flags};
+    append(context, gfx::kDraw, &d, sizeof d, v, n * static_cast<uint32_t>(sizeof(gfx::Vertex)));
 }
 
 // A vertex at (x, y) (1/16 pixel) with the library's packed Z and fog word (XYZF: Z in the low 24 bits).
@@ -178,8 +166,7 @@ void gt4_gfx_draw(uint32_t context, uint32_t prim, uint32_t flags, const gfx::Ve
 int gt4_gfx_upload(uint32_t context, uint32_t destination, int x, int y, int w, int h, uint32_t source) {
     const uint32_t qwords = transfer_qwords(destination >> 24, static_cast<uint32_t>(w), static_cast<uint32_t>(h));
     if (!qwords) return 0;
-    const UploadBlock block = upload_block(destination, x, y, w, h, source, qwords);
-    cursor(context) = write_records(cursor(context), 0, &block, sizeof block / 16);
+    append_upload(context, upload_record(destination, x, y, w, h, source, qwords));
     return static_cast<int>(qwords);
 }
 
@@ -188,21 +175,47 @@ int gt4_gfx_upload(uint32_t context, uint32_t destination, int x, int y, int w, 
 int gt4_gfx_upload_now(uint32_t destination, int x, int y, int w, int h, uint32_t source) {
     const uint32_t qwords = transfer_qwords(destination >> 24, static_cast<uint32_t>(w), static_cast<uint32_t>(h));
     if (!qwords) return 0;
-    const UploadBlock block = upload_block(destination, x, y, w, h, source, qwords);
+    struct {
+        gfx::Header header;
+        gfx::UploadRecord upload;
+        uint8_t pad[8];
+    } block{};
+    static_assert(sizeof block == 32);   // 4 + 20, padded
+    block.header = gfx::header(gfx::kUpload, sizeof(gfx::UploadRecord));
+    block.upload = upload_record(destination, x, y, w, h, source, qwords);
     const uint32_t head[2] = {block.upload.source, qwords * 16};
     link_send(GT4_REC_GFX_DATA, head, sizeof head, guest_ptr(block.upload.source), qwords * 16);
     link_send(GT4_REC_GFX, &block, sizeof block);
     return static_cast<int>(qwords);
 }
 
+// GT4's 3D batches from game code (compat/game/gt4_gfx.h).
+void gt4_gfx_batch_frame(uint32_t context) { append(context, gfx::kBatchFrame, nullptr, 0); }
+
+void gt4_gfx_batch_write(uint32_t context, uint32_t qword, const void *data, int count, uint32_t lanes) {
+    if (count <= 0) return;
+    const gfx::BatchWrite w{static_cast<uint16_t>(qword), static_cast<uint16_t>(count), lanes};
+    append(context, gfx::kBatchWrite, &w, sizeof w, data, static_cast<uint32_t>(count) * 16);
+}
+
+void gt4_gfx_batch_model(uint32_t context, uint32_t source, int qwords, uint32_t mask) {
+    const gfx::BatchModel m{source & 0x0FFFFFFF, static_cast<uint32_t>(qwords), mask};
+    append(context, gfx::kBatchModel, &m, sizeof m);
+}
+
+void gt4_gfx_batch_run(uint32_t context, uint32_t entry, uint32_t itop) {
+    const gfx::BatchRun r{entry, itop};
+    append(context, gfx::kBatchRun, &r, sizeof r);
+}
+
 // State that game code sets in the library's encoding (its shadow keeps GS register values): {value,
 // register} pairs, applied in order as state records (compat/game/gt4_gfx.h).
 void gt4_gfx_set(uint32_t context, const uint64_t *pairs, int n) {
-    StateBlock block;
+    gfx::StateRecord r;
     bool open = false;
     uint32_t blockContext = 0;
     auto flush = [&] {
-        if (open) cursor(context) = write_records(cursor(context), 0, &block, sizeof block / 16);
+        if (open) append(context, gfx::kState, &r, sizeof r);
         open = false;
     };
     for (int k = 0; k < n; ++k) {
@@ -217,25 +230,21 @@ void gt4_gfx_set(uint32_t context, const uint64_t *pairs, int n) {
         }
         const uint32_t bit = isShared ? 0 : 1u << (16 * ctx + group);
         // a new record when the group repeats or the other context comes in (one record: one context's values)
-        if (open && ((isShared && ((block.state.sharedGroups >> group) & 1)) || (!isShared && (block.state.contextGroups & bit)) ||
-                     (!isShared && block.state.contextGroups && blockContext != ctx)))
+        if (open && ((isShared && ((r.sharedGroups >> group) & 1)) || (!isShared && (r.contextGroups & bit)) ||
+                     (!isShared && r.contextGroups && blockContext != ctx)))
             flush();
         if (!open) {
-            std::memset(&block, 0, sizeof block);
-            block.header = {gfx::kState, static_cast<uint32_t>(sizeof(gfx::StateRecord))};
-            block.state.shared = gfx::Shared();
-            block.state.context = gfx::Context();
-            block.state.palette = gfx::Texture();
+            r = empty_state();
             open = true;
         }
         if (isShared) {
-            block.state.sharedGroups |= 1u << group;
-            gfx::setSharedGroup(block.state.shared, group, value);
+            r.sharedGroups |= 1u << group;
+            gfx::setSharedGroup(r.shared, group, value);
         } else {
             blockContext = ctx;
-            block.state.contextGroups |= bit;
-            if (group == gfx::kPalette) gfx::setPalette(block.state.palette, value);
-            else gfx::setContextGroup(block.state.context, group, value);
+            r.contextGroups |= bit;
+            if (group == gfx::kPalette) gfx::setPalette(r.palette, value);
+            else gfx::setContextGroup(r.context, group, value);
         }
     }
     flush();
@@ -281,18 +290,10 @@ void gt4_replace_func_004A6140(int x0, int y0, int x1, int y1) {
 // here the state goes as a record before the batch, and the batch's packet is left empty (NLOOP 0, EOP) so
 // that an earlier one in that buffer is not kicked again.
 void gt4_replace_func_0049E5F8(uint32_t context, uint32_t destination) {
-    uint32_t at = cursor(context);
-    StateBlock block;
-    if (take_state(context, block)) at = write_records(at, 0, &block, sizeof block / 16);
-    uint32_t *tag = static_cast<uint32_t *>(guest_ptr(at));
-    tag[0] = 1 | 0x10000000u;   // CNT, one qword
-    tag[1] = 0;
-    tag[2] = 0;
-    tag[3] = (1u << 16) | 0x6C00C000u | destination;   // UNPACK V4-32, FLG, USN: one qword at the destination
-    uint64_t *empty = static_cast<uint64_t *>(guest_ptr(at + 16));
-    empty[0] = 0x8000;   // NLOOP 0, EOP
-    empty[1] = 0;
-    cursor(context) = at + 32;
+    gfx::StateRecord r;
+    if (take_state(context, r)) append(context, gfx::kState, &r, sizeof r);
+    const uint32_t empty[4] = {0x8000, 0, 0, 0};   // NLOOP 0, EOP
+    gt4_gfx_batch_write(context, destination & 0x3FF, empty, 1, 0xF);
 }
 
 // 0049FE28(): the drawing state for 2D packets (the original: an A+D packet through DIRECT), when the
@@ -302,8 +303,8 @@ void gt4_replace_func_0049FE28(void) {
         guest_ref<uint64_t>(kContext + kDirty) = 0;
         return;
     }
-    StateBlock block;
-    if (take_state(kContext, block)) cursor(kContext) = write_records(cursor(kContext), 0, &block, sizeof block / 16);
+    gfx::StateRecord r;
+    if (take_state(kContext, r)) append(kContext, gfx::kState, &r, sizeof r);
 }
 
 // 00499508(set): the uploads of a texture set (one per record of `set`: {source, the destination's
@@ -313,7 +314,6 @@ void gt4_replace_func_0049FE28(void) {
 void gt4_replace_func_00499508(uint32_t set) {
     const uint32_t count = guest_ref<uint16_t>(set + 0x16);
     const uint32_t records = guest_ref<uint32_t>(set + 0x1C);
-    uint32_t at = cursor(kContext);
     for (uint32_t i = 0; i < count; ++i) {
         const uint32_t rec = records + 12 * i;
         const uint32_t destination = guest_ref<uint32_t>(rec + 4);
@@ -321,10 +321,8 @@ void gt4_replace_func_00499508(uint32_t set) {
         const uint32_t qwords = transfer_qwords(destination >> 24, w, h);   // the original switched on the whole byte
         if (!qwords) continue;
         guest_ref<int32_t>(kContext + 0x1030) += static_cast<int32_t>(qwords);   // the frame's upload total
-        const UploadBlock block = upload_block(destination, 0, 0, w, h, guest_ref<uint32_t>(rec), qwords);
-        at = write_records(at, 0, &block, sizeof block / 16);
+        append_upload(kContext, upload_record(destination, 0, 0, w, h, guest_ref<uint32_t>(rec), qwords));
     }
-    cursor(kContext) = at;
 }
 
 // 00499728(set): binds a texture set: its slot in graphics memory (004AA788 finds it there; else 004AA650
@@ -369,23 +367,77 @@ void gt4_replace_func_004A5178(uint32_t address, int format, int width, int x, i
     case 20: case 36: case 44: qwords = (qwords + 31) >> 5; break;
     default: qwords = 0; break;
     }
-    struct {
-        gfx::Header header;
-        gfx::ReadRecord read;
-        uint8_t pad[4];
-    } block{};
-    static_assert(sizeof block == 32);
-    block.header = {gfx::kRead, static_cast<uint32_t>(sizeof(gfx::ReadRecord))};
-    block.read.base = static_cast<uint16_t>(desc & 0x3FFF);
-    block.read.width = static_cast<uint8_t>((desc >> 16) & 0x3F);
-    block.read.format = static_cast<uint8_t>((desc >> 24) & 0x3F);
-    block.read.x = static_cast<uint16_t>(x);
-    block.read.y = static_cast<uint16_t>(y);
-    block.read.w = static_cast<uint16_t>(w);
-    block.read.h = static_cast<uint16_t>(h);
-    block.read.destination = destination;
-    block.read.qwords = qwords;
-    cursor(kContext) = write_records(cursor(kContext), 0, &block, sizeof block / 16);
+    gfx::ReadRecord read{};
+    read.base = static_cast<uint16_t>(desc & 0x3FFF);
+    read.width = static_cast<uint8_t>((desc >> 16) & 0x3F);
+    read.format = static_cast<uint8_t>((desc >> 24) & 0x3F);
+    read.x = static_cast<uint16_t>(x);
+    read.y = static_cast<uint16_t>(y);
+    read.w = static_cast<uint16_t>(w);
+    read.h = static_cast<uint16_t>(h);
+    read.destination = destination;
+    read.qwords = qwords;
+    append(kContext, gfx::kRead, &read, sizeof read);
+}
+
+// The font texture's upload (00499B60 sets it up, 00499C38 sends it with the pixels' address).
+struct FontUpload {
+    uint32_t destination = 0;
+    int x = 0, y = 0, w = 0, h = 0;
+} g_font_upload;
+
+// 00499B60(address, format, width, x, y, w, h): the original built the transfer's set-up packet (BITBLTBUF ...
+// IMAGE tag, D_00624C64) and a TEXFLUSH packet (D_00624C68) at the top of the frame's buffer and kept its size
+// in qwords (D_00624C6C); here the destination and rectangle are kept for 00499C38, and the size as before.
+void gt4_replace_func_00499B60(int address, int format, int width, int x, int y, int w, int h) {
+    const uint32_t destination = (static_cast<uint32_t>(address >> 6) & 0xFFFF) | ((static_cast<uint32_t>(width >> 6) & 0xFF) << 16) |
+                                 (static_cast<uint32_t>(format) << 24);
+    g_font_upload = {destination, x, y, w, h};
+    guest_ref<uint32_t>(0x00624C6C) = transfer_qwords(destination >> 24, static_cast<uint32_t>(w), static_cast<uint32_t>(h));
+}
+
+// 00499C38(address): the font texture from `address` with 00499B60's set-up, in the frame's order; the count at
+// +0x102C adds its size. The original sent the set-up, the pixels and the TEXFLUSH packet through REF tags.
+void gt4_replace_func_00499C38(uint32_t address) {
+    const uint32_t qwords = guest_ref<uint32_t>(0x00624C6C);
+    if (!qwords) return;
+    const FontUpload &f = g_font_upload;
+    append_upload(kContext, upload_record(f.destination, f.x, f.y, f.w, f.h, address, qwords));
+    guest_ref<int32_t>(kContext + 0x102C) += static_cast<int32_t>(qwords);
+}
+
+// 00499640(set): a texture set's uploads at once (the original sent each on DMA channel 2 and waited): each
+// entry {pixels, destination, width, height} is an upload that takes effect before the frame being built.
+void gt4_replace_func_00499640(uint32_t set) {
+    reinterpret_cast<void (*)()>(guest_ptr(0x004A20C8))();
+    const uint32_t count = guest_ref<uint16_t>(set + 0x16);
+    const uint32_t entries = guest_ref<uint32_t>(set + 0x1C);
+    for (uint32_t i = 0; i < count; ++i) {
+        const uint32_t e = entries + 12 * i;
+        gt4_gfx_upload_now(guest_ref<uint32_t>(e + 4), 0, 0, guest_ref<uint16_t>(e + 8), guest_ref<uint16_t>(e + 10), guest_ref<uint32_t>(e));
+    }
+}
+
+// 00105FD8(buffers): the frame packet buffers, two used in turn ({first, second, size, current}): the original's
+// were 640 KiB each in the image (D_006DEB00). Records take more room than the packets they replace (a state
+// record holds every group's fields; a 2D vertex is 32 bytes), so natively each is 4 MiB, outside the 32 MB of
+// game memory but below 0x10000000: the library keeps their addresses masked to 28 bits in its DMA tags.
+void gt4_replace_func_00105FD8(uint32_t self) {
+    constexpr uint32_t kSize = 4u << 20;
+    static uint32_t base = [] {
+        for (uint32_t at = 0x04000000; at < 0x0F000000; at += 0x01000000)
+            if (void *p = VirtualAlloc(reinterpret_cast<void *>(static_cast<uintptr_t>(at)), 2 * kSize, MEM_RESERVE | MEM_COMMIT,
+                                       PAGE_READWRITE))
+                return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(p));
+        log_warn("pgl: no room below 0x10000000 for the frame buffers; the image's 640 KiB ones are used");
+        return 0u;
+    }();
+    const uint32_t size = base ? kSize : 0xA0000;
+    const uint32_t first = base ? base : 0x006DEB00;
+    guest_ref<uint32_t>(self) = first;
+    guest_ref<uint32_t>(self + 4) = first + size;
+    guest_ref<uint32_t>(self + 8) = size;
+    guest_ref<uint32_t>(self + 12) = 0;
 }
 
 // 004A2038(mode): after an upload, paired a VIF1 FLUSH|I (004A1F60) with a PATH3 IRQ tag (004A1FA8) so that the

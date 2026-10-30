@@ -5,7 +5,10 @@
  * and offset by the screen rows 20, 21 and converted to 12.4 fixed point, and the packet goes at the scratchpad's
  * cursor (after 0049FE28): DMA tag and VIF codes, a GIF tag with PRIM (the scratchpad's primitive bits, a line)
  * and the registers RGBAQ (the scratchpad colour, each byte widened to a word), XYZ2, XYZ2. Shared vectors 20..23
- * are left holding the scratchpad's screen rows (0x70002FA0), as the original leaves them. */
+ * are left holding the scratchpad's screen rows (0x70002FA0), as the original leaves them. Natively the line is a
+ * draw record (compat/game/gt4_gfx.h) with the same values (an end whose fourth word has bit 15, the ADC bit, does
+ * not draw). */
+#include "gt4_gfx.h"
 #include "gt4_vec.h"
 #include "spr.h"
 extern "C" void *memcpy(void *, const void *, unsigned int);
@@ -51,22 +54,20 @@ extern "C" void func_004A70E8(Vec3 *from, Vec3 *to) {
     to_screen(p2, v[1], scale, offset, limit);
     const u32 flags = (u32)((*(u16 *)(s + 0x4A) | 1) & 0xFFEF);
     const u32 color = *(u32 *)(s + 0xC20);
-    u32 rgba[4];
-    for (int k = 0; k < 4; ++k)
-        rgba[k] = ((color >> (8 * k)) & 0xFF) * 0x01010101u;   /* pextlb, pextlh: the byte in all four */
     func_0049FE28();
-    u32 *p = (u32 *)*(u32 *)(s + 0x1F8);
-    p[0] = 0x10000004;
-    p[1] = 0;
-    p[2] = 0x11000000;
-    p[3] = 0x50000004;
-    *(u32 *)(s + 0x1F8) += 0x50;
-    p += 4;
-    p[0] = 0x8001;
-    p[1] = (flags << 15) | 0x30004000;
-    p[2] = 0x441;
-    p[3] = 0;
-    memcpy(p + 4, rgba, 16);
-    memcpy(p + 8, p1, 16);
-    memcpy(p + 12, p2, 16);
+    struct gt4_vertex line[2];
+    const int *ends[2] = {p1, p2};
+    for (int k = 0; k < 2; ++k) {
+        line[k].x = (unsigned short)ends[k][0];
+        line[k].y = (unsigned short)ends[k][1];
+        line[k].z = (u32)ends[k][2];
+        line[k].fog = 0;
+        line[k].rgba = color;
+        line[k].s = line[k].t = 0.0f;
+        line[k].q = 1.0f;
+        line[k].u = line[k].v = 0;
+        line[k].kick = !(((u32)ends[k][3] >> 15) & 1);
+        line[k].pad = 0;
+    }
+    gt4_gfx_draw(s, flags, GT4_DRAW_PRIM | GT4_DRAW_COLOR, line, 2);
 }

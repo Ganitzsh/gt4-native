@@ -6,7 +6,10 @@
  * of a halfword header (count in bits 0..14, bit 15: another group follows), a halfword the bone loader ignores,
  * four bone index bytes (0049D970 loads the bones into shared vectors 8..23), then `count` 28-byte vertices:
  * position (three floats, unaligned) and four bone weights. Each position goes through 0x478's sum (here with
- * scale 1): bone k's rows times the position times weight k, plus its translation times weight k. */
+ * scale 1): bone k's rows times the position times weight k, plus its translation times weight k.
+ * Natively the values go to the batch as batch writes (compat/game/gt4_gfx.h) instead of the packet, the
+ * quadwords filled as the original's UNPACK filled them (gt4_batch_v3). */
+#include "gt4_gfx.h"
 #include "gt4_vec.h"
 typedef unsigned short u16;
 typedef unsigned int u32;
@@ -50,15 +53,8 @@ static void skin_position(float *out, const float *pos, const float *w, float sc
 }
 
 extern "C" void func_0049D580(Ctx *ctx, u16 *cmd, int n) {
-    u32 *start = ctx->cursor;
-    u32 *p = start;
-    p[1] = 0;
-    p[2] = (n << 16) | 0x6800C000;
-    float *out = (float *)(p + 3);
-    p += 3 + n * 3;
-    while ((u32)p & 15) *p++ = 0;
-    *start = (((u32)((char *)p - (char *)start) >> 4) - 1) | 0x10000000;
-    ctx->cursor = p;
+    float *positions = (float *)__builtin_alloca((n > 0 ? n : 1) * 12);
+    float *out = positions;
 
     u16 hdr;
     do {
@@ -72,4 +68,5 @@ extern "C" void func_0049D580(Ctx *ctx, u16 *cmd, int n) {
         }
         cmd = (u16 *)item;
     } while (hdr & 0x8000);
+    gt4_batch_v3(ctx, 0, positions, n, 0);
 }

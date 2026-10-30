@@ -283,12 +283,20 @@ enum RecordType : uint32_t {
     kUpload = 2,   // UploadRecord
     kDraw = 3,     // DrawRecord, then its vertices
     kRead = 4,     // ReadRecord
+    // GT4's 3D batches (docs/VU1_PROGRAMS.md "The batch"): the host keeps two batch buffers that take turns, as
+    // the game fills them; a batch's renderer reads the one just filled.
+    kBatchFrame = 5,   // no payload: a frame starts (the buffers' turn back to the first, the data layout reset)
+    kBatchWrite = 6,   // BatchWrite, then its qwords
+    kBatchModel = 7,   // BatchModel
+    kBatchRun = 8,     // BatchRun
 };
 
 struct Header {
-    uint32_t type;
-    uint32_t bytes;   // payload bytes after the header
+    uint32_t word;   // the type in the low 8 bits, the payload's bytes after the header above
+    uint32_t type() const { return word & 0xFF; }
+    uint32_t bytes() const { return word >> 8; }
 };
+constexpr Header header(uint32_t type, uint32_t bytes) { return Header{type | bytes << 8}; }
 
 // The groups that changed (shared groups, then context 1's, then context 2's), from one source context.
 struct StateRecord {
@@ -443,6 +451,29 @@ struct ReadRecord {
 };
 static_assert(sizeof(ReadRecord) == 20);
 
+// Qwords into the batch being filled, from `qword` (0..255) on: the lanes `lanes` says (bit k: lane k) of each.
+struct BatchWrite {
+    uint16_t qword;
+    uint16_t count;
+    uint32_t lanes;
+};
+
+// A model's packet into the batch being filled: `qwords` x 16 bytes at `source` (game memory: GT4's model files
+// hold their vertex data as these packets, compact formats a decoder expands into the batch), the lane mask its
+// masked data uses (`mask`, two bits per lane and cycle: 0 data, 1 the row, 2 the column, 3 keep).
+struct BatchModel {
+    uint32_t source;
+    uint32_t qwords;
+    uint32_t mask;
+};
+
+// The batch just filled is drawn by the renderer at `entry` (its address in 8-byte units, GT4's program layout),
+// with the lighting chain `itop`; the next batch fills the other buffer.
+struct BatchRun {
+    uint32_t entry;
+    uint32_t itop;
+};
+
 // A vertex: position in 1/16 pixel in the drawing context's coordinates (its origin, at 2048 pixels on
 // GT4's screens, included), depth, colour (R in the low byte, alpha 0x80 = 1), texture coordinates as S, T,
 // Q (perspective) or U, V (texels in 1/16, with kTexelCoords), fog (255: none).
@@ -465,10 +496,9 @@ static_assert(sizeof(Vertex) == 32);
 // otherwise the values the previous vertices left apply.
 enum DrawFlags : uint32_t { kDrawPrim = 1, kDrawFog = 2, kDrawColor = 4, kDrawSt = 8, kDrawUv = 16 };
 struct DrawRecord {
-    uint32_t prim;    // PrimFlags
-    uint32_t count;
+    uint16_t prim;    // PrimFlags
+    uint16_t count;
     uint32_t flags;   // DrawFlags
-    uint32_t pad;
 };
 
 constexpr uint32_t recordQwords(uint32_t payload) { return (static_cast<uint32_t>(sizeof(Header)) + payload + 15) / 16; }

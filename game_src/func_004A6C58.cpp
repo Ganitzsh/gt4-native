@@ -6,7 +6,9 @@
  * the screen row loaded into shared vector 22), scaled and offset by the screen rows 20, 21 and converted to
  * 12.4 fixed point; its w lane gets 2048 (from shared vector 9) when this point and the previous one are outside
  * the same clipping plane. Shared vectors 20..23 are left holding the scratchpad's screen rows (0x70002FA0) and
- * 9 = (0, 0, 0, 2048), as the original leaves them. */
+ * 9 = (0, 0, 0, 2048), as the original leaves them. Natively the points are a draw record (compat/game/gt4_gfx.h)
+ * with the same values: a point whose w got 2048 (its ADC bit, bit 15 of the fourth word) does not draw. */
+#include "gt4_gfx.h"
 #include "gt4_vec.h"
 #include "spr.h"
 extern "C" void *memcpy(void *, const void *, unsigned int);
@@ -43,24 +45,11 @@ extern "C" void func_004A6C58(XY *pts, int n) {
         return;
     if (*(u8 *)(s + 0x0))
         func_0049E480(s);
-    char *p = (char *)*(u32 *)(s + 0x1F8);
-    const u64 prim = (u64)((*(u16 *)(s + 0x4A) & 0xFFEF) | 2);
-    /* DMA cnt tag + VIF NOP, DIRECT n + 3 */
-    *(u32 *)(p + 0x0) = (u32)(n + 3) | 0x10000000;
-    *(u32 *)(p + 0x4) = 0;
-    *(u32 *)(p + 0x8) = 0x11000000;
-    *(u32 *)(p + 0xC) = (u32)(n + 3) | 0x50000000;
-    *(u32 *)(s + 0x1F8) = ((u32)n << 4) + *(u32 *)(s + 0x1F8) + 0x40;
-    /* GIF tag (packed, NLOOP 1, A+D) and RGBAQ, PRIM */
-    *(u64 *)(p + 0x10) = 0x2400000000000001ULL;
-    *(u64 *)(p + 0x18) = 1;
-    *(u32 *)(p + 0x20) = *(u32 *)(s + 0xC20);
-    *(u32 *)(p + 0x24) = 0x3F800000;
-    *(u64 *)(p + 0x28) = prim;
-    /* GIF tag (packed, NLOOP n, EOP, one register: XYZ2) */
-    *(u64 *)(p + 0x30) = (u64)(u32)(n | 0x8000) | 0x1000000000000000ULL;
-    *(u64 *)(p + 0x38) = 4;
-    int *out = (int *)(p + 0x40);
+    const u32 prim = (u32)((*(u16 *)(s + 0x4A) & 0xFFEF) | 2);
+    const int count = n;
+    struct gt4_vertex *verts = (struct gt4_vertex *)__builtin_alloca(n * sizeof(struct gt4_vertex));
+    struct gt4_vertex *vo = verts;
+    int out[4];
 
     for (int r = 0; r < 4; ++r)
         memcpy(gt4_vec(20 + r), s + 0xFA0 + 0x10 * r, 16);
@@ -94,6 +83,17 @@ extern "C" void func_004A6C58(XY *pts, int n) {
         for (int k = 0; k < 4; ++k)
             out[k] = gt4_ftoi(q[k], 4);
         prev = flag;
-        out += 4;
+        vo->x = (unsigned short)out[0];
+        vo->y = (unsigned short)out[1];
+        vo->z = (u32)out[2];
+        vo->fog = 0;
+        vo->rgba = *(u32 *)(s + 0xC20);
+        vo->s = vo->t = 0.0f;
+        vo->q = 1.0f;
+        vo->u = vo->v = 0;
+        vo->kick = !(((u32)out[3] >> 15) & 1);
+        vo->pad = 0;
+        vo++;
     } while (--n != 0);
+    gt4_gfx_draw(s, prim, GT4_DRAW_PRIM | GT4_DRAW_COLOR, verts, count);
 }

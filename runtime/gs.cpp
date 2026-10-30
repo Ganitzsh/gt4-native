@@ -29,6 +29,7 @@
 using namespace gt4::rt;
 
 void send_record_data(const std::vector<uint8_t> &part);  // below, with the VIF1 scanner
+void find_direct(const std::vector<uint8_t> &part);
 size_t next_read(const std::vector<uint8_t> &part, size_t from, gt4::gfx::ReadRecord &read);
 
 namespace {
@@ -54,7 +55,32 @@ uint8_t *mem(uint32_t addr, bool spr) {
     return static_cast<uint8_t *>(guest_ptr(addr));  // as is: native stacks are only 4-aligned
 }
 
-void append(std::vector<uint8_t> &out, const uint8_t *p, uint32_t qwc) { out.insert(out.end(), p, p + qwc * 16); }
+// The bytes a DMA tag delivers. Outside game memory (natively a thread's stack or the frame buffers) only what is
+// mapped is read, zeros past it: a game array at the very top of a stack can be read past its end (on the PS2
+// other memory followed).
+void append(std::vector<uint8_t> &out, const uint8_t *p, uint32_t qwc) {
+    const uintptr_t a = reinterpret_cast<uintptr_t>(p);
+    const size_t n = size_t(qwc) * 16;
+    const bool guest = (a >= kGuestSectionStart && a + n <= kRamSize) || (a >= kScratchpad && a + n <= kScratchpad + kScratchpadSize);
+    if (guest) {
+        out.insert(out.end(), p, p + n);
+        return;
+    }
+    size_t done = 0;
+    while (done < n) {
+        MEMORY_BASIC_INFORMATION mbi;
+        if (!VirtualQuery(p + done, &mbi, sizeof mbi) || mbi.State != MEM_COMMIT || (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD))) break;
+        const size_t avail = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize - (a + done);
+        const size_t take = std::min(avail, n - done);
+        out.insert(out.end(), p + done, p + done + take);
+        done += take;
+    }
+    if (done < n) {
+        out.insert(out.end(), n - done, 0);
+        static int warned = 0;
+        if (warned++ < 4) log_warn("gs: DMA read of %zu bytes at %08x past mapped memory (zeros)", n - done, static_cast<uint32_t>(a + done));
+    }
+}
 
 // Source-chain DMA (EE DMAC tag IDs): returns false on a malformed chain.
 bool g_chain_has_mpg = false;  // the last chain walked uploaded a VU1 microprogram
@@ -248,6 +274,7 @@ void send_out(int channel, const std::vector<uint8_t> &out) {
                 }
                 return;
             }
+            find_direct(out);
             send_record_data(out);
             link_send(GT4_REC_VIF1, out.data(), static_cast<uint32_t>(out.size()));
         } else if (channel == 0) {
@@ -376,13 +403,18 @@ void send_record_data(const std::vector<uint8_t> &part) {
             for (size_t at = 0; at + sizeof(gt4::gfx::Header) <= bytes;) {
                 gt4::gfx::Header h;
                 std::memcpy(&h, records + at, sizeof h);
-                if (h.type == gt4::gfx::kUpload && h.bytes >= sizeof(gt4::gfx::UploadRecord)) {
+                if (h.type() == gt4::gfx::kUpload && h.bytes() >= sizeof(gt4::gfx::UploadRecord)) {
                     gt4::gfx::UploadRecord u;
                     std::memcpy(&u, records + at + sizeof h, sizeof u);
                     const uint32_t head[2] = {u.source, u.qwords * 16};
                     link_send(GT4_REC_GFX_DATA, head, sizeof head, mem(u.source, false), u.qwords * 16);
+                } else if (h.type() == gt4::gfx::kBatchModel && h.bytes() >= sizeof(gt4::gfx::BatchModel)) {
+                    gt4::gfx::BatchModel m;
+                    std::memcpy(&m, records + at + sizeof h, sizeof m);
+                    const uint32_t head[2] = {m.source, m.qwords * 16};
+                    link_send(GT4_REC_GFX_DATA, head, sizeof head, mem(m.source, false), m.qwords * 16);
                 }
-                at += size_t(gt4::gfx::recordQwords(h.bytes)) * 16;
+                at += size_t(gt4::gfx::recordQwords(h.bytes())) * 16;
             }
         }
         pos += n;
@@ -404,16 +436,47 @@ size_t next_read(const std::vector<uint8_t> &part, size_t from, gt4::gfx::ReadRe
             for (size_t at = 0; at + sizeof(gt4::gfx::Header) <= bytes;) {
                 gt4::gfx::Header h;
                 std::memcpy(&h, records + at, sizeof h);
-                if (h.type == gt4::gfx::kRead && h.bytes >= sizeof read) {
+                if (h.type() == gt4::gfx::kRead && h.bytes() >= sizeof read) {
                     std::memcpy(&read, records + at + sizeof h, sizeof read);
                     return (pos + n) * 4;
                 }
-                at += size_t(gt4::gfx::recordQwords(h.bytes)) * 16;
+                at += size_t(gt4::gfx::recordQwords(h.bytes())) * 16;
             }
         }
         pos += n;
     }
     return 0;
+}
+
+// GT4_DIRECT_FIND=N (debugging): for the first N distinct GIF packets that still reach VIF1 through DIRECT, where
+// in game memory their first 32 bytes are (to find what wrote them), with the VBlank.
+void find_direct(const std::vector<uint8_t> &part) {
+    static long left = getenv("GT4_DIRECT_FIND") ? atol(getenv("GT4_DIRECT_FIND")) : 0;
+    if (left <= 0) return;
+    const uint32_t *w = reinterpret_cast<const uint32_t *>(part.data());
+    const size_t nw = part.size() / 4;
+    VifScan scan;
+    static std::vector<std::vector<uint8_t>> seen;
+    for (size_t pos = 0; pos < nw && left > 0;) {
+        const uint32_t cmd = (w[pos] >> 24) & 0x7F;
+        const size_t n = scan.length(w + pos, nw - pos);
+        if ((cmd == 0x50 || cmd == 0x51) && n >= 9) {
+            std::vector<uint8_t> key(part.begin() + (pos + 1) * 4, part.begin() + (pos + 9) * 4);
+            if (std::find(seen.begin(), seen.end(), key) == seen.end()) {
+                seen.push_back(key);
+                --left;
+                const uint8_t *ram = static_cast<const uint8_t *>(guest_ptr(kGuestSectionStart));
+                const size_t size = kRamSize - kGuestSectionStart;
+                uint32_t found[4] = {};
+                int hits = 0;
+                for (size_t a = 0; a + 32 <= size && hits < 4; a += 16)
+                    if (!std::memcmp(ram + a, key.data(), 32)) found[hits++] = static_cast<uint32_t>(a + kGuestSectionStart);
+                log_info("direct: VBlank %u, %zu qwords, tag %08x%08x, in memory at %08x %08x %08x %08x (%d)", kernel_vblank_count(),
+                         (n - 1) / 4, w[pos + 2], w[pos + 1], found[0], found[1], found[2], found[3], hits);
+            }
+        }
+        pos += n;
+    }
 }
 
 // The GS events of a VIF1 stream's DIRECT packets (standalone runs: no host to report them).
@@ -731,8 +794,11 @@ extern "C" int gt4_replace_func_004AB430(int) {
 
 namespace gt4::rt {
 
+void watch_write_init();  // watch_write.cpp
+
 void gs_init() {
     gsw::init();  // GT4_GS_WRITERS (debugging)
+    watch_write_init();  // GT4_WATCH_WRITE (debugging)
     kernel_set_vblank_hook(on_vblank);
     kernel_set_interrupt_hook(dma_poll);
     guest_ref<uint32_t>(kGsCsr) = 0;

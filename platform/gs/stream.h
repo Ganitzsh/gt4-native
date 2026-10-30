@@ -89,6 +89,7 @@ private:
         GraphicsStream* owner = nullptr;
         void gif(uint32_t path, const uint8_t* data, size_t bytes) override {
             ++owner->counters.gifPackets[path & 3];
+            owner->logDirect(data, bytes);
             owner->sendGif(path, data, bytes);
         }
     };
@@ -102,6 +103,10 @@ private:
         void primitives(const GsPrimitives& p) override { owner->sendPrimitives(p); }
     };
     void runBatch(const Batch3d& batch);
+    // GT4_DIRECT_LOG=N (debugging): the first N GIF packets that still come through VIF1 DIRECT, with the VBlank
+    // and the packet's first tag and registers (what game code still writes as GS packets).
+    void logDirect(const uint8_t* data, size_t bytes);
+    uint32_t lastVblank = 0;
     void records(const uint8_t* data, size_t bytes);
     // The native drawing state, as state records and GIF packets set it (for saveState).
     gfx::Shared nativeShared;

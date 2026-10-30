@@ -4,7 +4,10 @@
  * of a header byte (count in bits 0..6, bit 7: another group follows), a byte the bone loader ignores, four bone
  * index bytes (0049D970 loads the bones into shared vectors 8..23), then `count` 10-byte vertices: x, y, z as
  * 16-bit integers (bytes 0..5) and four signed-byte bone weights (bytes 6..9). 0x460 converts the position to
- * floats (scaled by `scale`) and the weights to floats / 127, then sums as 0x478. */
+ * floats (scaled by `scale`) and the weights to floats / 127, then sums as 0x478.
+ * Natively the values go to the batch as batch writes (compat/game/gt4_gfx.h) instead of the packet, the
+ * quadwords filled as the original's UNPACK filled them (gt4_batch_v3). */
+#include "gt4_gfx.h"
 #include "gt4_vec.h"
 typedef unsigned char u8;
 typedef unsigned int u32;
@@ -58,15 +61,8 @@ static float inv127() {
 }
 
 extern "C" void func_0049DB08(Ctx *ctx, u8 *cmd, int n, float scale) {
-    u32 *start = ctx->cursor;
-    u32 *p = start;
-    p[1] = 0;
-    p[2] = (n << 16) | 0x6800C000;
-    float *out = (float *)(p + 3);
-    p += 3 + n * 3;
-    while ((u32)p & 15) *p++ = 0;
-    *start = (((u32)((char *)p - (char *)start) >> 4) - 1) | 0x10000000;
-    ctx->cursor = p;
+    float *positions = (float *)__builtin_alloca((n > 0 ? n : 1) * 12);
+    float *out = positions;
 
     const float i127 = inv127();
     u8 hdr;
@@ -83,4 +79,5 @@ extern "C" void func_0049DB08(Ctx *ctx, u8 *cmd, int n, float scale) {
         }
         cmd = (u8 *)item;
     } while (hdr & 0x80);
+    gt4_batch_v3(ctx, 0, positions, n, 0);
 }

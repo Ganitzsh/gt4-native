@@ -38,9 +38,34 @@ void gt4_gfx_set(void *context, const unsigned long long *pairs, int n);
  * << 24, the rectangle (x, y, w, h). In the frame's order, or (_now) at once. Returns the size in qwords. */
 int gt4_gfx_upload(void *context, unsigned int destination, int x, int y, int w, int h, const void *src);
 int gt4_gfx_upload_now(unsigned int destination, int x, int y, int w, int h, const void *src);
+/* GT4's 3D batches (include/gt4/gfx.h kBatch*): a frame starts; `count` qwords of `data` into the batch being
+ * filled from qword `qword` (the lanes in `lanes`, bit k lane k); a model packet in game memory decoded into it
+ * with the lane mask `mask`; the batch drawn by the renderer at `entry` with the lighting chain `itop`. */
+void gt4_gfx_batch_frame(void *context);
+void gt4_gfx_batch_write(void *context, unsigned int qword, const void *data, int count, unsigned int lanes);
+void gt4_gfx_batch_model(void *context, const void *source, int qwords, unsigned int mask);
+void gt4_gfx_batch_run(void *context, unsigned int entry, unsigned int itop);
 #ifdef __cplusplus
 }
 #endif
+
+/* `n` three-float vectors into the batch from `qword` on, as the original's UNPACK V3-32 filled the quadwords:
+ * unmasked (keep_w 0), lane w takes the next vector's x (0 after the last); masked with the lane mask C0C0C0C0
+ * (keep_w 1), lane w keeps what it held. */
+static inline void gt4_batch_v3(void *context, unsigned int qword, const float *v, int n, int keep_w)
+{
+    union { float f; unsigned int u; } c;
+    unsigned int *q = (unsigned int *)__builtin_alloca((n > 0 ? n : 1) * 16);
+    int k;
+    for (k = 0; k < n; k++) {
+        c.f = v[3 * k]; q[4 * k] = c.u;
+        c.f = v[3 * k + 1]; q[4 * k + 1] = c.u;
+        c.f = v[3 * k + 2]; q[4 * k + 2] = c.u;
+        if (k + 1 < n) { c.f = v[3 * k + 3]; q[4 * k + 3] = c.u; }
+        else q[4 * k + 3] = 0;
+    }
+    gt4_gfx_batch_write(context, qword, q, n, keep_w ? 0x7 : 0xF);
+}
 
 /* The library's packed Z and fog word (Z in the low 24 bits, fog in the top 8) into a vertex. */
 static inline void gt4_vertex_zf(struct gt4_vertex *v, unsigned int zf)

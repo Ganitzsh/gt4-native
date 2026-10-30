@@ -46,6 +46,23 @@ GraphicsStream::GraphicsStream(GsTarget& target) : gs(target) {
 
 GraphicsStream::~GraphicsStream() = default;
 
+void GraphicsStream::logDirect(const uint8_t* data, size_t bytes) {
+    static long left = std::getenv("GT4_DIRECT_LOG") ? std::strtol(std::getenv("GT4_DIRECT_LOG"), nullptr, 10) : 0;
+    if (left <= 0 || bytes < 16) return;
+    --left;
+    uint64_t tag[2], first[2] = {};
+    std::memcpy(tag, data, 16);
+    if (bytes >= 32) std::memcpy(first, data + 16, 16);
+    std::printf("[direct] vblank %u: %zu bytes, tag %016llX regs %016llX, then %016llX %016llX\n", lastVblank, bytes,
+                static_cast<unsigned long long>(tag[0]), static_cast<unsigned long long>(tag[1]),
+                static_cast<unsigned long long>(first[0]), static_cast<unsigned long long>(first[1]));
+    for (size_t q = 2; q < std::min<size_t>(bytes / 16, 12); ++q) {
+        uint64_t w[2];
+        std::memcpy(w, data + q * 16, 16);
+        std::printf("[direct]   %016llX %016llX\n", static_cast<unsigned long long>(w[0]), static_cast<unsigned long long>(w[1]));
+    }
+}
+
 // Native records (include/gt4/gfx.h): headers and payloads, each padded to 16 bytes.
 void GraphicsStream::records(const uint8_t* data, size_t bytes) {
     size_t at = 0;
@@ -53,15 +70,26 @@ void GraphicsStream::records(const uint8_t* data, size_t bytes) {
         gfx::Header h;
         std::memcpy(&h, data + at, sizeof h);
         const uint8_t* payload = data + at + sizeof h;
-        if (at + sizeof h + h.bytes > bytes) {
+        if (at + sizeof h + h.bytes() > bytes) {
             vif1.lastWarning = "a native record past the end of its block";
             ++counters.badRecords;
+            static int logged = 0;
+            if (logged++ < 10)
+            {
+                std::fprintf(stderr, "GS: bad record (vblank %u): type %u, %u bytes at %zu of a %zu-byte block\n", lastVblank, h.type(),
+                             h.bytes(), at, bytes);
+                for (size_t q = (at >= 64 ? at - 64 : 0) & ~size_t(15); q < std::min(bytes, at + 64); q += 16) {
+                    uint32_t w[4];
+                    std::memcpy(w, data + q, 16);
+                    std::fprintf(stderr, "GS:   %6zu: %08X %08X %08X %08X\n", q, w[0], w[1], w[2], w[3]);
+                }
+            }
             return;
         }
-        switch (h.type) {
+        switch (h.type()) {
         case gfx::kNop: break;
         case gfx::kState:
-            if (h.bytes >= sizeof(gfx::StateRecord)) {
+            if (h.bytes() >= sizeof(gfx::StateRecord)) {
                 gfx::StateRecord r;
                 std::memcpy(&r, payload, sizeof r);
                 applyNative(r);
@@ -70,7 +98,7 @@ void GraphicsStream::records(const uint8_t* data, size_t bytes) {
             }
             break;
         case gfx::kUpload:
-            if (h.bytes >= sizeof(gfx::UploadRecord)) {
+            if (h.bytes() >= sizeof(gfx::UploadRecord)) {
                 gfx::UploadRecord u;
                 std::memcpy(&u, payload, sizeof u);
                 auto it = std::find_if(recordData.begin(), recordData.end(), [&](const RecordData& d) { return d.source == u.source; });
@@ -86,8 +114,53 @@ void GraphicsStream::records(const uint8_t* data, size_t bytes) {
                 ++counters.badRecords;
             }
             break;
+        case gfx::kBatchFrame:
+            vif1.batchFrame();
+            break;
+        case gfx::kBatchWrite: {
+            gfx::BatchWrite w;
+            if (h.bytes() < sizeof w) {
+                ++counters.badRecords;
+                break;
+            }
+            std::memcpy(&w, payload, sizeof w);
+            if (h.bytes() < sizeof w + size_t(w.count) * 16) {
+                ++counters.badRecords;
+                break;
+            }
+            std::vector<uint32_t> words(size_t(w.count) * 4);
+            if (w.count) std::memcpy(words.data(), payload + sizeof w, size_t(w.count) * 16);
+            vif1.batchWrite(w.qword, words.data(), w.count, w.lanes);
+            break;
+        }
+        case gfx::kBatchModel: {
+            gfx::BatchModel m;
+            if (h.bytes() < sizeof m) {
+                ++counters.badRecords;
+                break;
+            }
+            std::memcpy(&m, payload, sizeof m);
+            auto it = std::find_if(recordData.begin(), recordData.end(), [&](const RecordData& d) { return d.source == m.source; });
+            if (it == recordData.end()) {
+                ++counters.uploadsWithoutData;
+                break;
+            }
+            vif1.batchModel(it->bytes.data(), std::min<size_t>(it->bytes.size(), size_t(m.qwords) * 16), m.mask);
+            recordData.erase(it);
+            break;
+        }
+        case gfx::kBatchRun: {
+            gfx::BatchRun r;
+            if (h.bytes() < sizeof r) {
+                ++counters.badRecords;
+                break;
+            }
+            std::memcpy(&r, payload, sizeof r);
+            vif1.batchRun(r.entry, r.itop);
+            break;
+        }
         case gfx::kRead:
-            if (h.bytes >= sizeof(gfx::ReadRecord)) {
+            if (h.bytes() >= sizeof(gfx::ReadRecord)) {
                 gfx::ReadRecord r;
                 std::memcpy(&r, payload, sizeof r);
                 gs.read(r);
@@ -97,12 +170,12 @@ void GraphicsStream::records(const uint8_t* data, size_t bytes) {
             break;
         case gfx::kDraw: {
             gfx::DrawRecord d;
-            if (h.bytes < sizeof d) {
+            if (h.bytes() < sizeof d) {
                 ++counters.badRecords;
                 break;
             }
             std::memcpy(&d, payload, sizeof d);
-            if (h.bytes < sizeof d + size_t(d.count) * sizeof(gfx::Vertex)) {
+            if (h.bytes() < sizeof d + size_t(d.count) * sizeof(gfx::Vertex)) {
                 ++counters.badRecords;
                 break;
             }
@@ -113,10 +186,17 @@ void GraphicsStream::records(const uint8_t* data, size_t bytes) {
             ++counters.draws;
             break;
         }
-        default: ++counters.badRecords; break;
+        default: {
+            ++counters.badRecords;
+            static int logged = 0;
+            if (logged++ < 10)
+                std::fprintf(stderr, "GS: unknown record (vblank %u): type %u, %u bytes at %zu of a %zu-byte block\n", lastVblank, h.type(),
+                             h.bytes(), at, bytes);
+            break;
+        }
         }
         ++counters.gfxRecords;
-        at += size_t(gfx::recordQwords(h.bytes)) * 16;
+        at += size_t(gfx::recordQwords(h.bytes())) * 16;
     }
 }
 
@@ -498,6 +578,7 @@ void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload)
         if (size >= 4) std::memcpy(&field, payload, 4);
         if (size >= 8) std::memcpy(&count, payload + 4, 4);
         ++counters.vsyncs;
+        lastVblank = count;
         if (!heldPath3.empty()) {   // still masked at the end of the frame: do not lose the data
             ++counters.path3ForcedAtVsync;
             releasePath3();

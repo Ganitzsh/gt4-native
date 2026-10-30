@@ -1,7 +1,9 @@
 /* compiler: ee-gcc2.96-no-strict-aliasing */
-/* Native version of 0049E548 (recovered matched source with VU0 asm): writes a packet entry at s->cur (+0x1F8) and
- * advances it: a tag (0x10000008, 0, 0, reg | 0x6C08C000), the view matrix (shared vectors 24..27; rows 24..26
- * times scale when scale is not 0) and the four rows at s + 0xFA0; stores scale at +0x20. */
+/* Native version of 0049E548 (recovered matched source with VU0 asm): the batch's setup constants, eight qwords
+ * from qword `reg` (193): the view matrix (shared vectors 24..27; rows 24..26 times scale when scale is not 0) and
+ * the four rows at s + 0xFA0; stores scale at +0x20. The original wrote them in the packet behind a DMA cnt tag
+ * and an UNPACK V4-32 code; natively they are a batch write (compat/game/gt4_gfx.h). */
+#include "gt4_gfx.h"
 #include "gt4_vec.h"
 extern "C" void *memcpy(void *, const void *, unsigned int);
 typedef float f32;
@@ -23,12 +25,9 @@ struct State {
 };
 
 extern "C" void func_0049E548(State *s, u32 reg, f32 scale) {
-    Packet *p = s->cur;
+    Packet packet;
+    Packet *p = &packet;
     s->scale = scale;
-    p->tag[0] = 0x10000008;
-    p->tag[1] = 0;
-    p->tag[2] = 0;
-    p->tag[3] = reg | 0x6C08C000;
     if (scale != 0.0f) {
         for (int r = 0; r < 3; ++r)
             for (int k = 0; k < 4; ++k) p->mat[r][k] = gt4_vec(24 + r)[k] * scale;
@@ -37,5 +36,5 @@ extern "C" void func_0049E548(State *s, u32 reg, f32 scale) {
         for (int r = 0; r < 4; ++r) memcpy(p->mat[r], gt4_vec(24 + r), 16);
     }
     memcpy(p->m2, s->m, 64);
-    s->cur = p + 1;
+    gt4_gfx_batch_write(s, reg & 0x3FF, p->mat, 8, 0xF);
 }

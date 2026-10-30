@@ -56,6 +56,13 @@ public:
     std::function<void(const uint8_t* records, size_t bytes)> onRecords;
     // Feeds stream words (the byte count is rounded down to whole words).
     void feed(const uint8_t* bytes, size_t size);
+    // Native batch records (include/gt4/gfx.h): a frame starts (the layout GT4's frame head sets: buffers at 0 and
+    // 435, cycle 4/4, no row mode, mask C0C0C0C0, the first buffer next); qwords into the batch being filled (the
+    // lanes in `lanes`); a model packet decoded into it with `mask`; the batch run.
+    void batchFrame();
+    void batchWrite(uint32_t qword, const uint32_t* words, uint32_t count, uint32_t lanes);
+    void batchModel(const uint8_t* bytes, size_t size, uint32_t modelMask);
+    void batchRun(uint32_t entry, uint32_t itop);
     void reset();
 
     // Whether the micro program image the game uploaded (MPG) is GT4's (NTSC-U v1.01). The image is kept

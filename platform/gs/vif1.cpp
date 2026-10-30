@@ -157,6 +157,50 @@ bool Vif1::step() {
     return true;
 }
 
+void Vif1::batchFrame() {
+    base = 0;
+    ofst = 435;
+    tops = base;
+    dbf = false;
+    cl = wl = 4;
+    mode = 0;
+    mask = 0xC0C0C0C0u;
+}
+
+void Vif1::batchWrite(uint32_t qword, const uint32_t* words, uint32_t count, uint32_t lanes) {
+    BatchBuffer& b = buffers[dbf ? 1 : 0];
+    for (uint32_t k = 0; k < count; ++k) {
+        if (qword + k >= BatchBuffer::kQwords) {
+            ++stats.outsideBatch;
+            continue;
+        }
+        for (uint32_t f = 0; f < 4; ++f)
+            if ((lanes >> f) & 1) b.words[qword + k][f] = words[4 * k + f];
+    }
+}
+
+void Vif1::batchModel(const uint8_t* bytes, size_t size, uint32_t modelMask) {
+    mask = modelMask;
+    // Decoded on its own: the record comes from inside the stream being decoded (its words, and `pos`, stay as
+    // they are; swapping keeps the outer words where the caller's pointers expect them).
+    std::vector<uint32_t> outer;
+    outer.swap(pending);
+    const size_t outerPos = pos;
+    pos = 0;
+    feed(bytes, size);
+    if (!pending.empty()) {
+        lastWarning = "a model packet ends inside a command";
+        pending.clear();
+    }
+    pending.swap(outer);
+    pos = outerPos;
+}
+
+void Vif1::batchRun(uint32_t entry, uint32_t itop) {
+    itops = itop & 0x3FF;
+    start(entry);
+}
+
 // MSCAL: the batch in the current buffer is complete. The next batch goes to the other buffer (the swap
 // the VIF makes at each start: TOPS alternates between BASE and BASE + OFFSET).
 void Vif1::start(uint32_t address) {

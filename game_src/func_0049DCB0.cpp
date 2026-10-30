@@ -5,7 +5,10 @@
  * another group follows), a byte the bone loader ignores, four bone index bytes (0049D970 loads the bones into
  * shared vectors 8..23), then `count` 13-byte vertices: x, y, z as 16-bit integers (bytes 0..5), the normal as
  * three signed bytes (6..8) and four signed-byte bone weights (9..12). 0x2E8 converts them to floats (the weights
- * / 127), then 0x308 skins the position (times `scale`) and the normal, which it normalises. */
+ * / 127), then 0x308 skins the position (times `scale`) and the normal, which it normalises.
+ * Natively the values go to the batch as batch writes (compat/game/gt4_gfx.h) instead of the packet, the
+ * quadwords filled as the original's UNPACK filled them (gt4_batch_v3). */
+#include "gt4_gfx.h"
 #include "gt4_vec.h"
 typedef unsigned int u32;
 typedef unsigned char u8;
@@ -90,22 +93,10 @@ static float inv127() {
 
 extern "C" void func_0049DCB0(S *s, unsigned char *p, int count, int dest, float scale) {
     const int bytes = count * 12, nc = count << 16;
-    u32 *base = s->top, *w = base;
-    w[1] = 0;
-    w[2] = nc | 0x6800C000;
-    float *a = (float *)(w + 3);
-    w = (u32 *)((char *)(w + 3) + bytes);
-    w[0] = 0x20000000;
-    w[1] = 0xC0C0C0C0;
-    w[2] = nc | dest | 0x7800C000;
-    float *b = (float *)(w + 3);
-    w = (u32 *)((char *)(w + 3) + bytes);
-    w[0] = 0x20000000;
-    w[1] = s->command;
-    w += 2;
-    while ((u32)w & 15) *w++ = 0;
-    *base = (((u32)((char *)w - (char *)base) >> 4) - 1) | 0x10000000;
-    s->top = w;
+    float *positions = (float *)__builtin_alloca(bytes + 12);
+    float *normals = (float *)__builtin_alloca(bytes + 12);
+    float *a = positions, *b = normals;
+    (void)nc;
 
     const float i127 = inv127();
     unsigned int tag;
@@ -125,4 +116,6 @@ extern "C" void func_0049DCB0(S *s, unsigned char *p, int count, int dest, float
         }
         p = (unsigned char *)item;
     } while (tag & 0x80);
+    gt4_batch_v3(s, 0, positions, count, 0);
+    gt4_batch_v3(s, dest & 0x3FF, normals, count, 1);
 }

@@ -8,7 +8,10 @@
  * loads the bones into shared vectors 8..23), then `count` 40-byte vertices: position and normal (three floats
  * each, unaligned) and four bone weights. 0x308: the position as in 0049D580 (scale 1); the normal through the
  * bones' rotations times the weights, then normalised (times 1/sqrt of its squared length; VU0's RSQRT of 0
- * gives the largest float). */
+ * gives the largest float).
+ * Natively the values go to the batch as batch writes (compat/game/gt4_gfx.h) instead of the packet, the
+ * quadwords filled as the original's UNPACK filled them (gt4_batch_v3). */
+#include "gt4_gfx.h"
 #include "gt4_vec.h"
 typedef unsigned short u16;
 typedef unsigned int u32;
@@ -82,22 +85,10 @@ static void skin_normal(float *out, const float *nrm, const float *w) {
 
 extern "C" void func_0049D728(S *s, u16 *cmd, int count, int dest) {
     const int bytes = count * 12, nc = count << 16;
-    u32 *base = s->top, *w = base;
-    w[1] = 0;
-    w[2] = nc | 0x6800C000;
-    float *a = (float *)(w + 3);
-    w = (u32 *)((char *)(w + 3) + bytes);
-    w[0] = 0x20000000;
-    w[1] = 0xC0C0C0C0;
-    w[2] = nc | dest | 0x7800C000;
-    float *b = (float *)(w + 3);
-    w = (u32 *)((char *)(w + 3) + bytes);
-    w[0] = 0x20000000;
-    w[1] = s->command;
-    w += 2;
-    while ((u32)w & 15) *w++ = 0;
-    *base = (((u32)((char *)w - (char *)base) >> 4) - 1) | 0x10000000;
-    s->top = w;
+    float *positions = (float *)__builtin_alloca(bytes + 12);
+    float *normals = (float *)__builtin_alloca(bytes + 12);
+    float *a = positions, *b = normals;
+    (void)nc;
 
     u16 tag;
     do {
@@ -113,4 +104,6 @@ extern "C" void func_0049D728(S *s, u16 *cmd, int count, int dest) {
         }
         cmd = (u16 *)item;
     } while (tag & 0x8000);
+    gt4_batch_v3(s, 0, positions, count, 0);
+    gt4_batch_v3(s, dest & 0x3FF, normals, count, 1);
 }
