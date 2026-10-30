@@ -102,6 +102,9 @@ std::vector<Item> buildItems(bool game) {
     items.push_back(choice("Anisotropic filtering", "texture.anisotropy",
         {{"1", "Off"}, {"2", "2x"}, {"4", "4x"}, {"8", "8x"}, {"16", "16x"}},
         "Sharper textures at grazing angles (roads), on mipmapped textures."));
+    if (game)
+        items.push_back(choice("HD textures", "texture.hd_pack", kOnOff,
+            "A texture pack's high-resolution replacements of the game's textures (PCSX2 format, SCUS-97328)."));
     if (!game) {
         items.push_back(choice("Texture filter", "texture.filter",
             {{"point", "Point"}, {"bilinear", "Bilinear"}, {"trilinear", "Trilinear"}}, "3D texture filtering."));
@@ -247,6 +250,7 @@ SettingsMenu::Result SettingsMenu::input(Input input, Settings& settings) {
         direction = 1;
         break;
     }
+    if (item.key == "texture.hd_pack" && settings.texturePackFound.empty()) return result;   // none installed
     if (item.kind == Item::Choice) {
         const std::string current = getOption(settings, item.key);
         // "custom" is shown when the values make it so, never chosen.
@@ -294,7 +298,18 @@ MenuView SettingsMenu::view(const Settings& settings) const {
             if (item.key == "render.scale") value = std::round(100.0f / upscaleRatio(settings));
             row.value = formatStep(item, value);
         }
-        if (row.selected) view.help = item.help;
+        if (item.key == "texture.hd_pack") {   // whether a pack was found decides what the row says
+            if (settings.texturePackFound.empty()) {
+                row.value = "Not installed";
+                row.adjustable = false;
+                if (row.selected)
+                    view.help = "No texture pack found. Put a PCSX2 texture pack for SCUS-97328 in textures/SCUS-97328 "
+                                "next to the host or in the settings folder, or set texture.pack_path.";
+            } else if (row.selected) {
+                view.help = item.help + " Found in " + settings.texturePackFound + ".";
+            }
+        }
+        if (row.selected && view.help.empty()) view.help = item.help;
         view.rows.push_back(std::move(row));
     }
     view.footer = "Up/Down: choose   Left/Right: change   L1/R1, PgUp/PgDn: section   Esc: close";

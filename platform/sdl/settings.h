@@ -66,6 +66,9 @@ struct Settings {
     float lodBias = 0.0f;             // added to the automatic upscaler bias
     bool autoLodBias = true;
     TextureFilter uiFilter = TextureFilter::Bilinear;  // 2D layer: point keeps pixel art crisp
+    bool hdTextures = true;           // a texture pack's replacements (PCSX2 format), when one is installed
+    std::string texturePack = "auto"; // its folder; auto: the usual places (platform/gsnative/texture_pack.h)
+    std::string texturePackFound;     // set at start-up: the folder in use, empty when none (not saved)
 
     // [effects]
     EffectQuality shadows = EffectQuality::High;

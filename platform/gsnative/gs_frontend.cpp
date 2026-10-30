@@ -1,5 +1,6 @@
 // The native renderer's front end (see gs_frontend.h). Register layouts from the public GS documentation.
 #include "gs_frontend.h"
+#include "texture_name.h"
 
 #include <algorithm>
 #include <cmath>
@@ -815,7 +816,40 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
     Cached& c = textureCache[key];
     if (!c.id) c.id = nextTexture++;
     c.lastUsed = frameCount;
-    if (!c.version || c.generation != generation || c.clutHash != clutHash) {
+    // A texture pack's image for this content (texture_name.h names it as PCSX2 does).
+    std::shared_ptr<const ReplacementImage> replacement;
+    const bool fresh = !c.version || c.generation != generation || c.clutHash != clutHash;
+    if (replacementsOn) {
+        if (fresh) {   // named once per content (level 0 is replaced; the GPU makes a mipmapped texture's levels)
+            MipAddress mips[6];
+            for (uint32_t i = 1; i < levelCount; ++i) mips[i - 1] = {levels[i].tbp, levels[i].tbw};
+            c.replacementFound = findTextureName(mem, t, Texa{s.texAlpha0, s.texAlpha1, s.texBlackTransparent != 0}, sm, mips,
+                                                 levelCount - 1, *texturePack, c.replacementName);
+            ++stats.named;
+            stats.found += c.replacementFound;
+            // GT4_TEXPACK_LOG=N (debugging): the first N textures looked up, found or not.
+            static long logLeft = std::getenv("GT4_TEXPACK_LOG") ? std::strtol(std::getenv("GT4_TEXPACK_LOG"), nullptr, 10) : 0;
+            if (logLeft > 0) {
+                --logLeft;
+                std::fprintf(stderr, "texpack: tbp %04x psm %02x %ux%u clamp %u/%u mips %u -> %s\n", t.tbp, t.psm, w, h, sm.wrapU,
+                             sm.wrapV, levelCount - 1, c.replacementFound ? "found" : "none");
+            }
+            c.replacementPending = false;
+        }
+        const uint64_t loads = texturePack->loadedSerial();
+        if (c.replacementFound && (fresh || (c.replacementPending && loads != c.packLoads))) {
+            c.packLoads = loads;
+            replacement = texturePack->get(c.replacementName);
+            c.replacementPending = !replacement;
+        }
+    }
+    if (replacement) {   // the image's own texture, uploaded once while it is in use (GT4 cycles texture slots)
+        c.generation = generation;
+        c.clutHash = clutHash;
+        if (!c.version) c.version = 1;
+        c.replacedId = replacementTexture(c.replacementName, *replacement);
+    } else if (fresh) {
+        c.replacedId = 0;
         // The back end uploads a frame's textures before its draws: content that changes within a frame
         // needs a new id, the earlier draws keeping the old one.
         if (c.version && c.decodedFrame == frameCount) {
@@ -873,6 +907,12 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
         }
         frame.textures.push_back(std::move(image));
         ++stats.decoded;
+    }
+    if (c.replacedId) {
+        src.kind = TextureSource::Kind::Memory;
+        src.id = c.replacedId;
+        src.version = 1;
+        return src;
     }
     src.kind = TextureSource::Kind::Memory;
     src.id = c.id;
@@ -977,7 +1017,31 @@ void GsFrontend::gif(uint32_t path, const uint8_t* data, size_t bytes) {
     }
 }
 
+// A texture pack image's texture: uploaded with the first draw that uses it, then shared by every texture slot
+// whose content it replaces until unused for two seconds (vsync).
+uint32_t GsFrontend::replacementTexture(const TextureName& name, const ReplacementImage& image) {
+    auto it = replacementTextures.find(name);
+    if (it != replacementTextures.end()) {
+        it->second.lastUsed = frameCount;
+        return it->second.id;
+    }
+    TextureImage upload;
+    upload.id = nextTexture++;
+    upload.version = 1;
+    upload.width = image.width;
+    upload.height = image.height;
+    upload.replaced = true;
+    upload.pixels = image.pixels;
+    frame.textures.push_back(std::move(upload));
+    const uint64_t texels = uint64_t(image.width) * image.height;
+    replacementTextures[name] = {upload.id, frameCount, texels};
+    cachedTexels += texels;
+    ++stats.replaced;
+    return upload.id;
+}
+
 void GsFrontend::resetTextures() {
+    replacementTextures.clear();
     textureCache.clear();
     cachedTexels = 0;
     frame.textures.clear();
@@ -986,11 +1050,26 @@ void GsFrontend::resetTextures() {
 
 void GsFrontend::vsync(uint64_t vblank, FrameList& out) {
     packetsThisFrame = 0;
+    // The texture pack switched on or off: every texture decodes again, with or without its replacement.
+    const bool wanted = replacementsWanted.load() && texturePack && texturePack->isOpen();
+    if (wanted != replacementsOn) {
+        replacementsOn = wanted;
+        resetTextures();
+    }
     // Textures unused for two seconds are dropped, and the least recently used ones beyond a budget (GT4's
     // menus animate palettes: every palette is a texture, and they piled up until the GPU ran out of
     // memory).
     constexpr uint64_t kBudget = 64ull << 20;   // texels (256 MiB of RGBA8)
     if (!(++frameCount % 16) || cachedTexels > kBudget) {
+        for (auto it = replacementTextures.begin(); it != replacementTextures.end();) {
+            if (it->second.lastUsed + 120 < frameCount) {
+                frame.retiredTextures.push_back(it->second.id);
+                cachedTexels -= it->second.texels;
+                it = replacementTextures.erase(it);
+            } else {
+                ++it;
+            }
+        }
         for (auto it = textureCache.begin(); it != textureCache.end();) {
             if (it->second.lastUsed + 120 < frameCount) {
                 frame.retiredTextures.push_back(it->second.id);

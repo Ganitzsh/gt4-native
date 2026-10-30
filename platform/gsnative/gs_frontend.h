@@ -6,9 +6,11 @@
 // target drawn earlier (the pages it last wrote) or GS memory, decoded once per content. The back end
 // (Vulkan) only executes the list. See docs/NATIVE_RENDERER.md.
 #include "gs_memory.h"
+#include "texture_pack.h"
 #include "gt4/gfx.h"
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -74,6 +76,7 @@ struct Draw {
 struct TextureImage {
     uint32_t id = 0, version = 0, width = 0, height = 0;
     uint32_t levels = 1;             // mipmap levels, each half the size of the one before (at least 1 x 1)
+    bool replaced = false;           // a texture pack's image (any size; the GS texture's shape): sampled normalised
     std::vector<uint32_t> pixels;    // level 0, then each further level
 };
 
@@ -160,6 +163,10 @@ public:
     void vsync(uint64_t vblank, FrameList& out);
     const GsMemory& memory() const { return mem; }
     void setEventSink(EventSink sink) { events = std::move(sink); }
+    // A texture pack's replacements for textures in GS memory (texture_pack.h), used while switched on
+    // (setReplacements may be called from any thread; it takes effect at the next frame).
+    void setTexturePack(std::shared_ptr<TexturePack> pack) { texturePack = std::move(pack); }
+    void setReplacements(bool on) { replacementsWanted.store(on); }
     // GS -> host data of the transfer the last TRXDIR = 1 started, `qwc` qwords from where the previous call
     // stopped (zeros past its end). Read from the memory model; `readFromTarget` says whether a page of it
     // was last written by a draw (whose pixels only the GPU has: those bytes are stale here).
@@ -180,7 +187,8 @@ public:
     void resetTextures();
 
     struct Stats {
-        uint64_t primitives = 0, draws = 0, uploads = 0, copies = 0, decoded = 0, targetReads = 0, reinterpreted = 0;
+        uint64_t primitives = 0, draws = 0, uploads = 0, copies = 0, decoded = 0, replaced = 0, targetReads = 0, reinterpreted = 0;
+        uint64_t named = 0, found = 0;   // textures looked up in the texture pack, and those it has
         uint64_t droppedDraws = 0;   // past the target limit (targetFor)
         uint64_t targetsReused = 0;  // slots given to a new buffer at the limit
         uint64_t reads = 0, readsFromTargets = 0;   // LOCAL -> HOST transfers; those with drawn pages
@@ -255,6 +263,9 @@ private:
     } clutSource;
     void clutWritten(const gfx::Texture& texture);
 
+    std::shared_ptr<TexturePack> texturePack;
+    std::atomic<bool> replacementsWanted{true};
+    bool replacementsOn = false;
     // Decoded textures, by what they were decoded from.
     struct Cached {
         uint32_t id = 0, version = 0;
@@ -262,8 +273,19 @@ private:
         uint64_t clutHash = 0;
         uint64_t decodedFrame = ~0ull, lastUsed = 0;
         uint64_t texels = 0;
+        bool replacementFound = false;     // the texture pack has an image for this content
+        uint32_t replacedId = 0;           // ... the texture drawn for it (replacementTexture), 0: the decoded one
+        TextureName replacementName;
+        bool replacementPending = false;   // ... still loading: looked up again after more loads
+        uint64_t packLoads = 0;            // ... the pack's loadedSerial when it was looked up
     };
     uint64_t cachedTexels = 0;   // of every cached texture
+    struct ReplacementTexture {
+        uint32_t id = 0;
+        uint64_t lastUsed = 0, texels = 0;
+    };
+    std::unordered_map<TextureName, ReplacementTexture, TextureNameHash> replacementTextures;
+    uint32_t replacementTexture(const TextureName& name, const ReplacementImage& image);
     std::unordered_map<uint64_t, Cached> textureCache;
     uint32_t nextTexture = 1;
     uint64_t frameCount = 0;

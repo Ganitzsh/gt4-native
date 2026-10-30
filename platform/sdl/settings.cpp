@@ -224,6 +224,12 @@ const std::vector<Option>& options() {
             "detail; a further -1 with FSR 2 (AMD's recommendation) and -0.5 with TAA."));
         o.push_back(enumOption("texture.ui_filter", &Settings::uiFilter, kFilters,
             "Filtering of the 2D layer (HUD, menus, sprites): point keeps pixel art sharp."));
+        o.push_back(boolOption("texture.hd_pack", &Settings::hdTextures,
+            "Replace the game's textures with a texture pack's (PCSX2 format, SCUS-97328) when one is installed."));
+        o.push_back(stringOption("texture.pack_path", &Settings::texturePack, "auto | <folder>",
+            "The texture pack's folder (its PNG files, in any subfolders). auto: textures/SCUS-97328 next to the "
+            "host, in the settings folder or in the local application data folder (gt4-native), then PCSX2's "
+            "own textures folder."));
         o.push_back(enumOption("effects.shadows", &Settings::shadows, kEffects,
             "Shadow maps: low 1024 px 2x2 PCF, medium 2048 px 3x3 PCF, high 2048 px 16-tap Poisson, ultra 4096 px "
             "with contact-hardening (PCSS)."));

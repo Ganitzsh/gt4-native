@@ -38,6 +38,7 @@ static_assert(sizeof(DrawConstants) == 72);
 enum : uint32_t {
     kTextured = 1, kUv = 2, kFog = 4, kBlend = 8, kPabe = 16, kFba = 32, kFromTarget = 64, kTarget24 = 128, kDestAlphaBlend = 256,
     kNearest = 512, kSnap = 1024, kAlphaInvert = 2048, kMipmapped = 4096, kGeneratedMips = 8192, kSnapFiltered = 16384,
+    kReplaced = 32768,
 };
 
 // A fixed-function blend for C = Ad: the coefficients of Cs and Cd as (a * Ad + b), mapped onto factors.
@@ -94,6 +95,7 @@ struct GsnScene::Impl {
         vk::Image image;
         uint32_t version = 0, width = 0, height = 0, levels = 1;
         uint32_t generated = 1;   // mip levels made from level 0 for a texture without GS mipmaps (3D draws)
+        bool replaced = false;    // a texture pack's image (gsn::TextureImage::replaced)
     };
     std::unordered_map<uint32_t, GpuTexture> textures;
     // Retired textures, destroyed once the frames that may still sample them are done.
@@ -353,6 +355,7 @@ struct GsnScene::Impl {
                 g.height = t.height;
                 g.levels = t.levels;
             }
+            g.replaced = t.replaced;
             g.version = t.version;
             std::memcpy(static_cast<uint8_t*>(stage.mapped) + offset, t.pixels.data(), t.pixels.size() * 4);
             copies.emplace_back(&t, offset);
@@ -746,7 +749,13 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
                     const bool plainWrap = sm.wrapU < 2 && sm.wrapV < 2;
                     const bool made = t->second.levels == 1 && t->second.generated > 1 && perspective && plainWrap && linear &&
                                       (sx > 1 || sy > 1);
-                    if (t->second.levels > 1 || made) {
+                    if (t->second.replaced) {
+                        // A texture pack's image: filtered and mipmapped by the sampler, in normalised coordinates
+                        // (the region modes of CLAMP at the GS texture's texels, gsn.frag), whatever the draw's filter.
+                        k.flags = (k.flags & ~kNearest) | kReplaced;
+                        const bool plain = sm.wrapU < 2 && sm.wrapV < 2;
+                        sampler = mipSamplers[plain ? (sm.wrapU == 0 ? 2 : 0) + (sm.wrapV == 0 ? 1 : 0) : 0];
+                    } else if (t->second.levels > 1 || made) {
                         k.flags = (k.flags & ~kNearest) | kMipmapped | (made ? kGeneratedMips : 0u);
                         sampler = mipSamplers[(sm.wrapU == 0 ? 2 : 0) + (sm.wrapV == 0 ? 1 : 0)];
                     }

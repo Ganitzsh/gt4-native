@@ -32,7 +32,7 @@ SOFTWARE.
 
 ## gt4_host: vendored and fetched components
 
-`gt4_host` (built only with `-DGT4_BUILD_HOST=ON`) uses the components below. The two vendored ones live
+`gt4_host` (built only with `-DGT4_BUILD_HOST=ON`) uses the components below. The vendored ones live
 under `third_party/` with their licence files (provenance in `third_party/README.md`); the others are
 fetched by CMake at pinned commits (`cmake/HostDependencies.cmake`) and are not part of this repository.
 
@@ -41,6 +41,8 @@ fetched by CMake at pinned commits (`cmake/HostDependencies.cmake`) and are not 
 | AMD FidelityFX Super Resolution 2.2.1 | `third_party/fidelityfx-fsr2/` (vendored, unmodified) | MIT, Copyright (c) 2022-2023 Advanced Micro Devices, Inc. (`third_party/fidelityfx-fsr2/LICENSE.txt`) | FSR 2 temporal upscaling; its RCAS header for sharpening. |
 | AMD FidelityFX Super Resolution 1.0, EASU | `platform/render/shaders/easu.comp` (a GLSL port of `ffx_fsr1.h`) | MIT, Copyright (c) 2021 Advanced Micro Devices, Inc. (same terms as FSR 2 above) | FSR 1 spatial upscaling. |
 | SMAA | `third_party/smaa/` (vendored, unmodified) | MIT-style, Copyright (C) 2013 Jorge Jimenez, Jose I. Echevarria, Belen Masia, Fernando Navarro, Diego Gutierrez (`third_party/smaa/LICENSE.txt`) | SMAA 1x / T2x anti-aliasing: the shader and its precomputed area and search textures. |
+| stb_image 2.30 | `third_party/stb/` (vendored, unmodified) | Public domain (Unlicense) or MIT, Sean Barrett (the end of `stb_image.h`) | Decodes texture packs' PNG files. |
+| xxHash 0.8.3 | `third_party/xxhash/` (vendored, unmodified) | BSD-2-Clause, Copyright (c) 2012-2021 Yann Collet (`third_party/xxhash/LICENSE`) | The hashes that name a texture pack's replacements. |
 | SDL 3 | fetched, linked | zlib | Window, input, audio, timing. |
 | Vulkan-Headers | fetched, headers only | Apache-2.0 OR MIT | Vulkan API declarations. |
 | volk | fetched (at Granite's pinned commit), compiled into gt4_host | MIT | Vulkan function loader. |
@@ -62,6 +64,11 @@ Q/P pipeline latencies, the integer-branch read of the previous VI value, the sa
 instruction slots, UNPACK filling writes and V2/V3 field order, the double-buffer swap on MSCAL), PCSX2's
 interpreter (https://github.com/PCSX2/pcsx2, GPL-3.0-or-later, Copyright (c) 2002-2026 PCSX2 Dev Team) was
 consulted as a reference; no PCSX2 source is copied.
+
+**PCSX2 texture names (reference only).** `platform/gsnative/texture_name.cpp` computes a texture's name as
+PCSX2 (https://github.com/PCSX2/pcsx2, GPL-3.0-or-later, Copyright (c) 2002-2026 PCSX2 Dev Team) does for its
+texture replacements, so that packs made for it apply here. It was written from a description of PCSX2's
+`GSTextureReplacements` and `GSTextureCache` hashing; no PCSX2 source is copied.
 
 **ps2-web-recomp (MIT).** `platform/gs/vu1_ref.*`, a second VU1 interpreter used only to check
 `vu1.cpp` (`GT4_VU1_DIFF`, `GT4_VU1=ref`), is adapted from the VU micro interpreter of ps2-web-recomp

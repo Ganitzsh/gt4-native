@@ -20,6 +20,8 @@ public:
         std::string replayPath;              // --replay: a capture file instead of a live game
         bool lockstep = false;               // replay: one VBlank per host frame (deterministic captures)
         bool loop = false;                   // replay: start again at the end
+        std::string texturePack;             // a texture pack's folder (texture_pack.h); empty: none
+        bool hdTextures = true;              // its replacements on at start (setHdTextures)
         // The game's sound (stereo s16 frames at `rate` Hz), called on the worker thread as it arrives.
         std::function<void(uint32_t rate, const int16_t* frames, size_t count)> audio;
     };
@@ -43,6 +45,8 @@ public:
     void sendPad(uint32_t port, bool connected, const uint8_t data[18]);
     // Stops or restarts the game's clock (its VBlanks, alarms and timers): the in-game settings menu.
     void setPaused(bool paused);
+    // The texture pack's replacements on or off (from the next frame; nothing without a pack).
+    void setHdTextures(bool on);
     // A gameplay option of the game (runtime.h GameOption): sent when it differs from the last value sent.
     void setGameOption(uint32_t id, uint32_t value);
 

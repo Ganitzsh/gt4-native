@@ -550,6 +550,20 @@ int run(const Options& options) {
         gsOptions.replayPath = options.replay;
         gsOptions.lockstep = lockstep;
         gsOptions.loop = options.replayLoop;
+        // A texture pack (texture.pack_path, or the usual places): found once, switched with texture.hd_pack.
+        {
+            std::string exeDir, prefDir;
+            if (const char* base = SDL_GetBasePath()) exeDir = base;
+            if (char* pref = SDL_GetPrefPath("gt4-native", "host")) {
+                prefDir = pref;
+                SDL_free(pref);
+            }
+            settings.texturePackFound = gt4::gsn::TexturePack::locate(settings.texturePack, exeDir, prefDir);
+            gsOptions.texturePack = settings.texturePackFound;
+            gsOptions.hdTextures = settings.hdTextures;
+            if (settings.texturePackFound.empty() && settings.texturePack != "auto")
+                std::fprintf(stderr, "Texture pack: none in %s\n", settings.texturePack.c_str());
+        }
         // The game's sound to the default output (windowed runs: headless ones stay silent; the game
         // writes its mix to a WAV file with GT4_AUDIO_WAV). A session owns its own audio stream.
         if (options.audio && !options.headless && options.sessionDirectory.empty()) {
@@ -772,6 +786,7 @@ int run(const Options& options) {
                 const bool ok = renderer->readGsTarget(read, pixels);
                 gs->completeRead(ok, std::move(pixels));
             }
+            gs->setHdTextures(settings.hdTextures);
             if (gs->live()) {
                 gs->setPaused(menu.isOpen());
                 gs->setGameOption(0, static_cast<uint32_t>(settings.aiCatchUp));   // runtime.h kOptionAiCatchUp

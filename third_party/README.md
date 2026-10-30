@@ -19,6 +19,16 @@ compiler and the prebuilt libraries (`ffx_*.{h,cpp}`, `shaders/`, `vk/ffx_fsr2_v
 - `platform/render/ffx_compat.h` is force-included when compiling the runtime: Vulkan entry points from
   volk, and portable definitions of two MSVC CRT helpers for GCC and Clang.
 
+## stb/
+
+`stb_image.h` 2.30 (public domain or MIT) from https://github.com/nothings/stb, commit `003501f6`: decodes
+texture packs' PNG files (`platform/gsnative/texture_pack.cpp`). Unmodified.
+
+## xxhash/
+
+`xxhash.h` and `LICENSE` (BSD-2-Clause) from https://github.com/Cyan4973/xxHash, tag `v0.8.3`: the hashes
+of texture pack names (`platform/gsnative/texture_name.cpp`). Unmodified.
+
 ## smaa/
 
 SMAA (MIT-style licence, `smaa/LICENSE.txt`), from https://github.com/iryoku/smaa: `SMAA.hlsl` (included

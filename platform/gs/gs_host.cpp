@@ -37,6 +37,7 @@ public:
         stats = mode && !std::strcmp(mode, "stats");
     }
     void setEventSink(gsn::GsFrontend::EventSink sink) { native->setEventSink(std::move(sink)); }
+    gsn::GsFrontend& frontend() { return *native; }
     void gif(uint32_t path, const uint8_t* data, size_t bytes) override { native->gif(path, data, bytes); }
     void state(const gfx::StateRecord& r) override { native->applyState(r); }
     void upload(const gfx::UploadRecord& u, const uint8_t* data, size_t bytes) override { native->upload(u, data, bytes); }
@@ -439,6 +440,16 @@ std::unique_ptr<GsHost> GsHost::create(const Options& options, std::string& erro
     if (!options.gamePath.empty())
         reads = [raw](gsn::FrameList& partial, const gsn::ReadRequest& r, std::vector<uint8_t>& out) { return raw->serveRead(partial, r, out); };
     h.target = std::make_unique<NativeTarget>([raw](gsn::FrameList& list) { raw->publishNative(list); }, reads);
+    if (!options.texturePack.empty()) {
+        auto pack = std::make_shared<gsn::TexturePack>();
+        if (pack->open(options.texturePack)) {
+            std::printf("Texture pack: %zu replacements in %s\n", pack->count(), options.texturePack.c_str());
+            h.target->frontend().setTexturePack(std::move(pack));
+        } else {
+            std::fprintf(stderr, "Texture pack: no replacements in %s\n", options.texturePack.c_str());
+        }
+    }
+    h.target->frontend().setReplacements(options.hdTextures);
     h.stream = std::make_unique<ps2::GraphicsStream>(*h.target);
     if (options.audio)
         h.stream->setAudioWriter([sink = options.audio](uint32_t stream, uint32_t rate, const int16_t* frames, size_t count) {
@@ -522,6 +533,8 @@ void GsHost::setPaused(bool paused) {
     impl->link->write(GT4_REC_HOST_CMD, &command, sizeof command);
 }
 
+void GsHost::setHdTextures(bool on) { impl->target->frontend().setReplacements(on); }
+
 void GsHost::setGameOption(uint32_t id, uint32_t value) {
     if (!impl->link || !impl->link->running() || id >= 8 || impl->gameOptions[id] == value) return;
     impl->gameOptions[id] = value;
@@ -552,6 +565,10 @@ std::string GsHost::summary() const {
     out << h.vsyncs.load() << " frames displayed in " << seconds << " s, " << h.events.load() << " GS events; "
         << h.stream->describe();
     if (h.target && h.target->blankFrames) out << "; " << h.target->blankFrames << " VBlanks with no display";
+    if (h.target && h.target->frontend().stats.named) {
+        const auto& s = h.target->frontend().stats;
+        out << "; texture pack: " << s.named << " textures looked up, " << s.found << " found, " << s.replaced << " drawn replaced";
+    }
     if (h.target && (h.target->gpuReads || h.target->staleReads))
         out << "; " << h.target->gpuReads << " reads of drawn pixels from the GPU, " << h.target->staleReads << " from GS memory";
     return out.str();
