@@ -38,6 +38,7 @@ public:
     }
     void setEventSink(gsn::GsFrontend::EventSink sink) { native->setEventSink(std::move(sink)); }
     void gif(uint32_t path, const uint8_t* data, size_t bytes) override { native->gif(path, data, bytes); }
+    void state(const gfx::StateRecord& r) override { native->applyState(r); }
     void primitives(const ps2::GsPrimitives& p) override {
         if (p.setPrim) native->setPrim(p.prim);
         for (size_t k = 0; k < p.count; ++k) {
@@ -111,14 +112,14 @@ public:
                         x0 = std::min(x0, v.x); x1 = std::max(x1, v.x); y0 = std::min(y0, v.y); y1 = std::max(y1, v.y);
                         u0 = std::min(u0, v.u); u1 = std::max(u1, v.u); v0 = std::min(v0, v.v); v1 = std::max(v1, v.v);
                     }
-                    const uint64_t t0 = d.state.tex0;
-                    std::printf("[gsn all] t%u bp %X frame %llX prim %03X | tbp %llX tbw %llu psm %llX %ux%u tfx %llu cbp %llX cpsm %llX csa %llu cld %llu | src %d:%u | alpha %llX test %llX sc %llX | n %u xy %.0f,%.0f-%.0f,%.0f uv %.0f,%.0f-%.0f,%.0f rgba %08X",
-                                d.target, t ? t->bp : 0, (unsigned long long)d.state.frame, d.state.prim,
-                                (unsigned long long)(t0 & 0x3FFF), (unsigned long long)((t0 >> 14) & 0x3F), (unsigned long long)((t0 >> 20) & 0x3F),
-                                1u << ((t0 >> 26) & 0xF), 1u << ((t0 >> 30) & 0xF), (unsigned long long)((t0 >> 35) & 3),
-                                (unsigned long long)((t0 >> 37) & 0x3FFF), (unsigned long long)((t0 >> 51) & 0xF), (unsigned long long)((t0 >> 56) & 0x1F),
-                                (unsigned long long)(t0 >> 61), static_cast<int>(d.texture.kind), d.texture.id,
-                                (unsigned long long)d.state.alpha, (unsigned long long)d.state.test, (unsigned long long)d.state.scissor, d.count, x0, y0, x1, y1, u0, v0, u1, v1,
+                    const gfx::Texture& t0 = d.state.c.texture;
+                    const gfx::Context& c = d.state.c;
+                    std::printf("[gsn all] t%u bp %X fb %X/%u psm %X keep %X prim %03X | tbp %X tbw %u psm %X %ux%u tfx %u cbp %X cpsm %X csa %u cld %u | src %d:%u | blend %u%u%u%u fix %X test a%u/%u/%X/%u d%u/%u z%u/%u sc %u-%u,%u-%u | n %u xy %.0f,%.0f-%.0f,%.0f uv %.0f,%.0f-%.0f,%.0f rgba %08X",
+                                d.target, t ? t->bp : 0, c.colorBase, c.colorWidth, c.colorFormat, c.colorKeep, d.state.prim,
+                                t0.base, t0.width, t0.format, 1u << t0.log2Width, 1u << t0.log2Height, t0.function, t0.clutBase, t0.clutFormat,
+                                t0.clutOffset, t0.clutLoad, static_cast<int>(d.texture.kind), d.texture.id, c.blendA, c.blendB, c.blendC, c.blendD,
+                                c.blendFixed, c.alphaTest, c.alphaFunc, c.alphaRef, c.alphaFail, c.destTest, c.destPass, c.depthTest, c.depthFunc,
+                                c.scissorX0, c.scissorX1, c.scissorY0, c.scissorY1, d.count, x0, y0, x1, y1, u0, v0, u1, v1,
                                 d.count ? list.vertices[d.first].rgba : 0u);
                     if (d.texture.kind == gsn::TextureSource::Kind::Reinterpreted && d.texture.id < list.reinterpretations.size()) {
                         const auto& r = list.reinterpretations[d.texture.id];
@@ -135,10 +136,15 @@ public:
                 const gsn::Target* t = nullptr;
                 for (const auto& x : list.targets) if (x.id == d.target) t = &x;
                 if (!t || static_cast<long>(t->bp) != drawsAt) continue;
-                std::printf("[gsn draw] test %llX zbuf %llX frame %llX prim %03X tex0 %016llX src kind %d id %u off %d,%d clamp %llX tex1 %llX alpha %llX sc %llX, %u vertices\n", (unsigned long long)d.state.test, (unsigned long long)d.state.zbuf, (unsigned long long)d.state.frame, d.state.prim,
-                            static_cast<unsigned long long>(d.state.tex0), static_cast<int>(d.texture.kind), d.texture.id, d.texture.offsetX,
-                            d.texture.offsetY, static_cast<unsigned long long>(d.state.clamp), static_cast<unsigned long long>(d.state.tex1),
-                            static_cast<unsigned long long>(d.state.alpha), static_cast<unsigned long long>(d.state.scissor), d.count);
+                const gfx::Context& c = d.state.c;
+                std::printf("[gsn draw] a%u/%u/%X/%u d%u/%u z%u/%u zb %X/%X/%u fb %X/%u/%X keep %X prim %03X tex %X/%u/%X %ux%u cbp %X src kind %d id %u off %d,%d "
+                            "wrap %u/%u filter %u/%u/%u blend %u%u%u%u/%X sc %u-%u,%u-%u, %u vertices\n",
+                            c.alphaTest, c.alphaFunc, c.alphaRef, c.alphaFail, c.destTest, c.destPass, c.depthTest, c.depthFunc, c.depthBase,
+                            c.depthFormat, c.depthWrite, c.colorBase, c.colorWidth, c.colorFormat, c.colorKeep, d.state.prim, c.texture.base,
+                            c.texture.width, c.texture.format, 1u << c.texture.log2Width, 1u << c.texture.log2Height, c.texture.clutBase,
+                            static_cast<int>(d.texture.kind), d.texture.id, d.texture.offsetX, d.texture.offsetY, c.sampler.wrapU, c.sampler.wrapV,
+                            c.sampler.magLinear, c.sampler.minFilter, c.sampler.mipMax, c.blendA, c.blendB, c.blendC, c.blendD, c.blendFixed,
+                            c.scissorX0, c.scissorX1, c.scissorY0, c.scissorY1, d.count);
                 // GT4_GSN_VERTS=N: the first N vertices of each draw (default 6)
                 static const uint32_t verts = std::getenv("GT4_GSN_VERTS") ? std::strtoul(std::getenv("GT4_GSN_VERTS"), nullptr, 10) : 6;
                 for (uint32_t k = 0; k < std::min<uint32_t>(d.count, verts); ++k) {

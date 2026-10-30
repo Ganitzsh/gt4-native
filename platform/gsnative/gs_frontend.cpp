@@ -71,50 +71,72 @@ void carryOver(FrameList& dropped, FrameList& into) {
     dropped.retiredTextures.clear();
 }
 
-GsFrontend::GsFrontend() : pages(512), pageGeneration(512, 0) {
-    reg[PRMODECONT] = 1;
-    reg[COLCLAMP] = 1;
-}
+GsFrontend::GsFrontend() : pages(512), pageGeneration(512, 0) {}
 
 uint32_t GsFrontend::primValue() const {
-    // With PRMODECONT = 0 the attributes (everything but the type) come from PRMODE.
+    // Without attributesFromPrim (PRMODECONT = 0) the attributes (everything but the type) come from PRMODE.
     const uint64_t p = reg[PRIM];
-    if (reg[PRMODECONT] & 1) return static_cast<uint32_t>(p & 0x7FF);
+    if (shared.attributesFromPrim) return static_cast<uint32_t>(p & 0x7FF);
     return static_cast<uint32_t>((p & 7) | (reg[PRMODE] & 0x7F8));
 }
 
 DrawState GsFrontend::currentState(uint32_t prim) const {
-    const uint32_t c = (prim >> 9) & 1;
     DrawState s;
     s.prim = prim;
-    s.frame = reg[FRAME_1 + c];
-    s.zbuf = reg[ZBUF_1 + c];
-    s.tex0 = reg[TEX0_1 + c];
-    s.tex1 = reg[TEX1_1 + c];
-    s.clamp = reg[CLAMP_1 + c];
-    s.test = reg[TEST_1 + c];
-    s.alpha = reg[ALPHA_1 + c];
-    s.scissor = reg[SCISSOR_1 + c];
-    s.texa = reg[TEXA];
-    // Mipmapping: MXL levels beyond the first with a MMIN that uses them.
-    if (((s.tex1 >> 2) & 7) && ((s.tex1 >> 6) & 7) >= 2) {
-        s.miptbp1 = reg[MIPTBP1_1 + c];
-        s.miptbp2 = reg[MIPTBP2_1 + c];
+    s.c = contexts[(prim & gfx::kContext2) ? 1 : 0];
+    s.c.originX = s.c.originY = 0;
+    s.texAlpha0 = shared.texAlpha0;
+    s.texAlpha1 = shared.texAlpha1;
+    s.texBlackTransparent = shared.texBlackTransparent;
+    s.perPixelBlend = shared.perPixelBlend;
+    s.dither = shared.dither;
+    s.colorClamp = shared.colorClamp;
+    s.fogColor = shared.fogColor;
+    // Mipmapping: levels beyond the first with a minification filter that uses them.
+    gfx::Sampler& sm = s.c.sampler;
+    if (!(sm.mipMax && sm.minFilter >= 2)) {
+        for (uint32_t k = 0; k < 6; ++k) sm.mipBase[k] = sm.mipWidth[k] = 0;
     }
-    s.fba = static_cast<uint32_t>(reg[FBA_1 + c] & 1);
-    s.pabe = static_cast<uint32_t>(reg[PABE] & 1);
-    s.dthe = static_cast<uint32_t>(reg[DTHE] & 1);
-    s.colclamp = static_cast<uint32_t>(reg[COLCLAMP] & 1);
-    s.fogcol = static_cast<uint32_t>(reg[FOGCOL] & 0xFFFFFF);
     // Fields that do not matter for the draw are cleared, so that equal draws batch.
-    if (!((prim >> 4) & 1)) s.tex0 = s.tex1 = s.clamp = s.texa = s.miptbp1 = s.miptbp2 = 0;
-    if (!((prim >> 6) & 1)) s.alpha = 0;
-    if (!((prim >> 5) & 1)) s.fogcol = 0;
+    if (!(prim & gfx::kTextured)) {
+        s.c.texture = {};
+        s.c.sampler = {};
+        s.texAlpha0 = s.texAlpha1 = s.texBlackTransparent = 0;
+    }
+    if (!(prim & gfx::kBlend)) s.c.blendA = s.c.blendB = s.c.blendC = s.c.blendD = s.c.blendFixed = 0;
+    if (!(prim & gfx::kFog)) s.fogColor = 0;
     return s;
+}
+
+void GsFrontend::contextGroupSet(uint32_t context, uint32_t group) {
+    // A texture (or its palette) set: the palette is loaded when the texture says so.
+    if (group == gfx::kTexture || group == gfx::kPalette) clutWritten(contexts[context].texture);
+}
+
+void GsFrontend::applyState(const gfx::StateRecord& r) {
+    gfx::applyState(shared, contexts, r, [this](uint32_t context, uint32_t group) { contextGroupSet(context, group); });
 }
 
 void GsFrontend::write(uint32_t r, uint64_t value) {
     r &= 0x7F;
+    // Drawing state: into the native state (include/gt4/gfx.h).
+    bool isShared = false;
+    uint32_t context = 0, group = 0;
+    if (gfx::groupOfRegister(r, isShared, context, group)) {
+        if (isShared) {
+            gfx::setSharedGroup(shared, group, value);
+            return;
+        }
+        if (group == gfx::kOrigin) {   // GT4_GSN_XFER (debugging): offset changes
+            static const bool logOffsets = std::getenv("GT4_GSN_XFER") != nullptr;
+            const gfx::Context& c = contexts[context];
+            if (logOffsets && (c.originX != (value & 0xFFFF) || c.originY != ((value >> 32) & 0xFFFF)))
+                std::printf("[gsn offset] %u: %llX\n", context + 1, static_cast<unsigned long long>(value));
+        }
+        gfx::setContextGroup(contexts[context], group, value);
+        contextGroupSet(context, group);
+        return;
+    }
     switch (r) {
     case PRIM:
         reg[PRIM] = value;
@@ -137,10 +159,11 @@ void GsFrontend::write(uint32_t r, uint64_t value) {
         // GT4 moves XYOFFSET by a quarter pixel every other frame (its field jitter); drawn at a higher
         // resolution that shakes the picture, so offsets keep half-pixel steps (GT4_GSN_JITTER=keep: as is).
         static const bool keepJitter = [] { const char* e = std::getenv("GT4_GSN_JITTER"); return e && !std::strcmp(e, "keep"); }();
-        const uint64_t offset = reg[XYOFFSET_1 + ((prim >> 9) & 1)] & (keepJitter ? ~0ull : ~0x0000000700000007ull);
+        const gfx::Context& c = contexts[(prim & gfx::kContext2) ? 1 : 0];
+        const uint32_t jitter = keepJitter ? 0xFFFFu : 0xFFF8u;
         const uint32_t x = static_cast<uint32_t>(value & 0xFFFF), y = static_cast<uint32_t>((value >> 16) & 0xFFFF);
-        v.x = (static_cast<float>(x) - static_cast<float>(offset & 0xFFFF)) / 16.0f;
-        v.y = (static_cast<float>(y) - static_cast<float>((offset >> 32) & 0xFFFF)) / 16.0f;
+        v.x = (static_cast<float>(x) - static_cast<float>(c.originX & jitter)) / 16.0f;
+        v.y = (static_cast<float>(y) - static_cast<float>(c.originY & jitter)) / 16.0f;
         const bool f = r == XYZF2 || r == XYZF3;
         v.z = f ? static_cast<uint32_t>((value >> 32) & 0xFFFFFF) : static_cast<uint32_t>(value >> 32);
         v.fog = f ? static_cast<uint32_t>(value >> 56) : static_cast<uint32_t>(reg[FOG] >> 56);
@@ -151,18 +174,6 @@ void GsFrontend::write(uint32_t r, uint64_t value) {
         v.u = static_cast<float>(reg[UV] & 0x3FFF) / 16.0f;
         v.v = static_cast<float>((reg[UV] >> 16) & 0x3FFF) / 16.0f;
         kick(r == XYZF2 || r == XYZ2);
-        return;
-    }
-    case TEX0_1: case TEX0_2:
-        reg[r] = value;
-        clutWritten(value);
-        return;
-    case TEX2_1: case TEX2_2: {
-        // TEX2: PSM and the CLUT fields of TEX0.
-        const uint64_t mask = (0x3Full << 20) | (~0ull << 37);
-        uint64_t& tex0 = reg[TEX0_1 + (r - TEX2_1)];
-        tex0 = (tex0 & ~mask) | (value & mask);
-        clutWritten(tex0);
         return;
     }
     case TRXDIR:
@@ -177,33 +188,28 @@ void GsFrontend::write(uint32_t r, uint64_t value) {
         if (events) events(r == FINISH ? 0 : r == SIGNAL ? 1 : 2, value);
         return;
     default:
-        if (r == XYOFFSET_1 || r == XYOFFSET_2) {   // GT4_GSN_XFER (debugging): offset changes
-            static const bool logOffsets = std::getenv("GT4_GSN_XFER") != nullptr;
-            if (logOffsets && reg[r] != value)
-                std::printf("[gsn offset] %u: %llX\n", r - XYOFFSET_1 + 1, static_cast<unsigned long long>(value));
-        }
         reg[r] = value;
         return;
     }
 }
 
-// A TEX0/TEX2 write. A CLUT loaded from a page a 32-bit target owns holds what was drawn there, which only
-// the GPU has: the reinterpretations of draws with this TEX0 read their palette from that target.
-void GsFrontend::clutWritten(uint64_t tex0) {
-    const GsMemory::Tex0 t = GsMemory::Tex0::decode(tex0);
+// A texture (or its palette) set. A CLUT loaded from a page a 32-bit target owns holds what was drawn there,
+// which only the GPU has: the reinterpretations of draws with this palette read it from that target.
+void GsFrontend::clutWritten(const gfx::Texture& texture) {
+    const GsMemory::Tex0 t = GsMemory::Tex0::of(texture);
     if (!mem.tex0Written(t)) return;
     static const bool logLoads = std::getenv("GT4_GSN_XFER") != nullptr;
     if (logLoads) {
         const uint16_t* c = reinterpret_cast<const uint16_t*>(mem.clutBuffer());
-        std::printf("[gsn clut] packet %u tex0 %016llX cbp %X cpsm %X csm %u csa %u psm %X, entry 64 %04X%04X\n", packetsThisFrame - 1,
-                    static_cast<unsigned long long>(tex0), t.cbp, t.cpsm, t.csm, t.csa, t.psm, c[256 + 64], c[64]);
+        std::printf("[gsn clut] packet %u tbp %X cbp %X cpsm %X csm %u csa %u psm %X cld %u, entry 64 %04X%04X\n", packetsThisFrame - 1,
+                    t.tbp, t.cbp, t.cpsm, t.csm, t.csa, t.psm, t.cld, c[256 + 64], c[64]);
     }
     clutSource = {};
     const PageOwner& page = pages[(t.cbp / 32) & 511];
     if (!page.target || (t.cpsm != PSMCT32 && t.cpsm != PSMCT24)) return;
     const Target& c = targets[page.target - 1];
     if (c.depth || !layout32(c.psm)) return;
-    clutSource = {page.target, tex0 & kClutFields};
+    clutSource = {page.target, texture};
 }
 
 void GsFrontend::transferStarted(uint32_t dir) {
@@ -435,11 +441,11 @@ void GsFrontend::emit(const Vertex* v, uint32_t n, Topology topology) {
         y0 = std::min(y0, out[k].y);
         y1 = std::max(y1, out[k].y);
     }
-    const uint32_t scissorX0 = static_cast<uint32_t>(s.scissor & 0x7FF), scissorX1 = static_cast<uint32_t>((s.scissor >> 16) & 0x7FF);
+    const uint32_t scissorX0 = s.c.scissorX0, scissorX1 = s.c.scissorX1;
     const uint32_t left = static_cast<uint32_t>(std::clamp(x0, static_cast<float>(scissorX0), static_cast<float>(scissorX1)));
     // The last pixel covered: an edge on a pixel boundary covers the pixel before it.
     const uint32_t right = static_cast<uint32_t>(std::clamp(std::max(x0, std::ceil(x1) - 1.0f), static_cast<float>(scissorX0), static_cast<float>(scissorX1)));
-    const uint32_t scissorY0 = static_cast<uint32_t>((s.scissor >> 32) & 0x7FF), scissorY1 = static_cast<uint32_t>((s.scissor >> 48) & 0x7FF);
+    const uint32_t scissorY0 = s.c.scissorY0, scissorY1 = s.c.scissorY1;
     const uint32_t top = static_cast<uint32_t>(std::clamp(y0, static_cast<float>(scissorY0), static_cast<float>(scissorY1)));
     const uint32_t bottom = static_cast<uint32_t>(std::clamp(std::max(y0, std::ceil(y1) - 1.0f), static_cast<float>(scissorY0), static_cast<float>(scissorY1)));
     // A triangle whose bounds hold no GS pixel inside the scissor draws nothing on the GS (pixel k is covered
@@ -451,17 +457,13 @@ void GsFrontend::emit(const Vertex* v, uint32_t n, Topology topology) {
         (std::max(std::ceil(x0), static_cast<float>(scissorX0)) > std::min(std::ceil(x1) - 1.0f, static_cast<float>(scissorX1)) ||
          std::max(std::ceil(y0), static_cast<float>(scissorY0)) > std::min(std::ceil(y1) - 1.0f, static_cast<float>(scissorY1))))
         return;
-    const uint32_t width = static_cast<uint32_t>((s.frame >> 16) & 0x3F);
-    const uint32_t colour = targetFor(s.frame, false, scissorY1 + 1, width);
-    const bool zte = (s.test >> 16) & 1;
-    const uint32_t depth = zte ? targetFor(s.zbuf, true, scissorY1 + 1, width) : 0;
+    const uint32_t width = s.c.colorWidth;
+    const uint32_t colour = targetFor(s.c.colorBase, s.c.colorFormat, false, scissorY1 + 1, width);
+    const bool zte = s.c.depthTest;
+    const uint32_t depth = zte ? targetFor(s.c.depthBase, s.c.depthFormat, true, scissorY1 + 1, width) : 0;
     if (!colour || (zte && !depth)) return;   // past the target limit
-    const uint32_t fbmsk = static_cast<uint32_t>(s.frame >> 32);
-    if (fbmsk != 0xFFFFFFFFu) markWritten(colour, static_cast<uint32_t>(s.frame & 0x1FF) * 32, static_cast<uint32_t>((s.frame >> 16) & 0x3F),
-                                          static_cast<uint32_t>((s.frame >> 24) & 0x3F), left, right, top, bottom);
-    if (depth && !((s.zbuf >> 32) & 1))
-        markWritten(depth, static_cast<uint32_t>(s.zbuf & 0x1FF) * 32, static_cast<uint32_t>((s.frame >> 16) & 0x3F),
-                    static_cast<uint32_t>(((s.zbuf >> 24) & 0xF) | 0x30), left, right, top, bottom);
+    if (s.c.colorKeep != 0xFFFFFFFFu) markWritten(colour, s.c.colorBase, width, s.c.colorFormat, left, right, top, bottom);
+    if (depth && s.c.depthWrite) markWritten(depth, s.c.depthBase, width, s.c.depthFormat, left, right, top, bottom);
     const TextureSource texture = ((prim >> 4) & 1) ? textureFor(s) : TextureSource{};
     // Batch with the previous draw when nothing changed.
     if (!frame.commands.empty() && frame.commands.back().kind == FrameList::Command::Kind::Draw) {
@@ -488,9 +490,7 @@ void GsFrontend::emit(const Vertex* v, uint32_t n, Topology topology) {
     ++stats.draws;
 }
 
-uint32_t GsFrontend::targetFor(uint64_t frameReg, bool depth, uint32_t heightNeeded, uint32_t bw) {
-    const uint32_t bp = static_cast<uint32_t>(frameReg & 0x1FF) * 32;
-    const uint32_t psm = depth ? static_cast<uint32_t>(((frameReg >> 24) & 0xF) | 0x30) : static_cast<uint32_t>((frameReg >> 24) & 0x3F);
+uint32_t GsFrontend::targetFor(uint32_t bp, uint32_t psm, bool depth, uint32_t heightNeeded, uint32_t bw) {
     const bool wide = !depth && layout32(psm);
     for (Target& t : targets) {
         if (t.depth != depth || t.bp != bp) continue;
@@ -551,8 +551,14 @@ void GsFrontend::markWritten(uint32_t targetId, uint32_t bp, uint32_t bw, uint32
     targetWritten[targetId] = serial;
 }
 
+namespace {
+bool sameTexAlpha(const Reinterpretation& a, const Reinterpretation& b) {
+    return a.texAlpha0 == b.texAlpha0 && a.texAlpha1 == b.texAlpha1 && a.texBlackTransparent == b.texBlackTransparent;
+}
+}  // namespace
+
 TextureSource GsFrontend::textureFor(const DrawState& s) {
-    const GsMemory::Tex0 t = GsMemory::Tex0::decode(s.tex0);
+    const GsMemory::Tex0 t = GsMemory::Tex0::of(s.c.texture);
     const uint32_t w = 1u << std::min<uint32_t>(t.tw, 10), h = 1u << std::min<uint32_t>(t.th, 10);
     uint32_t pw, ph;
     pageSize(t.psm, pw, ph);
@@ -617,12 +623,14 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
             r.targetBp = target.bp;
             r.targetBw = target.bw;
             r.targetPsm = target.psm;
-            r.tex0 = s.tex0;
-            r.texa = s.texa;
+            r.texture = s.c.texture;
+            r.texAlpha0 = s.texAlpha0;
+            r.texAlpha1 = s.texAlpha1;
+            r.texBlackTransparent = s.texBlackTransparent;
             r.width = w;
             r.height = h;
             std::memcpy(r.clut.data(), mem.clutBuffer(), r.clut.size());
-            if (clutSource.target && clutSource.tex0 == (s.tex0 & kClutFields)) {
+            if (clutSource.target && samePalette(clutSource.texture, s.c.texture)) {
                 const Target& c = targets[clutSource.target - 1];
                 r.clutTarget = c.id;
                 r.clutTargetBp = c.bp;
@@ -634,7 +642,7 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
             if (last.index < frame.reinterpretations.size()) {
                 const Reinterpretation& p = frame.reinterpretations[last.index];
                 const uint64_t written = owner < targetWritten.size() ? targetWritten[owner] : 0;
-                if (p.target == r.target && p.tex0 == r.tex0 && p.texa == r.texa && p.clut == r.clut && p.clutTarget == r.clutTarget &&
+                if (p.target == r.target && p.texture == r.texture && sameTexAlpha(p, r) && p.clut == r.clut && p.clutTarget == r.clutTarget &&
                     written <= last.serial && (!r.clutTarget || r.clutTarget >= targetWritten.size() || targetWritten[r.clutTarget] <= last.serial)) {
                     src.id = last.index;
                     return src;
@@ -651,11 +659,13 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
     }
     const bool indexed = t.psm == PSMT8 || t.psm == PSMT4 || t.psm == PSMT8H || t.psm == PSMT4HL || t.psm == PSMT4HH;
     // Indices in memory, palette drawn on the GPU (GT4 writes its colour-graded pixels back this way).
-    if (indexed && clutSource.target && clutSource.tex0 == (s.tex0 & kClutFields)) {
+    if (indexed && clutSource.target && samePalette(clutSource.texture, s.c.texture)) {
         const Target& c = targets[clutSource.target - 1];
         Reinterpretation r;
-        r.tex0 = s.tex0;
-        r.texa = s.texa;
+        r.texture = s.c.texture;
+        r.texAlpha0 = s.texAlpha0;
+        r.texAlpha1 = s.texAlpha1;
+        r.texBlackTransparent = s.texBlackTransparent;
         r.width = w;
         r.height = h;
         r.indices.resize(size_t(w) * h);
@@ -671,7 +681,7 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
         if (last.index < frame.reinterpretations.size()) {
             const Reinterpretation& p = frame.reinterpretations[last.index];
             const uint64_t written = c.id < targetWritten.size() ? targetWritten[c.id] : 0;
-            if (!p.target && p.tex0 == r.tex0 && p.texa == r.texa && p.clutTarget == r.clutTarget && written <= last.serial &&
+            if (!p.target && p.texture == r.texture && sameTexAlpha(p, r) && p.clutTarget == r.clutTarget && written <= last.serial &&
                 uploads == last.uploads) {
                 src.id = last.index;
                 return src;
@@ -691,22 +701,23 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
     std::array<Level, 7> levels{};
     levels[0] = {t.tbp, t.tbw, w, h};
     uint32_t levelCount = 1;
-    if (s.miptbp1 || s.miptbp2 || ((s.tex1 >> 9) & 1)) {
-        const uint32_t mxl = std::min<uint32_t>((s.tex1 >> 2) & 7, 6);
+    const gfx::Sampler& sm = s.c.sampler;
+    bool mipLevels = sm.mipAuto;
+    for (uint32_t k = 0; k < 6; ++k) mipLevels = mipLevels || sm.mipBase[k] || sm.mipWidth[k];
+    if (mipLevels) {
+        const uint32_t mxl = std::min<uint32_t>(sm.mipMax, 6);
         for (uint32_t i = 1; i <= mxl; ++i) {
             const Level& prev = levels[i - 1];
             if (prev.w == 1 && prev.h == 1) break;
             Level& l = levels[i];
             l.w = std::max<uint32_t>(prev.w / 2, 1);
             l.h = std::max<uint32_t>(prev.h / 2, 1);
-            if (((s.tex1 >> 9) & 1) && i <= 3) {   // MTBA
+            if (sm.mipAuto && i <= 3) {   // MTBA
                 l.tbp = prev.tbp + prev.w * prev.h * psmBits(t.psm) / 8 / 256;
                 l.tbw = std::max<uint32_t>(prev.tbw / 2, 1);
             } else {
-                const uint64_t m = i <= 3 ? s.miptbp1 : s.miptbp2;
-                const uint32_t k = (i - 1) % 3;
-                l.tbp = static_cast<uint32_t>((m >> (20 * k)) & 0x3FFF);
-                l.tbw = static_cast<uint32_t>((m >> (20 * k + 14)) & 0x3F);
+                l.tbp = sm.mipBase[i - 1];
+                l.tbw = sm.mipWidth[i - 1];
             }
             const uint32_t lrows = (l.h + ph - 1) / ph, lperRow = std::max<uint32_t>(1, (t.psm == PSMT8 || t.psm == PSMT4) ? l.tbw / 2 : l.tbw);
             for (uint32_t py = 0; py < lrows; ++py)
@@ -730,7 +741,7 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
         }
         key = mix(key, clutHash);   // one texture per palette: GT4 draws one index image with several
     } else if (t.psm != PSMCT32) {
-        key = mix(key, s.texa);
+        key = mix(key, uint64_t(s.texAlpha0) | (uint64_t(s.texBlackTransparent) << 15) | (uint64_t(s.texAlpha1) << 32));
     }
     // Garbage TEX0 registers decode a texture per draw; a frame keeps to a sane number (and GPU memory).
     constexpr size_t kMaxDecodesPerFrame = 768;
@@ -763,9 +774,9 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
         for (uint32_t i = 0; i < levelCount; ++i) texels += size_t(levels[i].w) * levels[i].h;
         image.pixels.resize(texels);
         Texa texa;
-        texa.ta0 = static_cast<uint8_t>(s.texa & 0xFF);
-        texa.aem = (s.texa >> 15) & 1;
-        texa.ta1 = static_cast<uint8_t>((s.texa >> 32) & 0xFF);
+        texa.ta0 = s.texAlpha0;
+        texa.aem = s.texBlackTransparent;
+        texa.ta1 = s.texAlpha1;
         size_t at = 0;
         for (uint32_t i = 0; i < levelCount; ++i) {
             GsMemory::Tex0 lt = t;

@@ -2,6 +2,7 @@
 #include "stream.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -26,6 +27,7 @@ GraphicsStream::GraphicsStream(GsTarget& target) : gs(target) {
     vif1.setGifSink(&sink);
     vif1.onPath3Mask = [this](bool masked) { if (!masked) releasePath3(); };
     vif1.onBatch = [this](const Batch3d& batch) { runBatch(batch); };
+    vif1.onRecords = [this](const uint8_t* data, size_t bytes) { records(data, bytes); };
 #if GT4_VU1_INTERPRETER
     if (Vu1Reference::wanted()) reference = std::make_unique<Reference>(vif1);
 #endif
@@ -43,6 +45,36 @@ GraphicsStream::GraphicsStream(GsTarget& target) : gs(target) {
 }
 
 GraphicsStream::~GraphicsStream() = default;
+
+// Native records (include/gt4/gfx.h): headers and payloads, each padded to 16 bytes.
+void GraphicsStream::records(const uint8_t* data, size_t bytes) {
+    size_t at = 0;
+    while (at + sizeof(gfx::Header) <= bytes) {
+        gfx::Header h;
+        std::memcpy(&h, data + at, sizeof h);
+        const uint8_t* payload = data + at + sizeof h;
+        if (at + sizeof h + h.bytes > bytes) {
+            vif1.lastWarning = "a native record past the end of its block";
+            ++counters.badRecords;
+            return;
+        }
+        switch (h.type) {
+        case gfx::kNop: break;
+        case gfx::kState:
+            if (h.bytes >= sizeof(gfx::StateRecord)) {
+                gfx::StateRecord r;
+                std::memcpy(&r, payload, sizeof r);
+                applyNative(r);
+            } else {
+                ++counters.badRecords;
+            }
+            break;
+        default: ++counters.badRecords; break;
+        }
+        ++counters.gfxRecords;
+        at += size_t(gfx::recordQwords(h.bytes)) * 16;
+    }
+}
 
 // A batch for GT4's 3D renderers (VIF1 MSCAL).
 void GraphicsStream::runBatch(const Batch3d& batch) {
@@ -209,7 +241,7 @@ struct StateReader {
     uint64_t u64() { uint64_t v; bytes(&v, 8); return v; }
 };
 constexpr uint32_t kStateMagic = 0x53345447;   // "GT4S"
-constexpr uint32_t kStateVersion = 2;   // 1: VU1 memories and registers instead of the batch buffers
+constexpr uint32_t kStateVersion = 3;   // 1: VU1 memories and registers instead of the batch buffers; 2: no native state
 constexpr size_t kVramBytes = 4u << 20;
 }  // namespace
 
@@ -233,6 +265,7 @@ std::vector<uint8_t> GraphicsStream::saveState(const uint8_t* vram) const {
     w.bytes(gsRegsSet, sizeof gsRegsSet);
     w.bytes(gsRegs, sizeof gsRegs);
     w.u32(packedQ);
+    for (const gfx::StateRecord& state : nativeState()) w.bytes(&state, sizeof state);
     w.bytes(vram, kVramBytes);
     return out;
 }
@@ -240,7 +273,7 @@ std::vector<uint8_t> GraphicsStream::saveState(const uint8_t* vram) const {
 void GraphicsStream::restoreState(const uint8_t* payload, size_t size) {
     StateReader r{payload, size};
     const uint32_t magic = r.u32(), version = r.u32();
-    if (magic != kStateMagic || (version != 1 && version != kStateVersion)) {
+    if (magic != kStateMagic || version < 1 || version > kStateVersion) {
         std::fprintf(stderr, "Replay: a saved state of an unknown version (ignored)\n");
         return;
     }
@@ -299,6 +332,9 @@ void GraphicsStream::restoreState(const uint8_t* payload, size_t size) {
     r.bytes(regsSet, sizeof regsSet);
     r.bytes(regs, sizeof regs);
     packedQ = r.u32();
+    std::array<gfx::StateRecord, 2> native{};
+    if (version >= 3)
+        for (gfx::StateRecord& state : native) r.bytes(&state, sizeof state);
     if (!r.ok || r.left < kVramBytes) {
         std::fprintf(stderr, "Replay: a truncated saved state (ignored)\n");
         return;
@@ -317,12 +353,34 @@ void GraphicsStream::restoreState(const uint8_t* payload, size_t size) {
     for (uint32_t reg = 0; reg < kGsRegs; ++reg) {
         if (!(regsSet[reg >> 6] >> (reg & 63) & 1)) continue;
         if (reg == 0x04 || reg == 0x05 || reg == 0x0C || reg == 0x0D || reg == 0x53 || reg == 0x54 || reg >= 0x60) continue;
+        bool isShared = false;
+        uint32_t context = 0, group = 0;
+        if (version >= 3 && gfx::groupOfRegister(reg, isShared, context, group)) continue;   // the native state below
         packet.push_back(regs[reg]);
         packet.push_back(reg);
     }
     const uint64_t count = (packet.size() - 2) / 2;
     packet[0] = count | 1ull << 15 | 1ull << 60;   // NLOOP, EOP, PACKED with one register (A+D)
     sendGif(2, reinterpret_cast<const uint8_t*>(packet.data()), packet.size() * 8);
+    if (version >= 3)
+        for (const gfx::StateRecord& state : native) applyNative(state);
+}
+
+// The native drawing state as two state records (every group, of context 1 and of context 2).
+std::array<gfx::StateRecord, 2> GraphicsStream::nativeState() const {
+    std::array<gfx::StateRecord, 2> out{};
+    for (uint32_t k = 0; k < 2; ++k) {
+        out[k].sharedGroups = k ? 0 : (1u << gfx::kSharedGroups) - 1;
+        out[k].contextGroups = ((1u << gfx::kContextGroups) - 1) << (16 * k);
+        out[k].shared = nativeShared;
+        out[k].context = nativeContexts[k];
+    }
+    return out;
+}
+
+void GraphicsStream::applyNative(const gfx::StateRecord& r) {
+    gfx::applyState(nativeShared, nativeContexts, r, [](uint32_t, uint32_t) {});
+    gs.state(r);
 }
 
 void GraphicsStream::releasePath3() {

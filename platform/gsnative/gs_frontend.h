@@ -6,6 +6,7 @@
 // target drawn earlier (the pages it last wrote) or GS memory, decoded once per content. The back end
 // (Vulkan) only executes the list. See docs/NATIVE_RENDERER.md.
 #include "gs_memory.h"
+#include "gt4/gfx.h"
 
 #include <array>
 #include <cstdint>
@@ -28,14 +29,24 @@ struct Vertex {
     float minU = 1, minV = 1, maxU = 0, maxV = 0;
 };
 
-// The registers a draw's result depends on, for the context it uses.
+// What a draw's result depends on: its primitive attributes, the state of the context it uses (include/gt4/
+// gfx.h; fields that do not matter for it are cleared, so that equal draws batch) and the shared state.
 struct DrawState {
-    uint32_t prim = 0;   // TYPE (low 3 bits), IIP, TME, FGE, ABE, AA1, FST, CTXT, FIX as in PRIM
-    uint64_t frame = 0, zbuf = 0, tex0 = 0, tex1 = 0, clamp = 0, test = 0, alpha = 0, scissor = 0, texa = 0;
-    uint64_t miptbp1 = 0, miptbp2 = 0;   // mipmap levels 1-3 and 4-6, when TEX1 mipmaps
-    uint32_t fba = 0, pabe = 0, dthe = 0, colclamp = 1, fogcol = 0;
+    uint32_t prim = 0;   // gfx::PrimFlags: type, Gouraud, textured, fog, blend, antialiased, texel coordinates, context 2
+    gfx::Context c;      // the origin cleared (the vertices are in window pixels); the texture and sampler when untextured,
+                         // the blend when unblended, the mipmap levels when it does not mipmap
+    uint8_t texAlpha0 = 0, texAlpha1 = 0, texBlackTransparent = 0;   // when textured
+    uint8_t perPixelBlend = 0, dither = 0, colorClamp = 1;
+    uint32_t fogColor = 0;   // when fogged
     bool operator==(const DrawState&) const = default;
 };
+
+// The palette fields of a texture (format, palette base, format, storage, offset): what a loaded palette
+// is kept against.
+inline bool samePalette(const gfx::Texture& a, const gfx::Texture& b) {
+    return a.format == b.format && a.clutBase == b.clutBase && a.clutFormat == b.clutFormat && a.clutStorage == b.clutStorage &&
+           a.clutOffset == b.clutOffset;
+}
 
 enum class Topology : uint8_t { Points, Lines, Triangles };
 
@@ -73,7 +84,8 @@ struct TextureImage {
 struct Reinterpretation {
     uint32_t target = 0, targetBp = 0, targetBw = 0, targetPsm = 0;
     std::vector<uint8_t> indices;
-    uint64_t tex0 = 0, texa = 0;
+    gfx::Texture texture;
+    uint8_t texAlpha0 = 0, texAlpha1 = 0, texBlackTransparent = 0;
     uint32_t width = 0, height = 0;
     std::array<uint8_t, 1024> clut{};
     // When the CLUT was loaded from a 32-bit target (GT4 renders palettes and then uses them): that target,
@@ -174,11 +186,20 @@ public:
         uint64_t reads = 0, readsFromTargets = 0;   // LOCAL -> HOST transfers; those with drawn pages
     } stats;
 
+    // The state groups of include/gt4/gfx.h: a state record from the game (the shared groups, then the
+    // context groups of both contexts in bit order, from one source context).
+    void applyState(const gfx::StateRecord& r);
+
 private:
     GsMemory mem;
     FrameList frame;
+    // The drawing state, natively (state records and the GS registers of GIF packets both set it), and the
+    // registers of GIF packets that are not drawing state (vertices, transfers).
+    gfx::Context contexts[2];
+    gfx::Shared shared;
     std::array<uint64_t, 128> reg{};
     uint64_t priv[0x100]{};
+    void contextGroupSet(uint32_t context, uint32_t group);   // a group's side effects (palette loads)
 
     // Vertex queue of the current primitive.
     std::array<Vertex, 3> queue;
@@ -221,13 +242,12 @@ private:
         uint64_t serial = 0, uploads = 0;
     } lastReinterpretation, lastMemoryReinterpretation;
     uint64_t uploads = 0;   // pages written by transfers, ever
-    // The target the CLUT buffer was last loaded from (0: memory), and the TEX0 fields of that load.
-    static constexpr uint64_t kClutFields = (0x3Full << 20) | (0xFFFFFFull << 37);
+    // The target the CLUT buffer was last loaded from (0: memory), and the texture of that load (samePalette).
     struct ClutSource {
         uint32_t target = 0;
-        uint64_t tex0 = 0;
+        gfx::Texture texture;
     } clutSource;
-    void clutWritten(uint64_t tex0);
+    void clutWritten(const gfx::Texture& texture);
 
     // Decoded textures, by what they were decoded from.
     struct Cached {
@@ -247,7 +267,7 @@ private:
     void emit(const Vertex* v, uint32_t n, Topology topology);
     DrawState currentState(uint32_t prim) const;
     uint32_t primValue() const;
-    uint32_t targetFor(uint64_t frameReg, bool depth, uint32_t heightNeeded, uint32_t bw);
+    uint32_t targetFor(uint32_t bp, uint32_t psm, bool depth, uint32_t heightNeeded, uint32_t bw);
     void markWritten(uint32_t targetId, uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x0, uint32_t x1, uint32_t y0, uint32_t y1);
     TextureSource textureFor(const DrawState& s);
     void transferStarted(uint32_t dir);

@@ -52,6 +52,8 @@ public:
     std::function<void(const Batch3d& batch)> onBatch;
     // Called when MSKPATH3 changes the PATH3 mask (the stream holds PATH3 packets while it is set).
     std::function<void(bool masked)> onPath3Mask;
+    // Native records the game placed in the stream (include/gt4/gfx.h kStreamCode): whole qwords of them.
+    std::function<void(const uint8_t* records, size_t bytes)> onRecords;
     // Feeds stream words (the byte count is rounded down to whole words).
     void feed(const uint8_t* bytes, size_t size);
     void reset();
@@ -77,7 +79,7 @@ public:
     uint32_t continueAt = 0;          // where MSCNT goes on: the end of the last renderer (set by the caller)
 
     struct Stats {
-        uint64_t codes = 0, unpacks = 0, microprograms = 0, directQwords = 0, mpgInstructions = 0;
+        uint64_t codes = 0, unpacks = 0, microprograms = 0, directQwords = 0, mpgInstructions = 0, recordQwords = 0;
         uint64_t unknownCodes = 0;
         uint64_t outsideBatch = 0;      // unpacked qwords outside both batch buffers (dropped)
         uint64_t absoluteUnpacks = 0;   // UNPACK without FLG (placed by address in a buffer)

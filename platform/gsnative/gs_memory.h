@@ -4,6 +4,8 @@
 // front end keeps it current with the game's uploads, so textures can be decoded the way the GS reads them
 // (GT4 uploads textures as 32-bit blocks and reads them as 4- and 8-bit indices). Checked against
 // paraLLEl-GS's memory after the same transfers (tests/gs_native.cpp).
+#include "gt4/gfx.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -69,6 +71,10 @@ public:
         uint32_t tbp = 0, tbw = 0, psm = 0, tw = 0, th = 0, tcc = 0, tfx = 0;
         uint32_t cbp = 0, cpsm = 0, csm = 0, csa = 0, cld = 0;
         static Tex0 decode(uint64_t v);
+        static Tex0 of(const gfx::Texture& t) {
+            return {t.base, t.width, t.format, t.log2Width, t.log2Height, t.useAlpha, t.function,
+                    t.clutBase, t.clutFormat, t.clutStorage, t.clutOffset, t.clutLoad};
+        }
     };
     // A TEX0 (or TEX2) write: loads the CLUT buffer when CLD says so (CBP0/CBP1 kept for CLD 4 and 5).
     // True when it loaded.

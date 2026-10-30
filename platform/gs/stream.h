@@ -3,10 +3,12 @@
 // back end, with VIF1 and GT4's 3D renderers in between. Used both for the live link and for --replay
 // captures, which are the same records concatenated. No GPU code here.
 #include "gs_primitives.h"
+#include "gt4/gfx.h"
 #include "gt4/link/protocol.h"
 #include "renderers3d.h"
 #include "vif1.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -22,6 +24,8 @@ public:
     // Primitives from GT4's 3D renderers (VU1's path on the PS2), in order with the GIF packets.
     virtual void primitives(const GsPrimitives& p) { (void)p; }
     virtual void privileged(uint32_t offset, uint64_t value) = 0;
+    // Native drawing state from the game (include/gt4/gfx.h), in order with the packets.
+    virtual void state(const gfx::StateRecord& r) { (void)r; }
     // A VBlank: present the displayed frame. `field` is CSR.FIELD, `count` the game's VBlank counter.
     virtual void vsync(uint32_t field, uint32_t count) = 0;
     // GS -> EE transfer data (after TRXDIR = 1), `qwc` qwords into `out`.
@@ -56,6 +60,7 @@ public:
         uint64_t primitiveRuns = 0, primitiveVertices = 0;   // from the 3D renderers
         uint64_t unknownPrograms = 0;   // batches started in a program image that is not GT4's (nothing drawn)
         uint64_t path3Held = 0, path3ForcedAtVsync = 0;   // PATH3 records held by MSKPATH3
+        uint64_t gfxRecords = 0, badRecords = 0;   // native records in the VIF1 stream (include/gt4/gfx.h)
     };
     const Stats& stats() const { return counters; }
     const Vif1::Stats& vifStats() const { return vif1.stats; }
@@ -90,6 +95,12 @@ private:
         void primitives(const GsPrimitives& p) override { owner->sendPrimitives(p); }
     };
     void runBatch(const Batch3d& batch);
+    void records(const uint8_t* data, size_t bytes);
+    // The native drawing state, as state records and GIF packets set it (for saveState).
+    gfx::Shared nativeShared;
+    gfx::Context nativeContexts[2];
+    std::array<gfx::StateRecord, 2> nativeState() const;
+    void applyNative(const gfx::StateRecord& r);
     void sendPrimitives(const GsPrimitives& p);
     // Every GIF packet goes to the GS through this (GT4_VRAM_DUMP counts them).
     void sendGif(uint32_t path, const uint8_t* data, size_t bytes);
@@ -136,6 +147,12 @@ private:
         if (reg >= kGsRegs) return;
         gsRegs[reg] = value;
         gsRegsSet[reg >> 6] |= 1ull << (reg & 63);
+        bool isShared = false;
+        uint32_t context = 0, group = 0;
+        if (gfx::groupOfRegister(reg, isShared, context, group)) {
+            if (isShared) gfx::setSharedGroup(nativeShared, group, value);
+            else gfx::setContextGroup(nativeContexts[context], group, value);
+        }
     }
 };
 

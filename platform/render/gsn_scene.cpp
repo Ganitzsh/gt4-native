@@ -630,12 +630,12 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
                 uint32_t targetBp, targetBw, targetHeight, scaleX, tbp, tbw, psm, width, height, cpsm, csa, texa;
                 uint32_t clutTargetBp, clutBw, clutHeight, cbp;
                 uint32_t indexStart, scaleY, pad[2];
-            } k{r.targetBp, source ? r.targetBw : 0, source ? source->height : 0, sx, static_cast<uint32_t>(r.tex0 & 0x3FFF),
-                static_cast<uint32_t>((r.tex0 >> 14) & 0x3F), static_cast<uint32_t>((r.tex0 >> 20) & 0x3F), r.width, r.height,
-                static_cast<uint32_t>((r.tex0 >> 51) & 0xF), static_cast<uint32_t>((r.tex0 >> 56) & 0x1F),
-                static_cast<uint32_t>(r.texa & 0xFF) | (static_cast<uint32_t>((r.texa >> 32) & 0xFF) << 8) | (static_cast<uint32_t>((r.texa >> 15) & 1) << 16),
+            } k{r.targetBp, source ? r.targetBw : 0, source ? source->height : 0, sx, r.texture.base,
+                r.texture.width, r.texture.format, r.width, r.height,
+                r.texture.clutFormat, r.texture.clutOffset,
+                r.texAlpha0 | (static_cast<uint32_t>(r.texAlpha1) << 8) | (static_cast<uint32_t>(r.texBlackTransparent) << 16),
                 palette ? r.clutTargetBp : 0, palette ? r.clutTargetBw : 0, palette ? palette->height : 0,
-                static_cast<uint32_t>((r.tex0 >> 37) & 0x3FFF), source ? 0 : indexStart[i], sy, {}};
+                r.texture.clutBase, source ? 0 : indexStart[i], sy, {}};
             const VkImageView fallback = source ? source->image.view : palette ? palette->image.view : blank.view;
             vk::Descriptors()
                 .sampled(0, fallback, samplers[0])
@@ -677,18 +677,18 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         if ((prim >> 4) & 1) {
             k.flags |= kTextured;
             if ((prim >> 8) & 1) k.flags |= kUv;
-            const uint32_t tw = (s.tex0 >> 26) & 0xF, th = (s.tex0 >> 30) & 0xF;
+            const gfx::Texture& tx = s.c.texture;
+            const gfx::Sampler& sm = s.c.sampler;
+            const uint32_t tw = tx.log2Width, th = tx.log2Height;
             k.textureSize[0] = static_cast<float>(1u << std::min(tw, 10u));
             k.textureSize[1] = static_cast<float>(1u << std::min(th, 10u));
-            const bool linear = (s.tex1 >> 5) & 1;
-            const bool repeat = (s.clamp & 3) == 0;
+            const bool linear = sm.magLinear;
+            const bool repeat = sm.wrapU == 0;
             if (!linear) k.flags |= kNearest;
-            k.clampU = static_cast<uint32_t>(s.clamp & 3) | (static_cast<uint32_t>((s.clamp >> 4) & 0x3FF) << 2) |
-                       (static_cast<uint32_t>((s.clamp >> 14) & 0x3FF) << 12);
-            k.clampV = static_cast<uint32_t>((s.clamp >> 2) & 3) | (static_cast<uint32_t>((s.clamp >> 24) & 0x3FF) << 2) |
-                       (static_cast<uint32_t>((s.clamp >> 34) & 0x3FF) << 12);
-            k.lod = static_cast<uint32_t>(s.tex1 & 1) | (static_cast<uint32_t>((s.tex1 >> 19) & 3) << 1) |
-                    (static_cast<uint32_t>((s.tex1 >> 32) & 0xFFF) << 3) | (static_cast<uint32_t>((s.tex1 >> 2) & 7) << 16);
+            k.clampU = sm.wrapU | (static_cast<uint32_t>(sm.minU) << 2) | (static_cast<uint32_t>(sm.maxU) << 12);
+            k.clampV = sm.wrapV | (static_cast<uint32_t>(sm.minV) << 2) | (static_cast<uint32_t>(sm.maxV) << 12);
+            k.lod = sm.lodFixed | (static_cast<uint32_t>(sm.lodL) << 1) | ((static_cast<uint32_t>(sm.lodK) & 0xFFF) << 3) |
+                    (static_cast<uint32_t>(sm.mipMax) << 16);
             sampler = samplers[(linear ? 2 : 0) + (repeat ? 1 : 0)];
             if (d.texture.kind == gsn::TextureSource::Kind::Target) {
                 auto source = targets.find(d.texture.id);
@@ -743,12 +743,12 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
                     // CLAMP, which the hardware sampler does not know (the logos' REGION_CLAMP keeps the rows
                     // under them out; sampled past it they drew a line of other texels).
                     const bool perspective = !((prim >> 8) & 1) && (prim & 7) != 6;
-                    const bool plainWrap = (s.clamp & 3) < 2 && ((s.clamp >> 2) & 3) < 2;
+                    const bool plainWrap = sm.wrapU < 2 && sm.wrapV < 2;
                     const bool made = t->second.levels == 1 && t->second.generated > 1 && perspective && plainWrap && linear &&
                                       (sx > 1 || sy > 1);
                     if (t->second.levels > 1 || made) {
                         k.flags = (k.flags & ~kNearest) | kMipmapped | (made ? kGeneratedMips : 0u);
-                        sampler = mipSamplers[((s.clamp & 3) == 0 ? 2 : 0) + (((s.clamp >> 2) & 3) == 0 ? 1 : 0)];
+                        sampler = mipSamplers[(sm.wrapU == 0 ? 2 : 0) + (sm.wrapV == 0 ? 1 : 0)];
                     }
                 }
             } else if (d.texture.kind == gsn::TextureSource::Kind::Reinterpreted && d.texture.id < count) {
@@ -759,21 +759,22 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
                 if (vk::Image* image = build(d.texture.id, at)) view = image->view;
                 k.flags |= linear && !oneToOne(d, k) ? kSnapFiltered : kSnap;
             }
-            k.tex = static_cast<uint32_t>((s.tex0 >> 35) & 3) | (static_cast<uint32_t>((s.tex0 >> 34) & 1) << 2) |
-                    (static_cast<uint32_t>(s.texa & 0xFF) << 8) | (static_cast<uint32_t>((s.texa >> 32) & 0xFF) << 16) |
-                    (static_cast<uint32_t>((s.texa >> 15) & 1) << 24);
+            k.tex = tx.function | (static_cast<uint32_t>(tx.useAlpha) << 2) | (static_cast<uint32_t>(s.texAlpha0) << 8) |
+                    (static_cast<uint32_t>(s.texAlpha1) << 16) | (static_cast<uint32_t>(s.texBlackTransparent) << 24);
         }
         if ((prim >> 5) & 1) k.flags |= kFog;
-        k.fogColour = s.fogcol;
-        k.alphaTest = static_cast<uint32_t>(s.test & 0x3FFF);
-        if (s.fba) k.flags |= kFba;
+        const gfx::Context& c = s.c;
+        k.fogColour = s.fogColor;
+        k.alphaTest = c.alphaTest | (static_cast<uint32_t>(c.alphaFunc) << 1) | (static_cast<uint32_t>(c.alphaRef) << 4) |
+                      (static_cast<uint32_t>(c.alphaFail) << 12);
+        if (c.forceAlpha) k.flags |= kFba;
         // The blend.
         uint32_t blendKey = 0;
         if ((prim >> 6) & 1) {
             k.flags |= kBlend;
-            if (s.pabe) k.flags |= kPabe;
-            k.blend = static_cast<uint32_t>(s.alpha & 0xFF) | (static_cast<uint32_t>((s.alpha >> 32) & 0xFF) << 8);
-            const uint32_t A = s.alpha & 3, B = (s.alpha >> 2) & 3, C = (s.alpha >> 4) & 3, D = (s.alpha >> 6) & 3;
+            if (s.perPixelBlend) k.flags |= kPabe;
+            const uint32_t A = c.blendA, B = c.blendB, C = c.blendC, D = c.blendD;
+            k.blend = A | (B << 2) | (C << 4) | (D << 6) | (static_cast<uint32_t>(c.blendFixed) << 8);
             if (C == 1) {
                 VkBlendFactor src, dst;
                 VkBlendOp op;
@@ -788,14 +789,14 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
             }
         }
         // Colour mask: FBMSK bytes, and no alpha in a 24-bit frame.
-        const uint32_t fbmsk = static_cast<uint32_t>(s.frame >> 32);
+        const uint32_t fbmsk = c.colorKeep;
         uint32_t mask = 0;
         if ((fbmsk & 0xFF) != 0xFF) mask |= VK_COLOR_COMPONENT_R_BIT;
         if (((fbmsk >> 8) & 0xFF) != 0xFF) mask |= VK_COLOR_COMPONENT_G_BIT;
         if (((fbmsk >> 16) & 0xFF) != 0xFF) mask |= VK_COLOR_COMPONENT_B_BIT;
-        if (((fbmsk >> 24) & 0xFF) != 0xFF && ((s.frame >> 24) & 0x3F) != gsn::PSMCT24) mask |= VK_COLOR_COMPONENT_A_BIT;
+        if (((fbmsk >> 24) & 0xFF) != 0xFF && c.colorFormat != gsn::PSMCT24) mask |= VK_COLOR_COMPONENT_A_BIT;
         // Destination alpha test: through the stencil copy.
-        const bool date = (s.test >> 14) & 1;
+        const bool date = c.destTest;
         uint32_t depthId = d.depth;
         if (date && !depthId) {
             depthId = ~0u;
@@ -824,20 +825,20 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         }
         const bool hasDepth = depthId != 0;
         // Depth and stencil state.
-        const bool zte = (s.test >> 16) & 1;
-        const uint32_t ztst = (s.test >> 17) & 3;
+        const bool zte = c.depthTest;
+        const uint32_t ztst = c.depthFunc;
         static const VkCompareOp zops[4] = {VK_COMPARE_OP_NEVER, VK_COMPARE_OP_ALWAYS, VK_COMPARE_OP_GREATER_OR_EQUAL, VK_COMPARE_OP_GREATER};
-        const bool zwrite = hasDepth && zte && d.depth && !((s.zbuf >> 32) & 1);
+        const bool zwrite = hasDepth && zte && d.depth && c.depthWrite;
         vkCmdSetDepthTestEnable(command, hasDepth && zte && d.depth ? VK_TRUE : VK_FALSE);
         vkCmdSetDepthCompareOp(command, zops[ztst]);
         vkCmdSetStencilTestEnable(command, date && hasDepth ? VK_TRUE : VK_FALSE);
         vkCmdSetStencilOp(command, VK_STENCIL_FACE_FRONT_AND_BACK, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP, VK_COMPARE_OP_EQUAL);
         vkCmdSetStencilCompareMask(command, VK_STENCIL_FACE_FRONT_AND_BACK, 1);
         vkCmdSetStencilWriteMask(command, VK_STENCIL_FACE_FRONT_AND_BACK, 0);
-        vkCmdSetStencilReference(command, VK_STENCIL_FACE_FRONT_AND_BACK, static_cast<uint32_t>((s.test >> 15) & 1));
+        vkCmdSetStencilReference(command, VK_STENCIL_FACE_FRONT_AND_BACK, c.destPass);
         // Scissor, in render pixels.
-        const uint32_t x0 = static_cast<uint32_t>(s.scissor & 0x7FF), x1 = static_cast<uint32_t>((s.scissor >> 16) & 0x7FF);
-        const uint32_t y0 = static_cast<uint32_t>((s.scissor >> 32) & 0x7FF), y1 = static_cast<uint32_t>((s.scissor >> 48) & 0x7FF);
+        const uint32_t x0 = c.scissorX0, x1 = c.scissorX1;
+        const uint32_t y0 = c.scissorY0, y1 = c.scissorY1;
         VkRect2D scissor{};
         scissor.offset = {static_cast<int32_t>(x0 * sx), static_cast<int32_t>(y0 * sy)};
         const uint32_t right = std::min((x1 + 1) * sx, colourTarget.image.extent.width), bottom = std::min((y1 + 1) * sy, colourTarget.image.extent.height);
@@ -847,8 +848,8 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         // The alpha test: pixels that pass are drawn as usual; those that fail, under AFAIL, update only the
         // frame buffer (FB_ONLY), only Z (ZB_ONLY) or only RGB (RGB_ONLY), or nothing (KEEP): a second pass
         // with the test inverted.
-        const bool ate = s.test & 1;
-        const uint32_t atst = (s.test >> 1) & 7, afail = (s.test >> 12) & 3;
+        const bool ate = c.alphaTest;
+        const uint32_t atst = c.alphaFunc, afail = c.alphaFail;
         struct Pass {
             uint32_t mask;
             bool zwrite, inverted;

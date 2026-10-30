@@ -181,7 +181,7 @@ target_compile_definitions(gt4_ps2gfx PUBLIC GT4_VU1_INTERPRETER=$<BOOL:${GT4_VU
     $<$<BOOL:${WIN32}>:_CRT_SECURE_NO_WARNINGS>)
 # The native renderer (docs/NATIVE_RENDERER.md): the GS memory model and front end on the CPU.
 add_library(gt4_gsnative STATIC platform/gsnative/gs_memory.cpp platform/gsnative/gs_frontend.cpp)
-target_include_directories(gt4_gsnative PUBLIC platform/gsnative)
+target_include_directories(gt4_gsnative PUBLIC platform/gsnative include)
 if(MSVC)
   target_compile_options(gt4_gsnative PRIVATE /W4)
 else()

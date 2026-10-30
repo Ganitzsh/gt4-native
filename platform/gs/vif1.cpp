@@ -139,6 +139,14 @@ bool Vif1::step() {
             consumed += size_t(qwc) * 4;
             break;
         }
+        case 0x08: {                                                         // native records (include/gt4/gfx.h)
+            const uint32_t qwc = imm;
+            if (!need(size_t(qwc) * 4)) { --stats.codes; return false; }
+            if (onRecords) onRecords(reinterpret_cast<const uint8_t*>(next), size_t(qwc) * 16);
+            stats.recordQwords += qwc;
+            consumed += size_t(qwc) * 4;
+            break;
+        }
         default:
             ++stats.unknownCodes;
             lastWarning = "unknown VIF1 code " + std::to_string(cmd);
