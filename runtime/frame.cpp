@@ -123,8 +123,18 @@ void walk(uint32_t start) {
                              h[2], h[3], reinterpret_cast<const uint32_t *>(block)[0], reinterpret_cast<const uint32_t *>(block)[1]);
             }
         } else if (qwc) {
-            static int warned = 0;
-            if (warned++ < 4) log_warn("frame: a list block of %u qwords that is not records (at %08x, id %u): left out", qwc, at, id);
+            // each kind once (its size and first words), with how often it was left out
+            static std::vector<uint64_t> seen;
+            static uint32_t total = 0;
+            ++total;
+            const uint32_t *w = reinterpret_cast<const uint32_t *>(ptr(id == 3 || id == 4 || id == 0 ? addr : body | self));
+            const uint64_t kind = static_cast<uint64_t>(qwc) << 32 | h[3];
+            if (std::find(seen.begin(), seen.end(), kind) == seen.end() && seen.size() < 32) {
+                seen.push_back(kind);
+                log_warn("frame: a list block of %u qwords that is not records (at %08x, id %u, codes %08x %08x; %u left out so far): "
+                         "%08x %08x %08x %08x | %08x %08x %08x %08x | %08x %08x %08x %08x",
+                         qwc, at, id, h[2], h[3], total, w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], w[8], w[9], w[10], w[11]);
+            }
         }
         switch (id) {
         case 1: at = (body | self) + qwc * 16; break;                 // cnt: the next block follows
