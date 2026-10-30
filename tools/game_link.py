@@ -687,6 +687,10 @@ def main():
         f.write(f"bound to the host C runtime: {len(host_bound)}\n")
         for n in host_bound:
             f.write(f"  {n}\n")
+        missing = sorted(fn_addrs - {x for x, _ in natives})
+        f.write(f"without native code (runtime/missing.cpp stops on a call): {len(missing)}\n")
+        for x in missing:
+            f.write(f"  {x:08X}\n" if isinstance(x, int) else f"  {x}\n")
     print(open(os.path.join(a.out, "LINK_REPORT.txt")).read().split("unresolved")[0], end="")
     print(f"unresolved (stubbed): {len(unresolved)}\n-> {exe}")
 
