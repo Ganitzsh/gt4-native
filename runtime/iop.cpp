@@ -3,7 +3,6 @@
 // calls (reboot, module loads: all succeed), libcdvd's init, the pad (libpad2/libvib/libdbc) and the
 // memory card (libmc), and the SDK's DelayThread / GetTimerSystemTime / iWakeupThread.
 #include "audio.h"
-#include "gs_writers.h"
 #include "guest.h"
 #include "image.h"
 #include "kernel.h"
@@ -41,13 +40,7 @@ bool iso_read(uint64_t offset, void *dst, uint32_t n) {
     ov.Offset = static_cast<DWORD>(offset);
     ov.OffsetHigh = static_cast<DWORD>(offset >> 32);
     DWORD got = 0;
-    if (gsw::active()) {  // GT4_GS_WRITERS may have write-protected the destination: ReadFile would fail there
-        std::vector<char> copy(n);
-        if (!ReadFile(g_iso, copy.data(), n, &got, &ov)) got = 0;
-        std::memcpy(dst, copy.data(), got);
-    } else if (!ReadFile(g_iso, dst, n, &got, &ov)) {
-        got = 0;
-    }
+    if (!ReadFile(g_iso, dst, n, &got, &ov)) got = 0;
     if (got < n) std::memset(static_cast<char *>(dst) + got, 0, n - got);
     return got > 0;
 }

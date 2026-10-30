@@ -521,7 +521,7 @@ uint64_t kernel_bus_cycles() {
     return cycles;
 }
 
-// Time the game did not run (a debugging tool's faults, GT4_GS_WRITERS), taken off the bus clock like a pause,
+// Time the game did not run (a debugging tool's faults), taken off the bus clock like a pause,
 // so that VBlank-driven game logic stays closer to its usual pace while the tool slows the game down.
 void kernel_add_stall(int64_t qpc_ticks) {
     if (qpc_ticks <= 0) return;

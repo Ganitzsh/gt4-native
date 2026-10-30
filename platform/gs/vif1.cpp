@@ -4,6 +4,8 @@
 #include "gt4/unpack.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace gt4::ps2 {
@@ -140,10 +142,13 @@ bool Vif1::step() {
             consumed += size_t(qwc) * 4;
             break;
         }
-        default:
+        default: {
             ++stats.unknownCodes;
             lastWarning = "unknown VIF1 code " + std::to_string(cmd);
+            static int logged = 0;
+            if (logged++ < 6) std::fprintf(stderr, "vif1: unknown code %08X (%s, %zu words left)\n", code, inModel ? "model packet" : "stream", available);
             break;
+        }
         }
     }
     pos += consumed;
@@ -181,6 +186,15 @@ void Vif1::batchModel(const uint8_t* bytes, size_t size, uint32_t modelMask) {
     const size_t outerPos = pos;
     pos = 0;
     inModel = true;
+    if (std::getenv("GT4_MODEL_LOG")) {   // (debugging) the first codes of model packets, the cycle they start with
+        static int left = std::atoi(std::getenv("GT4_MODEL_LOG"));
+        if (left-- > 0) {
+            uint32_t w[4] = {};
+            std::memcpy(w, bytes, std::min<size_t>(size, 16));
+            std::fprintf(stderr, "model: %zu bytes, cycle %u/%u, mask %08X, first words %08X %08X %08X %08X\n", size, cl, wl, modelMask, w[0], w[1],
+                         w[2], w[3]);
+        }
+    }
     feed(bytes, size);
     inModel = false;
     if (!pending.empty()) {

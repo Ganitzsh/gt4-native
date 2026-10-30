@@ -145,7 +145,20 @@ void GraphicsStream::records(const uint8_t* data, size_t bytes) {
                 ++counters.uploadsWithoutData;
                 break;
             }
+            const uint64_t unknownBefore = vif1.stats.unknownCodes;
             vif1.batchModel(it->bytes.data(), std::min<size_t>(it->bytes.size(), size_t(m.qwords) * 16), m.mask);
+            if (vif1.stats.unknownCodes != unknownBefore) {
+                static int logged = 0;
+                if (logged++ < 6) {
+                    std::fprintf(stderr, "GS: model packet at %08X (%u qwords, mask %08X, vblank %u) decodes badly\n", m.source, m.qwords, m.mask,
+                                 lastVblank);
+                    for (size_t q = 0; q < 6 && q * 16 < it->bytes.size(); ++q) {
+                        uint32_t w[4];
+                        std::memcpy(w, it->bytes.data() + q * 16, 16);
+                        std::fprintf(stderr, "GS:   %08X %08X %08X %08X\n", w[0], w[1], w[2], w[3]);
+                    }
+                }
+            }
             recordData.erase(it);
             break;
         }

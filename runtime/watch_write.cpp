@@ -2,7 +2,7 @@
 // (hex), the first N times (default 20): the page is write-protected, each store to it faults, the writer is named
 // (image.cpp native_name_for, with the return addresses near the stack top), and the store is single-stepped. Other
 // stores to the page pass silently. Protecting a page of guest RAM detaches the main view from the mirrors at
-// 0x20000000 / 0x30000000 for that page (gs_writers.cpp), so a run with a watch is for finding writers only.
+// 0x20000000 / 0x30000000 for that page, so a run with a watch is for finding writers only.
 #include "guest.h"
 #include "image.h"
 #include "log.h"
