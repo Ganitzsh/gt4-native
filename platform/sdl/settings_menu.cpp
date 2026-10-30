@@ -110,6 +110,9 @@ std::vector<Item> buildItems(bool game) {
         items.push_back(choice("Lighting", "effects.lighting", {{"original", "Original"}, {"enhanced", "Enhanced"}},
             "Enhanced: the 3D scene graded as a modern renderer would (more contrast, a soft highlight roll-off, "
             "richer colour, cool shadows and warm highlights). The HUD keeps its colours."));
+        items.push_back(choice("Rear-view mirror", "effects.mirror", {{"original", "Original"}, {"high", "High detail"}},
+            "High detail: the mirror shows the course's detail objects, sharp textures and full-detail cars, as the "
+            "main view does. Original: the PS2's reduced mirror."));
     }
     if (game)
         items.push_back(choice("HD textures", "texture.hd_pack", kOnOff,

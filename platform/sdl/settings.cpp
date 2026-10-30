@@ -152,6 +152,7 @@ const std::vector<const char*> kEffects{"original", "off", "low", "medium", "hig
 const std::vector<const char*> kPresets{"original", "low", "medium", "high", "ultra", "custom"};
 const std::vector<const char*> kCatchUp{"original", "reduced", "off"};
 const std::vector<const char*> kLighting{"original", "enhanced"};
+const std::vector<const char*> kMirror{"original", "high"};
 
 const std::vector<Option>& options() {
     static const std::vector<Option> table = [] {
@@ -261,6 +262,9 @@ const std::vector<Option>& options() {
             "original: the game's own colours; enhanced: its 3D scenes graded as a modern renderer's filmic "
             "response (more contrast around middle grey, a soft highlight shoulder, vibrance, cool shadows and "
             "warm highlights), before its HUD."));
+        o.push_back(enumOption("effects.mirror", &Settings::mirror, kMirror,
+            "The rear-view mirror: original (the PS2's: no course detail objects, the lowest texture level, low-detail "
+            "cars) or high (the course's detail objects, textures at their own level and cars as the main view draws them)."));
         o.push_back(enumOption("post.tonemapper", &Settings::tonemapper, kTonemappers,
             "HDR to display: original (clamp, as the PS2), reinhard (luminance), aces (Hill fit), agx and "
             "agx_punchy (Sobotka, Wrensch fit), pbr_neutral (Khronos PBR Neutral)."));
@@ -392,6 +396,7 @@ const char* name(VSync v) { return kVSync[static_cast<size_t>(v)]; }
 const char* name(Tonemapper v) { return kTonemappers[static_cast<size_t>(v)]; }
 const char* name(EffectQuality v) { return kEffects[static_cast<size_t>(v)]; }
 const char* name(LightingMode v) { return kLighting[static_cast<size_t>(v)]; }
+const char* name(MirrorDetail v) { return kMirror[static_cast<size_t>(v)]; }
 const char* name(TextureFilter v) { return kFilters[static_cast<size_t>(v)]; }
 const char* name(HudLayout v) { return kHud[static_cast<size_t>(v)]; }
 const char* name(AiCatchUp v) { return kCatchUp[static_cast<size_t>(v)]; }
