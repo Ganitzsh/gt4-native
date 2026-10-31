@@ -238,6 +238,13 @@ bool GameLink::write(uint32_t type, const void* payload, uint32_t payloadSize) {
 
 const std::string& GameLink::name() const { return impl->name; }
 bool GameLink::running() const { return impl->running; }
+double GameLink::processSeconds() const {
+    FILETIME created, exited, kernel, user;
+    if (!impl->process || !GetProcessTimes(impl->process, &created, &exited, &kernel, &user)) return 0.0;
+    auto seconds = [](const FILETIME& t) { return double((uint64_t(t.dwHighDateTime) << 32) | t.dwLowDateTime) * 1e-7; };
+    return seconds(kernel) + seconds(user);
+}
+
 int GameLink::exitCode() const { return impl->exitCode; }
 uint32_t GameLink::gameState() const { return impl->header->game_state; }
 uint64_t GameLink::bytesReceived() const { return impl->received; }

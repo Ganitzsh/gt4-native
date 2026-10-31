@@ -1,4 +1,5 @@
 #include "renderer.h"
+#include "../gs/cpu_profile.h"
 
 #include "gsn_scene.h"
 
@@ -943,7 +944,10 @@ bool Renderer::headless() const { return impl->headless; }
 void Renderer::resizeHeadless(VkExtent2D size) { impl->headlessSize = size; impl->resized = true; }
 void Renderer::suspend(bool paused) { impl->suspended = paused; impl->resized = true; }
 void Renderer::apply(const gt4::Settings& settings) { impl->settings = settings; }
-bool Renderer::draw(float deltaSeconds) { return impl->draw(deltaSeconds); }
+bool Renderer::draw(float deltaSeconds) {
+    GT4_CPU_SCOPE("render: frame");
+    return impl->draw(deltaSeconds);
+}
 VkExtent2D Renderer::drawableExtent() const { return impl->extent; }
 void Renderer::setControls(float horizontal, bool action) {
     impl->stick = std::clamp(horizontal, -1.0f, 1.0f);

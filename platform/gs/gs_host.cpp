@@ -1,6 +1,14 @@
 // PS2 graphics host: link / replay -> graphics stream -> the native renderer's front end, on a worker thread
 // (see gs_host.h).
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>   // GetThreadTimes (the summary's CPU times)
+#endif
 #include "gs_host.h"
+#include "cpu_profile.h"
 
 #include "gs_frontend.h"
 
@@ -44,11 +52,15 @@ public:
     void draw(const gfx::DrawRecord& d, const gfx::Vertex* vertices) override { native->draw(d, vertices); }
     void read(const gfx::ReadRecord& r) override { native->read(r); }
     void primitives(const ps2::GsPrimitives& p) override {
+        GT4_CPU_SCOPE("front end: the renderers' primitives");
         if (p.setPrim) native->setPrim(p.prim);
+        static thread_local std::vector<gsn::GsFrontend::InputVertex> run;
+        run.resize(p.count);
         for (size_t k = 0; k < p.count; ++k) {
             const ps2::GsVertex& v = p.vertices[k];
-            native->vertex({v.s, v.t, v.q, v.rgba, v.x, v.y, v.z, v.fog, v.adc, {v.motion[0], v.motion[1], v.motion[2]}}, p.fog);
+            run[k] = {v.s, v.t, v.q, v.rgba, v.x, v.y, v.z, v.fog, v.adc, {v.motion[0], v.motion[1], v.motion[2]}};
         }
+        native->vertices(run.data(), run.size(), p.fog);
     }
     void display(const gfx::DisplayRecord& d) override {
         // GT4_DISPFB=FBP[,FBW[,PSM]] (hex FBP, in 2048-word pages): show that frame buffer instead (debugging: look
@@ -323,8 +335,47 @@ struct GsHost::Impl {
         return r;
     }();
     std::atomic<uint64_t> vblankRecords{0};
+    // GT4_CPU_FROM=VBLANK or trigger:FILE: the summary's CPU times from that VBlank on (a race, not the boot and the
+    // menus before it). The GS thread takes the starting point.
+    struct CpuStart {
+        bool armed = false, taken = false;
+        uint64_t from = 0;
+        std::string trigger;
+        double game = 0.0, gsThread = 0.0;
+        uint64_t vsyncs = 0;
+    } cpuStart = [] {
+        CpuStart c;
+        if (const char* e = std::getenv("GT4_CPU_FROM")) {
+            c.armed = true;
+            if (!std::strncmp(e, "trigger:", 8)) c.trigger = e + 8;
+            else c.from = std::strtoull(e, nullptr, 10);
+        }
+        return c;
+    }();
+    double gsThreadAtEnd = -1.0;   // the GS thread's own CPU time when it stopped
+    double gameCpuAtEnd = -1.0;    // the game process's CPU time (ms) when the link closed
     void dispatch(const Gt4LinkRecord& header, const uint8_t* payload) {
-        if (header.type == GT4_REC_VSYNC) ++vblankRecords;
+        GT4_CPU_SCOPE("GS: dispatch");
+        if (header.type == GT4_REC_VSYNC) {
+            ++vblankRecords;
+            if (cpuStart.armed && !cpuStart.taken) {
+                bool now = cpuStart.trigger.empty() && vblankRecords >= cpuStart.from;
+                if (!cpuStart.trigger.empty())
+                    if (std::FILE* f = std::fopen(cpuStart.trigger.c_str(), "rb")) {
+                        std::fclose(f);
+                        std::remove(cpuStart.trigger.c_str());
+                        now = true;
+                    }
+                if (now) {
+                    cpuStart.taken = true;
+                    cpuStart.game = link ? link->processSeconds() * 1000.0 : 0.0;
+                    cpuStart.gsThread = threadCpuMilliseconds();
+                    cpuStart.vsyncs = vsyncs.load();
+                    cpuprofile::reset();
+                    std::printf("GS: CPU times from VBlank %llu\n", static_cast<unsigned long long>(vblankRecords.load()));
+                }
+            }
+        }
         if (recorder) {
             if (recorder->vsyncs >= recorder->from && recorder->vsyncs < recorder->from + recorder->count) {
                 if (!recorder->started && recorder->from) {   // mid-run: the state the replay starts from
@@ -352,7 +403,13 @@ struct GsHost::Impl {
         stream->record(header, payload);
     }
 
+    // The GS thread's CPU time when its loop ends (the summary's; a joined thread's handle no longer answers).
+    struct NoteCpu {
+        Impl* impl;
+        ~NoteCpu() { impl->gsThreadAtEnd = threadCpuMilliseconds(); }
+    };
     void runLive() {
+        NoteCpu note{this};
         auto onRecord = [this](const Gt4LinkRecord& h, const uint8_t* p) { dispatch(h, p); };
         int idle = 0;
         while (!stop) {
@@ -370,6 +427,7 @@ struct GsHost::Impl {
     }
 
     bool replayStep() {
+        GT4_CPU_SCOPE("GS: replay frame (reading and dispatch)");
         auto onRecord = [this](const Gt4LinkRecord& h, const uint8_t* p) { dispatch(h, p); };
         if (replay->nextFrame(onRecord)) { ++replayFrame; return true; }
         if (options.loop && replay->frames()) {
@@ -381,6 +439,7 @@ struct GsHost::Impl {
     }
 
     void runReplayRealTime() {
+        NoteCpu note{this};
         using clock = std::chrono::steady_clock;
         const auto period = std::chrono::nanoseconds(16683350);   // 1 / 59.94 Hz
         auto next = clock::now();
@@ -394,6 +453,7 @@ struct GsHost::Impl {
     }
 
     void runReplayLockstep() {
+        NoteCpu note{this};
         for (;;) {
             {
                 std::unique_lock<std::mutex> lock(stepMutex);
@@ -420,8 +480,10 @@ GsHost::~GsHost() {
     impl->stepCondition.notify_all();
     impl->readDone.notify_all();
     if (impl->worker.joinable()) impl->worker.join();
+    if (impl->link) impl->gameCpuAtEnd = impl->link->processSeconds() * 1000.0;
     impl->link.reset();   // asks the game to quit
     std::printf("GS: %s\n", summary().c_str());
+    cpuprofile::print(impl->vsyncs.load() - (impl->cpuStart.taken ? impl->cpuStart.vsyncs : 0));   // GT4_CPU_PROFILE
     std::fflush(stdout);
     // Markers for the teardown hang seen after long live runs (main.cpp's watchdog ends the process).
     impl->stream.reset();
@@ -568,12 +630,41 @@ std::string GsHost::status() const {
     return out.str();
 }
 
+double threadCpuMilliseconds() {
+#ifdef _WIN32
+    FILETIME created, exited, kernel, user;
+    if (!GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user)) return 0.0;
+    auto ms = [](const FILETIME& t) { return double((uint64_t(t.dwHighDateTime) << 32) | t.dwLowDateTime) * 1e-4; };
+    return ms(kernel) + ms(user);
+#else
+    return 0.0;
+#endif
+}
+
 std::string GsHost::summary() const {
     const Impl& h = *impl;
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - h.started).count();
     std::ostringstream out;
     out << h.vsyncs.load() << " frames displayed in " << seconds << " s, " << h.events.load() << " GS events; "
         << h.stream->describe();
+    // CPU time a frame: the game's process (every thread), the GS thread (the stream, the 3D renderers, the
+    // native renderer's front end); from GT4_CPU_FROM's point when it was reached.
+    const bool fromStart = h.cpuStart.taken;
+    if (const uint64_t frames = h.vsyncs.load() - (fromStart ? h.cpuStart.vsyncs : 0)) {
+        out << "; CPU a frame" << (fromStart ? " (from GT4_CPU_FROM)" : "") << ":";
+        const double game = h.link ? h.link->processSeconds() * 1000.0 : h.gameCpuAtEnd;
+        if (game >= 0.0) out << " game " << (game - (fromStart ? h.cpuStart.game : 0.0)) / double(frames) << " ms,";
+        double gs = h.gsThreadAtEnd;
+#ifdef _WIN32
+        FILETIME created, exited, kernel, user;
+        if (gs < 0.0 && h.worker.joinable() &&
+            GetThreadTimes(static_cast<HANDLE>(const_cast<std::thread&>(h.worker).native_handle()), &created, &exited, &kernel, &user)) {
+            auto ms = [](const FILETIME& t) { return double((uint64_t(t.dwHighDateTime) << 32) | t.dwLowDateTime) * 1e-4; };
+            gs = ms(kernel) + ms(user);
+        }
+#endif
+        if (gs >= 0.0) out << " GS thread " << (gs - (fromStart ? h.cpuStart.gsThread : 0.0)) / double(frames) << " ms";
+    }
     if (h.target && h.target->blankFrames) out << "; " << h.target->blankFrames << " VBlanks with no display";
     if (h.target && h.target->frontend().stats.named) {
         const auto& s = h.target->frontend().stats;

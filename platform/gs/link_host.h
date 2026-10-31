@@ -47,6 +47,7 @@ public:
     const std::string& name() const;
     bool running() const;                 // the game process has not exited
     int exitCode() const;                 // valid once !running()
+    double processSeconds() const;        // the game process's CPU time so far (user and kernel, every thread)
     uint32_t gameState() const;           // header game_state (0 starting, 1 running, 2 exited)
     uint64_t bytesReceived() const;
 

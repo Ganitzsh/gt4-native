@@ -96,6 +96,8 @@ private:
     Transfer xfer;
     uint32_t xferX = 0, xferY = 0;
     std::vector<uint8_t> xferPartial;   // bytes of an incomplete pixel (24-bit) carried over
+    // Whole pixels of the transfer in progress, from `bytes`, as many as `count` (write's fast path): the bytes used.
+    size_t writePixels(const uint8_t* bytes, size_t count, bool& changed);
     bool xferActive = false;
     void loadClut(const Tex0& t);
     uint32_t clutEntry(uint32_t index, uint32_t cpsm, uint32_t csa, bool four) const;

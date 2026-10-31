@@ -2,6 +2,7 @@
 #include "gsn_scene.h"
 
 #include "gt4_shaders.h"
+#include "../gs/cpu_profile.h"
 
 #include <algorithm>
 #include <bit>
@@ -1850,6 +1851,7 @@ void GsnScene::Impl::executePending(VkCommandBuffer command, uint32_t slot, VkEx
 }
 
 void GsnScene::recordPrepass(VkCommandBuffer command, const SceneView& view) {
+    GT4_CPU_SCOPE("render: native renderer's commands");
     Impl& s = *impl;
     s.lastExtent = view.renderExtent;
     // Each list is executed once (its blends would apply again).

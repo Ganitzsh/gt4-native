@@ -207,11 +207,99 @@ void GsMemory::beginWrite(const Transfer& t) {
     xferActive = t.rrw && t.rrh && psmKnown(t.dpsm);
 }
 
+// One loop per format, a row at a time: each pixel's address once, its old value compared as it is replaced (the
+// general path read and wrote each pixel through the format switch, twice the address: 7 ms a frame of a race).
+size_t GsMemory::writePixels(const uint8_t* bytes, size_t count, bool& changed) {
+    const uint32_t psm = xfer.dpsm, bp = xfer.dbp, bw = xfer.dbw;
+    uint8_t* m = mem.data();
+    size_t k = 0;   // pixels done
+    auto rows = [&](auto pixel) {
+        while (k < count && xferY < xfer.rrh) {
+            const uint32_t y = (xfer.dsay + xferY) & 2047;
+            const size_t run = std::min<size_t>(count - k, xfer.rrw - xferX);
+            for (size_t i = 0; i < run; ++i) pixel((xfer.dsax + xferX + uint32_t(i)) & 2047, y, k + i);
+            k += run;
+            xferX += uint32_t(run);
+            if (xferX == xfer.rrw) {
+                xferX = 0;
+                ++xferY;
+            }
+        }
+    };
+    auto word = [&](uint32_t a, uint32_t v, uint32_t keep) {
+        uint32_t old;
+        std::memcpy(&old, m + a, 4);
+        v = (old & keep) | (v & ~keep);
+        if (v != old) {
+            changed = true;
+            std::memcpy(m + a, &v, 4);
+        }
+    };
+    auto half = [&](uint32_t a, uint16_t v) {
+        uint16_t old;
+        std::memcpy(&old, m + a, 2);
+        if (v != old) {
+            changed = true;
+            std::memcpy(m + a, &v, 2);
+        }
+    };
+    auto in32 = [&](size_t i) { uint32_t v; std::memcpy(&v, bytes + i * 4, 4); return v; };
+    auto in24 = [&](size_t i) { return uint32_t(bytes[i * 3]) | uint32_t(bytes[i * 3 + 1]) << 8 | uint32_t(bytes[i * 3 + 2]) << 16; };
+    auto in16 = [&](size_t i) { uint16_t v; std::memcpy(&v, bytes + i * 2, 2); return v; };
+    auto in4 = [&](size_t i) { return uint32_t(bytes[i >> 1] >> ((i & 1) * 4)) & 15; };
+    switch (psm) {
+    case PSMCT32: rows([&](uint32_t x, uint32_t y, size_t i) { word(address32(bp, bw, x, y), in32(i), 0); }); return k * 4;
+    case PSMZ32: rows([&](uint32_t x, uint32_t y, size_t i) { word(addressZ32(bp, bw, x, y), in32(i), 0); }); return k * 4;
+    case PSMCT24: rows([&](uint32_t x, uint32_t y, size_t i) { word(address32(bp, bw, x, y), in24(i), 0xFF000000u); }); return k * 3;
+    case PSMZ24: rows([&](uint32_t x, uint32_t y, size_t i) { word(addressZ32(bp, bw, x, y), in24(i), 0xFF000000u); }); return k * 3;
+    case PSMCT16: rows([&](uint32_t x, uint32_t y, size_t i) { half(address16(bp, bw, x, y), in16(i)); }); return k * 2;
+    case PSMCT16S: rows([&](uint32_t x, uint32_t y, size_t i) { half(address16S(bp, bw, x, y), in16(i)); }); return k * 2;
+    case PSMZ16: rows([&](uint32_t x, uint32_t y, size_t i) { half(addressZ16(bp, bw, x, y), in16(i)); }); return k * 2;
+    case PSMZ16S: rows([&](uint32_t x, uint32_t y, size_t i) { half(addressZ16S(bp, bw, x, y), in16(i)); }); return k * 2;
+    case PSMT8:
+        rows([&](uint32_t x, uint32_t y, size_t i) {
+            uint8_t& b = m[address8(bp, bw, x, y)];
+            if (b != bytes[i]) {
+                changed = true;
+                b = bytes[i];
+            }
+        });
+        return k;
+    case PSMT4:
+        if (xferX & 1 || count & 1) return 0;   // (whole bytes only: the general path takes an odd start)
+        rows([&](uint32_t x, uint32_t y, size_t i) {
+            const uint32_t n = address4(bp, bw, x, y), v = in4(i);
+            uint8_t& b = m[n >> 1];
+            const uint8_t nb = (n & 1) ? static_cast<uint8_t>((b & 0x0F) | (v << 4)) : static_cast<uint8_t>((b & 0xF0) | v);
+            if (nb != b) {
+                changed = true;
+                b = nb;
+            }
+        });
+        return k / 2;
+    case PSMT8H: rows([&](uint32_t x, uint32_t y, size_t i) { word(address32(bp, bw, x, y), uint32_t(bytes[i]) << 24, 0x00FFFFFFu); }); return k;
+    case PSMT4HL:
+        if (xferX & 1 || count & 1) return 0;
+        rows([&](uint32_t x, uint32_t y, size_t i) { word(address32(bp, bw, x, y), in4(i) << 24, 0xF0FFFFFFu); });
+        return k / 2;
+    case PSMT4HH:
+        if (xferX & 1 || count & 1) return 0;
+        rows([&](uint32_t x, uint32_t y, size_t i) { word(address32(bp, bw, x, y), in4(i) << 28, 0x0FFFFFFFu); });
+        return k / 2;
+    default: return 0;
+    }
+}
+
 bool GsMemory::write(const uint8_t* bytes, size_t size) {
     if (!xferActive) return false;
     const uint32_t bits = psmBits(xfer.dpsm);
     const uint32_t mask = bits >= 32 ? ~0u : (1u << bits) - 1;
     bool changed = false;
+    if (xferPartial.empty()) {   // whole pixels first, by the formats' own loops
+        const size_t used = writePixels(bytes, bits == 4 ? size * 2 : size / (bits / 8), changed);
+        bytes += used;
+        size -= used;
+    }
     auto next = [&](uint32_t value) {
         if (xferY >= xfer.rrh) return;
         const uint32_t x = xfer.dsax + xferX, y = xfer.dsay + xferY;

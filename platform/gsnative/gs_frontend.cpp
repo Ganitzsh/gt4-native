@@ -1,5 +1,6 @@
 // The native renderer's front end (see gs_frontend.h). Register layouts from the public GS documentation.
 #include "gs_frontend.h"
+#include "../gs/cpu_profile.h"
 #include "texture_name.h"
 
 #include <algorithm>
@@ -120,6 +121,7 @@ void GsFrontend::applyState(const gfx::StateRecord& r) {
 }
 
 void GsFrontend::upload(const gfx::UploadRecord& u, const uint8_t* data, size_t bytes) {
+    GT4_CPU_SCOPE("front end: uploads");
     GsMemory::Transfer t;
     t.dbp = u.base;
     t.dbw = u.width;
@@ -140,6 +142,7 @@ void GsFrontend::upload(const gfx::UploadRecord& u, const uint8_t* data, size_t 
 }
 
 void GsFrontend::draw(const gfx::DrawRecord& d, const gfx::Vertex* vertices) {
+    GT4_CPU_SCOPE("front end: draw records");
     if (d.flags & gfx::kDrawPrim) write(PRIM, d.prim & 0x7FF);
     const bool fog = d.flags & gfx::kDrawFog;
     for (uint32_t k = 0; k < d.count; ++k) {
@@ -247,6 +250,7 @@ void GsFrontend::write(uint32_t r, uint64_t value) {
 void GsFrontend::clutWritten(const gfx::Texture& texture) {
     const GsMemory::Tex0 t = GsMemory::Tex0::of(texture);
     if (!mem.tex0Written(t)) return;
+    ++clutLoads;
     static const bool logLoads = std::getenv("GT4_GSN_XFER") != nullptr;
     if (logLoads) {
         const uint16_t* c = reinterpret_cast<const uint16_t*>(mem.clutBuffer());
@@ -376,6 +380,7 @@ void GsFrontend::setReadData(std::vector<uint8_t> data) {
 
 void GsFrontend::cut(FrameList& out) {
     lastReinterpretation = {};
+    lastTexture.valid = false;
     lastMemoryReinterpretation = {};
     frame.targets = targets;
     frame.displayed = false;
@@ -393,6 +398,7 @@ void GsFrontend::readTransfer(void* out, uint32_t qwc) {
 }
 
 void GsFrontend::restoreMemory(const void* data) {
+    lastTexture.valid = false;
     std::memcpy(mem.data(), data, GsMemory::kBytes);
     for (uint32_t page = 0; page < pages.size(); ++page) {
         pages[page] = {0, ++serial};
@@ -539,7 +545,16 @@ void GsFrontend::emit(const Vertex* v, uint32_t n, Topology topology) {
     if (!colour || (zte && !depth)) return;   // past the target limit
     if (s.c.colorKeep != 0xFFFFFFFFu) markWritten(colour, s.c.colorBase, width, s.c.colorFormat, left, right, top, bottom);
     if (depth && s.c.depthWrite) markWritten(depth, s.c.depthBase, width, s.c.depthFormat, left, right, top, bottom);
-    const TextureSource texture = ((prim >> 4) & 1) ? textureFor(s) : TextureSource{};
+    TextureSource texture;
+    if ((prim >> 4) & 1) {
+        const LastTexture& m = lastTexture;
+        if (m.valid && m.uploads == uploads && m.ownerChanges == ownerChanges && m.clutLoads == clutLoads && m.state == s) {
+            texture = m.source;
+        } else {
+            texture = textureFor(s);
+            lastTexture = {texture.kind == TextureSource::Kind::Memory, s, texture, uploads, ownerChanges, clutLoads};
+        }
+    }
     // A 3D scene's target read into another one (GT4's post effects, its composite into the display buffer)
     // is complete: the point for lighting it.
     if (texture.kind == TextureSource::Kind::Target && texture.id != colour) sceneRead(texture.id);
@@ -671,7 +686,11 @@ void GsFrontend::markWritten(uint32_t targetId, uint32_t bp, uint32_t bw, uint32
     const uint32_t perRow = std::max<uint32_t>(1, bw);
     const uint32_t first = std::min(x0 / pw, perRow - 1), last = std::min(x1 / pw, perRow - 1);
     for (uint32_t py = y0 / ph; py <= y1 / ph; ++py)
-        for (uint32_t px = first; px <= last; ++px) pages[(bp / 32 + py * perRow + px) & 511] = {targetId, ++serial};
+        for (uint32_t px = first; px <= last; ++px) {
+            PageOwner& p = pages[(bp / 32 + py * perRow + px) & 511];
+            if (p.target != targetId) ++ownerChanges;
+            p = {targetId, ++serial};
+        }
     if (targetWritten.size() <= targetId) targetWritten.resize(targetId + 1, 0);
     targetWritten[targetId] = serial;
 }
@@ -700,6 +719,7 @@ uint64_t GsFrontend::pageContent(uint32_t page) {
 }
 
 TextureSource GsFrontend::textureFor(const DrawState& s) {
+    GT4_CPU_SCOPE("front end: texture lookup");
     const GsMemory::Tex0 t = GsMemory::Tex0::of(s.c.texture);
     const uint32_t w = 1u << std::min<uint32_t>(t.tw, 10), h = 1u << std::min<uint32_t>(t.th, 10);
     uint32_t pw, ph;
@@ -916,14 +936,41 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
     const bool gone = c.id && !c.replacedId && (shown == decoded.end() || shown->second.id != c.id);
     const bool fresh = !c.version || c.generation != generation || c.clutHash != clutHash || lost || gone;
     if (!fresh && shown != decoded.end()) shown->second.lastUsed = frameCount;
+    // What the texture is (when it may have changed): its fields and palette (key), the content of every page its
+    // levels cover.
+    uint64_t contentKey = c.contentKey;
+    if (fresh) {
+        contentKey = mix(key, content);
+        for (uint32_t i = 0; i < levelCount; ++i) {
+            const Level& l = levels[i];
+            const uint32_t lrows = (l.h + ph - 1) / ph, lperRow = std::max<uint32_t>(1, (t.psm == PSMT8 || t.psm == PSMT4) ? l.tbw / 2 : l.tbw);
+            for (uint32_t py = 0; py < lrows; ++py)
+                for (uint32_t px = 0; px < std::max<uint32_t>(1, std::min<uint32_t>(lperRow, (l.w + pw - 1) / pw)); ++px)
+                    for (uint32_t extra = 0; extra < 2; ++extra) {
+                        if (extra && !(l.tbp % 32)) break;
+                        contentKey = mix(contentKey, pageContent(l.tbp / 32 + py * lperRow + px + extra));
+                    }
+        }
+        c.contentKey = contentKey;
+    }
     if (replacementsOn) {
         if (fresh) {   // named once per content (level 0 is replaced; the GPU makes a mipmapped texture's levels)
-            MipAddress mips[6];
-            for (uint32_t i = 1; i < levelCount; ++i) mips[i - 1] = {levels[i].tbp, levels[i].tbw};
-            c.replacementFound = findTextureName(mem, t, Texa{s.texAlpha0, s.texAlpha1, s.texBlackTransparent != 0}, sm, mips,
-                                                 levelCount - 1, *texturePack, c.replacementName, c.replacementOrigin);
-            ++stats.named;
-            stats.found += c.replacementFound;
+            Decoded& known = decoded[contentKey];
+            known.lastUsed = frameCount;
+            if (!known.named) {
+                MipAddress mips[6];
+                for (uint32_t i = 1; i < levelCount; ++i) mips[i - 1] = {levels[i].tbp, levels[i].tbw};
+                GT4_CPU_SCOPE("front end: texture pack naming");
+                known.found = findTextureName(mem, t, Texa{s.texAlpha0, s.texAlpha1, s.texBlackTransparent != 0}, sm, mips, levelCount - 1,
+                                              *texturePack, known.name, known.origin);
+                known.named = true;
+                ++stats.named;
+                stats.found += known.found;
+            }
+            c.replacementFound = known.found;
+            c.replacementName = known.name;
+            c.replacementOrigin[0] = known.origin[0];
+            c.replacementOrigin[1] = known.origin[1];
             // GT4_TEXPACK_LOG=N (debugging): the first N textures looked up, found or not.
             static long logLeft = std::getenv("GT4_TEXPACK_LOG") ? std::strtol(std::getenv("GT4_TEXPACK_LOG"), nullptr, 10) : 0;
             if (logLeft > 0) {
@@ -951,19 +998,6 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
         c.replacedId = 0;
         c.generation = generation;
         c.clutHash = clutHash;
-        // What the texture is: its fields and palette (key), the content of every page its levels cover.
-        uint64_t contentKey = mix(key, content);
-        for (uint32_t i = 0; i < levelCount; ++i) {
-            const Level& l = levels[i];
-            const uint32_t lrows = (l.h + ph - 1) / ph, lperRow = std::max<uint32_t>(1, (t.psm == PSMT8 || t.psm == PSMT4) ? l.tbw / 2 : l.tbw);
-            for (uint32_t py = 0; py < lrows; ++py)
-                for (uint32_t px = 0; px < std::max<uint32_t>(1, std::min<uint32_t>(lperRow, (l.w + pw - 1) / pw)); ++px)
-                    for (uint32_t extra = 0; extra < 2; ++extra) {
-                        if (extra && !(l.tbp % 32)) break;
-                        contentKey = mix(contentKey, pageContent(l.tbp / 32 + py * lperRow + px + extra));
-                    }
-        }
-        c.contentKey = contentKey;
         if (!c.version) c.version = 1;
         Decoded& d = decoded[contentKey];
         d.lastUsed = frameCount;
@@ -1073,6 +1107,152 @@ void GsFrontend::packed(uint32_t r, uint64_t a, uint64_t b) {
 
 void GsFrontend::setPrim(uint32_t prim) { write(PRIM, prim & 0x7FF); }
 
+void GsFrontend::vertices(const InputVertex* in, size_t count, bool withFog) {
+    const uint32_t prim = primValue();
+    // Triangle strips, not UV texturing (FST): the renderers' runs. Others vertex by vertex.
+    if ((prim & 7) != 4 || ((prim >> 8) & 1) || count < 3) {
+        for (size_t k = 0; k < count; ++k) vertex(in[k], withFog);
+        return;
+    }
+    const DrawState s = currentState(prim);
+    const gfx::Context& c = contexts[(prim & gfx::kContext2) ? 1 : 0];
+    static const bool keepJitter = [] { const char* e = std::getenv("GT4_GSN_JITTER"); return e && !std::strcmp(e, "keep"); }();
+    const uint32_t jitter = keepJitter ? 0xFFFFu : 0xFFF8u;
+    const float ox = static_cast<float>(c.originX & jitter) / 16.0f, oy = static_cast<float>(c.originY & jitter) / 16.0f;
+    const float u = static_cast<float>(reg[UV] & 0x3FFF) / 16.0f, vv = static_cast<float>((reg[UV] >> 16) & 0x3FFF) / 16.0f;
+    const uint32_t fogRegister = static_cast<uint32_t>(reg[FOG] >> 56);
+    auto convert = [&](const InputVertex& i) {
+        Vertex v;
+        v.x = static_cast<float>(i.x & 0xFFFF) / 16.0f - ox;
+        v.y = static_cast<float>(i.y & 0xFFFF) / 16.0f - oy;
+        v.z = withFog ? (i.z & 0xFFFFFF) : i.z;
+        v.fog = withFog ? (i.fog & 0xFF) : fogRegister;
+        v.rgba = i.rgba;
+        v.s = i.s;
+        v.t = i.t;
+        v.q = i.q;
+        v.u = u;
+        v.v = vv;
+        v.mw = i.motion[2];
+        v.mx = i.motion[0] - ox * i.motion[2];
+        v.my = i.motion[1] - oy * i.motion[2];
+        return v;
+    };
+    // Targets, texture and the scene's bookkeeping: once.
+    const uint32_t scissorX0 = s.c.scissorX0, scissorX1 = s.c.scissorX1, scissorY0 = s.c.scissorY0, scissorY1 = s.c.scissorY1;
+    const uint32_t width = s.c.colorWidth;
+    const uint32_t colour = targetFor(s.c.colorBase, s.c.colorFormat, false, scissorY1 + 1, width);
+    const bool zte = s.c.depthTest && !(s.c.depthFunc == 1 && !s.c.depthWrite);
+    const uint32_t depth = zte ? targetFor(s.c.depthBase, s.c.depthFormat, true, scissorY1 + 1, width) : 0;
+    // The strip goes on from the last run's two vertices (the GS's queue), the registers end as the last vertex left them.
+    Vertex ring[2] = {queue[0], queue[1]};
+    uint32_t have = std::min<uint32_t>(queued, 2);
+    if (!colour || (zte && !depth)) {   // past the target limit: nothing drawn, the queue kept
+        for (size_t k = 0; k < count; ++k) vertex(in[k], withFog);
+        return;
+    }
+    TextureSource texture;
+    bool first = true;
+    Draw* batch = nullptr;
+    uint32_t triangles = 0;
+    const bool gouraud = (prim >> 3) & 1;
+    for (size_t k = 0; k < count; ++k) {
+        const Vertex v = convert(in[k]);
+        const bool draws = have == 2 && !in[k].adc;
+        if (draws) {
+            Vertex t[3] = {ring[0], ring[1], v};
+            if (!gouraud) t[0].rgba = t[1].rgba = v.rgba;
+            float x0 = t[0].x, x1 = t[0].x, y0 = t[0].y, y1 = t[0].y;
+            for (int j = 1; j < 3; ++j) {
+                x0 = std::min(x0, t[j].x); x1 = std::max(x1, t[j].x); y0 = std::min(y0, t[j].y); y1 = std::max(y1, t[j].y);
+            }
+            const uint32_t left = static_cast<uint32_t>(std::clamp(x0, float(scissorX0), float(scissorX1)));
+            const uint32_t right = static_cast<uint32_t>(std::clamp(std::max(x0, std::ceil(x1) - 1.0f), float(scissorX0), float(scissorX1)));
+            const uint32_t top = static_cast<uint32_t>(std::clamp(y0, float(scissorY0), float(scissorY1)));
+            const uint32_t bottom = static_cast<uint32_t>(std::clamp(std::max(y0, std::ceil(y1) - 1.0f), float(scissorY0), float(scissorY1)));
+            if (s.c.colorKeep != 0xFFFFFFFFu) markWritten(colour, s.c.colorBase, width, s.c.colorFormat, left, right, top, bottom);
+            if (depth && s.c.depthWrite) markWritten(depth, s.c.depthBase, width, s.c.depthFormat, left, right, top, bottom);
+            if (first) {   // the texture as the first triangle sees it (as emit would, after its pages were marked)
+                first = false;
+                if ((prim >> 4) & 1) {
+                    const LastTexture& m = lastTexture;
+                    if (m.valid && m.uploads == uploads && m.ownerChanges == ownerChanges && m.clutLoads == clutLoads && m.state == s) {
+                        texture = m.source;
+                    } else {
+                        texture = textureFor(s);
+                        lastTexture = {texture.kind == TextureSource::Kind::Memory, s, texture, uploads, ownerChanges, clutLoads};
+                    }
+                }
+                if (texture.kind == TextureSource::Kind::Target && texture.id != colour) sceneRead(texture.id);
+                // a texture from memory stays for the run; another (a target's pixels) is looked up per triangle
+                if (texture.kind != TextureSource::Kind::Memory && texture.kind != TextureSource::Kind::None) {
+                    // (not the renderers' case: hand the rest of the run to the per-vertex path, from this vertex on)
+                    queue[0] = ring[0];
+                    queue[1] = ring[1];
+                    queued = have;
+                    for (size_t r = k; r < count; ++r) vertex(in[r], withFog);
+                    return;
+                }
+            }
+            if (!batch && !frame.commands.empty() && frame.commands.back().kind == FrameList::Command::Kind::Draw) {
+                Draw& last = frame.draws[frame.commands.back().index];
+                if (last.topology == Topology::Triangles && last.state == s && last.target == colour && last.depth == depth &&
+                    last.texture.kind == texture.kind && last.texture.id == texture.id && last.texture.version == texture.version &&
+                    last.first + last.count == frame.vertices.size())
+                    batch = &last;
+            }
+            if (!batch) {
+                Draw d;
+                d.state = s;
+                d.topology = Topology::Triangles;
+                d.first = static_cast<uint32_t>(frame.vertices.size());
+                d.count = 0;
+                d.target = colour;
+                d.depth = depth;
+                d.texture = texture;
+                frame.commands.push_back({FrameList::Command::Kind::Draw, static_cast<uint32_t>(frame.draws.size())});
+                frame.draws.push_back(d);
+                ++stats.draws;
+                batch = &frame.draws.back();
+            }
+            frame.vertices.insert(frame.vertices.end(), t, t + 3);
+            batch->count += 3;
+            ++triangles;
+        }
+        ring[0] = ring[1];
+        ring[1] = v;
+        have = std::min<uint32_t>(have + 1, 2);
+    }
+    stats.primitives += triangles;
+    if (triangles && depth) {
+        Scene& scene = scenes[colour];
+        scene.draws += triangles;
+        scene.depth = depth;
+        scene.width = std::max<uint32_t>(scene.width, scissorX1 + 1);
+        scene.height = std::max<uint32_t>(scene.height, scissorY1 + 1);
+        if ((prim >> 5) & 1) {
+            scene.fogColour = s.fogColor;
+            scene.fogged = true;
+        }
+        const std::array<uint16_t, 4> rect = {static_cast<uint16_t>(scissorX0), static_cast<uint16_t>(scissorY0),
+                                              static_cast<uint16_t>(scissorX1), static_cast<uint16_t>(scissorY1)};
+        auto known = std::find_if(scene.viewports.begin(), scene.viewports.end(), [&](const auto& v) { return v.first == rect; });
+        if (known != scene.viewports.end()) known->second += triangles;
+        else if (scene.viewports.size() < 8) scene.viewports.push_back({rect, triangles});
+    }
+    // The GS's state after the run: the queue (a strip goes on), the registers the last vertex wrote.
+    queue[0] = ring[0];
+    queue[1] = ring[1];
+    queued = have;
+    const InputVertex& last = in[count - 1];
+    st[0] = last.s;
+    st[1] = last.t;
+    q = last.q;
+    reg[ST] = static_cast<uint64_t>(std::bit_cast<uint32_t>(last.s)) | static_cast<uint64_t>(std::bit_cast<uint32_t>(last.t)) << 32;
+    reg[RGBAQ] = last.rgba | (static_cast<uint64_t>(std::bit_cast<uint32_t>(last.q)) << 32);
+    motion[0] = motion[1] = motion[2] = 0.0f;
+}
+
 void GsFrontend::vertex(const InputVertex& v, bool withFog) {
     for (int i = 0; i < 3; ++i) motion[i] = v.motion[i];
     write(ST, static_cast<uint64_t>(std::bit_cast<uint32_t>(v.s)) | static_cast<uint64_t>(std::bit_cast<uint32_t>(v.t)) << 32);
@@ -1157,6 +1337,7 @@ uint32_t GsFrontend::replacementTexture(const TextureName& name, const Replaceme
 }
 
 void GsFrontend::resetTextures() {
+    lastTexture.valid = false;
     replacementTextures.clear();
     textureCache.clear();
     decoded.clear();
@@ -1215,6 +1396,7 @@ void GsFrontend::vsync(uint64_t vblank, FrameList& out) {
     }
     lastReinterpretation = {};
     lastMemoryReinterpretation = {};
+    lastTexture.valid = false;
     frame.vblank = vblank;
     frame.displayed = true;
     frame.targets = targets;

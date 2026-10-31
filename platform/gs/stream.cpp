@@ -1,5 +1,6 @@
 // Game -> host graphics stream dispatch (see stream.h).
 #include "stream.h"
+#include "cpu_profile.h"
 
 #include <algorithm>
 #include <array>
@@ -90,6 +91,7 @@ void GraphicsStream::records(const uint8_t* data, size_t bytes) {
         case gfx::kNop: break;
         case gfx::kState:
             if (h.bytes() >= sizeof(gfx::StateRecord)) {
+                GT4_CPU_SCOPE("GS: state records");
                 gfx::StateRecord r;
                 std::memcpy(&r, payload, sizeof r);
                 applyNative(r);
@@ -118,6 +120,7 @@ void GraphicsStream::records(const uint8_t* data, size_t bytes) {
             vif1.batchFrame();
             break;
         case gfx::kBatchWrite: {
+            GT4_CPU_SCOPE("GS: batch writes");
             gfx::BatchWrite w;
             if (h.bytes() < sizeof w) {
                 ++counters.badRecords;
@@ -134,6 +137,7 @@ void GraphicsStream::records(const uint8_t* data, size_t bytes) {
             break;
         }
         case gfx::kBatchModel: {
+            GT4_CPU_SCOPE("GS: model packets");
             gfx::BatchModel m;
             if (h.bytes() < sizeof m) {
                 ++counters.badRecords;
@@ -215,6 +219,7 @@ void GraphicsStream::records(const uint8_t* data, size_t bytes) {
 
 // A batch for GT4's 3D renderers (VIF1 MSCAL).
 void GraphicsStream::runBatch(const Batch3d& batch) {
+    GT4_CPU_SCOPE("GS: 3D renderers (with the front end)");
     uint32_t continueAt = vif1.continueAt;
 #if GT4_VU1_INTERPRETER
     if (reference && reference->tool.run(batch, renderers, rendererSink, continueAt, vif1.gt4Program())) {
@@ -557,14 +562,19 @@ void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload)
         sendGif(path, payload + 4, bytes);
         break;
     }
-    case GT4_REC_VIF1:
+    case GT4_REC_VIF1: {
+        GT4_CPU_SCOPE("GS: VIF1 stream");
         counters.vif1Bytes += size;
         vif1.feed(payload, size);
         break;
-    case GT4_REC_GFX:
+    }
+    case GT4_REC_GFX: {
+        GT4_CPU_SCOPE("GS: native records");
         records(payload, size);
         break;
+    }
     case GT4_REC_GFX_DATA: {
+        GT4_CPU_SCOPE("GS: record data");
         if (size < 8) break;
         uint32_t head[2];
         std::memcpy(head, payload, 8);
@@ -600,6 +610,7 @@ void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload)
         }
         if (frameIndex == dumpFrame && dumpAtEnd) dumpVram("end");
         renderers.endFrame();
+        GT4_CPU_SCOPE("GS: frame end (front end)");
         gs.vsync(field, count);
         ++frameIndex;
         packetIndex = 0;

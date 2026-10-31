@@ -976,9 +976,11 @@ int run(const Options& options) {
         throw std::runtime_error("Window closed before the requested frames were presented");
     if (options.smoke && (!firstResize || !minimized || !restored || !sawMinimized))
         throw std::runtime_error("Rendering smoke test did not complete window transitions");
-    std::printf("%s %u frames on %s (%s); %s; GPU %.3f ms/frame%s\n", windowed ? "Presented" : "Rendered", frames,
+    // the main thread's CPU time a frame: the window, the render thread's recording and submission
+    const double mainMs = frames ? gt4::gs::threadCpuMilliseconds() / double(frames) : 0.0;
+    std::printf("%s %u frames on %s (%s); %s; GPU %.3f ms/frame; main thread CPU %.3f ms/frame%s\n", windowed ? "Presented" : "Rendered", frames,
                 renderer->gpu().name.c_str(), renderer->gpu().type.c_str(), renderer->pipelineDescription().c_str(),
-                renderer->averageGpuMilliseconds(), options.smoke ? "; resize/minimize/restore smoke test OK" : "");
+                renderer->averageGpuMilliseconds(), mainMs, options.smoke ? "; resize/minimize/restore smoke test OK" : "");
     std::fflush(stdout);
     // A teardown that hangs (seen after long headless runs of the game) must not keep scripts waiting.
     std::thread([] {

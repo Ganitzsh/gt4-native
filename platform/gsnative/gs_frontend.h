@@ -178,6 +178,10 @@ public:
     };
     void setPrim(uint32_t prim);
     void vertex(const InputVertex& v, bool withFog);
+    // A run of them with one PRIM (a renderer's strips, ADC between them): the same as vertex() for each, with the
+    // draw state, targets and texture worked out once for the run when it is a triangle strip with perspective
+    // texturing or none (what the 3D renderers send); other runs go vertex by vertex.
+    void vertices(const InputVertex* v, size_t count, bool withFog);
     // The display from this VBlank on.
     void display(const gfx::DisplayRecord& d) { shown = d; }
     // Ends the frame: `out` receives it (swapped, so its buffers are reused).
@@ -279,6 +283,16 @@ private:
         uint64_t serial = 0, uploads = 0;
     } lastReinterpretation, lastMemoryReinterpretation;
     uint64_t uploads = 0;   // pages written by transfers, ever
+    uint64_t ownerChanges = 0, clutLoads = 0;   // pages whose writer changed (markWritten), CLUT loads: ever
+    // The last primitive's texture from GS memory, for the next one with the same state (GT4's renderers send
+    // thousands of triangles a frame each through textureFor, 5 ms of a race frame): valid while no transfer,
+    // CLUT load or change of a page's writer came in between; forgotten at the end of a frame list.
+    struct LastTexture {
+        bool valid = false;
+        DrawState state;
+        TextureSource source;
+        uint64_t uploads = 0, ownerChanges = 0, clutLoads = 0;
+    } lastTexture;
     // The target the CLUT buffer was last loaded from (0: memory), and the texture of that load (samePalette).
     struct ClutSource {
         uint32_t target = 0;
@@ -294,8 +308,13 @@ private:
     // (129 decodes a frame in a race, each a GPU upload and mip chain), so what was decoded once is kept by what
     // it is, not where it was, and the GPU texture is used again. They own the texture ids of memory textures.
     struct Decoded {
-        uint32_t id = 0;
+        uint32_t id = 0;                   // 0: not decoded (a texture pack's image stands for it)
         uint64_t lastUsed = 0, texels = 0;
+        // Its name in the texture pack (texture_name.h), worked out once per content: hashing the texture as PCSX2
+        // does, each time GT4 put it back into its slot, took 26 ms a frame of a race.
+        bool named = false, found = false;
+        TextureName name;
+        uint32_t origin[2] = {};
     };
     std::unordered_map<uint64_t, Decoded> decoded;
     // Each 8 KiB page's content hash, and the page generation it was computed at (pageContent).

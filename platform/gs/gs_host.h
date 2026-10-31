@@ -63,4 +63,7 @@ private:
     std::unique_ptr<Impl> impl;
 };
 
+// The calling thread's CPU time so far (user and kernel), milliseconds; 0 where not known.
+double threadCpuMilliseconds();
+
 }  // namespace gt4::gs
