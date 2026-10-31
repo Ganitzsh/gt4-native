@@ -322,6 +322,8 @@ Generated from `gt4_host --list-options` (defaults are the `high` preset).
 | `display.refresh_rate` | `0` | 0..1000 | Exclusive fullscreen refresh rate in Hz; 0 picks the highest rate for the resolution. |
 | `display.vsync` | `on` | on \| off \| adaptive \| mailbox | Presentation: on = FIFO (no tearing), off = IMMEDIATE (tearing, lowest latency), adaptive = FIFO_RELAXED (tears only when late), mailbox = MAILBOX (no tearing, newest frame wins). Falls back to FIFO when the surface lacks the mode. |
 | `display.fps_limit` | `0` | 0..1000 | Frame-rate cap in frames per second; 0 = no cap. The game simulation stays at its own 60 Hz. |
+| `display.frame_interpolation` | `on` | on \| off | Presentation above 60 Hz: the game runs at 60 Hz; between two of its frames each display refresh draws the last frame again with its moving 3D (cars, camera, scenery) interpolated by the time passed, shown from the buffer the game draws into (docs/NATIVE_V2.md, step 4). Off: each game frame shows until the next. |
+| `display.race_frames` | `progressive` | fields \| progressive | Races as the PS2's 480i fields (224 lines, alternating) or the game's own 480p mode (whole 448-line frames), applied by 00436640 (game option 3). |
 | `display.output_bits` | `8` | 8 \| 10 | Swapchain precision: 8 or 10 bits per channel (10 reduces banding where the display supports it). |
 | `display.high_dpi` | `on` | on \| off | Render at the full pixel density of high-DPI displays (otherwise the OS scales the window). |
 | `display.hdr` | `off` | on \| off | HDR10 output (PQ, BT.2020) where the display offers it: the game's picture at `display.hdr_paper_white`, its highlights expanded towards `display.hdr_peak`. Off, or a display without HDR: SDR. |

@@ -98,15 +98,40 @@ and for the screen grids, whose packets are post effects (step 3).
 
 ## Step 3: native effects
 
-Glare, colour grading (the 24-bit frame read as 8-bit indices through the curve palette), the car reflection maps,
-the road reflection, the blend passes (004A3998) and the screen grids become render passes of their own; the
-reinterpretations and palette tricks go.
+GT4's post effects that worked through the GS's memory tricks become passes of their own, sent as effect records
+(`gfx::EffectRecord`, in order with the draws):
+
+- **The race's colour grading** (004A7D90 / 004A7FA8 -> 004A81A8, done 2026-10-31). The PS2 read the 24-bit frame
+  as 8-bit indices in three additive sprite passes through the curve palette (one channel each, modulated by a
+  column of a saturation matrix: x I + (1 - x) luma), summed into a scratch buffer, then loaded that buffer as
+  palettes and drew an index ramp through them back into the frame. Per pixel: out_k = min(255, sum_c
+  (curve[byte_c].k * weight_c.k) >> 7). `gsn_grade.comp` computes that per render pixel; identical to the GS's way
+  at 1x (the race recording), and no reinterpretation is left in the race. `GT4_EFFECTS_BOTH=1` (runtime) sends both
+  ways with the GS's between markers; the host draws one or the other (`GT4_NATIVE_EFFECTS=0`: the GS's).
+- Glare (003BADF8), the blend passes (004A3998) and the reflections are plain draws of targets into targets: the
+  renderer draws them as such. The reinterpretation path stays as the fallback for an effect not seen yet (004A9470,
+  grid 0x3EA0, did not run in the race or the menus).
 
 ## Step 4: timing
 
-The simulation keeps its fixed 60 Hz step; rendering is decoupled (interpolated, any refresh rate). Races draw
-progressive frames instead of 224-line fields; "VBlank" leaves the interfaces (the frame clock, the link's VSYNC
-record, the host's counters).
+- **60 Hz** (done 2026-10-31): the runtime's frame clock steps the game at 60 Hz, not 59.94 (a 60 Hz display no
+  longer repeats a frame every 16 s; the sound mixes 800 samples a frame; alarms keep 262.5 H-blanks a frame).
+- **Progressive races** (done): `display.race_frames = progressive` (the default) makes the game apply its 480p mode
+  where it would use fields (00436640): whole 448-line frames, twice the vertical detail, 16-bit frame buffers (the
+  displayed target is chosen by its format's layout, since the 480p frames sit at the 480i ones' addresses).
+- **Presentation decoupled** (done): between two game frames each display refresh draws the last frame list again
+  with its moving 3D's transforms blended by the time passed (`gsn_models.comp`: the previous frame's and this
+  one's, as the motion vectors already matched them), shown from the buffer the list draws into (the game draws a
+  back buffer while it shows the front one: t = 0 is the state on screen, 1 the new one, so a new list continues
+  exactly where the last presentation was). Measured live at 144 Hz: every presented frame moves on (frame-to-frame
+  change 1.0-1.5) where without it a repeat (0.26) and a jump (3) alternate. 2D, particles drawn by the CPU's paths
+  and objects not seen in the previous frame step at 60 Hz. GPU cost: the frame's work per refresh (1080p high: about
+  5 ms).
+- **Any shape** (done): the content aspect reaches the game at start-up and every frame (`aspect.ratio = window`: the
+  window's), so Hor+ 3D and the anchored HUD follow 21:9 and 32:9 (checked live) as well as 16:9 and 16:10. Not yet:
+  the rear-view mirror and the minimap keep their 16:9 placement.
+- Left: VBlank in the interfaces. The frame clock still delivers the game's frame callbacks as interrupts (the
+  kernel suspends the running guest thread), and the link's record is named VSYNC.
 
 ## State
 
@@ -114,5 +139,5 @@ record, the host's counters).
 |---|---|
 | 1 | in progress. 2026-10-31: texture sets are native: sent once per content, named by the draws, decoded once (pixel-identical to the address path). Graphics memory gets set bytes lazily. Targets: with step 3 |
 | 2 | done 2026-10-31: the renderers run on the GPU (homogeneous output, hardware clipping, a compute shader); model packets go once and decode once. Live race 60 fps at 1080p; front end 10 ms, stream 3 ms a frame |
-| 3 | - |
-| 4 | - |
+| 3 | in progress. 2026-10-31: the race's colour grading is a pass of its own; no reinterpretation left in the race |
+| 4 | in progress. 2026-10-31: 60 Hz clock, progressive races, presentation interpolated to any refresh rate, any aspect ratio; left: the frame callbacks as interrupts |
