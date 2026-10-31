@@ -29,6 +29,9 @@ struct Vertex {
     // A sprite's texture rectangle (UV in texels, or S/Q and T/Q): filtering at a higher resolution stays
     // inside it. minU > maxU for other primitives.
     float minU = 1, minV = 1, maxU = 0, maxV = 0;
+    // Where the vertex was in the previous frame (GT4's 3D renderers: ps2::GsVertex::motion), in these window
+    // pixels: homogeneous (x w, y w, w) over this frame's w; mw = 0: not known (2D, other paths).
+    float mx = 0, my = 0, mw = 0;
 };
 
 // What a draw's result depends on: its primitive attributes, the state of the context it uses (include/gt4/
@@ -165,6 +168,7 @@ public:
         uint32_t rgba = 0;
         uint32_t x = 0, y = 0, z = 0, fog = 0;   // x, y in 12.4; z 24 bits with fog, 32 without
         bool adc = false;
+        float motion[3] = {0, 0, 0};   // ps2::GsVertex::motion (x, y in pixels before XYOFFSET)
     };
     void setPrim(uint32_t prim);
     void vertex(const InputVertex& v, bool withFog);
@@ -230,6 +234,7 @@ private:
     std::array<Vertex, 3> queue;
     uint32_t queued = 0, stripParity = 0;
     float st[2] = {}, q = 1;   // ST and Q as set by ST/RGBAQ
+    float motion[3] = {};      // the next vertex's (InputVertex::motion), for the XYZ write that follows
     // Each GIF path's tag in progress: its data may continue in the next transfer (an IMAGE tag in one DMA
     // packet, its pixels in the next).
     struct GifPath {

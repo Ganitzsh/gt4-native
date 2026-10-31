@@ -32,8 +32,14 @@ struct DrawConstants {
     uint32_t tex, fogColour, alphaTest, blend;
     uint32_t clampU, clampV;   // WMS/WMT (0-1), MINU/MINV (2-11), MAXU/MAXV (12-21): CLAMP
     uint32_t lod;              // LCM (0), L (1-2), K (3-14, signed 7.4), MXL (16-18): TEX1
+    float jitter[2];           // the scene stage's sub-pixel offset, GS pixels (temporal anti-aliasing)
 };
-static_assert(sizeof(DrawConstants) == 72);
+static_assert(sizeof(DrawConstants) == 80);
+
+// The temporal anti-aliasing's sub-pixel offsets: Halton (2, 3), 8 phases, in render pixels from the centre.
+constexpr float kHalton[8][2] = {{0.0f, -1.0f / 6.0f},   {-0.25f, 1.0f / 6.0f}, {0.25f, -7.0f / 18.0f}, {-0.375f, -1.0f / 18.0f},
+                                 {0.125f, 5.0f / 18.0f}, {-0.125f, -5.0f / 18.0f}, {0.375f, 1.0f / 18.0f}, {-0.4375f, 7.0f / 18.0f}};
+constexpr VkFormat kVelocity = VK_FORMAT_R16G16_SFLOAT;
 
 enum : uint32_t {
     kTextured = 1, kUv = 2, kFog = 4, kBlend = 8, kPabe = 16, kFba = 32, kFromTarget = 64, kTarget24 = 128, kDestAlphaBlend = 256,
@@ -123,6 +129,19 @@ struct GsnScene::Impl {
     } lighting;
     vk::Pipeline aoPass, lightPass;
     vk::Image aoImage, litImage;
+    // The scene stage's temporal anti-aliasing (docs/NATIVE_RENDERER.md): the 3D draws of a scene are jittered,
+    // drawn again for their motion vectors (velocityPass) and resolved against the scene's history.
+    bool temporal = false;
+    uint64_t displayedFrames = 0;   // frames shown so far (the jitter's phase, the histories' age)
+    vk::Pipeline velocityPass, taaPass;
+    vk::Image velocityImage;
+    struct History {
+        vk::Image image[2];
+        uint32_t current = 0;    // the image holding the last resolve
+        uint64_t used = 0;       // displayedFrames when last resolved
+        bool valid = false;
+    };
+    std::unordered_map<uint32_t, History> histories;   // by scene target
     // A Z buffer's depth plane as a sampled view (kept with the image's other views, destroyed with it).
     VkImageView depthView(vk::Image& image) {
         if (!image.mipViews.empty()) return image.mipViews[0];
@@ -204,6 +223,11 @@ struct GsnScene::Impl {
         vk::destroy(device, lightPass);
         vk::destroy(device, aoImage);
         vk::destroy(device, litImage);
+        vk::destroy(device, velocityPass);
+        vk::destroy(device, taaPass);
+        vk::destroy(device, velocityImage);
+        for (auto& [id, h] : histories)
+            for (vk::Image& i : h.image) vk::destroy(device, i);
         for (auto& [key, p] : pipelines) vk::destroy(device, p);
         vk::destroy(device, display);
         vk::destroy(device, stencilPrep);
@@ -575,26 +599,46 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         vkCmdEndRendering(command);
     };
 
-    // Lighting (docs/LIGHTING.md): a 3D scene complete in its target (the front end's Light command) gets its
-    // ambient occlusion from its Z buffer and the enhanced grade, computed into litImage and copied back.
-    auto relight = [&](const gsn::FrameList::Lighting& l) {
+    // The scene stage (docs/NATIVE_RENDERER.md, docs/LIGHTING.md): a 3D scene complete in its target (the
+    // front end's Light command), before GT4's post effects and HUD. Its colour and Z images, and its area.
+    struct SceneImages {
+        vk::Image* colour = nullptr;
+        vk::Image* depth = nullptr;
+        VkExtent2D area{};
+    };
+    auto sceneImages = [&](const gsn::FrameList::Lighting& l, SceneImages& out) {
         auto ct = targets.find(l.target), dt = targets.find(l.depth);
-        if (ct == targets.end() || dt == targets.end() || ct->second.depth || !dt->second.depth) return;
-        vk::Image& colour = ct->second.image;
-        vk::Image& depth = dt->second.image;
-        if (!colour.valid() || !depth.valid()) return;
-        end();
-        VkExtent2D e{std::min(colour.extent.width, depth.extent.width), std::min(colour.extent.height, depth.extent.height)};
+        if (ct == targets.end() || dt == targets.end() || ct->second.depth || !dt->second.depth) return false;
+        if (!ct->second.image.valid() || !dt->second.image.valid()) return false;
+        out.colour = &ct->second.image;
+        out.depth = &dt->second.image;
+        VkExtent2D e{std::min(out.colour->extent.width, out.depth->extent.width), std::min(out.colour->extent.height, out.depth->extent.height)};
         if (l.width && l.height) e = {std::min(e.width, l.width * sx), std::min(e.height, l.height * sy)};
+        out.area = e;
+        return true;
+    };
+    // An image of the stage at least `e` large (kept, grown).
+    auto ensureImage = [&](vk::Image& image, VkExtent2D e, VkFormat format, VkImageUsageFlags usage, const char* name) {
+        if (image.valid() && image.extent.width >= e.width && image.extent.height >= e.height) return false;
+        if (image.valid()) retire(image);
+        vk::ImageDesc desc;
+        desc.format = format;
+        desc.extent = {std::max(e.width, image.extent.width), std::max(e.height, image.extent.height)};
+        desc.usage = usage;
+        desc.name = name;
+        image = vk::createImage(device, desc);
+        return true;
+    };
+    // Lighting: ambient occlusion from the Z buffer and the enhanced grade, computed into litImage and copied back.
+    auto relight = [&](const gsn::FrameList::Lighting& l) {
+        SceneImages si;
+        if (!sceneImages(l, si)) return;
+        vk::Image& colour = *si.colour;
+        vk::Image& depth = *si.depth;
+        end();
+        const VkExtent2D e = si.area;
         auto ensure = [&](vk::Image& image, VkFormat format, VkImageUsageFlags usage, const char* name) {
-            if (image.valid() && image.extent.width >= e.width && image.extent.height >= e.height) return;
-            if (image.valid()) retire(image);
-            vk::ImageDesc desc;
-            desc.format = format;
-            desc.extent = {std::max(e.width, image.extent.width), std::max(e.height, image.extent.height)};
-            desc.usage = usage;
-            desc.name = name;
-            image = vk::createImage(device, desc);
+            ensureImage(image, e, format, usage, name);
         };
         ensure(aoImage, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, "gsn occlusion");
         ensure(litImage, kColour, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, "gsn lit");
@@ -639,6 +683,144 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         copy.srcSubresource = copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         copy.extent = {e.width, e.height, 1};
         vkCmdCopyImage(command, litImage.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, colour.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+    };
+
+    // Temporal anti-aliasing: the 3D draws (depth-tested) into a scene's target before its Light command are
+    // jittered by this frame's sub-pixel offset, the same for every scene of the frame.
+    std::vector<uint8_t> jittered(frame.commands.size(), 0);
+    const float* phase = kHalton[displayedFrames % 8];
+    const float jitterGs[2] = {phase[0] / float(sx), phase[1] / float(sy)};
+    if (temporal) {
+        std::vector<std::pair<uint32_t, uint32_t>> lit;   // (target, Z buffer) of the scenes lit later
+        for (size_t at = frame.commands.size(); at-- > 0;) {
+            const auto& cmd = frame.commands[at];
+            if (cmd.kind == gsn::FrameList::Command::Kind::Light && cmd.index < frame.lights.size()) {
+                lit.emplace_back(frame.lights[cmd.index].target, frame.lights[cmd.index].depth);
+            } else if (cmd.kind == gsn::FrameList::Command::Kind::Draw && !lit.empty()) {
+                const gsn::Draw& d = frame.draws[cmd.index];
+                if (d.depth && d.state.c.depthTest && std::find(lit.begin(), lit.end(), std::make_pair(d.target, d.depth)) != lit.end())
+                    jittered[at] = 1;
+            }
+        }
+    }
+    // The scene's motion vectors: its 3D draws again, with their previous positions (gsn_velocity.vert), each
+    // where the Z buffer the scene left shows it (depth test EQUAL; alpha-tested cut-outs need no texture: where
+    // a fence was not drawn, the Z is what is behind it). 2D and transparent draws (blended without a Z write)
+    // leave the surface under them. Into velocityImage, GS pixels.
+    auto drawVelocity = [&](const gsn::FrameList::Lighting& l, size_t lightAt) {
+        SceneImages si;
+        if (!sceneImages(l, si)) return false;
+        end();
+        vk::Image& colour = *si.colour;
+        vk::Image& depth = *si.depth;
+        ensureImage(velocityImage, colour.extent, kVelocity, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, "gsn motion vectors");
+        vk::toColor(b, velocityImage, true);
+        vk::toDepth(b, depth);
+        b.flush(command);
+        VkRenderingAttachmentInfo v{};
+        v.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        v.imageView = velocityImage.view;
+        v.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        v.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        v.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        VkRenderingAttachmentInfo ds{};
+        ds.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        ds.imageView = depth.view;
+        ds.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        ds.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        ds.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        VkRenderingInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        info.renderArea = {{0, 0}, {std::min({colour.extent.width, depth.extent.width, velocityImage.extent.width}),
+                                    std::min({colour.extent.height, depth.extent.height, velocityImage.extent.height})}};
+        info.layerCount = 1;
+        info.colorAttachmentCount = 1;
+        info.pColorAttachments = &v;
+        info.pDepthAttachment = &ds;
+        info.pStencilAttachment = &ds;
+        vkCmdBeginRendering(command, &info);
+        VkViewport viewport{0, 0, static_cast<float>(colour.extent.width), static_cast<float>(colour.extent.height), 0, 1};
+        vkCmdSetViewport(command, 0, 1, &viewport);
+        vk::bind(command, velocityPass);
+        const VkDeviceSize zero = 0;
+        vkCmdBindVertexBuffers(command, 0, 1, &vertices.buffer, &zero);
+        vkCmdSetDepthCompareOp(command, VK_COMPARE_OP_EQUAL);
+        DrawConstants k{};
+        k.targetSize[0] = static_cast<float>(colour.extent.width);
+        k.targetSize[1] = static_cast<float>(colour.extent.height);
+        k.scale[0] = static_cast<float>(sx);
+        k.scale[1] = static_cast<float>(sy);
+        for (size_t at = 0; at < lightAt; ++at) {
+            const auto& cmd = frame.commands[at];
+            if (cmd.kind != gsn::FrameList::Command::Kind::Draw) continue;
+            const gsn::Draw& d = frame.draws[cmd.index];
+            if (d.target != l.target || d.topology != gsn::Topology::Triangles || !d.count) continue;
+            if (!(frame.vertices[d.first].mw > 0.0f || frame.vertices[d.first + d.count - 1].mw > 0.0f)) continue;
+            const gfx::Context& c = d.state.c;
+            const bool zt = d.depth && c.depthTest;
+            if (d.depth && d.depth != l.depth) continue;
+            if (c.colorKeep == 0xFFFFFFFFu) continue;                                    // Z only
+            if (((d.state.prim >> 6) & 1) && !(zt && c.depthWrite)) continue;            // transparent
+            vkCmdSetDepthTestEnable(command, zt ? VK_TRUE : VK_FALSE);
+            const uint32_t x0 = c.scissorX0, y0 = c.scissorY0;
+            const uint32_t right = std::min((uint32_t(c.scissorX1) + 1) * sx, info.renderArea.extent.width),
+                           bottom = std::min((uint32_t(c.scissorY1) + 1) * sy, info.renderArea.extent.height);
+            if (right <= x0 * sx || bottom <= y0 * sy) continue;
+            const VkRect2D scissor{{static_cast<int32_t>(x0 * sx), static_cast<int32_t>(y0 * sy)}, {right - x0 * sx, bottom - y0 * sy}};
+            vkCmdSetScissor(command, 0, 1, &scissor);
+            k.jitter[0] = jittered[at] ? jitterGs[0] : 0.0f;
+            k.jitter[1] = jittered[at] ? jitterGs[1] : 0.0f;
+            vk::pushConstants(command, velocityPass, k);
+            vkCmdDraw(command, d.count, 1, d.first, 0);
+        }
+        vkCmdEndRendering(command);
+        return true;
+    };
+    // The resolve: the scene against its history (gsn_taa.comp), into the history's other image, copied back.
+    auto antialias = [&](const gsn::FrameList::Lighting& l) {
+        SceneImages si;
+        if (!sceneImages(l, si)) return;
+        vk::Image& colour = *si.colour;
+        const VkExtent2D e = si.area;
+        History& h = histories[l.target];
+        bool reset = !h.valid || displayedFrames > h.used + 1;
+        for (vk::Image& i : h.image)
+            reset = ensureImage(i, e, kColour, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                                "gsn scene history") || reset;
+        vk::Image& before = h.image[h.current];
+        vk::Image& after = h.image[1 - h.current];
+        vk::toSampled(b, colour, vk::kCompute);
+        vk::toSampled(b, velocityImage, vk::kCompute);
+        vk::toSampled(b, *si.depth, vk::kCompute);
+        if (!reset) vk::toSampled(b, before, vk::kCompute);
+        vk::toStorage(b, after, true);
+        b.flush(command);
+        vk::bind(command, taaPass);
+        vk::Descriptors()
+            .sampled(0, colour.view, samplers[0])
+            .sampled(1, velocityImage.view, samplers[0])
+            .sampled(2, depthView(*si.depth), samplers[0])
+            .sampled(3, reset ? colour.view : before.view, samplers[2])
+            .storage(4, after.view)
+            .push(command, taaPass);
+        static const uint32_t view = std::getenv("GT4_TAA_VIEW") ? static_cast<uint32_t>(std::atoi(std::getenv("GT4_TAA_VIEW"))) : 0;
+        struct {
+            float size[2], historySize[2], scale[2], jitter[2], reset;
+            uint32_t view;
+        } k{{float(e.width), float(e.height)}, {float(before.extent.width), float(before.extent.height)}, {float(sx), float(sy)},
+            {phase[0], phase[1]}, reset ? 1.0f : 0.0f, view};
+        vk::pushConstants(command, taaPass, k);
+        vk::dispatch2D(command, e.width, e.height);
+        b.image(after, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_READ_BIT);
+        b.image(colour, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        b.flush(command);
+        VkImageCopy copy{};
+        copy.srcSubresource = copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        copy.extent = {e.width, e.height, 1};
+        vkCmdCopyImage(command, after.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, colour.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+        h.current = 1 - h.current;
+        h.used = displayedFrames;
+        h.valid = true;
     };
 
     // Reinterpreted textures: built from their target when a draw first needs them.
@@ -753,7 +935,11 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
     for (size_t at = 0; at < frame.commands.size(); ++at) {
         const auto& cmd = frame.commands[at];
         if (cmd.kind == gsn::FrameList::Command::Kind::Light) {
-            if ((lighting.occlusion > 0.0f || lighting.grade > 0.0f) && cmd.index < frame.lights.size()) relight(frame.lights[cmd.index]);
+            if (cmd.index >= frame.lights.size()) continue;
+            const gsn::FrameList::Lighting& l = frame.lights[cmd.index];
+            const bool moving = temporal && drawVelocity(l, at);
+            if (lighting.occlusion > 0.0f || lighting.grade > 0.0f) relight(l);
+            if (moving) antialias(l);
             continue;
         }
         if (cmd.kind != gsn::FrameList::Command::Kind::Draw) continue;
@@ -982,6 +1168,10 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
             vkCmdSetDepthWriteEnable(command, ps.zwrite ? VK_TRUE : VK_FALSE);
             DrawConstants pk = k;
             if (ps.inverted) pk.flags |= kAlphaInvert;
+            if (jittered[at]) {
+                pk.jitter[0] = jitterGs[0];
+                pk.jitter[1] = jitterGs[1];
+            }
             vk::Descriptors().sampled(0, view, sampler).push(command, p);
             vk::pushConstants(command, p, pk);
             vkCmdDraw(command, d.count, 1, d.first, 0);
@@ -990,6 +1180,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
     end();
     // The displayed buffer, for recordMain (a list cut for a GS -> host read displays nothing).
     if (!frame.displayed) return;
+    ++displayedFrames;
     displayTarget = frame.display.target2 ? frame.display.target2 : frame.display.target1;
     auto shown = targets.find(displayTarget);
     if (shown != targets.end()) {
@@ -1079,6 +1270,9 @@ bool GsnScene::hasFrame() const { return impl->any; }
 void GsnScene::setScale(uint32_t scale) { impl->scaleSetting = scale; }
 void GsnScene::setAnisotropy(int anisotropy) { impl->makeMipSamplers(static_cast<float>(anisotropy)); }
 
+void GsnScene::setTemporal(bool on) { impl->temporal = on; }
+bool GsnScene::antiAliasesItself() const { return impl->temporal; }
+
 void GsnScene::setLighting(float occlusion, uint32_t directions, float grade, float aspect) {
     Impl::Lighting& l = impl->lighting;
     l.occlusion = occlusion;
@@ -1122,6 +1316,31 @@ void GsnScene::prepare(const SceneFormats& formats) {
                                         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                                          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
                                         36, "gsn light");
+    if (!s.velocityPass.valid()) {
+        vk::GraphicsDesc v;
+        v.vertex = shaders::gsn_velocity_vert();
+        v.fragment = shaders::gsn_velocity_frag();
+        v.colors = {kVelocity};
+        v.depth = kDepth;
+        v.stencil = kDepth;
+        v.depthTest = true;
+        v.depthWrite = false;
+        v.depthCompare = VK_COMPARE_OP_EQUAL;
+        v.vertices.stride = sizeof(gsn::Vertex);
+        v.vertices.attributes = {{0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(gsn::Vertex, x)},
+                                 {1, 0, VK_FORMAT_R32_UINT, offsetof(gsn::Vertex, z)},
+                                 {7, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(gsn::Vertex, mx)}};
+        v.pushSize = sizeof(DrawConstants);
+        v.dynamics = {VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE, VK_DYNAMIC_STATE_DEPTH_COMPARE_OP};
+        v.name = "gsn motion vectors";
+        s.velocityPass = vk::createGraphics(s.device, v);
+    }
+    if (!s.taaPass.valid())
+        s.taaPass = vk::createCompute(s.device, shaders::gsn_taa_comp(),
+                                      {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                       VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                       VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
+                                      40, "gsn temporal anti-aliasing");
     if (!s.reinterpret.valid())
         s.reinterpret = vk::createCompute(s.device, shaders::gsn_reinterpret_comp(),
                                           {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -1213,6 +1432,16 @@ void GsnScene::Impl::executePending(VkCommandBuffer command, uint32_t slot, VkEx
             for (const gsn::Target& t : frame.targets)
                 for (size_t k = 0; k < dump.images.size(); ++k)
                     if (dump.images[k].first == t.id) dump.bps[k] = t.bp;
+        }
+    }
+    // Histories of scenes not seen for 10 seconds go (a scene's target left behind with its screen).
+    for (auto it = histories.begin(); it != histories.end();) {
+        if (displayedFrames > it->second.used + 600) {
+            for (vk::Image& i : it->second.image)
+                if (i.valid()) retire(i);
+            it = histories.erase(it);
+        } else {
+            ++it;
         }
     }
     // The executed lists' buffers go back to the queue's vector for reuse; the last one stays in `frame`.

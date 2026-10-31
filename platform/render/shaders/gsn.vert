@@ -19,8 +19,11 @@ layout(location = 2) out vec2 outUv;
 layout(location = 3) out float outFog;
 layout(location = 4) flat out vec4 outBounds;
 
+// gsn_velocity.vert draws the scene's 3D again with the same position to the bit (its depth test EQUAL).
+invariant gl_Position;
+
 void main() {
-    const vec2 p = (inPosition * draw.scale + 0.5) / draw.targetSize * 2.0 - 1.0;
+    const vec2 p = ((inPosition + draw.jitter) * draw.scale + 0.5) / draw.targetSize * 2.0 - 1.0;
     // Z as an unsigned fraction of 2^32: float keeps 24 bits, all of a 24-bit Z buffer.
     gl_Position = vec4(p, float(inZ) * (1.0 / 4294967296.0), 1.0);
     outColour = inColour;

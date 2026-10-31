@@ -233,7 +233,8 @@ struct FramePipeline::Impl {
         return vk::createImage(device, desc);
     }
 
-    Config resolveConfig(const Settings& s, VkExtent2D swapchain, bool motionVectors) {
+    // `selfResolved`: the scene does its own temporal anti-aliasing (SceneSource::antiAliasesItself).
+    Config resolveConfig(const Settings& s, VkExtent2D swapchain, bool motionVectors, bool selfResolved = false) {
         Config c;
         c.swapchain = swapchain;
         const float target = aspectValue(s.aspect);
@@ -252,7 +253,8 @@ struct FramePipeline::Impl {
         c.upscaler = !motionVectors && s.upscaler == Upscaler::Fsr2 ? Upscaler::Fsr1 : s.upscaler;
         c.fsr2 = c.upscaler == Upscaler::Fsr2 && !fsr2Failed;
         if (c.fsr2 && ratio < 1.0f) ratio = 1.0f;   // FSR 2 does not downsample; supersampling uses the other paths
-        const AntiAliasing aa = !motionVectors && (s.aa == AntiAliasing::Taa || s.aa == AntiAliasing::SmaaT2x) ? AntiAliasing::Smaa : s.aa;
+        AntiAliasing aa = !motionVectors && (s.aa == AntiAliasing::Taa || s.aa == AntiAliasing::SmaaT2x) ? AntiAliasing::Smaa : s.aa;
+        if (selfResolved && (s.aa == AntiAliasing::Taa || s.upscaler == Upscaler::Fsr2)) aa = AntiAliasing::Off;
         c.taa = !c.fsr2 && aa == AntiAliasing::Taa;
         c.spatialAa = c.temporal() ? AntiAliasing::Off : aa;
         c.render = {roundSize(static_cast<float>(width) / ratio), roundSize(static_cast<float>(height) / ratio)};
@@ -292,7 +294,7 @@ struct FramePipeline::Impl {
                 if (!fsr2.create(c.output)) {
                     std::fprintf(stderr, "FSR 2 is unavailable on this device; using TAA instead\n");
                     fsr2Failed = true;
-                    config = resolveConfig(settings, c.swapchain, scene.hasMotionVectors());
+                    config = resolveConfig(settings, c.swapchain, scene.hasMotionVectors(), scene.antiAliasesItself());
                     createTargets(scene);
                     return;
                 }
@@ -362,7 +364,7 @@ struct FramePipeline::Impl {
 
     void configure(const Settings& s, VkExtent2D swapchain, SceneSource& scene) {
         settings = s;
-        const Config next = resolveConfig(s, swapchain, scene.hasMotionVectors());
+        const Config next = resolveConfig(s, swapchain, scene.hasMotionVectors(), scene.antiAliasesItself());
         const bool rebuild = !configured || !(next == config);
         config = next;   // fields that need no new targets (e.g. the spatial upscaler) apply directly
         if (rebuild) {

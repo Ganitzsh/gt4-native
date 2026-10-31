@@ -599,6 +599,7 @@ void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload)
             releasePath3();
         }
         if (frameIndex == dumpFrame && dumpAtEnd) dumpVram("end");
+        renderers.endFrame();
         gs.vsync(field, count);
         ++frameIndex;
         packetIndex = 0;
@@ -659,7 +660,8 @@ std::string GraphicsStream::describe() const {
         << " unpacks, " << v.microprograms << " 3D batches (" << r.batches << " drawn, " << counters.primitiveRuns << " primitive runs, "
         << counters.primitiveVertices << " vertices, " << r.clipped << " clipped triangles, " << r.skipped + counters.unknownPrograms
         << " without a renderer, " << r.unexpectedTags << " unexpected tags, " << r.countMismatch << " count mismatches, "
-        << r.oversized << " oversized, " << v.outsideBatch << " qwords outside the batch buffers), " << v.directQwords
+        << r.oversized << " oversized, " << v.outsideBatch << " qwords outside the batch buffers; " << r.setups << " objects, "
+        << r.matched << " seen the frame before), " << v.directQwords
         << " DIRECT qwords, " << v.mpgInstructions << " MPG instructions, " << v.unknownCodes << " unknown codes; "
         << counters.gfxRecords << " native records (" << counters.uploads << " uploads, " << counters.uploadsWithoutData
          << " without data, " << counters.draws << " draws, " << counters.badRecords << " bad); " << counters.displays << " displays, " << counters.reads

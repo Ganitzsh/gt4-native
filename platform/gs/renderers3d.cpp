@@ -225,6 +225,7 @@ bool decodeEntry(uint32_t pc, Entry& entry) {
 
 struct Projector {
     const Renderers3d::Constants& c;
+    const Renderers3d::Constants* previous = nullptr;   // the object's constants in the previous frame (motion)
     // The transform: the position's w is taken as 1.
     Vec4 clip(const Vec4& p) const {
         Vec4 r;
@@ -238,6 +239,26 @@ struct Projector {
         Vec4 r;
         for (int i = 0; i < 4; ++i) r[i] = base[i] + s[i] * c.scale[i];
         return r;
+    }
+    // Where the previous frame's transform put the point: homogeneous window coordinates (x w, y w, w); w = 0
+    // when not known or behind the eye then.
+    Vec4 history(const Vec4& p) const {
+        if (!previous) return {};
+        const Renderers3d::Constants& o = *previous;
+        auto row = [&](int i) { return o.matrix[0][i] * p.x + o.matrix[1][i] * p.y + o.matrix[2][i] * p.z + o.matrix[3][i]; };
+        const float x = row(0), y = row(1), w = row(3);
+        if (!(w > 1e-6f) || !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(w)) return {};
+        return {o.offset.x * w + o.scale.x * x, o.offset.y * w + o.scale.y * y, w, 0.0f};
+    }
+    // A vertex's motion: its history over this frame's w (q = 1/w).
+    static void withHistory(GsVertex& v, const Vec4& h, float q) {
+        if (h.z == 0.0f || !(q > 0.0f) || q >= FLT_MAX) return;
+        const float m[3] = {h.x * q, h.y * q, h.z * q};
+        if (std::isfinite(m[0]) && std::isfinite(m[1]) && std::isfinite(m[2]) && m[2] > 0.0f)
+            for (int i = 0; i < 3; ++i) v.motion[i] = m[i];
+    }
+    void motion(GsVertex& v, const Vec4& position, float q) const {
+        if (previous) withHistory(v, history(position), q);
     }
 };
 
@@ -283,6 +304,7 @@ void stripRenderer(const Reader& r, const Projector& p, Vertices& in, Output& ou
             const float q = reciprocal(clip.w);
             const Vec4 s = p.projected(clip, q);
             out.vertices.push_back(gsVertex(out.tag, in.st[v].x * q, in.st[v].y * q, q, in.colour[v], p.window(s, j < 2 ? adc : p.c.offset)));
+            p.motion(out.vertices.back(), in.position[v], q);
         }
 }
 
@@ -313,6 +335,7 @@ void culledRenderer(const Reader& r, const Projector& p, Vertices& in, Output& o
                 culled = front ? !negativeFlag(z) : !positiveFlag(z);
             }
             out.vertices.push_back(gsVertex(out.tag, in.st[v].x * q, in.st[v].y * q, q, in.colour[v], p.window(s[2], culled ? adc : p.c.offset)));
+            p.motion(out.vertices.back(), in.position[v], q);
         }
 }
 
@@ -357,12 +380,14 @@ bool homogeneousCulled(const Vec4 p[3], const Vec4& guard, bool variantB) {
 // as its signed distances to the six planes (g + g.w for the -w side, g - g.w for the +w side).
 struct ClipVertex {
     Vec4 pos, st, colour;
+    Vec4 history;   // Projector::history (motion vectors; not part of the original)
     Vec4 plus, minus;
     uint32_t flags = 0;
 };
 
-ClipVertex clipVertex(const Vec4& pos, const Vec4& g, const Vec4& st, const Vec4& colour) {
+ClipVertex clipVertex(const Vec4& pos, const Vec4& g, const Vec4& st, const Vec4& colour, const Vec4& history = {}) {
     ClipVertex r;
+    r.history = history;
     r.pos = pos;
     r.st = st;
     r.colour = colour;
@@ -403,13 +428,16 @@ void clipPolygon(const ClipVertex triangle[3], const Projector& p, const Vec4& a
             // The intersection: (e dA - a dE) / (dA - dE), dA and dE the distances to this plane.
             const float da = (plane.plus ? a.plus : a.minus)[plane.lane], de = (plane.plus ? e.plus : e.minus)[plane.lane];
             const float q = reciprocal(da - de);
-            Vec4 pos, st, colour;
+            Vec4 pos, st, colour, history;
             for (int i = 0; i < 4; ++i) {
                 pos[i] = e.pos[i] * da - a.pos[i] * de;
                 st[i] = e.st[i] * da - a.st[i] * de;
                 colour[i] = e.colour[i] * da - a.colour[i] * de;
+                history[i] = e.history[i] * da - a.history[i] * de;
             }
-            next.push_back(clipVertex(saturate(pos * q), saturate((pos * guard) * q), saturate(st * q), saturate(colour * q)));
+            // (a history known at one end only is not known: its w would interpolate towards 0)
+            if (a.history.z == 0.0f || e.history.z == 0.0f) history = {};
+            next.push_back(clipVertex(saturate(pos * q), saturate((pos * guard) * q), saturate(st * q), saturate(colour * q), history * q));
             any |= next.back().flags;
         }
         ring.swap(next);
@@ -429,6 +457,7 @@ void clipPolygon(const ClipVertex triangle[3], const Projector& p, const Vec4& a
         const Words colour = {fixedPoint(v.colour.x + 0.5f, 0), fixedPoint(v.colour.y + 0.5f, 0), fixedPoint(v.colour.z + 0.5f, 0),
                               fixedPoint(v.colour.w + 0.5f, 0)};
         strip.push_back(gsVertex(batchTag, v.st.x * q, v.st.y * q, q, colour, p.window(p.projected(v.pos, q), k == 0 ? adc : p.c.offset)));
+        Projector::withHistory(strip.back(), v.history, q);
     }
     GsPrimitives prims;
     prims.setPrim = batchTag.pre;
@@ -470,7 +499,7 @@ void clippedRenderer(const Reader& r, const Projector& p, Vertices& in, Output& 
                         for (uint32_t t = 0; t < 3; ++t) {
                             const Words& c = in.colour[v - 2 + t];
                             triangle[t] = clipVertex(clip[t], saturate(clip[t] * guard), in.st[v - 2 + t],
-                                                     {itof0(c[0]), itof0(c[1]), itof0(c[2]), itof0(c[3])});
+                                                     {itof0(c[0]), itof0(c[1]), itof0(c[2]), itof0(c[3])}, p.history(in.position[v - 2 + t]));
                         }
                         clipPolygon(triangle, p, adc, out.tag, sink, stats);
                     }
@@ -483,6 +512,7 @@ void clippedRenderer(const Reader& r, const Projector& p, Vertices& in, Output& 
                 if (!positiveFlag(z)) xyzf.w = xyzf.w + kAdc3072;
             }
             out.vertices.push_back(gsVertex(out.tag, in.st[v].x * q, in.st[v].y * q, q, in.colour[v], xyzf));
+            p.motion(out.vertices.back(), in.position[v], q);
         }
 }
 
@@ -898,6 +928,16 @@ Renderers3d::Constants constantsFromRegisters(const uint32_t vf[32][4]) {
     return c;
 }
 
+void Renderers3d::endFrame() {
+    bool drew = false;
+    for (const auto& [key, list] : thisFrame) drew = drew || !list.empty();
+    if (!drew) return;   // a VSYNC inside a frame drawn over two (30 frames a second): its objects carry on
+    lastFrame.swap(thisFrame);
+    if (thisFrame.size() > 50000) thisFrame.clear();   // objects of courses left long ago
+    for (auto& [key, list] : thisFrame) list.clear();
+    hasPrevious = false;
+}
+
 bool Renderers3d::run(const Batch3d& batch, PrimitiveSink& sink, uint32_t& continueAt) {
     const Reader r{*batch.buffer};
     const uint32_t address = batch.entry * 8;
@@ -933,6 +973,24 @@ bool Renderers3d::run(const Batch3d& batch, PrimitiveSink& sink, uint32_t& conti
         constants.offset = r.floats(kConstants + 5);
         constants.clamp = r.floats(kConstants + 6);
         constants.guard = r.floats(kConstants + 7);
+        // The object, for its previous transform (motion vectors): what its first batch draws (FNV-1a over the
+        // GIF tag, the strips' lengths and the GS state header) and how many setups drew the same before it.
+        uint64_t key = 1469598103934665603ull;
+        auto mix = [&key](uint32_t w) { key = (key ^ w) * 1099511628211ull; };
+        for (const uint32_t w : r.words(kTag)) mix(w);
+        const uint32_t strips = stripCount(r);
+        mix(strips);
+        for (uint32_t k = 0; k < strips && k < 64; ++k) mix(r.half(kSt + 1 + k, 3));
+        if (entry.header)
+            for (uint32_t q = 0, n = packetQwords(r, kHeader); q < n; ++q)
+                for (const uint32_t w : r.words(kHeader + q)) mix(w);
+        std::vector<Constants>& seen = thisFrame[key];
+        const auto then = lastFrame.find(key);
+        hasPrevious = then != lastFrame.end() && then->second.size() > seen.size();
+        if (hasPrevious) previous = then->second[seen.size()];
+        seen.push_back(constants);
+        ++stats.setups;
+        if (hasPrevious) ++stats.matched;
     }
     const Tag tag(r.words(kTag));
     // The vertices: the strips' total, and the tag's count, which the lighting chain processes.
@@ -973,7 +1031,7 @@ bool Renderers3d::run(const Batch3d& batch, PrimitiveSink& sink, uint32_t& conti
     static thread_local std::vector<GsVertex> vertices;
     vertices.clear();
     Output out{tag, vertices};
-    const Projector p{constants};
+    const Projector p{constants, hasPrevious ? &previous : nullptr};
     switch (entry.renderer) {
     case Renderer::Strip: stripRenderer(r, p, in, out); break;
     case Renderer::CulledBack: culledRenderer(r, p, in, out, false); break;

@@ -63,6 +63,9 @@ public:
     // False when the velocity target stays zero (the game's frames): temporal anti-aliasing and FSR 2 would
     // smear moving pictures, so the pipeline uses SMAA and FSR 1 instead.
     virtual bool hasMotionVectors() const { return true; }
+    // True when the scene resolves its own temporal anti-aliasing where it should (the game's frames: in the
+    // 3D scene, before the game's post effects and HUD): the pipeline then adds none of its own for TAA.
+    virtual bool antiAliasesItself() const { return false; }
 };
 
 }  // namespace gt4

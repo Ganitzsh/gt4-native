@@ -14,6 +14,8 @@
 
 #include <cstdint>
 #include <map>
+#include <unordered_map>
+#include <vector>
 
 namespace gt4::ps2 {
 
@@ -37,6 +39,12 @@ public:
         Vec4 guard;            // the guard band, as a scale of the clip-space point
     } constants;
 
+    // Motion vectors (not the PS2's): each setup is an object drawn with its own transform. Matched with the
+    // previous frame's by what it draws (its first batch's GIF tag, strips and GS state header) and its order
+    // among the setups that draw the same, its vertices also get where that transform put them then
+    // (GsVertex::motion). The frame ends at the game's VSYNC.
+    void endFrame();
+
     struct Stats {
         uint64_t batches = 0, skipped = 0;
         uint64_t clipped = 0;          // triangles through the polygon clipper
@@ -45,7 +53,13 @@ public:
         uint64_t countMismatch = 0;    // the tag's NLOOP is not the number of vertices of the strips
         uint64_t oversized = 0;        // strips longer than a batch can hold: not drawn
         std::map<uint32_t, uint64_t> parts;   // runs per renderer, lighting body and unpack routine (byte address)
+        uint64_t setups = 0, matched = 0;     // objects (setups), and those found in the previous frame
     } stats;
+
+private:
+    std::unordered_map<uint64_t, std::vector<Constants>> lastFrame, thisFrame;
+    bool hasPrevious = false;
+    Constants previous;   // the current object's constants in the previous frame (when hasPrevious)
 };
 
 // A saved state's VU1 registers vf23..vf31 (GT4_REC_STATE version 1) as the setup's constants.

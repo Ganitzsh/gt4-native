@@ -27,7 +27,9 @@ mostly the field lines, which the native renderer does not jitter.
   unchanged keep the decodes; the cache has a budget (animated menu palettes once filled the GPU).
 - **The pipeline** keeps the game's grading: no tone mapping, automatic exposure or extra bloom on these
   frames (the game draws its own glare); sharpening, film grain and the like still apply.
-- **No motion vectors yet**: the pipeline uses SMAA and FSR 1 in place of TAA and FSR 2 for these frames.
+- **Temporal anti-aliasing in the scene stage** (2026-10-31; "The scene stage" below): motion vectors from
+  GT4's 3D renderers, TAA on the 3D scene before GT4's post effects and HUD. The pipeline adds no AA of its own
+  then, and its FSR 2 is still FSR 1 for these frames (the frame it gets is the game's, HUD included).
 - Debugging: `GT4_GSN=stats`, `GT4_GSN_DRAWS=BP|all`, `GT4_GSN_XFER` (transfers, CLUT loads, XYOFFSET),
   `GT4_GSN_TEXDUMP=TBP`, `GT4_GSN_DUMP=VBLANK` (targets), `GT4_GSN_LIMIT=K`, `GT4_GSN_VRAM=N` (front-end memory),
   `GT4_GSN_TRIGGER=PATH` (live sessions: when that file appears, that frame's lines and targets),
@@ -39,9 +41,38 @@ mostly the field lines, which the native renderer does not jitter.
   resolution (`--preset original` / `high`), the same frames every time.
 
 The menus' 2D keeps a centred 4:3 area in the game's 16:9 mode (game-side, gt4-native-game
-WIDESCREEN.md). Open: motion vectors, COLCLAMP = 0 (wrapping), Z formats as frames and textures (GT4's Z24
+WIDESCREEN.md). Open: COLCLAMP = 0 (wrapping), Z formats as frames and textures (GT4's Z24
 pass), dithering, the GPU cost of the colour grading (one dispatch per batch would do). GT mode's map is
 broken in the game port itself (paraLLEl-GS shows the same shards): a game-side bug.
+
+## The scene stage
+
+GT4 draws a 3D scene into a 640-wide target with its Z buffer, then reads it for its post effects (glare,
+colour grading) into the displayed buffer, where the HUD goes. The front end marks the point where the scene is
+complete (a Light command: a target of at least 512 x 384 with 64 or more depth-tested draws, first read by
+another; docs/LIGHTING.md). Modern engines put their scene effects there, and so does the back end
+(`gsn_scene.cpp`, `execute`): motion vectors, then the lighting of docs/LIGHTING.md, then the resolve.
+
+- **Motion vectors.** Each setup of GT4's 3D renderers (`platform/gs/renderers3d.cpp`) is an object with its
+  own transform to clip space. It is matched with the previous frame's by what its first batch draws (GIF tag,
+  strip lengths, GS state header) and its rank among the setups that draw the same; its vertices then also carry
+  where the previous transform put them (`GsVertex::motion`: homogeneous window coordinates over this frame's w,
+  so that they interpolate exactly across the screen; the polygon clipper interpolates them as positions). On the
+  Laguna Seca capture: 78 objects a frame, 87% of them found. At the scene's Light command its 3D draws are drawn
+  again (`gsn_velocity.vert/.frag`, the position invariant with `gsn.vert`) into a motion vector image with the
+  depth test EQUAL against the Z the scene left: only what the scene shows writes, and an alpha-tested fence
+  needs no texture (where it was not drawn, the Z is what is behind). 2D and transparent draws (blended without a
+  Z write) keep the surface under them; objects not found have none (the resolve's clamp takes care of them).
+- **Jitter.** With `render.aa = taa` (and for FSR 2), a scene's depth-tested draws before its Light command
+  are offset by a Halton (2, 3) sub-pixel step (`DrawConstants::jitter`), 8 phases, the same for every scene
+  of the frame.
+- **Resolve** (`gsn_taa.comp`): as the pipeline's TAA without the upsampling: 3x3 reconstruction of the
+  jittered samples, a 5-tap Catmull-Rom history at the motion vector of the nearest surface around (GT4's
+  larger Z is nearer), variance clipping in YCoCg, blending on reversibly tonemapped values; GT4's alpha is the
+  current frame's. Each scene target keeps its history (two images; a scene not resolved the frame before
+  starts again; histories not used for 10 seconds go).
+- Debugging: `GT4_TAA_VIEW=1` shows the motion vectors (grey still, through GT4's own grading); the summary
+  line counts the renderers' objects and those found in the frame before.
 
 ## What GT4 asks of the GS
 

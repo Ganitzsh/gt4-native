@@ -47,7 +47,7 @@ public:
         if (p.setPrim) native->setPrim(p.prim);
         for (size_t k = 0; k < p.count; ++k) {
             const ps2::GsVertex& v = p.vertices[k];
-            native->vertex({v.s, v.t, v.q, v.rgba, v.x, v.y, v.z, v.fog, v.adc}, p.fog);
+            native->vertex({v.s, v.t, v.q, v.rgba, v.x, v.y, v.z, v.fog, v.adc, {v.motion[0], v.motion[1], v.motion[2]}}, p.fog);
         }
     }
     void display(const gfx::DisplayRecord& d) override {

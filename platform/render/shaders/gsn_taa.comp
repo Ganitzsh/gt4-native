@@ -1,0 +1,104 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#include "common.glsl"
+// Temporal anti-aliasing of the game's 3D scene (docs/NATIVE_RENDERER.md, "The scene stage"), in its target
+// before GT4's own post effects and HUD, at the render scale. As taa.comp without the upsampling: the 3D draws
+// were jittered (Halton 2,3); each pixel reconstructs the current frame from its 3x3 jittered samples, fetches
+// the history with a 5-tap Catmull-Rom filter where the motion vector of the nearest surface around it says
+// (dilation: GT4's larger Z is nearer), clips it to the neighbourhood's variance box in YCoCg and blends on
+// reversibly tonemapped values. The alpha (GT4's, alpha / 128) is the current frame's.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D current;       // the scene, colour / 255
+layout(set = 0, binding = 1) uniform sampler2D velocity;      // GS pixels, previous minus current
+layout(set = 0, binding = 2) uniform sampler2D depthBuffer;   // GS Z / 2^32
+layout(set = 0, binding = 3) uniform sampler2D history;       // linear, clamped
+layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D result;
+layout(push_constant) uniform Taa {
+    vec2 size;          // the scene's area, render pixels
+    vec2 historySize;   // the history image's size
+    vec2 scale;         // render pixels per GS pixel
+    vec2 jitter;        // this frame's content shift, render pixels
+    float reset;        // 1: no history (a cut, a new scene)
+    uint view;          // debugging (GT4_TAA_VIEW): 1 the motion vectors (grey: still; 32 render pixels a full tone)
+} p;
+
+vec3 loadCurrent(ivec2 q) {
+    q = clamp(q, ivec2(0), ivec2(p.size) - 1);
+    return tonemapWeight(max(texelFetch(current, q, 0).rgb, vec3(0.0)));
+}
+
+vec3 historyCatmullRom(vec2 position) {
+    const vec2 center = floor(position - 0.5) + 0.5;
+    const vec2 f = position - center, f2 = f * f, f3 = f2 * f;
+    const vec2 w0 = -0.5 * f3 + f2 - 0.5 * f;
+    const vec2 w1 = 1.5 * f3 - 2.5 * f2 + 1.0;
+    const vec2 w2 = -1.5 * f3 + 2.0 * f2 + 0.5 * f;
+    const vec2 w3 = 0.5 * f3 - 0.5 * f2;
+    const vec2 w12 = w1 + w2;
+    const vec2 texel = 1.0 / p.historySize;
+    const vec2 tc0 = (center - 1.0) * texel, tc3 = (center + 2.0) * texel, tc12 = (center + w2 / w12) * texel;
+    vec3 sum = vec3(0.0);
+    float weight = 0.0, w;
+    w = w12.x * w0.y;  sum += textureLod(history, vec2(tc12.x, tc0.y), 0.0).rgb * w; weight += w;
+    w = w0.x * w12.y;  sum += textureLod(history, vec2(tc0.x, tc12.y), 0.0).rgb * w; weight += w;
+    w = w12.x * w12.y; sum += textureLod(history, vec2(tc12.x, tc12.y), 0.0).rgb * w; weight += w;
+    w = w3.x * w12.y;  sum += textureLod(history, vec2(tc3.x, tc12.y), 0.0).rgb * w; weight += w;
+    w = w12.x * w3.y;  sum += textureLod(history, vec2(tc12.x, tc3.y), 0.0).rgb * w; weight += w;
+    return tonemapWeight(max(sum / weight, vec3(0.0)));
+}
+
+vec3 clipToAabb(vec3 h, vec3 center, vec3 extents) {
+    const vec3 offset = h - center;
+    const float units = max3(abs(offset / max(extents, vec3(1e-5))));
+    return units > 1.0 ? center + offset / units : h;
+}
+
+void main() {
+    const ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(q, ivec2(p.size)))) return;
+    const vec2 at = vec2(q) + 0.5;
+    vec3 sum = vec3(0.0), m1 = vec3(0.0), m2 = vec3(0.0);
+    float weights = 0.0, peak = 0.0, nearest = -1.0;
+    ivec2 nearestPixel = q;
+    for (int y = -1; y <= 1; ++y)
+        for (int x = -1; x <= 1; ++x) {
+            const ivec2 s = q + ivec2(x, y);
+            const vec3 c = loadCurrent(s);
+            const vec2 d = (vec2(s) + 0.5 - p.jitter) - at;   // the sample's true position
+            const float w = exp(-2.29 * dot(d, d));
+            sum += c * w;
+            weights += w;
+            peak = max(peak, w);
+            const vec3 y3 = rgbToYCoCg(c);
+            m1 += y3;
+            m2 += y3 * y3;
+            const float z = texelFetch(depthBuffer, clamp(s, ivec2(0), ivec2(p.size) - 1), 0).r;
+            if (z > nearest) {
+                nearest = z;
+                nearestPixel = clamp(s, ivec2(0), ivec2(p.size) - 1);
+            }
+        }
+    const vec3 now = sum / max(weights, 1e-5);
+    const vec2 motion = texelFetch(velocity, nearestPixel, 0).rg * p.scale;   // render pixels
+    const vec2 then = at + motion;
+    const float alphaNow = texelFetch(current, q, 0).a;
+    vec3 resolved;
+    if (p.reset > 0.5 || any(lessThan(then, vec2(0.0))) || any(greaterThan(then, p.size))) {
+        resolved = now;
+    } else {
+        const vec3 mean = m1 / 9.0;
+        const vec3 sigma = sqrt(max(m2 / 9.0 - mean * mean, vec3(0.0)));
+        const float speed = length(motion);
+        const float gamma = mix(1.25, 0.85, clamp(speed / 8.0, 0.0, 1.0));
+        const vec3 h = yCoCgToRgb(clipToAabb(rgbToYCoCg(historyCatmullRom(then)), mean, sigma * gamma));
+        float alpha = mix(0.08, 0.2, clamp(speed / 16.0, 0.0, 1.0));
+        alpha *= clamp(peak * 1.25, 0.25, 1.0);
+        resolved = mix(h, now, alpha);
+    }
+    if (p.view == 1u) {
+        const vec2 m = texelFetch(velocity, q, 0).rg * p.scale;
+        imageStore(result, q, vec4(clamp(0.5 + m.x / 64.0, 0.0, 1.0), clamp(0.5 + m.y / 64.0, 0.0, 1.0), 0.5, alphaNow));
+        return;
+    }
+    imageStore(result, q, vec4(tonemapWeightInverse(resolved), alphaNow));
+}

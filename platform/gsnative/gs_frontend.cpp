@@ -217,6 +217,11 @@ void GsFrontend::write(uint32_t r, uint64_t value) {
         v.q = q;
         v.u = static_cast<float>(reg[UV] & 0x3FFF) / 16.0f;
         v.v = static_cast<float>((reg[UV] >> 16) & 0x3FFF) / 16.0f;
+        // the previous position, less this frame's offset (as x and y): (x - ox) w = x w - ox w
+        v.mw = motion[2];
+        v.mx = motion[0] - static_cast<float>(c.originX & jitter) / 16.0f * motion[2];
+        v.my = motion[1] - static_cast<float>(c.originY & jitter) / 16.0f * motion[2];
+        motion[0] = motion[1] = motion[2] = 0.0f;
         kick(r == XYZF2 || r == XYZ2);
         return;
     }
@@ -1003,6 +1008,7 @@ void GsFrontend::packed(uint32_t r, uint64_t a, uint64_t b) {
 void GsFrontend::setPrim(uint32_t prim) { write(PRIM, prim & 0x7FF); }
 
 void GsFrontend::vertex(const InputVertex& v, bool withFog) {
+    for (int i = 0; i < 3; ++i) motion[i] = v.motion[i];
     write(ST, static_cast<uint64_t>(std::bit_cast<uint32_t>(v.s)) | static_cast<uint64_t>(std::bit_cast<uint32_t>(v.t)) << 32);
     q = v.q;
     write(RGBAQ, v.rgba | (static_cast<uint64_t>(std::bit_cast<uint32_t>(v.q)) << 32));

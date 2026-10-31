@@ -15,6 +15,10 @@ struct GsVertex {
     uint32_t z = 0;              // 24 bits with fog (XYZF2), 32 without (XYZ2)
     uint32_t fog = 0;            // F, 0..255 (XYZF2 only)
     bool adc = false;            // the GS does not draw the triangle this vertex completes (XYZF3 / XYZ3)
+    // Not the GS's: where the vertex was in the previous frame, for motion vectors (the renderer's object seen
+    // then: Renderers3d::endFrame). Homogeneous window coordinates (x, y in pixels, as XYZ before FTOI4, times
+    // w) over this frame's w, so that they interpolate linearly across the screen; w = 0: not known.
+    float motion[3] = {0.0f, 0.0f, 0.0f};
 };
 
 // A run of vertices drawn with one PRIM. The front end assembles them as the GS does (a strip continues
