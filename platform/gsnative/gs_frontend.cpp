@@ -234,6 +234,13 @@ void GsFrontend::write(uint32_t r, uint64_t value) {
         v.mx = motion[0] - static_cast<float>(c.originX & jitter) / 16.0f * motion[2];
         v.my = motion[1] - static_cast<float>(c.originY & jitter) / 16.0f * motion[2];
         motion[0] = motion[1] = motion[2] = 0.0f;
+        v.w = homogeneous[3];
+        if (v.w != 0.0f) {
+            v.x = homogeneous[0] - static_cast<float>(c.originX & jitter) / 16.0f * v.w;
+            v.y = homogeneous[1] - static_cast<float>(c.originY & jitter) / 16.0f * v.w;
+            v.z = std::bit_cast<uint32_t>(homogeneous[2]);
+            homogeneous[3] = 0.0f;
+        }
         kick(r == XYZF2 || r == XYZ2);
         return;
     }
@@ -522,14 +529,23 @@ void GsFrontend::emit(const Vertex* v, uint32_t n, Topology topology) {
         if (!((prim >> 3) & 1)) out[k].rgba = v[n - 1].rgba;
     }
     // Targets: the frame buffer and, when the depth test is on, the Z buffer.
-    float x0 = out[0].x, x1 = out[0].x, y0 = out[0].y, y1 = out[0].y;
-    for (uint32_t k = 1; k < n; ++k) {
-        x0 = std::min(x0, out[k].x);
-        x1 = std::max(x1, out[k].x);
-        y0 = std::min(y0, out[k].y);
-        y1 = std::max(y1, out[k].y);
-    }
     const uint32_t scissorX0 = s.c.scissorX0, scissorX1 = s.c.scissorX1;
+    float x0 = 1e30f, x1 = -1e30f, y0 = 1e30f, y1 = -1e30f;
+    for (uint32_t k = 0; k < n; ++k) {   // (homogeneous vertices: the projected points; one behind the eye: the scissor)
+        float x = out[k].x, y = out[k].y;
+        if (out[k].w != 0.0f) {
+            if (!(out[k].w > 0.0f)) {
+                x0 = float(scissorX0); x1 = float(scissorX1 + 1); y0 = float(s.c.scissorY0); y1 = float(s.c.scissorY1 + 1);
+                break;
+            }
+            x /= out[k].w;
+            y /= out[k].w;
+        }
+        x0 = std::min(x0, x);
+        x1 = std::max(x1, x);
+        y0 = std::min(y0, y);
+        y1 = std::max(y1, y);
+    }
     const uint32_t left = static_cast<uint32_t>(std::clamp(x0, static_cast<float>(scissorX0), static_cast<float>(scissorX1)));
     // The last pixel covered: an edge on a pixel boundary covers the pixel before it.
     const uint32_t right = static_cast<uint32_t>(std::clamp(std::max(x0, std::ceil(x1) - 1.0f), static_cast<float>(scissorX0), static_cast<float>(scissorX1)));
@@ -1399,6 +1415,12 @@ void GsFrontend::vertices(const InputVertex* in, size_t count, bool withFog) {
         v.mw = i.motion[2];
         v.mx = i.motion[0] - ox * i.motion[2];
         v.my = i.motion[1] - oy * i.motion[2];
+        v.w = i.h[3];
+        if (v.w != 0.0f) {
+            v.x = i.h[0] - ox * v.w;
+            v.y = i.h[1] - oy * v.w;
+            v.z = std::bit_cast<uint32_t>(i.h[2]);
+        }
         return v;
     };
     // Targets, texture and the scene's bookkeeping: once.
@@ -1425,9 +1447,19 @@ void GsFrontend::vertices(const InputVertex* in, size_t count, bool withFog) {
         if (draws) {
             Vertex t[3] = {ring[0], ring[1], v};
             if (!gouraud) t[0].rgba = t[1].rgba = v.rgba;
-            float x0 = t[0].x, x1 = t[0].x, y0 = t[0].y, y1 = t[0].y;
-            for (int j = 1; j < 3; ++j) {
-                x0 = std::min(x0, t[j].x); x1 = std::max(x1, t[j].x); y0 = std::min(y0, t[j].y); y1 = std::max(y1, t[j].y);
+            // its extent (homogeneous vertices: the projected points; one behind the eye: the scissor's)
+            float x0 = 1e30f, x1 = -1e30f, y0 = 1e30f, y1 = -1e30f;
+            for (int j = 0; j < 3; ++j) {
+                float x = t[j].x, y = t[j].y;
+                if (t[j].w != 0.0f) {
+                    if (!(t[j].w > 0.0f)) {
+                        x0 = float(scissorX0); x1 = float(scissorX1 + 1); y0 = float(scissorY0); y1 = float(scissorY1 + 1);
+                        break;
+                    }
+                    x /= t[j].w;
+                    y /= t[j].w;
+                }
+                x0 = std::min(x0, x); x1 = std::max(x1, x); y0 = std::min(y0, y); y1 = std::max(y1, y);
             }
             const uint32_t left = static_cast<uint32_t>(std::clamp(x0, float(scissorX0), float(scissorX1)));
             const uint32_t right = static_cast<uint32_t>(std::clamp(std::max(x0, std::ceil(x1) - 1.0f), float(scissorX0), float(scissorX1)));
@@ -1518,6 +1550,7 @@ void GsFrontend::vertices(const InputVertex* in, size_t count, bool withFog) {
 
 void GsFrontend::vertex(const InputVertex& v, bool withFog) {
     for (int i = 0; i < 3; ++i) motion[i] = v.motion[i];
+    for (int i = 0; i < 4; ++i) homogeneous[i] = v.h[i];
     write(ST, static_cast<uint64_t>(std::bit_cast<uint32_t>(v.s)) | static_cast<uint64_t>(std::bit_cast<uint32_t>(v.t)) << 32);
     q = v.q;
     write(RGBAQ, v.rgba | (static_cast<uint64_t>(std::bit_cast<uint32_t>(v.q)) << 32));

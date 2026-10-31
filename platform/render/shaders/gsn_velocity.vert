@@ -8,13 +8,13 @@
 layout(location = 0) in vec2 inPosition;
 layout(location = 1) in uint inZ;
 layout(location = 7) in vec3 inMotion;   // the previous window position, homogeneous over this frame's w
+layout(location = 8) in float inW;       // gsn.vert's
 
 layout(location = 0) noperspective out vec3 outMotion;
 
 invariant gl_Position;
 
 void main() {
-    const vec2 p = ((inPosition + draw.jitter) * draw.scale + 0.5) / draw.targetSize * 2.0 - 1.0;
-    gl_Position = vec4(p, float(inZ) * (1.0 / 4294967296.0), 1.0);
+    gl_Position = gsnPosition(inPosition, inZ, inW);
     outMotion = inMotion;
 }

@@ -60,7 +60,7 @@ public:
         run.resize(p.count);
         for (size_t k = 0; k < p.count; ++k) {
             const ps2::GsVertex& v = p.vertices[k];
-            run[k] = {v.s, v.t, v.q, v.rgba, v.x, v.y, v.z, v.fog, v.adc, {v.motion[0], v.motion[1], v.motion[2]}};
+            run[k] = {v.s, v.t, v.q, v.rgba, v.x, v.y, v.z, v.fog, v.adc, {v.motion[0], v.motion[1], v.motion[2]}, {v.h[0], v.h[1], v.h[2], v.h[3]}};
         }
         native->vertices(run.data(), run.size(), p.fog);
     }

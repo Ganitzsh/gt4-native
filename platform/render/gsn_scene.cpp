@@ -353,7 +353,8 @@ struct GsnScene::Impl {
                                     {3, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(gsn::Vertex, s)},
                                     {4, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(gsn::Vertex, u)},
                                     {5, 0, VK_FORMAT_R32_UINT, offsetof(gsn::Vertex, fog)},
-                                    {6, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(gsn::Vertex, minU)}};
+                                    {6, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(gsn::Vertex, minU)},
+                                    {8, 0, VK_FORMAT_R32_SFLOAT, offsetof(gsn::Vertex, w)}};
         desc.types = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER};
         desc.pushSize = sizeof(DrawConstants);
         VkPipelineColorBlendAttachmentState blend{};
@@ -385,6 +386,7 @@ struct GsnScene::Impl {
         const bool uv = (k.flags & kUv) != 0;
         for (uint32_t i = 0; i < d.count; ++i) {
             const gsn::Vertex& v = frame.vertices[d.first + i];
+            if (v.w != 0.0f) return false;   // 3D (homogeneous): not a texture laid on the screen
             const float q = v.q != 0.0f ? v.q : 1.0f;
             const float tu = uv ? v.u : v.s / q * k.textureSize[0], tv = uv ? v.v : v.t / q * k.textureSize[1];
             x0 = std::min(x0, v.x); x1 = std::max(x1, v.x); y0 = std::min(y0, v.y); y1 = std::max(y1, v.y);
@@ -1417,7 +1419,17 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
                 float bx0 = 1e30f, by0 = 1e30f, bx1 = -1e30f, by1 = -1e30f;
                 for (uint32_t v = 0; v < e.count; ++v) {
                     const gsn::Vertex& p = frame.vertices[e.first + v];
-                    bx0 = std::min(bx0, p.x); by0 = std::min(by0, p.y); bx1 = std::max(bx1, p.x); by1 = std::max(by1, p.y);
+                    float x = p.x, y = p.y;
+                    if (p.w != 0.0f) {   // homogeneous: projected; behind the eye: the scissor
+                        if (!(p.w > 0.0f)) {
+                            bx0 = by0 = -1e30f;
+                            bx1 = by1 = 1e30f;
+                            break;
+                        }
+                        x /= p.w;
+                        y /= p.w;
+                    }
+                    bx0 = std::min(bx0, x); by0 = std::min(by0, y); bx1 = std::max(bx1, x); by1 = std::max(by1, y);
                 }
                 const gfx::Context& ec = e.state.c;
                 const float lx = std::max(std::floor(bx0) - 1.0f, float(ec.scissorX0)), ly = std::max(std::floor(by0) - 1.0f, float(ec.scissorY0));
@@ -1709,7 +1721,8 @@ void GsnScene::prepare(const SceneFormats& formats) {
         v.vertices.stride = sizeof(gsn::Vertex);
         v.vertices.attributes = {{0, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(gsn::Vertex, x)},
                                  {1, 0, VK_FORMAT_R32_UINT, offsetof(gsn::Vertex, z)},
-                                 {7, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(gsn::Vertex, mx)}};
+                                 {7, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(gsn::Vertex, mx)},
+                                 {8, 0, VK_FORMAT_R32_SFLOAT, offsetof(gsn::Vertex, w)}};
         v.pushSize = sizeof(DrawConstants);
         v.dynamics = {VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE, VK_DYNAMIC_STATE_DEPTH_COMPARE_OP};
         v.name = "gsn motion vectors";

@@ -35,3 +35,15 @@ const uint kSnapFiltered = 16384u;// a reinterpreted texture drawn scaled: GS bi
 const uint kMipmapped = 4096u;    // the GS's mipmap levels: the sampler's trilinear filtering
 const uint kReplaced = 32768u;    // a texture pack's image: any size, sampled normalised with its own mips
 const uint kGeneratedMips = 8192u;// ... levels made from level 0 (the GS has none): alpha from level 0         // coordinates at the GS pixel's sample point, not the render pixel's
+
+// A vertex's clip-space position (gsn.vert, gsn_velocity.vert: the same to the bit). GS window coordinates
+// (pixels) at the render scale, shifted by half a render pixel; Z as an unsigned fraction of 2^32 (float keeps 24
+// bits, all of a 24-bit Z buffer). With w (GT4's 3D renderers) the same, homogeneous: x, y, Z times w.
+vec4 gsnPosition(vec2 position, uint z, float w) {
+    if (w == 0.0) {
+        const vec2 p = ((position + draw.jitter) * draw.scale + 0.5) / draw.targetSize * 2.0 - 1.0;
+        return vec4(p, float(z) * (1.0 / 4294967296.0), 1.0);
+    }
+    const vec2 p = ((position + draw.jitter * w) * draw.scale + 0.5 * w) / draw.targetSize * 2.0 - w;
+    return vec4(p, uintBitsToFloat(z) * (1.0 / 4294967296.0), w);
+}

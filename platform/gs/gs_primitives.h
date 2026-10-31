@@ -19,6 +19,10 @@ struct GsVertex {
     // then: Renderers3d::endFrame). Homogeneous window coordinates (x, y in pixels, as XYZ before FTOI4, times
     // w) over this frame's w, so that they interpolate linearly across the screen; w = 0: not known.
     float motion[3] = {0.0f, 0.0f, 0.0f};
+    // Not the GS's: the position in homogeneous window coordinates, so that the GPU clips (docs/NATIVE_V2.md, step
+    // 2): x, y (pixels, as XYZ before FTOI4) and Z (as the GS reads it) times w, and w (the clip-space w); w = 0:
+    // none (x, y, z above).
+    float h[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 };
 
 // A run of vertices drawn with one PRIM. The front end assembles them as the GS does (a strip continues

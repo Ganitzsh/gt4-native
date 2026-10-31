@@ -7,6 +7,7 @@
 #include <bit>
 #include <cfloat>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <vector>
@@ -260,7 +261,31 @@ struct Projector {
     void motion(GsVertex& v, const Vec4& position, float q) const {
         if (previous) withHistory(v, history(position), q);
     }
+    // The vertex's homogeneous window coordinates (GsVertex::h): the offset times w plus the clamped clip-space
+    // point scaled; Z as the GS reads it (24 bits with fog, the FTOI4 word without).
+    void homogeneous(GsVertex& v, const Vec4& clip, bool fog) const {
+        const float w = clip.w;
+        v.h[0] = c.offset.x * w + c.scale.x * std::min(clip.x, c.clamp.x);
+        v.h[1] = c.offset.y * w + c.scale.y * std::min(clip.y, c.clamp.y);
+        v.h[2] = (c.offset.z * w + c.scale.z * std::min(clip.z, c.clamp.z)) * (fog ? 1.0f : 16.0f);
+        v.h[3] = w;
+    }
 };
+
+// Homogeneous output (GsVertex::h): the GPU clips, the polygon clipper is not needed (GT4_VU_CLIP=1: the VU's
+// clipping, as before).
+bool homogeneousOutput() {
+    static const bool on = [] { const char* e = std::getenv("GT4_VU_CLIP"); return !(e && *e == '1'); }();
+    return on;
+}
+
+// The facing of the triangle (a, b, c) from its clip-space points: the determinant of their (x, y, w), which
+// has the sign of the projected triangle's area wherever it is in front of the eye (and holds for the part that
+// is when it crosses the eye plane). `oddOrder` as facing().
+float homogeneousFacing(const Vec4& a, const Vec4& b, const Vec4& c, bool oddOrder) {
+    const float d = a.x * (b.y * c.w - c.y * b.w) - a.y * (b.x * c.w - c.x * b.w) + a.w * (b.x * c.y - c.x * b.y);
+    return oddOrder ? -d : d;
+}
 
 // The offset with fog raised by 2048 (or 3072): FTOI4 then sets bit 15 of the fog word, ADC.
 Vec4 adcOffset(const Vec4& offset, float raise) {
@@ -305,6 +330,7 @@ void stripRenderer(const Reader& r, const Projector& p, Vertices& in, Output& ou
             const Vec4 s = p.projected(clip, q);
             out.vertices.push_back(gsVertex(out.tag, in.st[v].x * q, in.st[v].y * q, q, in.colour[v], p.window(s, j < 2 ? adc : p.c.offset)));
             p.motion(out.vertices.back(), in.position[v], q);
+            if (homogeneousOutput()) p.homogeneous(out.vertices.back(), clip, out.tag.fog);
         }
 }
 
@@ -321,7 +347,8 @@ float facing(const Vec4 s[3], bool oddOrder) {
 void culledRenderer(const Reader& r, const Projector& p, Vertices& in, Output& out, bool front) {
     const Vec4 adc = adcOffset(p.c.offset, kAdc2048);
     uint32_t v = 0;
-    Vec4 s[3];
+    Vec4 s[3], h[3];
+    const bool homogeneous = homogeneousOutput();
     for (uint32_t k = 0, strips = stripCount(r); k < strips; ++k)
         for (uint32_t j = 0, n = stripVertices(r, k); j < n; ++j, ++v) {
             const Vec4 clip = p.clip(in.position[v]);
@@ -329,13 +356,17 @@ void culledRenderer(const Reader& r, const Projector& p, Vertices& in, Output& o
             s[0] = s[1];
             s[1] = s[2];
             s[2] = p.projected(clip, q);
+            h[0] = h[1];
+            h[1] = h[2];
+            h[2] = clip;
             bool culled = j < 2;
             if (!culled) {
-                const float z = facing(s, (j & 1) != 0);
+                const float z = homogeneous ? homogeneousFacing(h[0], h[1], h[2], (j & 1) != 0) : facing(s, (j & 1) != 0);
                 culled = front ? !negativeFlag(z) : !positiveFlag(z);
             }
             out.vertices.push_back(gsVertex(out.tag, in.st[v].x * q, in.st[v].y * q, q, in.colour[v], p.window(s[2], culled ? adc : p.c.offset)));
             p.motion(out.vertices.back(), in.position[v], q);
+            if (homogeneous) p.homogeneous(out.vertices.back(), clip, out.tag.fog);
         }
 }
 
@@ -492,6 +523,8 @@ void clippedRenderer(const Reader& r, const Projector& p, Vertices& in, Output& 
             if (!hidden && (flags[0] | flags[1] | flags[2])) {
                 if (flags[0] & flags[1] & flags[2]) {
                     hidden = true;
+                } else if (homogeneousOutput()) {
+                    // drawn as it is: the GPU clips it
                 } else if (clipFlags(saturate(clip[0] * guard)) | clipFlags(saturate(clip[1] * guard)) | clipFlags(saturate(clip[2] * guard))) {
                     const bool variantB = (kind == Clipped::Back27A8) == ((j & 1) == 0);
                     if (!culling || !homogeneousCulled(clip, guard, variantB)) {
@@ -508,11 +541,13 @@ void clippedRenderer(const Reader& r, const Projector& p, Vertices& in, Output& 
             }
             Vec4 xyzf = p.window(s[2], hidden ? adc : p.c.offset);
             if (culling && j >= 2) {
-                const float z = facing(s, ((j & 1) != 0) != (kind == Clipped::Front2AD8));
+                const bool odd = ((j & 1) != 0) != (kind == Clipped::Front2AD8);
+                const float z = homogeneousOutput() ? homogeneousFacing(clip[0], clip[1], clip[2], odd) : facing(s, odd);
                 if (!positiveFlag(z)) xyzf.w = xyzf.w + kAdc3072;
             }
             out.vertices.push_back(gsVertex(out.tag, in.st[v].x * q, in.st[v].y * q, q, in.colour[v], xyzf));
             p.motion(out.vertices.back(), in.position[v], q);
+            if (homogeneousOutput()) p.homogeneous(out.vertices.back(), clip[2], out.tag.fog);
         }
 }
 

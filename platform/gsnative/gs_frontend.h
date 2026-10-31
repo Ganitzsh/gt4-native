@@ -33,6 +33,9 @@ struct Vertex {
     // Where the vertex was in the previous frame (GT4's 3D renderers: ps2::GsVertex::motion), in these window
     // pixels: homogeneous (x w, y w, w) over this frame's w; mw = 0: not known (2D, other paths).
     float mx = 0, my = 0, mw = 0;
+    // GT4's 3D renderers (docs/NATIVE_V2.md, step 2): w != 0: x, y and z (float bits) are homogeneous, times this
+    // clip-space w, and the GPU clips.
+    float w = 0;
 };
 
 // What a draw's result depends on: its primitive attributes, the state of the context it uses (include/gt4/
@@ -176,6 +179,7 @@ public:
         uint32_t x = 0, y = 0, z = 0, fog = 0;   // x, y in 12.4; z 24 bits with fog, 32 without
         bool adc = false;
         float motion[3] = {0, 0, 0};   // ps2::GsVertex::motion (x, y in pixels before XYOFFSET)
+        float h[4] = {0, 0, 0, 0};     // ps2::GsVertex::h (x, y in pixels before XYOFFSET)
     };
     void setPrim(uint32_t prim);
     void vertex(const InputVertex& v, bool withFog);
@@ -254,6 +258,7 @@ private:
     uint32_t queued = 0, stripParity = 0;
     float st[2] = {}, q = 1;   // ST and Q as set by ST/RGBAQ
     float motion[3] = {};      // the next vertex's (InputVertex::motion), for the XYZ write that follows
+    float homogeneous[4] = {}; // ... and its InputVertex::h
     // Each GIF path's tag in progress: its data may continue in the next transfer (an IMAGE tag in one DMA
     // packet, its pixels in the next).
     struct GifPath {

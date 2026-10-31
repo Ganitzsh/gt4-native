@@ -12,20 +12,21 @@ layout(location = 3) in vec3 inStq;
 layout(location = 4) in vec2 inUv;
 layout(location = 5) in uint inFog;
 layout(location = 6) in vec4 inBounds;   // a sprite's texture rectangle (min U, min V, max U, max V)
+layout(location = 8) in float inW;       // 3D: the position is homogeneous (times w, Z's float bits); 0: not
 
-layout(location = 0) out vec4 outColour;
-layout(location = 1) out vec3 outStq;
-layout(location = 2) out vec2 outUv;
-layout(location = 3) out float outFog;
+// The GS interpolates linearly across the screen (its STQ carry the perspective): so do these, also where the
+// GPU clips a homogeneous triangle.
+layout(location = 0) noperspective out vec4 outColour;
+layout(location = 1) noperspective out vec3 outStq;
+layout(location = 2) noperspective out vec2 outUv;
+layout(location = 3) noperspective out float outFog;
 layout(location = 4) flat out vec4 outBounds;
 
 // gsn_velocity.vert draws the scene's 3D again with the same position to the bit (its depth test EQUAL).
 invariant gl_Position;
 
 void main() {
-    const vec2 p = ((inPosition + draw.jitter) * draw.scale + 0.5) / draw.targetSize * 2.0 - 1.0;
-    // Z as an unsigned fraction of 2^32: float keeps 24 bits, all of a 24-bit Z buffer.
-    gl_Position = vec4(p, float(inZ) * (1.0 / 4294967296.0), 1.0);
+    gl_Position = gsnPosition(inPosition, inZ, inW);
     outColour = inColour;
     outStq = inStq;
     outUv = inUv;

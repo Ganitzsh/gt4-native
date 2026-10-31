@@ -10,10 +10,10 @@
 
 layout(set = 0, binding = 0) uniform sampler2D source;
 
-layout(location = 0) in vec4 inColour;
-layout(location = 1) in vec3 inStq;
-layout(location = 2) in vec2 inUv;
-layout(location = 3) in float inFog;
+layout(location = 0) noperspective in vec4 inColour;
+layout(location = 1) noperspective in vec3 inStq;
+layout(location = 2) noperspective in vec2 inUv;
+layout(location = 3) noperspective in float inFog;
 layout(location = 4) flat in vec4 inBounds;   // a sprite's texture rectangle; min > max for other primitives
 
 layout(location = 0, index = 0) out vec4 outColour;
