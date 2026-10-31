@@ -1,0 +1,86 @@
+#version 460
+// Screen-space reflections on the game's 3D scene (docs/NATIVE_RENDERER.md, "The scene stage"), before the
+// temporal resolve: GT4 has none on its courses. Surfaces facing up (road, kerbs, pit lane) reflect what the
+// scene shows above them with Schlick's Fresnel term (F0 0.04: strong only at grazing angles, the road ahead);
+// coloured matte surfaces (grass, gravel, sand) reflect little. The ray is marched in screen space with depth
+// interpolated in 1 / z, refined by bisection, and its direction is perturbed per pixel and frame for a slightly
+// rough lobe that the temporal resolve integrates. Rays leaving the screen or the scene fade out.
+#extension GL_GOOGLE_include_directive : require
+#include "gsn_view.glsl"
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D scene;         // colour / 255
+layout(set = 0, binding = 1) uniform sampler2D depthBuffer;   // GS Z / 2^32
+layout(set = 0, binding = 2) uniform sampler2D unused;
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D result;
+layout(push_constant) uniform Ssr {
+    vec2 size;
+    vec2 tanHalf;
+    float zScale;
+    float strength;   // 0..1: how much of the Fresnel term reaches the picture
+    uint steps;
+    uint frame;
+    float roughness;
+    uint view;        // debugging (GT4_SSR_VIEW=1): red the reflectivity, green where a ray hit, blue a miss
+} p;
+
+void main() {
+    const ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(q, ivec2(p.size)))) return;
+    const vec4 c = texelFetch(scene, q, 0);
+    imageStore(result, q, c);
+    const float d = viewDistance(depthBuffer, q, p.zScale);
+    if (d > 3000.0) return;   // sky, or nothing drawn
+    const vec3 P = viewPosition(vec2(q) + 0.5, d, p.size, p.tanHalf);
+    const vec3 n = viewNormal(depthBuffer, q, d, p.size, p.tanHalf, p.zScale);
+    float weight = smoothstep(0.6, 0.9, -n.y);   // facing up (y is down)
+    const float high = max(c.r, max(c.g, c.b)), low = min(c.r, min(c.g, c.b));
+    weight *= 1.0 - smoothstep(0.1, 0.3, (high - low) / max(high, 1e-3));   // grey: asphalt, concrete, paint
+    const vec3 V = normalize(P);
+    const float cosine = max(dot(-V, n), 0.0);
+    weight *= (0.04 + 0.96 * pow(1.0 - cosine, 5.0)) * p.strength;
+    if (p.view == 1u) imageStore(result, q, vec4(weight, 0.0, 0.0, c.a));
+    if (weight < 0.003) return;
+
+    const float noise = gradientNoise(vec2(q) + float(p.frame % 64u) * vec2(5.588, 3.17));
+    const float angle = noise * 6.2831853;
+    vec3 R = reflect(V, n);
+    R = normalize(R + p.roughness * (vec3(cos(angle), 0.0, sin(angle)) * fract(noise * 7.31) + vec3(0.0, -0.5 * fract(noise * 3.7), 0.0)));
+    if (R.z <= 0.0) return;   // towards the camera: nothing of it on the screen
+    // The ray's end, 80 m away or at the near plane; its screen line, depth by 1 / z.
+    vec3 E = P + R * 80.0;
+    const vec2 s0 = viewToPixel(P, p.size, p.tanHalf), s1 = viewToPixel(E, p.size, p.tanHalf);
+    const float k0 = 1.0 / P.z, k1 = 1.0 / E.z;
+    // The march starts 2.5 pixels out: at its own pixel the ray is a hair behind the surface it leaves.
+    const float start = min(2.5 / max(length(s1 - s0), 1e-3), 1.0);
+    float before = start, hit = -1.0;
+    for (uint i = 1u; i <= p.steps; ++i) {
+        float f = (float(i) - noise) / float(p.steps);
+        f = start + (1.0 - start) * f * f;   // denser near the start, where detail is
+        const vec2 s = mix(s0, s1, f);
+        if (any(lessThan(s, vec2(0.0))) || any(greaterThanEqual(s, p.size))) break;
+        const float rayZ = 1.0 / mix(k0, k1, f);
+        const float sceneZ = viewDistance(depthBuffer, ivec2(s), p.zScale);
+        if (rayZ > sceneZ && rayZ - sceneZ < 0.3 + 0.03 * sceneZ) {
+            hit = f;
+            break;
+        }
+        before = f;
+    }
+    if (hit < 0.0) {
+        if (p.view == 1u) imageStore(result, q, vec4(weight, 0.0, 1.0, c.a));
+        return;
+    }
+    for (int k = 0; k < 4; ++k) {   // bisection between the last miss and the hit
+        const float f = 0.5 * (before + hit);
+        const vec2 s = mix(s0, s1, f);
+        const float rayZ = 1.0 / mix(k0, k1, f);
+        if (rayZ > viewDistance(depthBuffer, ivec2(s), p.zScale)) hit = f;
+        else before = f;
+    }
+    const vec2 s = mix(s0, s1, hit);
+    const vec2 edge = min(s, p.size - s) / (0.1 * p.size);
+    const float fade = clamp(min(edge.x, edge.y), 0.0, 1.0) * (1.0 - hit);
+    const vec3 reflected = toLinear(texelFetch(scene, ivec2(s), 0).rgb);
+    const vec3 lit = mix(toLinear(c.rgb), reflected, clamp(weight * fade, 0.0, 1.0));
+    imageStore(result, q, p.view == 1u ? vec4(weight, fade, 0.0, c.a) : vec4(toDisplay(lit), c.a));
+}

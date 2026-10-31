@@ -547,6 +547,15 @@ void GsFrontend::emit(const Vertex* v, uint32_t n, Topology topology) {
         scene.depth = depth;
         scene.width = std::max<uint32_t>(scene.width, scissorX1 + 1);
         scene.height = std::max<uint32_t>(scene.height, scissorY1 + 1);
+        if ((prim >> 5) & 1) {
+            scene.fogColour = s.fogColor;
+            scene.fogged = true;
+        }
+        const std::array<uint16_t, 4> rect = {static_cast<uint16_t>(scissorX0), static_cast<uint16_t>(scissorY0),
+                                              static_cast<uint16_t>(scissorX1), static_cast<uint16_t>(scissorY1)};
+        auto known = std::find_if(scene.viewports.begin(), scene.viewports.end(), [&](const auto& v) { return v.first == rect; });
+        if (known != scene.viewports.end()) ++known->second;
+        else if (scene.viewports.size() < 8) scene.viewports.push_back({rect, 1});
     }
     // Batch with the previous draw when nothing changed.
     if (!frame.commands.empty() && frame.commands.back().kind == FrameList::Command::Kind::Draw) {
@@ -583,7 +592,21 @@ void GsFrontend::sceneRead(uint32_t target) {
         if (t.id != target) continue;
         if (t.bw * 64 >= 512 && t.height >= 384) {
             frame.commands.push_back({FrameList::Command::Kind::Light, static_cast<uint32_t>(frame.lights.size())});
-            frame.lights.push_back({target, it->second.depth, it->second.width, it->second.height});
+            FrameList::Lighting light{target, it->second.depth, it->second.width, it->second.height, it->second.fogColour, it->second.fogged};
+            // The main view: the largest scissor; another, inside it and under half its area, is an inset view.
+            auto area = [](const std::array<uint16_t, 4>& r) { return (uint32_t(r[2]) - r[0] + 1) * (uint32_t(r[3]) - r[1] + 1); };
+            const auto& views = it->second.viewports;
+            const auto main = std::max_element(views.begin(), views.end(), [&](const auto& a, const auto& b) { return area(a.first) < area(b.first); });
+            for (const auto& v : views) {
+                if (main == views.end() || v.first == main->first || area(v.first) * 2 > area(main->first)) continue;
+                if (!light.hasInset) std::copy(v.first.begin(), v.first.end(), light.inset);
+                light.inset[0] = std::min(light.inset[0], v.first[0]);
+                light.inset[1] = std::min(light.inset[1], v.first[1]);
+                light.inset[2] = std::max(light.inset[2], v.first[2]);
+                light.inset[3] = std::max(light.inset[3], v.first[3]);
+                light.hasInset = true;
+            }
+            frame.lights.push_back(light);
         }
         break;
     }

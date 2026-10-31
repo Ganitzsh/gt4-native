@@ -1,0 +1,75 @@
+#version 460
+// Depth of field on the game's 3D scene (docs/NATIVE_RENDERER.md, "The scene stage"), after the temporal resolve
+// and motion blur: a thin lens of the scene's field of view (a 35 mm frame: focal length 12 mm / tan of half the
+// vertical angle) at an f-number, focused at a distance or, at 0, on what the centre of the screen shows (the
+// median of five distances there). Each pixel gathers a golden-angle disc of its circle of confusion; a sample
+// counts where its own circle reaches this pixel, and one behind the pixel only within the pixel's circle, so
+// that the blurred background does not bleed over a sharp foreground.
+#extension GL_GOOGLE_include_directive : require
+#include "gsn_view.glsl"
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D scene;         // linear
+layout(set = 0, binding = 1) uniform sampler2D depthBuffer;
+layout(set = 0, binding = 2) uniform sampler2D unused;
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D result;
+layout(push_constant) uniform Dof {
+    vec2 size;
+    vec2 tanHalf;
+    vec2 imageSize;
+    float zScale;
+    float focus;       // metres; 0: autofocus on the centre
+    float fNumber;
+    float maxCoc;      // render pixels (radius)
+    uint samples;
+} p;
+
+float cocAt(float d, float focus, float focal) {
+    // the circle's diameter on a 24 mm high sensor, in render pixels; radius returned
+    const float c = focal * focal * abs(d - focus) / (p.fNumber * d * max(focus - focal, 1e-3));
+    return min(0.5 * c / 0.024 * p.size.y, p.maxCoc);
+}
+
+void main() {
+    const ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(q, ivec2(p.size)))) return;
+    const vec4 c = texelFetch(scene, q, 0);
+    float focus = p.focus;
+    if (focus <= 0.0) {
+        const ivec2 m = ivec2(p.size * 0.5);
+        const int o = int(p.size.y * 0.03);
+        float v[5] = float[5](viewDistance(depthBuffer, m, p.zScale), viewDistance(depthBuffer, m + ivec2(o, 0), p.zScale),
+                              viewDistance(depthBuffer, m - ivec2(o, 0), p.zScale), viewDistance(depthBuffer, m + ivec2(0, o), p.zScale),
+                              viewDistance(depthBuffer, m - ivec2(0, o), p.zScale));
+        for (int i = 1; i < 5; ++i)   // the median of five, by insertion
+            for (int j = i; j > 0 && v[j - 1] > v[j]; --j) {
+                const float t = v[j];
+                v[j] = v[j - 1];
+                v[j - 1] = t;
+            }
+        focus = clamp(v[2], 0.5, 2000.0);
+    }
+    const float focal = 0.012 / p.tanHalf.y;
+    const float d = min(viewDistance(depthBuffer, q, p.zScale), 1e4);
+    const float coc = cocAt(d, focus, focal);
+    if (coc < 0.6) {
+        imageStore(result, q, c);
+        return;
+    }
+    vec3 sum = vec3(0.0);
+    float weights = 0.0;
+    const float golden = 2.39996323;
+    for (uint i = 0u; i < p.samples; ++i) {
+        const float r = coc * sqrt((float(i) + 0.5) / float(p.samples));
+        const vec2 offset = r * vec2(cos(float(i) * golden), sin(float(i) * golden));
+        const vec2 at = vec2(q) + 0.5 + offset;
+        const ivec2 s = clamp(ivec2(at), ivec2(0), ivec2(p.size) - 1);
+        const float ds = min(viewDistance(depthBuffer, s, p.zScale), 1e4);
+        const float cs = cocAt(ds, focus, focal);
+        const float reach = ds > d ? min(cs, coc) : cs;
+        const float w = smoothstep(r - 1.0, r + 1.0, reach + 0.5);
+        sum += toLinear(textureLod(scene, at / p.imageSize, 0.0).rgb) * w;
+        weights += w;
+    }
+    const vec3 blurred = weights > 1e-3 ? sum / weights : toLinear(c.rgb);
+    imageStore(result, q, vec4(toDisplay(blurred), c.a));
+}

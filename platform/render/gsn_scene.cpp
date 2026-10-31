@@ -142,6 +142,9 @@ struct GsnScene::Impl {
         bool valid = false;
     };
     std::unordered_map<uint32_t, History> histories;   // by scene target
+    // The scene stage's other effects (GsnScene::setEffects), each a compute pass over the scene.
+    SceneEffects effects;
+    vk::Pipeline ssrPass, fogPass, blurPass, dofPass;
     // A Z buffer's depth plane as a sampled view (kept with the image's other views, destroyed with it).
     VkImageView depthView(vk::Image& image) {
         if (!image.mipViews.empty()) return image.mipViews[0];
@@ -225,6 +228,7 @@ struct GsnScene::Impl {
         vk::destroy(device, litImage);
         vk::destroy(device, velocityPass);
         vk::destroy(device, taaPass);
+        for (vk::Pipeline* p : {&ssrPass, &fogPass, &blurPass, &dofPass}) vk::destroy(device, *p);
         vk::destroy(device, velocityImage);
         for (auto& [id, h] : histories)
             for (vk::Image& i : h.image) vk::destroy(device, i);
@@ -617,6 +621,30 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         out.area = e;
         return true;
     };
+    // The stage's result copied back into the scene, except an inset view (another camera: the mirror).
+    auto copyBack = [&](vk::Image& from, vk::Image& colour, VkExtent2D e, const gsn::FrameList::Lighting& l) {
+        VkImageCopy regions[4]{};
+        uint32_t n = 0;
+        auto add = [&](uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1) {   // [x0, x1) x [y0, y1), clipped to e
+            x1 = std::min(x1, e.width);
+            y1 = std::min(y1, e.height);
+            if (x0 >= x1 || y0 >= y1) return;
+            VkImageCopy& c = regions[n++];
+            c.srcSubresource = c.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            c.srcOffset = c.dstOffset = {static_cast<int32_t>(x0), static_cast<int32_t>(y0), 0};
+            c.extent = {x1 - x0, y1 - y0, 1};
+        };
+        if (!l.hasInset) {
+            add(0, 0, e.width, e.height);
+        } else {
+            const uint32_t ix0 = l.inset[0] * sx, iy0 = l.inset[1] * sy, ix1 = (l.inset[2] + 1u) * sx, iy1 = (l.inset[3] + 1u) * sy;
+            add(0, 0, e.width, std::min(iy0, e.height));          // above
+            add(0, iy1, e.width, e.height);                        // below
+            add(0, iy0, std::min(ix0, e.width), iy1);              // left
+            add(ix1, iy0, e.width, iy1);                           // right
+        }
+        if (n) vkCmdCopyImage(command, from.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, colour.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, n, regions);
+    };
     // An image of the stage at least `e` large (kept, grown).
     auto ensureImage = [&](vk::Image& image, VkExtent2D e, VkFormat format, VkImageUsageFlags usage, const char* name) {
         if (image.valid() && image.extent.width >= e.width && image.extent.height >= e.height) return false;
@@ -679,10 +707,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         b.image(litImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_READ_BIT);
         b.image(colour, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_WRITE_BIT);
         b.flush(command);
-        VkImageCopy copy{};
-        copy.srcSubresource = copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        copy.extent = {e.width, e.height, 1};
-        vkCmdCopyImage(command, litImage.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, colour.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+        copyBack(litImage, colour, e, l);
     };
 
     // Temporal anti-aliasing: the 3D draws (depth-tested) into a scene's target before its Light command are
@@ -776,6 +801,81 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         vkCmdEndRendering(command);
         return true;
     };
+    // A pass of the scene stage over the scene's area: the scene (binding 0, linear), its Z (1), the motion
+    // vectors (2: the scene when there are none) into litImage (3), copied back.
+    auto stagePass = [&](const gsn::FrameList::Lighting& l, const SceneImages& si, vk::Pipeline& pass, const void* push, uint32_t pushSize,
+                         bool motion) {
+        end();
+        vk::Image& colour = *si.colour;
+        const VkExtent2D e = si.area;
+        ensureImage(litImage, e, kColour, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, "gsn lit");
+        vk::toSampled(b, colour, vk::kCompute);
+        vk::toSampled(b, *si.depth, vk::kCompute);
+        if (motion) vk::toSampled(b, velocityImage, vk::kCompute);
+        vk::toStorage(b, litImage, true);
+        b.flush(command);
+        vk::bind(command, pass);
+        vk::Descriptors()
+            .sampled(0, colour.view, samplers[2])
+            .sampled(1, depthView(*si.depth), samplers[0])
+            .sampled(2, motion ? velocityImage.view : colour.view, samplers[0])
+            .storage(3, litImage.view)
+            .push(command, pass);
+        vk::pushConstants(command, pass, push, pushSize);
+        vk::dispatch2D(command, e.width, e.height);
+        b.image(litImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_READ_BIT);
+        b.image(colour, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        b.flush(command);
+        copyBack(litImage, colour, e, l);
+    };
+    constexpr float kZScale = 1.6e6f;   // GT4's 3D Z = 1.6e6 / view distance (docs/LIGHTING.md)
+    static const uint32_t ssrView = std::getenv("GT4_SSR_VIEW") ? static_cast<uint32_t>(std::atoi(std::getenv("GT4_SSR_VIEW"))) : 0;
+    auto reflect = [&](const gsn::FrameList::Lighting& l) {
+        SceneImages si;
+        if (!sceneImages(l, si)) return;
+        struct {
+            float size[2], tanHalf[2], zScale, strength;
+            uint32_t steps, frame;
+            float roughness;
+            uint32_t view;
+        } k{{float(si.area.width), float(si.area.height)}, {lighting.tanX, lighting.tanY}, kZScale, effects.reflections,
+            effects.reflectionSteps, static_cast<uint32_t>(displayedFrames), temporal ? 0.06f : 0.0f, ssrView};
+        stagePass(l, si, ssrPass, &k, sizeof k, false);
+    };
+    auto haze = [&](const gsn::FrameList::Lighting& l) {
+        SceneImages si;
+        if (!sceneImages(l, si) || !l.fogged) return;
+        const uint32_t f = l.fogColour;
+        struct {
+            float size[2], tanHalf[2], zScale, density, falloff, height;
+            float colour[4];
+        } k{{float(si.area.width), float(si.area.height)}, {lighting.tanX, lighting.tanY}, kZScale, effects.fogDensity, 0.02f, 1.5f,
+            {float(f & 0xFF) / 255.0f, float((f >> 8) & 0xFF) / 255.0f, float((f >> 16) & 0xFF) / 255.0f, 1.0f}};
+        stagePass(l, si, fogPass, &k, sizeof k, false);
+    };
+    auto blur = [&](const gsn::FrameList::Lighting& l) {
+        SceneImages si;
+        if (!sceneImages(l, si)) return;
+        struct {
+            float size[2], scale[2], imageSize[2], shutter, maxBlur, zScale;
+            uint32_t samples, frame;
+        } k{{float(si.area.width), float(si.area.height)}, {float(sx), float(sy)},
+            {float(si.colour->extent.width), float(si.colour->extent.height)}, effects.shutter, 0.05f * float(si.area.height), kZScale,
+            effects.blurSamples, static_cast<uint32_t>(displayedFrames)};
+        stagePass(l, si, blurPass, &k, sizeof k, true);
+    };
+    auto focus = [&](const gsn::FrameList::Lighting& l) {
+        SceneImages si;
+        if (!sceneImages(l, si)) return;
+        struct {
+            float size[2], tanHalf[2], imageSize[2], zScale, focus, fNumber, maxCoc;
+            uint32_t samples;
+        } k{{float(si.area.width), float(si.area.height)}, {lighting.tanX, lighting.tanY},
+            {float(si.colour->extent.width), float(si.colour->extent.height)}, kZScale, effects.focus, effects.aperture,
+            0.02f * float(si.area.height), effects.dofSamples};
+        stagePass(l, si, dofPass, &k, sizeof k, false);
+    };
+
     // The resolve: the scene against its history (gsn_taa.comp), into the history's other image, copied back.
     auto antialias = [&](const gsn::FrameList::Lighting& l) {
         SceneImages si;
@@ -936,10 +1036,16 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         const auto& cmd = frame.commands[at];
         if (cmd.kind == gsn::FrameList::Command::Kind::Light) {
             if (cmd.index >= frame.lights.size()) continue;
+            // The scene stage, in a modern renderer's order: motion vectors, lighting, reflections and fog
+            // (before the resolve, which also integrates their noise), the resolve, motion blur, depth of field.
             const gsn::FrameList::Lighting& l = frame.lights[cmd.index];
-            const bool moving = temporal && drawVelocity(l, at);
+            const bool moving = (temporal || effects.shutter > 0.0f) && drawVelocity(l, at);
             if (lighting.occlusion > 0.0f || lighting.grade > 0.0f) relight(l);
-            if (moving) antialias(l);
+            if (effects.reflections > 0.0f) reflect(l);
+            if (effects.fogDensity > 0.0f) haze(l);
+            if (moving && temporal) antialias(l);
+            if (moving && effects.shutter > 0.0f) blur(l);
+            if (effects.aperture > 0.0f) focus(l);
             continue;
         }
         if (cmd.kind != gsn::FrameList::Command::Kind::Draw) continue;
@@ -1271,6 +1377,7 @@ void GsnScene::setScale(uint32_t scale) { impl->scaleSetting = scale; }
 void GsnScene::setAnisotropy(int anisotropy) { impl->makeMipSamplers(static_cast<float>(anisotropy)); }
 
 void GsnScene::setTemporal(bool on) { impl->temporal = on; }
+void GsnScene::setEffects(const SceneEffects& effects) { impl->effects = effects; }
 bool GsnScene::antiAliasesItself() const { return impl->temporal; }
 
 void GsnScene::setLighting(float occlusion, uint32_t directions, float grade, float aspect) {
@@ -1335,6 +1442,12 @@ void GsnScene::prepare(const SceneFormats& formats) {
         v.name = "gsn motion vectors";
         s.velocityPass = vk::createGraphics(s.device, v);
     }
+    const auto stage = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE};
+    if (!s.ssrPass.valid()) s.ssrPass = vk::createCompute(s.device, shaders::gsn_ssr_comp(), stage, 48, "gsn reflections");
+    if (!s.fogPass.valid()) s.fogPass = vk::createCompute(s.device, shaders::gsn_fog_comp(), stage, 48, "gsn fog");
+    if (!s.blurPass.valid()) s.blurPass = vk::createCompute(s.device, shaders::gsn_motionblur_comp(), stage, 48, "gsn motion blur");
+    if (!s.dofPass.valid()) s.dofPass = vk::createCompute(s.device, shaders::gsn_dof_comp(), stage, 48, "gsn depth of field");
     if (!s.taaPass.valid())
         s.taaPass = vk::createCompute(s.device, shaders::gsn_taa_comp(),
                                       {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,

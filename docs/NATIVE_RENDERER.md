@@ -71,8 +71,29 @@ another; docs/LIGHTING.md). Modern engines put their scene effects there, and so
   larger Z is nearer), variance clipping in YCoCg, blending on reversibly tonemapped values; GT4's alpha is the
   current frame's. Each scene target keeps its history (two images; a scene not resolved the frame before
   starts again; histories not used for 10 seconds go).
-- Debugging: `GT4_TAA_VIEW=1` shows the motion vectors (grey still, through GT4's own grading); the summary
-  line counts the renderers' objects and those found in the frame before.
+- **The other effects** (`effects.*` settings; each a compute pass over the scene's area, in this order after
+  the lighting, with the view space rebuilt from GT4's Z, `gsn_view.glsl`):
+  - *Reflections* (`effects.reflections`, `gsn_ssr.comp`): screen-space reflections, before the resolve.
+    Surfaces facing up and grey (asphalt, concrete, paint) reflect what the scene shows above them with
+    Schlick's Fresnel term (F0 0.04: the road ahead at grazing angles, the cars on it); the ray is marched in
+    screen space from 2.5 pixels out (its own pixel would hit itself), 1/z interpolated, refined by bisection,
+    and perturbed per pixel and frame for a slightly rough lobe the resolve integrates. Low to ultra: 20 to 44
+    steps, 55 to 100 % of the Fresnel term.
+  - *Fog* (`effects.sky_fog`, `gsn_fog.comp`): height fog in the course's own fog colour (FOGCOL of the scene's
+    draws), integrated along the view ray from a camera 1.5 m up, before the resolve: the distance turns hazy and
+    the sky above the horizon stays clear. GT4's own linear fog stays as drawn.
+  - *Motion blur* (`effects.motion_blur`, `post.shutter`; off in every preset, `gsn_motionblur.comp`): after the
+    resolve, McGuire et al. 2012's reconstruction along each pixel's motion, so the player's car (still on the
+    screen) stays sharp and does not smear into the streaking road.
+  - *Depth of field* (`effects.dof`, `post.aperture`, `post.focus_distance`; off in every preset,
+    `gsn_dof.comp`): a thin lens of the scene's field of view, autofocus on the median distance at the centre of
+    the screen, a golden-angle gather where a farther sample may not bleed over a nearer pixel.
+  - The race's rear-view mirror is another camera drawn into the same target: the front end reports such an inset
+    view (a smaller scissor than the main view's, `Lighting::inset`), and these effects and the lighting leave it
+    as drawn (the resolve covers it: its motion vectors are its own).
+- Debugging: `GT4_TAA_VIEW=1` shows the motion vectors (grey still, through GT4's own grading), `GT4_SSR_VIEW=1`
+  the reflections (red the reflectivity, green a hit, blue a miss); the summary line counts the renderers'
+  objects and those found in the frame before.
 
 ## What GT4 asks of the GS
 

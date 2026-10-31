@@ -1,0 +1,65 @@
+#version 460
+// Motion blur of the game's 3D scene (docs/NATIVE_RENDERER.md, "The scene stage"), after the temporal resolve,
+// from its motion vectors: McGuire et al. 2012's reconstruction filter along the pixel's own motion (samples
+// jittered per pixel). A sample nearer than the pixel blurs over it as far as its own motion reaches; a farther
+// one only within the pixel's motion; both by a soft depth comparison. So the player's car, still on the screen,
+// stays sharp while the road around it streaks, and does not smear into the road.
+#extension GL_GOOGLE_include_directive : require
+#include "gsn_view.glsl"
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D scene;         // linear
+layout(set = 0, binding = 1) uniform sampler2D depthBuffer;
+layout(set = 0, binding = 2) uniform sampler2D velocity;      // GS pixels, previous minus current
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D result;
+layout(push_constant) uniform Blur {
+    vec2 size;
+    vec2 scale;        // render pixels per GS pixel
+    vec2 imageSize;    // the scene image's size (texture coordinates)
+    float shutter;     // the exposure, a fraction of the frame
+    float maxBlur;     // render pixels
+    float zScale;
+    uint samples;
+    uint frame;
+} p;
+
+vec2 motionAt(ivec2 q) {
+    const vec2 v = texelFetch(velocity, q, 0).rg * p.scale * p.shutter;
+    const float l = length(v);
+    return l > p.maxBlur ? v * (p.maxBlur / l) : v;
+}
+float cone(float distance, float extent) { return clamp(1.0 - distance / max(extent, 1e-3), 0.0, 1.0); }
+float cylinder(float distance, float extent) { return 1.0 - smoothstep(0.95 * extent, 1.05 * extent, distance); }
+// 1 when a is nearer than b (by more than the soft extent), 0 when farther.
+float nearer(float a, float b, float soft) { return clamp(1.0 - (a - b) / soft, 0.0, 1.0); }
+
+void main() {
+    const ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(q, ivec2(p.size)))) return;
+    const vec4 c = texelFetch(scene, q, 0);
+    const vec2 v = motionAt(q);
+    const float extent = length(v);
+    if (extent < 0.5) {
+        imageStore(result, q, c);
+        return;
+    }
+    const float d = viewDistance(depthBuffer, q, p.zScale);
+    const float soft = max(0.05 * min(d, 1e4), 0.05);
+    const float noise = gradientNoise(vec2(q) + float(p.frame % 64u) * vec2(5.588, 3.17)) - 0.5;
+    const float centreWeight = 1.0 / extent;
+    vec3 sum = toLinear(c.rgb) * centreWeight;
+    float weights = centreWeight;
+    for (uint i = 0u; i < p.samples; ++i) {
+        const float t = mix(-0.5, 0.5, (float(i) + 0.5 + noise) / float(p.samples));
+        const vec2 at = vec2(q) + 0.5 + v * t;
+        const ivec2 s = clamp(ivec2(at), ivec2(0), ivec2(p.size) - 1);
+        const float distance = length(v * t);
+        const float ds = viewDistance(depthBuffer, s, p.zScale);
+        const float extentS = length(motionAt(s));
+        const float front = nearer(ds, d, soft), back = nearer(d, ds, soft);
+        const float w = front * cone(distance, extentS) + back * cone(distance, extent) +
+                        cylinder(distance, extentS) * cylinder(distance, extent) * 2.0;
+        sum += toLinear(textureLod(scene, at / p.imageSize, 0.0).rgb) * w;
+        weights += w;
+    }
+    imageStore(result, q, vec4(toDisplay(sum / weights), c.a));
+}

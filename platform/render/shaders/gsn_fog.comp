@@ -1,0 +1,38 @@
+#version 460
+// Height fog on the game's 3D scene (docs/NATIVE_RENDERER.md, "The scene stage"), in the course's own fog colour
+// (GT4's FOGCOL of the scene's draws): exponential in height, integrated along the view ray from the camera
+// (about 1.5 m above the ground), so that the distance turns hazy and the sky above the horizon stays clear.
+// GT4's own linear fog stays as it was drawn; this adds the depth of air it lacks.
+#extension GL_GOOGLE_include_directive : require
+#include "gsn_view.glsl"
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D scene;
+layout(set = 0, binding = 1) uniform sampler2D depthBuffer;
+layout(set = 0, binding = 2) uniform sampler2D unused;
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D result;
+layout(push_constant) uniform Fog {
+    vec2 size;
+    vec2 tanHalf;
+    float zScale;
+    float density;    // per metre at the ground
+    float falloff;    // per metre of height
+    float height;     // the camera above the ground, metres
+    vec4 colour;      // display-referred
+} p;
+
+void main() {
+    const ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(q, ivec2(p.size)))) return;
+    const vec4 c = texelFetch(scene, q, 0);
+    const float d = min(viewDistance(depthBuffer, q, p.zScale), 4000.0);   // the sky as far
+    const vec3 P = viewPosition(vec2(q) + 0.5, d, p.size, p.tanHalf);
+    const float range = length(P);
+    const float rise = -P.y / range;   // the ray's climb per metre (y is down)
+    const float b = p.falloff;
+    const float atCamera = p.density * exp(-b * p.height);
+    const float x = b * rise * range;
+    const float integral = abs(x) < 1e-4 ? atCamera * range : atCamera * (1.0 - exp(-x)) / (b * rise);
+    const float amount = 1.0 - exp(-max(integral, 0.0));
+    const vec3 fogged = mix(toLinear(c.rgb), toLinear(p.colour.rgb), amount);
+    imageStore(result, q, vec4(toDisplay(fogged), c.a));
+}

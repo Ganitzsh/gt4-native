@@ -126,6 +126,12 @@ struct FrameList {
     struct Lighting {
         uint32_t target = 0, depth = 0;
         uint32_t width = 0, height = 0;   // the scene's area from the target's corner (its 3D draws' scissor), GS pixels
+        uint32_t fogColour = 0;           // FOGCOL of its last fogged 3D draw (R in the low byte; the course's haze)
+        bool fogged = false;              // ... whether it had one
+        // Another view drawn into the scene with a smaller scissor (the race's rear-view mirror): its rectangle
+        // (x0, y0, x1, y1, GS pixels, inclusive); effects of the main view's camera leave it as drawn.
+        uint16_t inset[4] = {0, 0, 0, 0};
+        bool hasInset = false;
     };
     std::vector<Lighting> lights;
     std::vector<Vertex> vertices;
@@ -307,6 +313,10 @@ private:
     // Per target this frame: its depth-tested 3D draws since it was last lit, and their Z buffer (lighting).
     struct Scene {
         uint32_t draws = 0, depth = 0, width = 0, height = 0;
+        uint32_t fogColour = 0;
+        bool fogged = false;
+        // Its 3D draws' scissor rectangles (x0, y0, x1, y1) and how many draws each: the largest is the main view.
+        std::vector<std::pair<std::array<uint16_t, 4>, uint32_t>> viewports;
     };
     std::unordered_map<uint32_t, Scene> scenes;
     void sceneRead(uint32_t target);

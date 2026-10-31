@@ -12,6 +12,18 @@
 
 namespace gt4 {
 
+// The scene stage's effects on the game's 3D scenes (docs/NATIVE_RENDERER.md); 0 switches each off.
+struct SceneEffects {
+    float reflections = 0.0f;        // screen-space reflections: the share of the Fresnel term shown, 0..1
+    uint32_t reflectionSteps = 24;
+    float fogDensity = 0.0f;         // height fog per metre at the ground, in the course's fog colour
+    float shutter = 0.0f;            // motion blur: the exposure, a fraction of the frame
+    uint32_t blurSamples = 12;
+    float aperture = 0.0f;           // depth of field: the f-number
+    float focus = 0.0f;              // ... focused at metres; 0: on the centre of the screen
+    uint32_t dofSamples = 32;
+};
+
 class GsnScene final : public SceneSource {
 public:
     GsnScene(const vk::Device& device, VkCommandPool pool);
@@ -36,6 +48,7 @@ public:
     // Temporal anti-aliasing of the 3D scenes in the scene stage (render.aa = taa, or FSR 2): jittered draws,
     // motion vectors from the 3D renderers, a resolve against each scene's history (docs/NATIVE_RENDERER.md).
     void setTemporal(bool on);
+    void setEffects(const SceneEffects& effects);
     bool antiAliasesItself() const override;
 
     void prepare(const SceneFormats& formats) override;

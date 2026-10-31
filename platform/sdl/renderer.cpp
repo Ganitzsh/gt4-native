@@ -814,6 +814,32 @@ struct Renderer::Impl {
             // Temporal anti-aliasing in the game's 3D scenes (motion vectors from its 3D renderers): for TAA, and for
             // FSR 2, whose temporal part it takes (the game's frames reach the pipeline whole, HUD included).
             gsnScene->setTemporal(settings.aa == gt4::AntiAliasing::Taa || settings.upscaler == gt4::Upscaler::Fsr2);
+            // The scene stage's effects, by their settings' levels (original and off: none).
+            auto level = [](gt4::EffectQuality q) {
+                switch (q) {
+                case gt4::EffectQuality::Low: return 1;
+                case gt4::EffectQuality::Medium: return 2;
+                case gt4::EffectQuality::High: return 3;
+                case gt4::EffectQuality::Ultra: return 4;
+                default: return 0;
+                }
+            };
+            gt4::SceneEffects fx;
+            if (const int q = level(settings.reflections)) {
+                fx.reflections = 0.4f + 0.15f * float(q);
+                fx.reflectionSteps = 12u + 8u * static_cast<uint32_t>(q);
+            }
+            if (const int q = level(settings.skyFog)) fx.fogDensity = 0.0002f + 0.0001f * float(q);
+            if (const int q = level(settings.motionBlur)) {
+                fx.shutter = settings.shutter;
+                fx.blurSamples = 4u + 4u * static_cast<uint32_t>(q);
+            }
+            if (const int q = level(settings.dof)) {
+                fx.aperture = settings.aperture;
+                fx.focus = settings.focusDistance;
+                fx.dofSamples = 16u * static_cast<uint32_t>(q);
+            }
+            gsnScene->setEffects(fx);
         }
         scene->setControls(stick, action);
         scene->apply(settings);
