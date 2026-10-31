@@ -170,7 +170,8 @@ uint64_t clutHash(const GsMemory& mem, const GsMemory::Tex0& t, const Texa& texa
 }  // namespace
 
 bool findTextureName(const GsMemory& mem, const GsMemory::Tex0& tex0, const Texa& texa, const gfx::Sampler& sampler,
-                     const MipAddress* mips, uint32_t mipCount, const TexturePack& pack, TextureName& name) {
+                     const MipAddress* mips, uint32_t mipCount, const TexturePack& pack, TextureName& name,
+                     uint32_t origin[2]) {
     Format f;
     if (!formatOf(tex0.psm, f)) return false;
     TextureName key;
@@ -225,12 +226,16 @@ bool findTextureName(const GsMemory& mem, const GsMemory::Tex0& tex0, const Texa
             key.texHash = XXH3_64bits_digest(&chain);
             if (complete && pack.has(key)) {
                 name = key;
+                origin[0] = r.hasX() ? static_cast<uint32_t>(r.minX) : 0;
+                origin[1] = r.hasY() ? static_cast<uint32_t>(r.minY) : 0;
                 return true;
             }
         }
         key.texHash = XXH3_64bits_digest(&state);
         if (pack.has(key)) {
             name = key;
+            origin[0] = r.hasX() ? static_cast<uint32_t>(r.minX) : 0;
+            origin[1] = r.hasY() ? static_cast<uint32_t>(r.minY) : 0;
             return true;
         }
     }

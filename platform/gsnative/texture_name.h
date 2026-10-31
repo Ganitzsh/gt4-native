@@ -16,8 +16,10 @@ struct MipAddress {
 // `mips` holds levels 1..n of a mipmapped draw), with TEXA for 16 and 24-bit formats and the CLUT buffer as
 // loaded for the draw. PCSX2 names one texture differently by how it is drawn (a region, a recent partial
 // upload, the mip chain): the names the pack can have for it are tried (its regions for these TEX0 / TEXA
-// bits, with and without the chain). False when the pack has none of them.
+// bits, with and without the chain). False when the pack has none of them. `origin` receives the texel the
+// name's region starts at (its size is the name's; 0, 0 without a region).
 bool findTextureName(const GsMemory& mem, const GsMemory::Tex0& tex0, const Texa& texa, const gfx::Sampler& sampler,
-                     const MipAddress* mips, uint32_t mipCount, const TexturePack& pack, TextureName& name);
+                     const MipAddress* mips, uint32_t mipCount, const TexturePack& pack, TextureName& name,
+                     uint32_t origin[2]);
 
 }  // namespace gt4::gsn

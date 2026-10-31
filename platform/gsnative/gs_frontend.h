@@ -62,6 +62,9 @@ struct TextureSource {
     // sampled as the texture's (same layout); otherwise the texels are decoded from memory, which is stale.
     int32_t offsetX = 0, offsetY = 0;
     bool reinterpreted = false;
+    // Memory, a texture pack's image: the rectangle of the GS texture it stands for, in GS texels (an axis
+    // without one: 0, 0, the whole axis).
+    uint16_t regionX = 0, regionY = 0, regionWidth = 0, regionHeight = 0;
 };
 
 struct Draw {
@@ -284,6 +287,7 @@ private:
         bool replacementFound = false;     // the texture pack has an image for this content
         uint32_t replacedId = 0;           // ... the texture drawn for it (replacementTexture), 0: the decoded one
         TextureName replacementName;
+        uint32_t replacementOrigin[2] = {};   // the GS texel its region starts at (the region's size is the name's)
         bool replacementPending = false;   // ... still loading: looked up again after more loads
         uint64_t packLoads = 0;            // ... the pack's loadedSerial when it was looked up
     };

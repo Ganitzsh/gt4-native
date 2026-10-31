@@ -96,6 +96,11 @@ public:
                 triggered = true;
                 list.dump = true;
                 std::printf("[gsn] vblank %u: triggered\n", count);
+                // and the front end's GS memory at the end of the frame (gsn_vram_N.bin)
+                if (FILE* v = std::fopen(("gsn_vram_" + std::to_string(count) + ".bin").c_str(), "wb")) {
+                    std::fwrite(native->memory().data(), 1, gsn::GsMemory::kBytes, v);
+                    std::fclose(v);
+                }
             }
         }
         const bool statsNow = triggered || statsAt.second < 0 ||

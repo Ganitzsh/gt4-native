@@ -126,16 +126,18 @@ vec4 texel(vec2 coordinate) {
     // coordinate: normalised over the texture (2^TW x 2^TH).
     coordinate = insideSprite(coordinate);
     if ((draw.flags & kReplaced) != 0u) {
-        // A texture pack's image (any size): the hardware's filtering and mips. CLAMP's region modes wrap at the
-        // GS texture's texels, the position within the texel kept (the gradients of the unwrapped coordinate).
-        vec2 at = coordinate;
+        // A texture pack's image (any size) for the rectangle of the GS texture at sourceOffset, sourceSize texels
+        // (the whole texture, or the region PCSX2 named it by): the hardware's filtering and mips. CLAMP's region
+        // modes wrap at the GS texture's texels, the position within the texel kept (the gradients of the
+        // unwrapped coordinate).
+        vec2 p = coordinate * draw.textureSize;
         if ((draw.clampU & 3u) >= 2u || (draw.clampV & 3u) >= 2u) {
-            const vec2 p = coordinate * draw.textureSize, cell = floor(p);
+            const vec2 cell = floor(p);
             const ivec2 size = ivec2(draw.textureSize);
-            const vec2 wrapped = vec2(wrap(int(cell.x), draw.clampU, size.x), wrap(int(cell.y), draw.clampV, size.y));
-            at = (wrapped + (p - cell)) / draw.textureSize;
+            p = vec2(wrap(int(cell.x), draw.clampU, size.x), wrap(int(cell.y), draw.clampV, size.y)) + (p - cell);
         }
-        vec4 c = textureGrad(source, at, dFdx(coordinate), dFdy(coordinate));
+        const vec2 at = (p - draw.sourceOffset) / draw.sourceSize, perTexel = draw.textureSize / draw.sourceSize;
+        vec4 c = textureGrad(source, at, dFdx(coordinate) * perTexel, dFdy(coordinate) * perTexel);
         // The alpha test sees level 0's alpha, as with made levels: averaged levels make cut-outs solid.
         if ((draw.alphaTest & 1u) != 0u) c.a = textureLod(source, at, 0.0).a;
         return floor(c * 255.0 + 0.5);

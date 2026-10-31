@@ -33,13 +33,17 @@ The settings menu's "HD textures" row (GRAPHICS) switches the pack on and off wh
   thread; the original is drawn until it is ready (usually the next few frames).
 - A replacement is drawn in the original's place at its own resolution, with mipmaps made from it and the
   sampler's filtering (anisotropic with `texture.anisotropy`). CLAMP's region modes still wrap at the
-  original texture's texels.
+  original texture's texels. A replacement named with a region stands for that rectangle of the texture
+  (from the clamp's minimum, or the texture's corner), and is sampled over it (until 2026-10-31 it was spread
+  over the whole texture: the arcade emblems were cut off).
 - Decoded images stay in memory up to 1.5 GiB (`GT4_TEXTURE_PACK_MB` changes it), least recently used first
   out; the GPU keeps what is drawn.
 - PNG alpha is the GS's own (0x80 = 1.0), unscaled, as PCSX2 dumps and loads it; an image without alpha
   is opaque (0x80).
 - One replacement image is uploaded once and shared by every texture slot whose content it replaces (GT4
-  streams its textures through a few slots in GS memory), until unused for two seconds.
+  streams its textures through a few slots in GS memory), until unused for two seconds. Every draw with it
+  counts as a use (until 2026-10-31 only a texture's first draw did: on a screen that stayed still for two
+  seconds, such as the arcade car selection, the replaced textures vanished).
 
 ## Names
 

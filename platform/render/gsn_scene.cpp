@@ -848,6 +848,11 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
                         // A texture pack's image: filtered and mipmapped by the sampler, in normalised coordinates
                         // (the region modes of CLAMP at the GS texture's texels, gsn.frag), whatever the draw's filter.
                         k.flags = (k.flags & ~kNearest) | kReplaced;
+                        // the rectangle of the GS texture it stands for (a region PCSX2 named it by), in texels
+                        k.sourceOffset[0] = static_cast<float>(d.texture.regionX);
+                        k.sourceOffset[1] = static_cast<float>(d.texture.regionY);
+                        k.sourceSize[0] = d.texture.regionWidth ? static_cast<float>(d.texture.regionWidth) : k.textureSize[0];
+                        k.sourceSize[1] = d.texture.regionHeight ? static_cast<float>(d.texture.regionHeight) : k.textureSize[1];
                         const bool plain = sm.wrapU < 2 && sm.wrapV < 2;
                         sampler = mipSamplers[plain ? (sm.wrapU == 0 ? 2 : 0) + (sm.wrapV == 0 ? 1 : 0) : 0];
                     } else if (t->second.levels > 1 || made) {

@@ -846,21 +846,37 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
     c.lastUsed = frameCount;
     // A texture pack's image for this content (texture_name.h names it as PCSX2 does).
     std::shared_ptr<const ReplacementImage> replacement;
-    const bool fresh = !c.version || c.generation != generation || c.clutHash != clutHash;
+    // The replacement a texture is drawn with stays uploaded while it is used: each use keeps it. One dropped
+    // meanwhile (unused for two seconds by every texture it replaced) is named and fetched again; until then
+    // its id names no texture, and the draws using it came out empty (the arcade car selection's emblems and
+    // car body, still for longer than that).
+    bool lost = false;
+    if (c.replacedId) {
+        auto kept = replacementTextures.find(c.replacementName);
+        if (kept != replacementTextures.end() && kept->second.id == c.replacedId) {
+            kept->second.lastUsed = frameCount;
+        } else {
+            lost = true;
+            c.replacedId = 0;
+        }
+    }
+    const bool fresh = !c.version || c.generation != generation || c.clutHash != clutHash || lost;
     if (replacementsOn) {
         if (fresh) {   // named once per content (level 0 is replaced; the GPU makes a mipmapped texture's levels)
             MipAddress mips[6];
             for (uint32_t i = 1; i < levelCount; ++i) mips[i - 1] = {levels[i].tbp, levels[i].tbw};
             c.replacementFound = findTextureName(mem, t, Texa{s.texAlpha0, s.texAlpha1, s.texBlackTransparent != 0}, sm, mips,
-                                                 levelCount - 1, *texturePack, c.replacementName);
+                                                 levelCount - 1, *texturePack, c.replacementName, c.replacementOrigin);
             ++stats.named;
             stats.found += c.replacementFound;
             // GT4_TEXPACK_LOG=N (debugging): the first N textures looked up, found or not.
             static long logLeft = std::getenv("GT4_TEXPACK_LOG") ? std::strtol(std::getenv("GT4_TEXPACK_LOG"), nullptr, 10) : 0;
             if (logLeft > 0) {
                 --logLeft;
-                std::fprintf(stderr, "texpack: tbp %04x psm %02x %ux%u clamp %u/%u mips %u -> %s\n", t.tbp, t.psm, w, h, sm.wrapU,
-                             sm.wrapV, levelCount - 1, c.replacementFound ? "found" : "none");
+                std::fprintf(stderr, "texpack: tbp %04x psm %02x %ux%u clamp %u/%u mips %u -> %s %016llx-%016llx-%08x\n", t.tbp, t.psm, w, h,
+                             sm.wrapU, sm.wrapV, levelCount - 1, c.replacementFound ? "found" : "none",
+                             static_cast<unsigned long long>(c.replacementName.texHash),
+                             static_cast<unsigned long long>(c.replacementName.clutHash), c.replacementName.bits);
             }
             c.replacementPending = false;
         }
@@ -940,6 +956,10 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
         src.kind = TextureSource::Kind::Memory;
         src.id = c.replacedId;
         src.version = 1;
+        src.regionX = static_cast<uint16_t>(c.replacementOrigin[0]);
+        src.regionY = static_cast<uint16_t>(c.replacementOrigin[1]);
+        src.regionWidth = static_cast<uint16_t>(c.replacementName.regionWidth);
+        src.regionHeight = static_cast<uint16_t>(c.replacementName.regionHeight);
         return src;
     }
     src.kind = TextureSource::Kind::Memory;
