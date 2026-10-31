@@ -1,6 +1,6 @@
 #pragma once
 // The EE kernel on the host: threads, semaphores, sleep/wakeup, alarms, and the frame clock (the game's
-// 59.94 Hz frame, in place of the PS2's VBlank interrupt; no interrupt or DMA controller).
+// 60 Hz frame, in place of the PS2's VBlank interrupt; no interrupt or DMA controller).
 //
 // Scheduling follows the EE kernel: one guest thread runs at a time; the highest-priority ready thread
 // runs (0 is highest); a thread of equal priority runs until it blocks or rotates the ready queue.

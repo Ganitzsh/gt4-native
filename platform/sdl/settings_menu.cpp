@@ -140,7 +140,7 @@ std::vector<Item> buildItems(bool game) {
         "newest frame."));
     items.push_back(choice("Frame rate limit", "display.fps_limit",
         {{"0", "Off"}, {"30", "30"}, {"60", "60"}, {"120", "120"}, {"144", "144"}, {"240", "240"}},
-        game ? "Caps the host's presentation. The game itself always runs at 59.94 Hz."
+        game ? "Caps the host's presentation. The game itself always runs at 60 Hz."
              : "Caps the frame rate (the simulation stays at 60 Hz)."));
     items.push_back(choice("Aspect ratio", "aspect.ratio",
         {{"window", "Fit window"}, {"4:3", "4:3"}, {"16:9", "16:9"}, {"16:10", "16:10"}, {"21:9", "21:9"},

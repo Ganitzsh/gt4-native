@@ -413,7 +413,7 @@ std::deque<int16_t> g_movie;
 
 FILE *g_wav = nullptr;
 uint32_t g_wav_bytes = 0;
-uint64_t g_frames_due = 0;  // in 1/1001 frame units
+uint64_t g_frames_due = 0;  // in 1/60000 of a sample frame
 
 void wav_header() {
     struct {
@@ -663,8 +663,8 @@ void audio_frame() {
         std::lock_guard<std::mutex> lock(g_mutex);
         spu_trace();
     }
-    // 48000 / 59.94 = 800.8 frames per VBlank
-    g_frames_due += static_cast<uint64_t>(kRate) * 1001;
+    // 48000 / 60 = 800 sample frames a frame (the kernel's frame clock)
+    g_frames_due += static_cast<uint64_t>(kRate) * 1000;
     const int n = static_cast<int>(g_frames_due / 60000);
     g_frames_due %= 60000;
     if (n <= 0) return;

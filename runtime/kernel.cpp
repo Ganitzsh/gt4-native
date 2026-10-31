@@ -31,8 +31,11 @@ constexpr int kMaxThreads = 256;
 constexpr int kMaxSemas = 256;
 constexpr int kPriorities = 128;
 constexpr double kBusHz = 147456000.0;
-constexpr double kFrameHz = 59.94;       // the game's frame rate (it steps its simulation once a frame)
-constexpr double kHsyncHz = 15734.26;    // the unit of the EE kernel's alarms (SetAlarm counts H-blanks)
+// The game's frame rate (it steps its simulation once a frame): 60 Hz, a modern display's, not NTSC's 59.94
+// (docs/NATIVE_V2.md, step 4: a 60 Hz display no longer repeats a frame every 16 s, the sound mixes 800 samples a
+// frame). The EE kernel's alarms count H-blanks: 262.5 a frame, as on the PS2.
+constexpr double kFrameHz = 60.0;
+constexpr double kHsyncHz = kFrameHz * 262.5;
 
 // ee_thread_t / ee_thread_status_t as the game passes them (all 32-bit fields).
 struct GuestThreadParam {

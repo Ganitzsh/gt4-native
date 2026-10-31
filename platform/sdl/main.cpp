@@ -64,7 +64,7 @@ const char* kUsage =
     "  --game PATH          start gt4_game.exe with a link and display its frames (GS back end)\n"
     "  --game-args \"ARGS\"  extra arguments for the game (after --link NAME)\n"
     "  --replay FILE        display a capture of the game's graphics stream (gt4_game --capture) instead;\n"
-    "                       with --fixed-step (headless) one VBlank per rendered frame, else 59.94 Hz\n"
+    "                       with --fixed-step (headless) one VBlank per rendered frame, else 60 Hz\n"
     "  --replay-loop        start the replay again at its end\n"
     "  --import-save PATH   copy Gran Turismo 4's saves from a PS2 memory card image (PCSX2 .ps2, a raw dump),\n"
     "                       a folder memory card or a .psu export into the save folder, then exit\n"
@@ -962,7 +962,7 @@ int run(const Options& options) {
             SDL_Delay(10);
         }
         // Frame-rate cap (display.fps_limit): paces presentation only; the tick rate above is unaffected.
-        // Without a window, a live game or a real-time replay is shown at its own 59.94 Hz.
+        // Without a window, a live game or a real-time replay is shown at its own 60 Hz.
         const bool paceToGame = gs && !windowed && !lockstep;
         if ((settings.fpsLimit > 0 && windowed) || paceToGame) {
             const Uint64 interval = paceToGame ? 16683350ull : 1000000000ull / static_cast<Uint64>(settings.fpsLimit);

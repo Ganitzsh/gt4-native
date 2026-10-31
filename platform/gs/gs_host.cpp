@@ -658,7 +658,7 @@ struct GsHost::Impl {
     void runReplayRealTime() {
         NoteCpu note{this};
         using clock = std::chrono::steady_clock;
-        const auto period = std::chrono::nanoseconds(16683350);   // 1 / 59.94 Hz
+        const auto period = std::chrono::nanoseconds(16666667);   // 1 / 60 Hz (the game's frame clock)
         auto next = clock::now();
         while (!stop) {
             if (!replayStep()) { done = true; break; }
