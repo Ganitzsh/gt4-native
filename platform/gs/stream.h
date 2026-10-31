@@ -14,6 +14,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace gt4::ps2 {
@@ -132,6 +133,18 @@ private:
         std::vector<uint8_t> bytes;
     };
     std::vector<RecordData> recordData;
+    // The model packets' contents (gfx::ContentFifo, as the runtime keeps them): bytes by hash.
+    gfx::ContentFifo modelHashes{gfx::kModelsKept};
+    std::unordered_map<uint64_t, std::vector<uint8_t>> modelBytes;
+public:
+    // Every model packet content kept, oldest first (a recording that starts mid-run).
+    void exportModels(const std::function<void(uint64_t hash, const std::vector<uint8_t>& bytes)>& out) const {
+        for (const uint64_t h : modelHashes.all()) {
+            auto it = modelBytes.find(h);
+            if (it != modelBytes.end()) out(h, it->second);
+        }
+    }
+private:
     std::vector<uint8_t> texSetBlob;   // a texture set record with its bytes (kTexSet)
     std::vector<gfx::Vertex> drawVertices;
     void sendPrimitives(const GsPrimitives& p);

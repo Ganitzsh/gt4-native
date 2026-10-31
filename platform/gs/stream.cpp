@@ -138,32 +138,48 @@ void GraphicsStream::records(const uint8_t* data, size_t bytes) {
         }
         case gfx::kBatchModel: {
             GT4_CPU_SCOPE("GS: model packets");
-            gfx::BatchModel m;
-            if (h.bytes() < sizeof m) {
+            // (12 bytes: a recording from before the contents went once; its bytes always follow)
+            gfx::BatchModel m{};
+            if (h.bytes() < 12) {
                 ++counters.badRecords;
                 break;
             }
-            std::memcpy(&m, payload, sizeof m);
-            auto it = std::find_if(recordData.begin(), recordData.end(), [&](const RecordData& d) { return d.source == m.source; });
-            if (it == recordData.end()) {
-                ++counters.uploadsWithoutData;
-                break;
+            std::memcpy(&m, payload, std::min<size_t>(h.bytes(), sizeof m));
+            const bool legacy = h.bytes() < sizeof m;
+            const uint64_t hash = legacy ? 0 : (uint64_t(m.hashHigh) << 32) | m.hashLow;
+            const std::vector<uint8_t>* bytes = nullptr;
+            if (legacy || m.sent) {
+                auto it = std::find_if(recordData.begin(), recordData.end(), [&](const RecordData& d) { return d.source == m.source; });
+                if (it == recordData.end()) {
+                    ++counters.uploadsWithoutData;
+                    break;
+                }
+                if (legacy) {
+                    static std::vector<uint8_t> one;
+                    one = std::move(it->bytes);
+                    bytes = &one;
+                } else {
+                    if (modelHashes.add(hash, [&](uint64_t gone) { modelBytes.erase(gone); })) modelBytes[hash] = std::move(it->bytes);
+                    bytes = &modelBytes[hash];
+                }
+                recordData.erase(it);
+            } else {
+                auto it = modelBytes.find(hash);
+                if (it == modelBytes.end()) {
+                    ++counters.uploadsWithoutData;
+                    break;
+                }
+                bytes = &it->second;
             }
+            if (m.sent == 2) break;   // a content only
             const uint64_t unknownBefore = vif1.stats.unknownCodes;
-            vif1.batchModel(it->bytes.data(), std::min<size_t>(it->bytes.size(), size_t(m.qwords) * 16), m.mask);
+            vif1.batchModel(bytes->data(), std::min<size_t>(bytes->size(), size_t(m.qwords) * 16), m.mask, hash);
             if (vif1.stats.unknownCodes != unknownBefore) {
                 static int logged = 0;
-                if (logged++ < 6) {
+                if (logged++ < 6)
                     std::fprintf(stderr, "GS: model packet at %08X (%u qwords, mask %08X, vblank %u) decodes badly\n", m.source, m.qwords, m.mask,
                                  lastVblank);
-                    for (size_t q = 0; q < 6 && q * 16 < it->bytes.size(); ++q) {
-                        uint32_t w[4];
-                        std::memcpy(w, it->bytes.data() + q * 16, 16);
-                        std::fprintf(stderr, "GS:   %08X %08X %08X %08X\n", w[0], w[1], w[2], w[3]);
-                    }
-                }
             }
-            recordData.erase(it);
             break;
         }
         case gfx::kTexSet: {
@@ -706,7 +722,8 @@ std::string GraphicsStream::describe() const {
         << counters.gfxRecords << " native records (" << counters.uploads << " uploads, " << counters.uploadsWithoutData
          << " without data, " << counters.draws << " draws, " << counters.badRecords << " bad); " << counters.displays << " displays, " << counters.reads
         << " GS reads, " << counters.path3Held << " PATH3 records held by MSKPATH3 (" << counters.path3ForcedAtVsync
-        << " released at VSYNC)";
+        << " released at VSYNC); model packets: " << vif1.modelStats.decoded << " decoded, " << vif1.modelStats.replayed << " replayed, "
+        << vif1.modelStats.uncacheable << " not kept; 3D batches on the GPU: " << counters.modelBatches;
     if (!vif1.lastWarning.empty()) out << "; last VIF warning: " << vif1.lastWarning;
     return out.str();
 }

@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace gt4::ps2 {
@@ -62,7 +63,7 @@ public:
     // lanes in `lanes`); a model packet decoded into it with `mask`; the batch run.
     void batchFrame();
     void batchWrite(uint32_t qword, const uint32_t* words, uint32_t count, uint32_t lanes);
-    void batchModel(const uint8_t* bytes, size_t size, uint32_t modelMask);
+    void batchModel(const uint8_t* bytes, size_t size, uint32_t modelMask, uint64_t contentHash = 0);   // (hash 0: worked out here)
     void batchRun(uint32_t entry, uint32_t itop);
     void reset();
 
@@ -107,9 +108,29 @@ public:
     Observer* observer = nullptr;
 #endif
 
+    // Model packets decoded once (docs/NATIVE_V2.md, step 2): a packet's effect follows from its bytes and the VIF
+    // state it starts in, so it is kept as the writes it made into the batch buffers and the state it left.
+    struct ModelEffect {
+        struct Write {
+            uint16_t buffer, qword;   // which batch buffer (0, 1), the qword
+            uint32_t lanes;
+            uint32_t value[4];
+        };
+        std::vector<Write> writes;
+        uint32_t cl, wl, mask, mode, row[4], col[4], base, ofst, tops, itops, mark;
+        bool dbf;
+        uint64_t unpacks, codes;
+    };
+    struct ModelStats {
+        uint64_t decoded = 0, replayed = 0, uncacheable = 0;
+    } modelStats;
+
 private:
     GifSink* gifSink = nullptr;
     std::vector<uint32_t> pending;    // words not yet consumed
+    std::unordered_map<uint64_t, ModelEffect> modelEffects;
+    ModelEffect* recording = nullptr;   // the effect being recorded (batchModel)
+    bool cacheable = true;              // ... nothing in the packet but UNPACK and state codes
     size_t pos = 0;
     bool programKnown = false, programIsGt4 = false;
     bool inModel = false;   // decoding a model packet (batchModel)

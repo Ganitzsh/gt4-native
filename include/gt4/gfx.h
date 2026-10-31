@@ -472,11 +472,43 @@ struct BatchWrite {
 // A model's packet into the batch being filled: `qwords` x 16 bytes at `source` (game memory: GT4's model files
 // hold their vertex data as these packets, compact formats a decoder expands into the batch), the lane mask its
 // masked data uses (`mask`, two bits per lane and cycle: 0 data, 1 the row, 2 the column, 3 keep).
+// The runtime's frame walker fills in `hash` (the packet's bytes) and `sent`: 1 when the bytes follow as
+// GT4_REC_GFX_DATA, 0 when the host has them (ContentFifo: both ends keep the same ones); 2: a content only, not
+// decoded (a recording that starts mid-run).
 struct BatchModel {
     uint32_t source;
     uint32_t qwords;
     uint32_t mask;
+    uint32_t sent;
+    uint32_t hashLow, hashHigh;
 };
+
+// Contents both ends keep by hash, the `capacity` most recently first sent, in the order of the records (the model
+// packets: GT4 sends the same ones every frame). add() is true for a content not kept, whose bytes go, and calls
+// gone(hash) for one it forgets.
+class ContentFifo {
+public:
+    explicit ContentFifo(size_t capacity) : capacity(capacity) {}
+    template <class Gone> bool add(uint64_t hash, Gone&& gone) {
+        if (!kept.insert(hash).second) return false;
+        order.push_back(hash);
+        while (order.size() > capacity) {
+            const uint64_t oldest = order.front();
+            order.pop_front();
+            kept.erase(oldest);
+            gone(oldest);
+        }
+        return true;
+    }
+    bool has(uint64_t hash) const { return kept.count(hash) != 0; }
+    const std::deque<uint64_t>& all() const { return order; }   // oldest first
+
+private:
+    size_t capacity;
+    std::deque<uint64_t> order;
+    std::unordered_set<uint64_t> kept;
+};
+inline constexpr size_t kModelsKept = 8192;
 
 // The batch just filled is drawn by the renderer at `entry` (its address in 8-byte units, GT4's program layout),
 // with the lighting chain `itop` (0xFFFFFFFF: the previous run's); the next batch fills the other buffer.

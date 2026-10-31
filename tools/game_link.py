@@ -141,8 +141,14 @@ def compile_eeorig(out, gen):
 
 
 def name_newer_headers(rt, obj):
+    # the runtime's own headers and the shared ones (include/gt4: the record layouts both ends use)
     t = os.path.getmtime(obj)
-    return any(os.path.getmtime(os.path.join(rt, h)) > t for h in os.listdir(rt) if h.endswith(".h"))
+    shared = [os.path.join(ROOT, "include", "gt4"), os.path.join(ROOT, "include", "gt4", "link")]
+    paths = [os.path.join(rt, h) for h in os.listdir(rt) if h.endswith(".h")]
+    for d in shared:
+        if os.path.isdir(d):
+            paths += [os.path.join(d, h) for h in os.listdir(d) if h.endswith(".h")]
+    return any(os.path.getmtime(p) > t for p in paths)
 
 
 _NM_CACHE = {}       # object path -> [mtime, defined [[type, name]], undefined [name]]

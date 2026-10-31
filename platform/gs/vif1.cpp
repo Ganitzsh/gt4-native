@@ -92,6 +92,7 @@ bool Vif1::step() {
         case 0x04: itops = imm & 0x3FF; break;                               // ITOP
         case 0x05: mode = imm & 3; break;                                    // STMOD
         case 0x06: {                                                         // MSKPATH3
+            cacheable = false;
             const bool masked = (imm >> 15) & 1;
             const bool changed = masked != path3Masked;
             path3Masked = masked;
@@ -100,8 +101,8 @@ bool Vif1::step() {
         }
         case 0x07: mark = imm; break;                                        // MARK
         case 0x10: case 0x11: case 0x13: break;                              // FLUSHE FLUSH FLUSHA
-        case 0x14: case 0x15: start(imm); break;                             // MSCAL MSCALF
-        case 0x17: start(continueAt); break;                                 // MSCNT
+        case 0x14: case 0x15: cacheable = false; start(imm); break;          // MSCAL MSCALF
+        case 0x17: cacheable = false; start(continueAt); break;              // MSCNT
         case 0x20:                                                           // STMASK
             if (!need(1)) { --stats.codes; return false; }
             mask = next[0];
@@ -113,6 +114,7 @@ bool Vif1::step() {
             consumed += 4;
             break;
         case 0x4A: {                                                         // MPG
+            cacheable = false;
             uint32_t num = (code >> 16) & 0xFF;
             if (!num) num = 256;
             if (!need(num * 2)) { --stats.codes; return false; }
@@ -127,6 +129,7 @@ bool Vif1::step() {
             break;
         }
         case 0x50: case 0x51: {                                              // DIRECT DIRECTHL
+            cacheable = false;
             const uint32_t qwc = imm ? imm : 65536;
             if (!need(size_t(qwc) * 4)) { --stats.codes; return false; }
             if (gifSink) gifSink->gif(2, reinterpret_cast<const uint8_t*>(next), size_t(qwc) * 16);
@@ -135,6 +138,7 @@ bool Vif1::step() {
             break;
         }
         case 0x08: {                                                         // native records (include/gt4/gfx.h)
+            cacheable = false;
             const uint32_t qwc = imm;
             if (!need(size_t(qwc) * 4)) { --stats.codes; return false; }
             if (onRecords) onRecords(reinterpret_cast<const uint8_t*>(next), size_t(qwc) * 16);
@@ -178,7 +182,7 @@ void Vif1::batchWrite(uint32_t qword, const uint32_t* words, uint32_t count, uin
     }
 }
 
-void Vif1::batchModel(const uint8_t* bytes, size_t size, uint32_t modelMask) {
+void Vif1::batchModel(const uint8_t* bytes, size_t size, uint32_t modelMask, uint64_t contentHash) {
     mask = modelMask;
     // Decoded on its own: the record comes from inside the stream being decoded (its words, and `pos`, stay as
     // they are; swapping keeps the outer words where the caller's pointers expect them).
@@ -196,11 +200,70 @@ void Vif1::batchModel(const uint8_t* bytes, size_t size, uint32_t modelMask) {
                          w[2], w[3]);
         }
     }
+    // Decoded once per (bytes, VIF state); after that its effect is replayed (GT4_VIF_MODELS=0: decoded every time).
+    static const bool memo = [] { const char* e = std::getenv("GT4_VIF_MODELS"); return !(e && *e == '0'); }();
+    uint64_t key = contentHash ? contentHash ^ size : 0xCBF29CE484222325ull ^ size;
+    if (memo) {
+        if (!contentHash) {
+            const uint8_t* b = bytes;
+            size_t i = 0;
+            for (; i + 8 <= size; i += 8) {
+                uint64_t w;
+                std::memcpy(&w, b + i, 8);
+                key = (key ^ w) * 0x9E3779B97F4A7C15ull;
+                key ^= key >> 29;
+            }
+            for (; i < size; ++i) key = (key ^ b[i]) * 0x100000001B3ull;
+        }
+        const uint32_t state[] = {cl, wl, mask, mode, row[0], row[1], row[2], row[3], col[0], col[1], col[2], col[3],
+                                  base, ofst, tops, itops, dbf ? 1u : 0u};
+        for (const uint32_t w : state) key = (key ^ w) * 0x100000001B3ull;
+        auto known = modelEffects.find(key);
+        if (known != modelEffects.end()) {
+            const ModelEffect& e = known->second;
+            for (const ModelEffect::Write& w : e.writes) {
+                uint32_t* q = buffers[w.buffer].words[w.qword];
+                for (uint32_t f = 0; f < 4; ++f)
+                    if ((w.lanes >> f) & 1) q[f] = w.value[f];
+                if (w.qword < 192) ++buffers[w.buffer].vertexWrites;
+            }
+            cl = e.cl, wl = e.wl, mask = e.mask, mode = e.mode, base = e.base, ofst = e.ofst, tops = e.tops, itops = e.itops, mark = e.mark;
+            dbf = e.dbf;
+            std::memcpy(row, e.row, sizeof row);
+            std::memcpy(col, e.col, sizeof col);
+            stats.unpacks += e.unpacks;
+            stats.codes += e.codes;
+            ++modelStats.replayed;
+            inModel = false;
+            pending.swap(outer);
+            pos = outerPos;
+            return;
+        }
+    }
+    ModelEffect effect;
+    const uint64_t unpacksBefore = stats.unpacks, codesBefore = stats.codes;
+    recording = memo ? &effect : nullptr;
+    cacheable = true;
     feed(bytes, size);
+    recording = nullptr;
     inModel = false;
     if (!pending.empty()) {
         lastWarning = "a model packet ends inside a command";
         pending.clear();
+        cacheable = false;
+    }
+    ++modelStats.decoded;
+    if (memo && cacheable) {
+        effect.cl = cl, effect.wl = wl, effect.mask = mask, effect.mode = mode, effect.base = base, effect.ofst = ofst, effect.tops = tops;
+        effect.itops = itops, effect.mark = mark, effect.dbf = dbf;
+        std::memcpy(effect.row, row, sizeof row);
+        std::memcpy(effect.col, col, sizeof col);
+        effect.unpacks = stats.unpacks - unpacksBefore;
+        effect.codes = stats.codes - codesBefore;
+        if (modelEffects.size() > 32768) modelEffects.clear();   // (a bound: models of courses left long ago)
+        modelEffects.emplace(key, std::move(effect));
+    } else if (memo) {
+        ++modelStats.uncacheable;
     }
     pending.swap(outer);
     pos = outerPos;
@@ -244,10 +307,12 @@ void Vif1::unpack(uint32_t code, const uint32_t* source) {
     // buffer whose VU address range holds them.
     const uint32_t current = dbf ? 1 : 0;
     const uint32_t bufferStart[2] = {base & 0x3FF, (base + ofst) & 0x3FF};
+    uint32_t written = 0, writtenQword = 0;   // (the buffer and qword destinationOf found, for a recording)
     auto destinationOf = [&](uint32_t a, uint32_t& vuAddress) -> uint32_t* {
         if (relative) {
             vuAddress = (bufferStart[current] + a) & 0x3FF;
             if (a < 192) ++buffers[current].vertexWrites;
+            written = current, writtenQword = a;
             if (a < BatchBuffer::kQwords) return buffers[current].words[a];
             return nullptr;
         }
@@ -255,6 +320,7 @@ void Vif1::unpack(uint32_t code, const uint32_t* source) {
         for (uint32_t b : {current, current ^ 1u}) {
             const uint32_t r = (vuAddress - bufferStart[b]) & 0x3FF;
             if (r < 192) ++buffers[b].vertexWrites;
+            written = b, writtenQword = r;
             if (r < BatchBuffer::kQwords) return buffers[b].words[r];
         }
         return nullptr;
@@ -269,6 +335,9 @@ void Vif1::unpack(uint32_t code, const uint32_t* source) {
                           }
                           for (uint32_t f = 0; f < 4; ++f)
                               if ((lanes >> f) & 1) destination[f] = value[f];
+                          if (recording)
+                              recording->writes.push_back({static_cast<uint16_t>(written), static_cast<uint16_t>(writtenQword), lanes,
+                                                           {destination[0], destination[1], destination[2], destination[3]}});
 #if GT4_VU1_INTERPRETER
                           if (observer) observer->unpacked(vuAddress, destination, lanes);
 #endif

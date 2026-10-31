@@ -578,6 +578,20 @@ struct GsHost::Impl {
                         std::memcpy(block.data() + sizeof hd + sizeof r, uploads.data(), uploads.size() * sizeof(gfx::TexSetUpload));
                         recorder->out->write(GT4_REC_GFX, block.data(), static_cast<uint32_t>(block.size()));
                     });
+                    // the model packets' contents the runtime counts on the host having (content only, sent 2)
+                    stream->exportModels([&](uint64_t hash, const std::vector<uint8_t>& bytes) {
+                        std::vector<uint8_t> data(8 + bytes.size());
+                        const uint32_t head[2] = {0, static_cast<uint32_t>(bytes.size())};
+                        std::memcpy(data.data(), head, 8);
+                        std::memcpy(data.data() + 8, bytes.data(), bytes.size());
+                        recorder->out->write(GT4_REC_GFX_DATA, data.data(), static_cast<uint32_t>(data.size()));
+                        const gfx::BatchModel m{0, static_cast<uint32_t>(bytes.size() / 16), 0, 2, static_cast<uint32_t>(hash), static_cast<uint32_t>(hash >> 32)};
+                        std::vector<uint8_t> block(gfx::recordQwords(sizeof m) * 16, 0);
+                        const gfx::Header hd = gfx::header(gfx::kBatchModel, sizeof m);
+                        std::memcpy(block.data(), &hd, sizeof hd);
+                        std::memcpy(block.data() + sizeof hd, &m, sizeof m);
+                        recorder->out->write(GT4_REC_GFX, block.data(), static_cast<uint32_t>(block.size()));
+                    });
                 }
                 recorder->started = true;
                 recorder->out->write(header.type, payload, header.size);

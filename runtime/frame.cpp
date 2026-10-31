@@ -115,6 +115,22 @@ void send_tex_set(uint8_t *payload, uint32_t bytes) {
     }
 }
 
+// The model packets' contents the host has (docs/NATIVE_V2.md, step 2): their bytes go once.
+gfx::ContentFifo g_sent_models(gfx::kModelsKept);
+
+uint64_t content_hash(const std::vector<uint8_t> &bytes) {
+    uint64_t hash = 0xCBF29CE484222325ull ^ bytes.size();
+    size_t i = 0;
+    for (; i + 8 <= bytes.size(); i += 8) {
+        uint64_t w;
+        std::memcpy(&w, bytes.data() + i, 8);
+        hash = (hash ^ w) * 0x9E3779B97F4A7C15ull;
+        hash ^= hash >> 31;
+    }
+    for (; i < bytes.size(); ++i) hash = (hash ^ bytes[i]) * 0x100000001B3ull;
+    return hash;
+}
+
 // One record block: the bytes its records refer to, the block, then its reads.
 void send_block(uint8_t *block, uint32_t bytes) {
     std::vector<gfx::ReadRecord> reads;
@@ -130,7 +146,17 @@ void send_block(uint8_t *block, uint32_t bytes) {
         } else if (h.type() == gfx::kBatchModel && h.bytes() >= sizeof(gfx::BatchModel)) {
             gfx::BatchModel m;
             std::memcpy(&m, payload, sizeof m);
-            send_data(m.source, m.qwords * 16);
+            // its bytes once per content
+            const std::vector<uint8_t> data = read_mapped(ptr(m.source), m.qwords * 16);
+            const uint64_t hash = content_hash(data);
+            m.hashLow = static_cast<uint32_t>(hash);
+            m.hashHigh = static_cast<uint32_t>(hash >> 32);
+            m.sent = g_sent_models.add(hash, [](uint64_t) {}) ? 1u : 0u;
+            std::memcpy(block + at + sizeof h, &m, sizeof m);
+            if (m.sent) {
+                const uint32_t head[2] = {m.source, m.qwords * 16};
+                link_send(GT4_REC_GFX_DATA, head, sizeof head, data.data(), m.qwords * 16);
+            }
         } else if (h.type() == gfx::kTexSet && h.bytes() >= sizeof(gfx::TexSetRecord)) {
             send_tex_set(block + at + sizeof h, h.bytes());
         } else if (h.type() == gfx::kRead && h.bytes() >= sizeof(gfx::ReadRecord)) {
