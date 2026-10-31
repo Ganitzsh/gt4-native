@@ -11,6 +11,7 @@
 #include "gs_host.h"
 #include "ps2_pad.h"
 #include "renderer.h"
+#include "save_import.h"
 #include "session.h"
 #include "settings.h"
 #include "settings_menu.h"
@@ -65,6 +66,9 @@ const char* kUsage =
     "  --replay FILE        display a capture of the game's graphics stream (gt4_game --capture) instead;\n"
     "                       with --fixed-step (headless) one VBlank per rendered frame, else 59.94 Hz\n"
     "  --replay-loop        start the replay again at its end\n"
+    "  --import-save PATH   copy Gran Turismo 4's saves from a PS2 memory card image (PCSX2 .ps2, a raw dump),\n"
+    "                       a folder memory card or a .psu export into the save folder, then exit\n"
+    "  --saves DIR          the save folder (default %LOCALAPPDATA%\\gt4-native\\saves); passed to the game\n"
     "Interactive runs read and save the settings file in the user's preference directory; scripted runs\n"
     "(--frames, --smoke-test, --session-dir, --headless) start from the defaults unless --settings is given.\n"
     "Keys: F1 readout, F2 preset, F3 anti-aliasing, F4 upscaler, F5 render quality, F6 aspect ratio,\n"
@@ -81,7 +85,7 @@ struct Options {
     uint32_t frames = 0;
     uint32_t captureEvery = 0;  // --capture-every: also every N frames, numbered
     VkExtent2D size{0, 0};   // headless output; 0 = the window size setting
-    std::string gpu, settingsPath, sessionDirectory, capture;
+    std::string gpu, settingsPath, sessionDirectory, capture, importSave, saves;
     std::vector<std::pair<std::string, std::string>> sets;
 };
 
@@ -138,6 +142,8 @@ Options parse(int argc, char** argv) {
         else if (a == "--game-args") o.gameArgs = splitArguments(value(i));
         else if (a == "--replay") o.replay = value(i);
         else if (a == "--replay-loop") o.replayLoop = true;
+        else if (a == "--import-save") o.importSave = value(i);
+        else if (a == "--saves") o.saves = value(i);
         else if (a == "--preset") o.sets.emplace_back("graphics.preset", value(i));
         else if (a == "--set") {
             const std::string pair = value(i);
@@ -461,6 +467,14 @@ std::string jsonQuote(const std::string& text) {
 }
 
 int run(const Options& options) {
+    if (!options.importSave.empty()) {   // a save from a PS2, into the native save folder (docs/SAVES.md)
+        const std::filesystem::path folder =
+            options.saves.empty() ? gt4::saves::defaultSaveFolder() : std::filesystem::u8path(options.saves);
+        const gt4::saves::ImportResult r = gt4::saves::importSave(std::filesystem::u8path(options.importSave), folder);
+        std::printf("Saves: %s\n", r.message.c_str());
+        for (const std::string& name : r.imported) std::printf("  %s\n", name.c_str());
+        return r.ok ? 0 : 1;
+    }
     // Settings: defaults, then the file, then the command line.
     gt4::Settings settings;
     const bool interactive = !options.probe && !options.frames && options.sessionDirectory.empty() && !options.headless &&
@@ -534,6 +548,10 @@ int run(const Options& options) {
         gt4::gs::GsHost::Options gsOptions;
         gsOptions.gamePath = options.game;
         gsOptions.gameArgs = options.gameArgs;
+        if (!options.saves.empty()) {   // the save folder (the game's default otherwise)
+            gsOptions.gameArgs.push_back("--saves");
+            gsOptions.gameArgs.push_back(options.saves);
+        }
         // A wide content shape switches on the game's own 16:9 mode, generalised to that aspect (the
         // game's --aspect: Hor+ 3D in the anamorphic 640 x 448 frame, which the host presents at the
         // aspect). Read at start-up: changing aspect.ratio later needs a restart of the game.

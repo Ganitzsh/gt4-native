@@ -1,10 +1,11 @@
-// Memory card 1 as a host folder: libmc (the SDK's sceMc* calls, replaced at their API) on files.
+// The native save folder (docs/SAVES.md) behind libmc: the SDK's sceMc* calls, replaced at their API, on files.
 //
 // The game's card manager (gt4-decomp unit 005547E8, 00561E00-00562738) issues one libmc call at a
 // time and completes it with sceMcSync; each call here does its work at once and leaves the result
 // for the next sceMcSync, as an IOP that answered instantly would. The card holds PS2-style
 // directories (BASCUS-97328GAMEDATA...) as host directories and files as host files, so saves can
-// be copied in and out (docs/IOP_SERVICES.md, section 8). Memory card 2 (port 1) is absent.
+// be copied in and out, and saves from a PS2 come in with gt4_host --import-save. What the game sees of a card is
+// what its save code asks: one in the first slot, always present and formatted; the second slot is empty.
 //
 // libmc conventions followed: results 0 success, -1 "new card" (the first GetInfo of a session),
 // -4 no such entry, -5 not permitted, -6 directory not empty, -7 too many open files, -10 no card;

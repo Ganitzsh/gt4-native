@@ -91,10 +91,20 @@ int main(int argc, char **argv) {
     g_config.iso_path = arg_value(argc, argv, "--iso", "GT4_ISO", default_iso.c_str());
     g_config.link_name = arg_value(argc, argv, "--link", "GT4_LINK", "");
     g_config.capture_path = arg_value(argc, argv, "--capture", "GT4_CAPTURE", "");
-    static std::string default_card;
-    if (const char *la = getenv("LOCALAPPDATA")) default_card = std::string(la) + "\\gt4-native\\memcard1";
-    else default_card = "memcard1";
-    g_config.memcard_path = arg_value(argc, argv, "--memcard", "GT4_MEMCARD", default_card.c_str());
+    // The save folder (docs/SAVES.md): --saves / GT4_SAVES, or the older --memcard / GT4_MEMCARD, or
+    // %LOCALAPPDATA%\gt4-native\saves; a folder from before the name changed (memcard1) is moved there.
+    static std::string default_saves;
+    if (const char *la = getenv("LOCALAPPDATA")) {
+        default_saves = std::string(la) + "\\gt4-native\\saves";
+        const std::string old = std::string(la) + "\\gt4-native\\memcard1";
+        if (GetFileAttributesA(default_saves.c_str()) == INVALID_FILE_ATTRIBUTES &&
+            GetFileAttributesA(old.c_str()) != INVALID_FILE_ATTRIBUTES && MoveFileA(old.c_str(), default_saves.c_str()))
+            log_info("saves: %s moved to %s", old.c_str(), default_saves.c_str());
+    } else {
+        default_saves = "saves";
+    }
+    const char *saves = arg_value(argc, argv, "--saves", "GT4_SAVES", "");
+    g_config.memcard_path = *saves ? saves : arg_value(argc, argv, "--memcard", "GT4_MEMCARD", default_saves.c_str());
     g_config.aspect = arg_value(argc, argv, "--aspect", "GT4_ASPECT", "");
     g_config.menus = arg_value(argc, argv, "--menus", "GT4_MENUS", "centered");
     log_open(arg_value(argc, argv, "--log", "GT4_LOG", "build/game/run.log"));

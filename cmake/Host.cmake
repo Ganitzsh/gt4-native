@@ -214,6 +214,11 @@ if(GT4_GS_REFERENCE)
   endif()
 endif()
 
+# Saves from a PS2 memory card or export into the native save folder (docs/SAVES.md): plain C++, no GPU.
+add_library(gt4_saves STATIC platform/saves/save_import.cpp)
+target_include_directories(gt4_saves PUBLIC platform/saves)
+target_compile_features(gt4_saves PUBLIC cxx_std_20)
+
 add_executable(gt4_host
     platform/sdl/main.cpp
     platform/sdl/renderer.cpp
@@ -234,7 +239,7 @@ target_include_directories(gt4_host PRIVATE platform/sdl platform/render ${GT4_S
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party
     ${GT4_FSR2_DIR})
 target_compile_definitions(gt4_host PRIVATE VK_NO_PROTOTYPES FFX_GCC)
-target_link_libraries(gt4_host PRIVATE SDL3::SDL3 Vulkan::Headers gt4_guest_abi gt4_fsr2 gt4_gs ${GT4_VOLK} ${GT4_VOLK_HEADERS})
+target_link_libraries(gt4_host PRIVATE SDL3::SDL3 Vulkan::Headers gt4_guest_abi gt4_fsr2 gt4_gs gt4_saves ${GT4_VOLK} ${GT4_VOLK_HEADERS})
 if(MSVC)
   target_compile_options(gt4_host PRIVATE /W4)
   # Generated SPIR-V tables and the volk loader are third-party style code: no warnings there.
@@ -262,6 +267,11 @@ if(BUILD_TESTING)
     target_compile_options(gt4_host_settings_test PRIVATE -Wall -Wextra -Wpedantic)
   endif()
   add_test(NAME host_settings COMMAND gt4_host_settings_test)
+
+  # Saves from memory card images, .psu exports and folder cards (built here; no game data).
+  add_executable(gt4_save_import_test tests/save_import.cpp)
+  target_link_libraries(gt4_save_import_test PRIVATE gt4_saves)
+  add_test(NAME save_import COMMAND gt4_save_import_test)
 
   # PS2 graphics on the CPU: VIF1, GT4's 3D renderers, stream records, replay, pad (no GPU needed).
   add_executable(gt4_ps2gfx_test tests/ps2gfx.cpp)

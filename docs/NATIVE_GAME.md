@@ -103,7 +103,7 @@ move takes effect after the map has scrolled (some 200 VBlanks); presses while i
 `GT4_TRACE_INTC=CAUSE` logs, every 120th time, each INTC handler of that cause with its result (a handler returning
 a negative value ends the chain). `GT4_WATCH` names the semaphore a waiting thread waits on, with its count.
 `GT4_MONEY=N` (testing) keeps the player's money from reading below N (game_src/func_0043AF68.cpp), for the
-dealers, tuning shops and purchases. `GT4_MEMCARD=DIR` is relative to the working directory.
+dealers, tuning shops and purchases. `GT4_SAVES=DIR` (or the older `GT4_MEMCARD`) is the save folder (docs/SAVES.md), relative to the working directory.
 
 Finding a wrong GS packet: decode the `--capture` file (GIF/VIF1 records), find the packet's guest
 address with `GT4_DMA_LOG`, then its writer with `gt4dbg --watch-write`. Provisional drafts

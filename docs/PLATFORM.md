@@ -62,7 +62,7 @@ device. The choices (status 2026-10-26):
 | IPU + Polyphony's MPEG player | the stream loop (`0054E3D8`) decodes PSS with FFmpeg into the game's picture queue (`runtime/native/movie.cpp`) | FFmpeg: libavformat `mpegps`, libavcodec `mpeg2video` (LGPL-2.1+) | video done |
 | Movie audio (PSS private stream 1) | decoded with the video, to the host mixer | FFmpeg `adpcm_psx` / PCM, SDL3 audio | todo |
 | SPU2 voices (sound effects, engine sounds) and BGM streams | a software voice mixer fed by the sound driver's register writes (ADPCM decode, pitch, ADSR, reverb) | FFmpeg `adpcm_psx` for decoding, SDL3 audio for output | todo |
-| Memory card (libmc) | files in a host folder (`runtime/memcard.cpp`, `--memcard`) | std::filesystem | done |
+| Saves (libmc) | the native save folder (`runtime/memcard.cpp`, `--saves`; docs/SAVES.md), PS2 saves imported with `gt4_host --import-save` | std::filesystem | done |
 | Pad, GT Force wheel (libpad2, libdbc, Logitech) | host input | SDL3 gamepad / joystick / haptics | pad done |
 | Disc, volumes (`sceCd`, `GT4.VOL`) | reads from the user's ISO image | own | done |
 | Upscaling, anti-aliasing, post effects | host display pipeline | AMD FidelityFX FSR 2 (MIT), SMAA (MIT) | in the host |
