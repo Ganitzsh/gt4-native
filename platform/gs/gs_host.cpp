@@ -18,6 +18,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <deque>
 #include <cstdio>
 #include <utility>
 #include <cstdlib>
@@ -234,9 +235,158 @@ private:
 
 }  // namespace
 
+// The native renderer's front end on a thread of its own (GT4_GS_THREADS=1: on the GS thread, as before): the GS
+// thread decodes the stream and runs GT4's 3D renderers while this one assembles what came before into frame
+// lists (in a race the two took 24 ms a frame on one thread, the game waiting on them). Each call is recorded with
+// its data into a chunk and the chunks are replayed in order; the calls that return data wait until the queue is
+// empty and then run on the caller's thread, the front end's idle.
+class QueuedTarget final : public ps2::GsTarget {
+public:
+    explicit QueuedTarget(ps2::GsTarget& inner) : inner(inner) { worker = std::thread([this] { run(); }); }
+    ~QueuedTarget() override {
+        submit();
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            stopping = true;
+        }
+        wake.notify_all();
+        worker.join();
+    }
+    void gif(uint32_t path, const uint8_t* data, size_t bytes) override { put(Op::Gif, path, 0, data, bytes); }
+    void primitives(const ps2::GsPrimitives& p) override {
+        put(Op::Primitives, (p.setPrim ? 1u : 0u) | (p.fog ? 2u : 0u), p.prim, p.vertices, p.count * sizeof(ps2::GsVertex));
+    }
+    void display(const gfx::DisplayRecord& d) override { put(Op::Display, 0, 0, &d, sizeof d); }
+    void state(const gfx::StateRecord& r) override { put(Op::State, 0, 0, &r, sizeof r); }
+    void upload(const gfx::UploadRecord& u, const uint8_t* data, size_t bytes) override {
+        put(Op::Upload, 0, 0, &u, sizeof u, data, bytes);
+    }
+    void read(const gfx::ReadRecord& r) override { put(Op::Read, 0, 0, &r, sizeof r); }
+    void draw(const gfx::DrawRecord& d, const gfx::Vertex* vertices) override {
+        put(Op::Draw, 0, 0, &d, sizeof d, vertices, size_t(d.count) * sizeof(gfx::Vertex));
+    }
+    void vsync(uint32_t field, uint32_t count) override {
+        put(Op::Vsync, field, count, nullptr, 0);
+        submit();
+    }
+    void readTransfer(void* out, uint32_t qwc) override {
+        drain();
+        inner.readTransfer(out, qwc);
+    }
+    void readVram(void* out) override {
+        drain();
+        inner.readVram(out);
+    }
+    void writeVram(const void* data) override {
+        drain();
+        inner.writeVram(data);
+    }
+    // Everything recorded so far done by the front end.
+    void drain() {
+        submit();
+        std::unique_lock<std::mutex> lock(mutex);
+        idle.wait(lock, [&] { return queue.empty() && !busy; });
+    }
+
+private:
+    enum class Op : uint32_t { Gif, Primitives, Display, State, Upload, Read, Draw, Vsync };
+    struct Entry {
+        Op op;
+        uint32_t a, b;
+        uint32_t first, second;   // byte sizes of the two payloads that follow (each padded to 16)
+        uint32_t pad[3];
+    };
+    static_assert(sizeof(Entry) == 32);
+    static size_t padded(size_t n) { return (n + 15) & ~size_t(15); }
+    void put(Op op, uint32_t a, uint32_t b, const void* first, size_t firstSize, const void* second = nullptr, size_t secondSize = 0) {
+        const size_t at = filling.size();
+        filling.resize(at + sizeof(Entry) + padded(firstSize) + padded(secondSize));
+        Entry e{op, a, b, static_cast<uint32_t>(firstSize), static_cast<uint32_t>(secondSize), {}};
+        std::memcpy(filling.data() + at, &e, sizeof e);
+        if (firstSize) std::memcpy(filling.data() + at + sizeof e, first, firstSize);
+        if (secondSize) std::memcpy(filling.data() + at + sizeof e + padded(firstSize), second, secondSize);
+        if (filling.size() >= (4u << 20)) submit();
+    }
+    // The chunk being recorded to the front end; at most a few frames ahead of it (the game would run ahead of
+    // what is shown otherwise).
+    void submit() {
+        if (filling.empty()) return;
+        std::unique_lock<std::mutex> lock(mutex);
+        idle.wait(lock, [&] { return queue.size() < 3; });
+        queue.push_back(std::move(filling));
+        if (!spare.empty()) {
+            filling = std::move(spare.back());
+            spare.pop_back();
+        }
+        filling.clear();
+        wake.notify_one();
+    }
+    void run() {
+        for (;;) {
+            std::vector<uint8_t> chunk;
+            {
+                std::unique_lock<std::mutex> lock(mutex);
+                wake.wait(lock, [&] { return stopping || !queue.empty(); });
+                if (queue.empty()) return;
+                chunk = std::move(queue.front());
+                queue.pop_front();
+                busy = true;
+            }
+            replay(chunk);
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                busy = false;
+                chunk.clear();
+                if (spare.size() < 4) spare.push_back(std::move(chunk));
+            }
+            idle.notify_all();
+        }
+    }
+    void replay(const std::vector<uint8_t>& chunk) {
+        GT4_CPU_SCOPE("front end thread: busy");
+        size_t at = 0;
+        while (at + sizeof(Entry) <= chunk.size()) {
+            Entry e;
+            std::memcpy(&e, chunk.data() + at, sizeof e);
+            const uint8_t* first = chunk.data() + at + sizeof e;
+            const uint8_t* second = first + padded(e.first);
+            at += sizeof e + padded(e.first) + padded(e.second);
+            switch (e.op) {
+            case Op::Gif: inner.gif(e.a, first, e.first); break;
+            case Op::Primitives: {
+                ps2::GsPrimitives p;
+                p.setPrim = (e.a & 1) != 0;
+                p.fog = (e.a & 2) != 0;
+                p.prim = e.b;
+                p.vertices = reinterpret_cast<const ps2::GsVertex*>(first);
+                p.count = e.first / sizeof(ps2::GsVertex);
+                inner.primitives(p);
+                break;
+            }
+            case Op::Display: inner.display(*reinterpret_cast<const gfx::DisplayRecord*>(first)); break;
+            case Op::State: inner.state(*reinterpret_cast<const gfx::StateRecord*>(first)); break;
+            case Op::Upload: inner.upload(*reinterpret_cast<const gfx::UploadRecord*>(first), second, e.second); break;
+            case Op::Read: inner.read(*reinterpret_cast<const gfx::ReadRecord*>(first)); break;
+            case Op::Draw: inner.draw(*reinterpret_cast<const gfx::DrawRecord*>(first), reinterpret_cast<const gfx::Vertex*>(second)); break;
+            case Op::Vsync: inner.vsync(e.a, e.b); break;
+            }
+        }
+    }
+
+    ps2::GsTarget& inner;
+    std::vector<uint8_t> filling;
+    std::deque<std::vector<uint8_t>> queue;
+    std::vector<std::vector<uint8_t>> spare;
+    std::mutex mutex;
+    std::condition_variable wake, idle;
+    bool busy = false, stopping = false;
+    std::thread worker;
+};
+
 struct GsHost::Impl {
     Options options;
     std::unique_ptr<NativeTarget> target;
+    std::unique_ptr<QueuedTarget> frontThread;   // the front end's own thread, in front of target (GT4_GS_THREADS)
     std::unique_ptr<ps2::GraphicsStream> stream;
     std::unique_ptr<ps2::GameLink> link;
     std::unique_ptr<ps2::ReplaySource> replay;
@@ -461,6 +611,7 @@ struct GsHost::Impl {
                 if (stop) return;
             }
             const bool more = replayStep();
+            if (frontThread) frontThread->drain();   // the step's frames ready when advance() returns
             {
                 std::lock_guard<std::mutex> lock(stepMutex);
                 ++stepsDone;
@@ -480,6 +631,7 @@ GsHost::~GsHost() {
     impl->stepCondition.notify_all();
     impl->readDone.notify_all();
     if (impl->worker.joinable()) impl->worker.join();
+    impl->frontThread.reset();   // the front end finishes what was queued
     if (impl->link) impl->gameCpuAtEnd = impl->link->processSeconds() * 1000.0;
     impl->link.reset();   // asks the game to quit
     std::printf("GS: %s\n", summary().c_str());
@@ -522,7 +674,10 @@ std::unique_ptr<GsHost> GsHost::create(const Options& options, std::string& erro
         }
     }
     h.target->frontend().setReplacements(options.hdTextures);
-    h.stream = std::make_unique<ps2::GraphicsStream>(*h.target);
+    // GT4_GS_THREADS=1: the front end on the GS thread (QueuedTarget otherwise).
+    const char* threads = std::getenv("GT4_GS_THREADS");
+    if (!(threads && std::atoi(threads) == 1)) h.frontThread = std::make_unique<QueuedTarget>(*h.target);
+    h.stream = std::make_unique<ps2::GraphicsStream>(h.frontThread ? static_cast<ps2::GsTarget&>(*h.frontThread) : *h.target);
     if (options.audio)
         h.stream->setAudioWriter([sink = options.audio](uint32_t stream, uint32_t rate, const int16_t* frames, size_t count) {
             if (stream == 0) sink(rate, frames, count);  // stream 0: the game's final mix
