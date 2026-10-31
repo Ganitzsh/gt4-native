@@ -51,22 +51,44 @@ Measured on a Laguna Seca recording (100 frames, 1080p): the native path is pixe
 front end's thread 16.6 ms a frame against 19.2. Every texture that is not a target or a reinterpretation of one
 comes from a set in the race (and in the menus but the movie's GSBuffer).
 
+### Graphics memory, lazily
+
+Graphics memory (`gs_memory`) gets a set's bytes only where something reads or writes them there (a page at a
+time, `GsFrontend::materializePage`): an upload or a draw over part of a set's page, a read of it by address, a
+transfer, a recording's start. Palette loads from a page that still holds a set read the set's content. Both ends
+keep a content for the 512 contents dropped after it (the slot cache brings the same sets back every frame), so
+its bytes cross once. On the race recording 130 pages a frame reach memory, against every set's pages before.
+
 ### Targets
 
-The game's GSBuffers (00105728 binds one as a texture) and its frame buffers become named images at the render
-resolution; a texture read from a target names the target and the rectangle.
-
-### What goes from the host
-
-The GS memory model (`gs_memory`), page ownership, the slot-cache uploads, the texture cache keyed by memory,
-CLUT loads. The reinterpretations (an 8-bit read of a 32-bit target through a palette) stay until step 3.
+Targets are GPU images already (the renderer samples them with an offset); what names them is page ownership,
+bookkeeping of which target last wrote which 8 KiB page. Its readers are the post effects (reinterpretations,
+glare, reflections): step 3 replaces those with passes of their own, which name their images natively. The
+game's GSBuffers (00105728 binds one as a texture, 001056A0 as a frame buffer) and the movie's are the remaining
+named images to give the effects.
 
 ## Step 2: 3D on the GPU
 
-The model packets (VIF UNPACK formats inside the model files), the setup constants and the lighting blocks become
-native data: vertex buffers made once per model, per-object transforms and lights per draw; vertex shaders do the
-renderers' work (transform, clip, the lighting bodies, the key-frame blend). `platform/gs/renderers3d.cpp` and the
-VIF1 decoder go.
+Done in two parts (2026-10-31):
+
+- **Homogeneous output, the GPU clips.** The renderers' vertices carry homogeneous window coordinates (`x w`,
+  `y w`, `Z w`, `w`; `GsVertex::h`, `gsn::Vertex::w`) and the vertex shader puts them in clip space, so hardware
+  clipping replaces the VU's polygon clipper and guard band; all varyings are `noperspective`, the GS's
+  interpolation. Culling is the sign of the clip-space determinant of (x, y, w), which agrees with the VU's
+  projected test in front of the eye and holds across the eye plane. (`GT4_VU_CLIP=1`: the VU's clipping.)
+- **The renderers in a compute shader** (`gsn_models.comp`, one workgroup per batch): the lighting chain (the
+  decompression routines, the 15 bodies), the transform, fog and ADC, culling, the motion vectors from the
+  previous frame's constants; it writes the batch's triangles into the frame's vertex buffer, after the CPU's
+  vertices. The stream thread hands a batch whole (`gfx::ModelJob` and its 256 qwords); the front end works out
+  its state, targets and texture once and reserves its vertices. A batch drawn again without new vertices runs
+  the chain that decoded them again (`BatchBuffer::vertexWrites`). (`GT4_GPU_MODELS=0`: the CPU renderers.)
+
+On the race recording: 97.5% of the pixels identical to the CPU renderers, 99.97% within 4 per channel (edges a
+subpixel apart); the stream thread's renderers 7.2 ms a frame -> 0.5 ms; live, 60 fps at 1080p.
+
+What remains of the PS2's 3D path: the VIF1 decoding of the model packets on the CPU (UNPACK into the batch
+buffers, 4.9 ms a frame) and the batch buffers themselves. Next: the model packets as vertex buffers made once
+per model, decoded on the GPU.
 
 ## Step 3: native effects
 
@@ -84,7 +106,7 @@ record, the host's counters).
 
 | Step | State |
 |---|---|
-| 1 | in progress. 2026-10-31: texture sets are native: sent once per content, named by the draws, decoded once (pixel-identical to the address path). Next: targets and GSBuffers (the movie) as named images |
-| 2 | - |
+| 1 | in progress. 2026-10-31: texture sets are native: sent once per content, named by the draws, decoded once (pixel-identical to the address path). Graphics memory gets set bytes lazily. Targets: with step 3 |
+| 2 | in progress. 2026-10-31: the renderers run on the GPU (homogeneous output, hardware clipping, a compute shader); next: model packets as vertex buffers |
 | 3 | - |
 | 4 | - |
