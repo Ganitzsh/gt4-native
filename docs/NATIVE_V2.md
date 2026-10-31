@@ -27,25 +27,29 @@ read through its own format (GT4_GSN_XFER on the race: 4,806 of 5,427 uploads ar
 8-bit and 429 4-bit textures and 60 32-bit ones). Every frame the sets are re-sent into a slot cache (1 to 2.6 MB).
 
 Natively:
-- **A set is converted once per content.** When the game binds a set whose content the host has not seen, it sends
-  the set (its records and uploads, the pixel bytes) with a content hash; the host applies the uploads to a private
-  scratch layout and decodes each record into a texture (RGBA8 with its mip levels). This is the PS2 texture format
-  decoded as an asset, once, not a graphics memory kept per frame.
-- **Content, not address, names it.** The game modifies some sets in place (menu palettes fade: the same upload
-  carried 03 03 03 then 07 07 07), so the identity is the content hash taken when the set is bound for upload, as
-  the PS2 saw it then. The game remembers which hashes the host has and sends the bytes only for new ones.
-- **A draw names its texture as (set, record).** 0049CC48 binds a record by its address; the set's records are
-  registered when the set is bound, so the bind becomes a native handle in the drawing state.
+- **A set is sent once per content.** 00499508 sends a set record (`gfx::TexSetRecord`: a new id, its uploads, its
+  slot size) instead of the uploads. The runtime's frame walker hashes the uploads' bytes and layout when the frame
+  is sent (the game changes some sets in place: menu palettes fade, the same upload carried 03 03 03 then 07 07 07)
+  and sends the bytes only for a content the host does not have.
+- **Both ends keep the same sets** (`gfx::SetSlots`, in the order of the set records): a set lives until another is
+  uploaded over its slot, a content until its last set goes; the walker then forgets it was sent, the host drops it.
+  Nothing is ever asked back.
+- **A draw names its set.** The runtime keeps the sets in graphics memory by slot (`runtime/native/pgl.cpp`); any
+  TEX0 (or TEX2) flushed with its image inside one names that set, whatever bound it (0049CC48 binds a record, the
+  pglu calls, the mirror's own TEX0s). A frame buffer set at a slot ends the set there.
+- **The host decodes it once per identity** (`GsFrontend::setTexture`): the draw's fields moved from the slot to
+  where the content was first sent, decoded from a private copy of the content (`assetMemory`), keyed by (content,
+  fields, palette entries, TEXA where used). The address path decoded a set again each time the slot cache moved it.
+- **Graphics memory still gets the content**, from the host's copy at the slot: palettes are loaded through the
+  CLUT buffer (CLD, CSA, a 4-bit palette loaded whole as 8-bit by 0049CC48), the game writes palettes of its own into
+  set pages afterwards, and the effects read targets through palettes there. A set texture whose pages were written
+  since goes by address. This memory goes with the native palettes of step 3.
+- `GT4_SET_UPLOADS=1` (runtime) also sends the old uploads, `GT4_NATIVE_TEXTURES=0` (host) uses them: the same
+  recording both ways, to compare.
 
-A view of the game's memory from the host (the executable's shared .guest section mapped in the host) would read
-static data without copies, but not data the game changes after recording it (the palettes above: 540,000 of 1.5
-million uploads differed by the time the host looked), so content travels by hash.
-
-What the host does with a set (`GsFrontend::setTexture`): the set's uploads go into a private copy of the layout
-(`assetMemory`, loaded per content), the palette goes in as the bind loads it (0049CC48: a 4-bit texture's palette
-at a CSA other than 0 is loaded as a whole 8-bit palette at CSA 0, then the texture picks its 16 entries), and the
-record decodes, once per (content, record, TEXA where the format uses it). A recording that starts mid-run carries
-the sets bound before it (`exportSets`). `GT4_NATIVE_TEXTURES=0` names them by address as before.
+Measured on a Laguna Seca recording (100 frames, 1080p): the native path is pixel-identical to the address path; the
+front end's thread 16.6 ms a frame against 19.2. Every texture that is not a target or a reinterpretation of one
+comes from a set in the race (and in the menus but the movie's GSBuffer).
 
 ### Targets
 
@@ -80,7 +84,7 @@ record, the host's counters).
 
 | Step | State |
 |---|---|
-| 1 | in progress. 2026-10-31: texture sets are native (the race capture is pixel-identical to the address path; live race at 60 fps, 1080p). Next: the remaining textures by address (fonts, menus), targets, then the GS model goes |
+| 1 | in progress. 2026-10-31: texture sets are native: sent once per content, named by the draws, decoded once (pixel-identical to the address path). Next: targets and GSBuffers (the movie) as named images |
 | 2 | - |
 | 3 | - |
 | 4 | - |

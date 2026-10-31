@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <vector>
 
 namespace gt4::gsn {
@@ -80,6 +81,7 @@ public:
     // True when it loaded.
     bool tex0Written(const Tex0& t);
     const uint8_t* clutBuffer() const { return clut; }   // 1 KiB
+    void setClutBuffer(const uint8_t* buffer) { std::memcpy(clut, buffer, sizeof clut); }
 
     // Decodes a w x h region of the texture TEX0 describes (from texel (u0, v0)) into RGBA8 (R in the low
     // byte), with the CLUT buffer for indexed formats, TEXA for 16/24-bit alpha; TCC = 0 keeps the

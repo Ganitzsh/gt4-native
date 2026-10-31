@@ -216,7 +216,7 @@ public:
         uint64_t primitives = 0, draws = 0, uploads = 0, copies = 0, decoded = 0, replaced = 0, targetReads = 0, reinterpreted = 0;
         uint64_t named = 0, found = 0;   // textures looked up in the texture pack, and those it has
         uint64_t reused = 0;             // textures whose content was decoded before (GsFrontend::decoded)
-        uint64_t setTextures = 0, setMisses = 0, setDecodes = 0;   // textures named as (set, record); unknown ones; decodes
+        uint64_t setTextures = 0, setMisses = 0, setDecodes = 0;   // textures named by their set; not held now; decodes
         uint64_t byAddress = 0;   // textures still named by graphics-memory address (lookups)
         uint64_t droppedDraws = 0;   // past the target limit (targetFor)
         uint64_t targetsReused = 0;  // slots given to a new buffer at the limit
@@ -232,13 +232,11 @@ public:
     void draw(const gfx::DrawRecord& d, const gfx::Vertex* vertices);
     // A read record: the pixels for readTransfer.
     void read(const gfx::ReadRecord& r);
-    // A texture set record (docs/NATIVE_V2.md): gfx::TexSetRecord, its uploads, its textures, then (when `sent`) the
-    // uploads' bytes in order.
+    // A texture set record (docs/NATIVE_V2.md): gfx::TexSetRecord, its uploads, then (when `sent`) their bytes in order.
     void texSet(const uint8_t* payload, size_t bytes);
-    // Every set id known, as a set record with its bytes (`sent` 1), for a recording that starts mid-run (its replay
-    // knows the sets bound before it).
-    void exportSets(const std::function<void(const gfx::TexSetRecord&, const std::vector<gfx::TexSetUpload>&,
-                                             const std::vector<gfx::TexSetTexture>&, const std::vector<uint8_t>&)>& out) const;
+    // The sets in graphics memory, as set records (a content's bytes with its first), for a recording that starts
+    // mid-run.
+    void exportSets(const std::function<void(const gfx::TexSetRecord&, const std::vector<gfx::TexSetUpload>&, const std::vector<uint8_t>&)>& out) const;
 
 private:
     GsMemory mem;
@@ -330,23 +328,36 @@ private:
         uint64_t packLoads = ~0ull;
     };
     std::unordered_map<uint64_t, Decoded> decoded;
-    // Native texture sets (docs/NATIVE_V2.md): the game's set ids to contents, the contents (uploads, texture records,
-    // the uploads' pixels) by hash. A set's textures are decoded from a private copy of its uploads (assetMemory),
-    // once per (content, record, TEXA where the format uses it), into `decoded`.
+    // Native texture sets (docs/NATIVE_V2.md): the sets in graphics memory (their slots), and the contents (uploads,
+    // their pixels) by hash. A set's textures are decoded from a private copy of its uploads (assetMemory), once per
+    // (content, the texture's fields there, TEXA where the format uses it), into `decoded`.
     struct SetContent {
+        uint32_t base = 0;   // the slot (blocks) its uploads were sent at
         std::vector<gfx::TexSetUpload> uploads;
-        std::vector<gfx::TexSetTexture> textures;
         std::vector<uint8_t> bytes;
     };
-    struct SetId {
-        uint64_t hash = 0, lastUsed = 0;
+    gfx::SetSlots setSlots;
+    // GT4_NATIVE_TEXTURES=0 (checking, with the runtime's GT4_SET_UPLOADS=1): the sets' textures by address; with
+    // native textures, those uploads (after their set record: source, base) are left out.
+    bool nativeTextures = true;
+    std::vector<std::pair<uint32_t, uint32_t>> setUploadsToo;
+    // Each page's set (its id) and the write serial the set's upload had there: the page holds the set's content while
+    // nothing wrote it since (pages[page].serial unchanged).
+    struct SetPage {
+        uint32_t id = 0;
+        uint64_t serial = 0;
     };
-    std::unordered_map<uint32_t, SetId> setIds;
+    std::vector<SetPage> setPages = std::vector<SetPage>(512);
+    bool holdsSet(uint32_t block, uint32_t id) const {
+        const uint32_t page = (block / 32) & 511;
+        return setPages[page].id == id && pages[page].serial == setPages[page].serial;
+    }
     std::unordered_map<uint64_t, SetContent> setContents;
     uint64_t setContentBytes = 0;
-    void pruneSets();
     std::unique_ptr<GsMemory> assetMemory;
     uint64_t assetLoaded = 0;   // the content written into assetMemory (0: none)
+    void loadSetContent(uint64_t hash, const SetContent& sc);
+    uint64_t paletteHash(const GsMemory::Tex0& t) const;
     bool setTexture(const DrawState& s, TextureSource& out);
     // Each 8 KiB page's content hash, and the page generation it was computed at (pageContent).
     std::vector<uint64_t> pageHash = std::vector<uint64_t>(512, 0), pageHashGeneration = std::vector<uint64_t>(512, ~0ull);

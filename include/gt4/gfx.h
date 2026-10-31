@@ -14,9 +14,12 @@
 // with one dirty bit per group): a state record carries the groups that changed, applied in bit order.
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <unordered_map>
+#include <vector>
 
 namespace gt4::gfx {
 
@@ -49,9 +52,8 @@ struct Texture {
     uint8_t clutOffset = 0;       // in 16-entry units
     uint8_t clutLoad = 0;         // when this texture is set: 0 keep the palette, 1 load, 2/3 load and remember the base,
                                   // 4/5 load if the base differs from the remembered one
-    // Native (docs/NATIVE_V2.md): a texture of a texture set (TexSetRecord): the set's id and the record's index;
-    // set 0: the texture is named by its graphics-memory fields above.
-    uint16_t record = 0;
+    // Native (docs/NATIVE_V2.md): the texture set (TexSetRecord::id) whose slot holds the texture (its image and
+    // palette): the fields above, inside that set. 0: by graphics-memory address.
     uint32_t set = 0;
     bool operator==(const Texture&) const = default;
 };
@@ -143,8 +145,7 @@ inline void setTexture(Texture& t, uint64_t v) {
     t.clutStorage = static_cast<uint8_t>((v >> 55) & 1);
     t.clutOffset = static_cast<uint8_t>((v >> 56) & 0x1F);
     t.clutLoad = static_cast<uint8_t>((v >> 61) & 7);
-    t.record = 0;   // a texture by its graphics-memory fields (the bind of a set's record names it after)
-    t.set = 0;
+    t.set = 0;   // (the runtime names the set after)
 }
 
 // TEX2: the format and palette fields only.
@@ -155,8 +156,6 @@ inline void setPalette(Texture& t, uint64_t v) {
     t.clutStorage = static_cast<uint8_t>((v >> 55) & 1);
     t.clutOffset = static_cast<uint8_t>((v >> 56) & 0x1F);
     t.clutLoad = static_cast<uint8_t>((v >> 61) & 7);
-    t.record = 0;   // a texture by its graphics-memory fields (the bind of a set's record names it after)
-    t.set = 0;
 }
 
 // Sets one group of `c` from its register value; false for a group this does not know.
@@ -392,7 +391,8 @@ inline void copyContextGroup(Context& to, const Context& from, const Texture& pa
         to.sampler.minV = from.sampler.minV;
         to.sampler.maxV = from.sampler.maxV;
         break;
-    case kPalette:
+    case kPalette:   // (with the set that holds the texture and this palette, as the runtime names it)
+        to.texture.set = palette.set;
         to.texture.format = palette.format;
         to.texture.clutBase = palette.clutBase;
         to.texture.clutFormat = palette.clutFormat;
@@ -409,7 +409,7 @@ inline void copyContextGroup(Context& to, const Context& from, const Texture& pa
         to.sampler.lodL = from.sampler.lodL;
         to.sampler.lodK = from.sampler.lodK;
         break;
-    case kTexture: to.texture = from.texture; break;   // (with its native set and record)
+    case kTexture: to.texture = from.texture; break;   // (with its native set)
     case kMip1: case kMip2:
         for (uint32_t k = 0; k < 3; ++k) {
             const uint32_t level = (group == kMip1 ? 0 : 3) + k;
@@ -483,15 +483,15 @@ struct BatchRun {
     uint32_t itop;
 };
 
-// A texture set the game bound for drawing (00499728 gave it a slot and uploaded it): `id` names it in the drawing
-// state (Texture::set) from here on, until a set record with the same id. Its `uploads` TexSetUpload and `records`
-// TexSetTexture follow. The runtime's frame walker fills in `hash` (the content of the uploads' bytes when the frame
-// is sent) and `sent`: 1 when the bytes follow as GT4_REC_GFX_DATA (each upload's, in order), 0 when the host has
-// this content already.
+// A texture set the game uploaded into a slot of graphics memory (00499728 -> 00499508): `id` names it in the
+// drawing state (Texture::set) for textures inside its slot, `size` (64-block units) long from its lowest upload.
+// Its `uploads` TexSetUpload follow. The runtime's frame walker fills in `hash` (the content of the uploads' bytes and
+// layout when the frame is sent) and `sent`: 1 when the bytes follow as GT4_REC_GFX_DATA (each upload's, in order),
+// 0 when the host has this content already (SetSlots: both ends keep the same contents).
 struct TexSetRecord {
     uint32_t id;
     uint32_t hashLow, hashHigh;
-    uint16_t uploads, records;
+    uint16_t uploads, size;
     uint32_t sent;
 };
 static_assert(sizeof(TexSetRecord) == 20);
@@ -503,11 +503,53 @@ struct TexSetUpload {
     uint32_t qwords;
 };
 static_assert(sizeof(TexSetUpload) == 16);
-// One of its textures: the GS register values GT4 keeps for it (TEX0, TEX1, MIPTBP1, MIPTBP2, CLAMP), at the set's slot.
-struct TexSetTexture {
-    uint64_t tex0, tex1, mip1, mip2, clamp;
+
+// The texture sets in graphics memory, as the runtime's frame walker and the host both keep them (in the order of
+// the set records): a set lives until another is uploaded over its slot, and a content (by hash) until its last
+// set goes. add() calls `gone(hash)` for each content that went: the walker sends its bytes again if it comes back,
+// the host drops them.
+class SetSlots {
+public:
+    struct Slot {
+        uint32_t id, lo, hi;   // its slot (blocks)
+        uint64_t hash;
+    };
+    template <class Gone> void add(const Slot& slot, Gone&& gone) {
+        ++refs[slot.hash];
+        for (size_t k = 0; k < slots.size();) {
+            const Slot& s = slots[k];
+            if (s.lo < slot.hi && slot.lo < s.hi) {
+                auto ref = refs.find(s.hash);
+                if (ref != refs.end() && --ref->second == 0) {
+                    refs.erase(ref);
+                    gone(s.hash);
+                }
+                slots[k] = slots.back();
+                slots.pop_back();
+            } else {
+                ++k;
+            }
+        }
+        slots.push_back(slot);
+    }
+    const Slot* find(uint32_t id) const {
+        for (const Slot& s : slots)
+            if (s.id == id) return &s;
+        return nullptr;
+    }
+    const std::vector<Slot>& all() const { return slots; }
+    // A set's slot from its record: its lowest upload base, `size` long.
+    static Slot of(const TexSetRecord& r, const TexSetUpload* uploads) {
+        uint32_t lo = ~0u;
+        for (uint32_t k = 0; k < r.uploads; ++k) lo = std::min(lo, uploads[k].destination & 0x3FFF);
+        if (lo == ~0u) lo = 0;
+        return {r.id, lo, lo + (static_cast<uint32_t>(r.size) << 6), (uint64_t(r.hashHigh) << 32) | r.hashLow};
+    }
+
+private:
+    std::vector<Slot> slots;
+    std::unordered_map<uint64_t, uint32_t> refs;
 };
-static_assert(sizeof(TexSetTexture) == 40);
 
 // A vertex: position in 1/16 pixel in the drawing context's coordinates (its origin, at 2048 pixels on
 // GT4's screens, included), depth, colour (R in the low byte, alpha 0x80 = 1), texture coordinates as S, T,

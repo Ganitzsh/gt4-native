@@ -69,8 +69,10 @@ void send_data(uint32_t source, uint32_t bytes) {
     link_send(GT4_REC_GFX_DATA, head, sizeof head, data.data(), bytes);
 }
 
-// The texture sets' contents the host has (docs/NATIVE_V2.md): their bytes go once.
+// The texture sets' contents the host has (docs/NATIVE_V2.md): their bytes go once, while a set in graphics memory
+// holds them (gfx::SetSlots: the host keeps the same).
 std::unordered_set<uint64_t> g_sent_sets;
+gfx::SetSlots g_set_slots;
 
 // A texture set record (gfx::TexSetRecord, in the frame's buffer): its content hashed now, as the frame is sent (the
 // game changes some sets in place: the PS2 uploaded what was there then), and its bytes sent when the host has not
@@ -81,10 +83,13 @@ void send_tex_set(uint8_t *payload, uint32_t bytes) {
     if (sizeof r + r.uploads * sizeof(gfx::TexSetUpload) > bytes) return;
     const auto *uploads = reinterpret_cast<const gfx::TexSetUpload *>(payload + sizeof r);
     std::vector<std::vector<uint8_t>> data(r.uploads);
-    uint64_t hash = 0xCBF29CE484222325ull ^ r.uploads;
+    const uint32_t lo = gfx::SetSlots::of(r, uploads).lo;
+    uint64_t hash = 0xCBF29CE484222325ull ^ r.uploads ^ uint64_t(r.size) << 16;
     for (uint32_t k = 0; k < r.uploads; ++k) {
         data[k] = read_mapped(ptr(uploads[k].source), uploads[k].qwords * 16);
-        const uint64_t layout[2] = {uploads[k].destination & 0xFFFF0000u | (uint64_t(uploads[k].w) << 32 | uint64_t(uploads[k].h) << 48),
+        // (the layout: each upload's place in the slot, its width, format and size)
+        const uint64_t layout[2] = {((uploads[k].destination & 0x3FFF) - lo) | (uploads[k].destination & 0xFFFF0000u) |
+                                        (uint64_t(uploads[k].w) << 32 | uint64_t(uploads[k].h) << 48),
                                     uploads[k].qwords};
         for (const uint64_t v : layout) hash = (hash ^ v) * 0x100000001B3ull;
         const uint8_t *b = data[k].data();
@@ -100,6 +105,7 @@ void send_tex_set(uint8_t *payload, uint32_t bytes) {
     }
     r.hashLow = static_cast<uint32_t>(hash);
     r.hashHigh = static_cast<uint32_t>(hash >> 32);
+    g_set_slots.add(gfx::SetSlots::of(r, uploads), [](uint64_t gone) { g_sent_sets.erase(gone); });
     r.sent = g_sent_sets.insert(hash).second ? 1u : 0u;
     std::memcpy(payload, &r, sizeof r);
     if (!r.sent) return;
