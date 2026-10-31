@@ -11,6 +11,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
+#include <string>
 #include <unordered_map>
 
 namespace gt4 {
@@ -168,6 +170,63 @@ struct GsnScene::Impl {
         std::vector<uint32_t> bps;
     } dump;
     void writeDump();
+    // GT4_GPU_PROFILE=1 (performance work): GPU timestamps between labelled points of the frames executed here
+    // (each label takes the time since the point before it), and counts of what the GPU was asked to do,
+    // averaged per frame and printed when the scene goes.
+    struct Profile {
+        bool on = false;
+        VkQueryPool pool = VK_NULL_HANDLE;
+        static constexpr uint32_t kPerSlot = 256;
+        std::vector<const char*> labels[kSlots];
+        std::map<std::string, double> milliseconds;
+        std::map<std::string, uint64_t> counts;
+        uint64_t frames = 0;
+    } profile;
+    void tally(const char* what, uint64_t n = 1) {
+        if (profile.on) profile.counts[what] += n;
+    }
+    int markSlot = -1;   // the slot of the frame being profiled (-1: none, e.g. a read's own submission)
+    void mark(VkCommandBuffer command, const char* label) {
+        if (!profile.on || markSlot < 0) return;
+        auto& l = profile.labels[markSlot];
+        if (l.size() + 1 >= Profile::kPerSlot) return;
+        vkCmdWriteTimestamp2(command, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, profile.pool, uint32_t(markSlot) * Profile::kPerSlot + uint32_t(l.size()) + 1);
+        l.push_back(label);
+    }
+    // At the start of a frame in `slot`: the results of the slot's last frame (done: the renderer waited for it),
+    // then its queries reset and the first timestamp.
+    void profileFrame(VkCommandBuffer command, uint32_t slot) {
+        if (!profile.on) return;
+        slot %= kSlots;
+        auto& l = profile.labels[slot];
+        if (!l.empty()) {
+            std::vector<uint64_t> t(l.size() + 1);
+            if (vkGetQueryPoolResults(device.device, profile.pool, slot * Profile::kPerSlot, uint32_t(t.size()), t.size() * 8, t.data(), 8,
+                                      VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
+                const double period = device.properties.limits.timestampPeriod * 1e-6;
+                for (size_t k = 1; k < t.size(); ++k) profile.milliseconds[l[k - 1]] += double(t[k] - t[k - 1]) * period;
+                ++profile.frames;
+            }
+            l.clear();
+        }
+        vkCmdResetQueryPool(command, profile.pool, slot * Profile::kPerSlot, Profile::kPerSlot);
+        vkCmdWriteTimestamp2(command, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, profile.pool, slot * Profile::kPerSlot);
+    }
+    void printProfile() const {
+        if (!profile.on || !profile.frames) return;
+        const double f = double(profile.frames);
+        double total = 0.0;
+        for (const auto& [label, ms] : profile.milliseconds) total += ms;
+        std::printf("GPU profile of the native renderer, %llu frames: %.3f ms a frame\n", static_cast<unsigned long long>(profile.frames), total / f);
+        std::vector<std::pair<double, std::string>> rows;
+        for (const auto& [label, ms] : profile.milliseconds) rows.emplace_back(ms / f, label);
+        std::sort(rows.rbegin(), rows.rend());
+        for (const auto& [ms, label] : rows) std::printf("  %-28s %7.3f ms\n", label.c_str(), ms);
+        std::printf("  per frame:");
+        for (const auto& [what, n] : profile.counts) std::printf(" %s %.1f,", what.c_str(), double(n) / f);
+        std::printf("\n");
+    }
+
     std::unordered_map<uint32_t, vk::Pipeline> pipelines;
     vk::Pipeline display, stencilPrep;
     VkSampler samplers[4] = {};   // [linear][repeat]
@@ -177,6 +236,13 @@ struct GsnScene::Impl {
     bool warnedBlend = false;
 
     Impl(const vk::Device& d, VkCommandPool p) : device(d), pool(p) {
+        if (const char* e = std::getenv("GT4_GPU_PROFILE"); e && *e && *e != '0') {
+            VkQueryPoolCreateInfo q{};
+            q.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+            q.queryType = VK_QUERY_TYPE_TIMESTAMP;
+            q.queryCount = Profile::kPerSlot * kSlots;
+            profile.on = vkCreateQueryPool(device.device, &q, nullptr, &profile.pool) == VK_SUCCESS;
+        }
         for (int linear = 0; linear < 2; ++linear)
             for (int repeat = 0; repeat < 2; ++repeat)
                 samplers[linear * 2 + repeat] = vk::createSampler(device, linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST, VK_SAMPLER_MIPMAP_MODE_NEAREST,
@@ -209,6 +275,8 @@ struct GsnScene::Impl {
     }
     ~Impl() {
         vkDeviceWaitIdle(device.device);
+        printProfile();
+        if (profile.pool) vkDestroyQueryPool(device.device, profile.pool, nullptr);
         for (auto& [id, t] : targets) vk::destroy(device, t.image);
         for (auto& [id, t] : textures) vk::destroy(device, t.image);
         for (auto& [when, image] : graveyard) vk::destroy(device, image);
@@ -496,7 +564,8 @@ struct GsnScene::Impl {
 
     void execute(VkCommandBuffer command, uint32_t slot);
     // Executes every pending list in order into `command` (the scale from `extent`), then empties the queue.
-    void executePending(VkCommandBuffer command, uint32_t slot, VkExtent2D extent);
+    // `profiled`: a frame's own submission (GT4_GPU_PROFILE).
+    void executePending(VkCommandBuffer command, uint32_t slot, VkExtent2D extent, bool profiled = false);
 
     // The pixels the display shows: the circuit's size in video clocks over its clocks per pixel; interlaced in
     // field mode each field shows every line of a half-height buffer.
@@ -558,6 +627,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         info.pDepthAttachment = depth ? &ds : nullptr;
         info.pStencilAttachment = depth ? &ds : nullptr;
         vkCmdBeginRendering(command, &info);
+        tally("render passes");
         rendering = true;
         boundColour = colourId;
         boundDepth = depthId;
@@ -567,6 +637,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
     // The stencil copy of a target's alpha bit 7, for the destination alpha test.
     auto prepareStencil = [&](uint32_t colourId, uint32_t depthId) {
         end();
+        tally("stencil copies");
         GpuTarget& c = targets[colourId];
         vk::Image& depth = depthId == ~0u ? scratchDepth : targets[depthId].image;
         vk::toSampled(b, c.image, vk::kFragment);
@@ -1024,6 +1095,8 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
             vk::dispatch2D(command, r.width * sx, r.height * sy);
             built[i] = true;
         }
+        tally("reinterpret batches");
+        tally("reinterpret dispatches", batch.size());
         for (const uint32_t i : batch) vk::toSampled(b, *reinterpretImages[i], vk::kFragment);
         b.flush(command);
         return reinterpretImages[index];
@@ -1039,13 +1112,23 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
             // The scene stage, in a modern renderer's order: motion vectors, lighting, reflections and fog
             // (before the resolve, which also integrates their noise), the resolve, motion blur, depth of field.
             const gsn::FrameList::Lighting& l = frame.lights[cmd.index];
+            end();
+            mark(command, "draws");
+            tally("scenes");
             const bool moving = (temporal || effects.shutter > 0.0f) && drawVelocity(l, at);
+            mark(command, "motion vectors");
             if (lighting.occlusion > 0.0f || lighting.grade > 0.0f) relight(l);
+            mark(command, "lighting");
             if (effects.reflections > 0.0f) reflect(l);
+            mark(command, "reflections");
             if (effects.fogDensity > 0.0f) haze(l);
+            mark(command, "fog");
             if (moving && temporal) antialias(l);
+            mark(command, "temporal resolve");
             if (moving && effects.shutter > 0.0f) blur(l);
+            mark(command, "motion blur");
             if (effects.aperture > 0.0f) focus(l);
+            mark(command, "depth of field");
             continue;
         }
         if (cmd.kind != gsn::FrameList::Command::Kind::Draw) continue;
@@ -1102,6 +1185,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
                         copy.srcSubresource = copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
                         copy.extent = {image->extent.width, image->extent.height, 1};
                         vkCmdCopyImage(command, image->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, feedback.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+                        tally("feedback copies");
                         image = &feedback;
                         k.sourceSize[0] = static_cast<float>(feedback.extent.width) / sx;
                         k.sourceSize[1] = static_cast<float>(feedback.extent.height) / sy;
@@ -1266,6 +1350,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
             if (!ps.mask && !ps.zwrite) continue;
             vk::Pipeline& p = pipeline(blendKey, ps.mask, hasDepth, d.topology);
             if (p.pipeline != boundPipeline) {
+                tally("pipeline binds");
                 vk::bind(command, p);
                 const VkDeviceSize zero = 0;
                 vkCmdBindVertexBuffers(command, 0, 1, &vertices.buffer, &zero);
@@ -1281,9 +1366,11 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
             vk::Descriptors().sampled(0, view, sampler).push(command, p);
             vk::pushConstants(command, p, pk);
             vkCmdDraw(command, d.count, 1, d.first, 0);
+            tally("draws");
         }
     }
     end();
+    mark(command, "draws");
     // The displayed buffer, for recordMain (a list cut for a GS -> host read displays nothing).
     if (!frame.displayed) return;
     ++displayedFrames;
@@ -1478,8 +1565,10 @@ void GsnScene::prepare(const SceneFormats& formats) {
     }
 }
 
-void GsnScene::Impl::executePending(VkCommandBuffer command, uint32_t slot, VkExtent2D extent) {
+void GsnScene::Impl::executePending(VkCommandBuffer command, uint32_t slot, VkExtent2D extent, bool profiled) {
     sweepGraveyard();
+    markSlot = profiled && profile.on ? static_cast<int>(slot % kSlots) : -1;
+    if (markSlot >= 0) profileFrame(command, slot);
     // The nearest whole scale to the render extent per axis, from what the display shows (640 x 448, or 224
     // lines per field: GT4's race draws each field whole, so its lines get the full height).
     const gsn::FrameList* shown = nullptr;
@@ -1517,7 +1606,10 @@ void GsnScene::Impl::executePending(VkCommandBuffer command, uint32_t slot, VkEx
             }
             for (uint32_t id : created) clearNew(command, targets[id]);
         }
+        mark(command, "new targets");
         uploadTextures(command, slot);
+        mark(command, "texture uploads");
+        tally("lists");
         execute(command, slot);
         retireTextures();
         static const long dumpAt = std::getenv("GT4_GSN_DUMP") ? std::strtol(std::getenv("GT4_GSN_DUMP"), nullptr, 10) : -1;
@@ -1574,7 +1666,7 @@ void GsnScene::recordPrepass(VkCommandBuffer command, const SceneView& view) {
     s.lastExtent = view.renderExtent;
     // Each list is executed once (its blends would apply again).
     if (s.pending.empty()) return;
-    s.executePending(command, view.slot, view.renderExtent);
+    s.executePending(command, view.slot, view.renderExtent, true);
 }
 
 bool GsnScene::read(const gsn::ReadRequest& request, std::vector<uint8_t>& out) {

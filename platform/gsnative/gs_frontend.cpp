@@ -680,6 +680,23 @@ bool sameTexAlpha(const Reinterpretation& a, const Reinterpretation& b) {
 }
 }  // namespace
 
+// A page's content hash (64-bit words, multiply-xorshift), computed again only after a transfer wrote the page.
+uint64_t GsFrontend::pageContent(uint32_t page) {
+    page &= 511;
+    if (pageHashGeneration[page] == pageGeneration[page]) return pageHash[page];
+    const uint8_t* bytes = mem.data() + size_t(page) * 8192;
+    uint64_t h = 0x9E3779B97F4A7C15ull ^ page;
+    for (size_t k = 0; k < 8192; k += 8) {
+        uint64_t w;
+        std::memcpy(&w, bytes + k, 8);
+        h = (h ^ w) * 0xFF51AFD7ED558CCDull;
+        h ^= h >> 29;
+    }
+    pageHash[page] = h;
+    pageHashGeneration[page] = pageGeneration[page];
+    return h;
+}
+
 TextureSource GsFrontend::textureFor(const DrawState& s) {
     const GsMemory::Tex0 t = GsMemory::Tex0::of(s.c.texture);
     const uint32_t w = 1u << std::min<uint32_t>(t.tw, 10), h = 1u << std::min<uint32_t>(t.th, 10);
@@ -688,7 +705,7 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
     const uint32_t perRow = std::max<uint32_t>(1, (t.psm == PSMT8 || t.psm == PSMT4) ? t.tbw / 2 : t.tbw);
     // The most recent writer of the pages the texture covers.
     uint32_t owner = 0;
-    uint64_t newest = 0, generation = 0;
+    uint64_t newest = 0, generation = 0, content = 0;
     const uint32_t rows = (h + ph - 1) / ph, columns = std::min<uint32_t>(perRow, (w + pw - 1) / pw);
     for (uint32_t py = 0; py < rows; ++py)
         for (uint32_t px = 0; px < std::max<uint32_t>(columns, 1); ++px)
@@ -696,6 +713,7 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
                 if (extra && !(t.tbp % 32)) break;
                 const uint32_t page = (t.tbp / 32 + py * perRow + px + extra) & 511;
                 generation += pageGeneration[page] * (page + 1);
+                content = mix(content, page);
                 if (pages[page].target && pages[page].serial > newest) {
                     newest = pages[page].serial;
                     owner = pages[page].target;
@@ -845,7 +863,11 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
             const uint32_t lrows = (l.h + ph - 1) / ph, lperRow = std::max<uint32_t>(1, (t.psm == PSMT8 || t.psm == PSMT4) ? l.tbw / 2 : l.tbw);
             for (uint32_t py = 0; py < lrows; ++py)
                 for (uint32_t px = 0; px < std::max<uint32_t>(1, std::min<uint32_t>(lperRow, (l.w + pw - 1) / pw)); ++px)
-                    generation += pageGeneration[(l.tbp / 32 + py * lperRow + px) & 511] * (i * 512 + py * lperRow + px + 1);
+                {
+                    const uint32_t page = (l.tbp / 32 + py * lperRow + px) & 511;
+                    generation += pageGeneration[page] * (i * 512 + py * lperRow + px + 1);
+                    content = mix(content, page);
+                }
             levelCount = i + 1;
         }
     }
@@ -870,7 +892,6 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
     constexpr size_t kMaxDecodesPerFrame = 768;
     if (frame.textures.size() >= kMaxDecodesPerFrame && !textureCache.count(key)) return TextureSource{};
     Cached& c = textureCache[key];
-    if (!c.id) c.id = nextTexture++;
     c.lastUsed = frameCount;
     // A texture pack's image for this content (texture_name.h names it as PCSX2 does).
     std::shared_ptr<const ReplacementImage> replacement;
@@ -888,7 +909,11 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
             c.replacedId = 0;
         }
     }
-    const bool fresh = !c.version || c.generation != generation || c.clutHash != clutHash || lost;
+    // (a decoded texture dropped meanwhile: decoded again)
+    auto shown = c.id ? decoded.find(c.contentKey) : decoded.end();
+    const bool gone = c.id && !c.replacedId && (shown == decoded.end() || shown->second.id != c.id);
+    const bool fresh = !c.version || c.generation != generation || c.clutHash != clutHash || lost || gone;
+    if (!fresh && shown != decoded.end()) shown->second.lastUsed = frameCount;
     if (replacementsOn) {
         if (fresh) {   // named once per content (level 0 is replaced; the GPU makes a mipmapped texture's levels)
             MipAddress mips[6];
@@ -922,23 +947,39 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
         c.replacedId = replacementTexture(c.replacementName, *replacement);
     } else if (fresh) {
         c.replacedId = 0;
-        // The back end uploads a frame's textures before its draws: content that changes within a frame
-        // needs a new id, the earlier draws keeping the old one.
-        if (c.version && c.decodedFrame == frameCount) {
-            frame.retiredTextures.push_back(c.id);
-            c.id = nextTexture++;
-        }
-        c.decodedFrame = frameCount;
-        cachedTexels -= c.texels;
-        c.texels = 0;
-        for (uint32_t i = 0; i < levelCount; ++i) c.texels += uint64_t(levels[i].w) * levels[i].h;
-        cachedTexels += c.texels;
-        ++c.version;
         c.generation = generation;
         c.clutHash = clutHash;
+        // What the texture is: its fields and palette (key), the content of every page its levels cover.
+        uint64_t contentKey = mix(key, content);
+        for (uint32_t i = 0; i < levelCount; ++i) {
+            const Level& l = levels[i];
+            const uint32_t lrows = (l.h + ph - 1) / ph, lperRow = std::max<uint32_t>(1, (t.psm == PSMT8 || t.psm == PSMT4) ? l.tbw / 2 : l.tbw);
+            for (uint32_t py = 0; py < lrows; ++py)
+                for (uint32_t px = 0; px < std::max<uint32_t>(1, std::min<uint32_t>(lperRow, (l.w + pw - 1) / pw)); ++px)
+                    for (uint32_t extra = 0; extra < 2; ++extra) {
+                        if (extra && !(l.tbp % 32)) break;
+                        contentKey = mix(contentKey, pageContent(l.tbp / 32 + py * lperRow + px + extra));
+                    }
+        }
+        c.contentKey = contentKey;
+        if (!c.version) c.version = 1;
+        Decoded& d = decoded[contentKey];
+        d.lastUsed = frameCount;
+        if (d.id) {   // seen before: its texture is still on the GPU
+            c.id = d.id;
+            ++stats.reused;
+            src.kind = TextureSource::Kind::Memory;
+            src.id = c.id;
+            src.version = 1;
+            return src;
+        }
+        d.id = c.id = nextTexture++;
+        d.texels = 0;
+        for (uint32_t i = 0; i < levelCount; ++i) d.texels += uint64_t(levels[i].w) * levels[i].h;
+        cachedTexels += d.texels;
         TextureImage image;
         image.id = c.id;
-        image.version = c.version;
+        image.version = 1;
         image.width = w;
         image.height = h;
         image.levels = levelCount;
@@ -992,7 +1033,7 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
     }
     src.kind = TextureSource::Kind::Memory;
     src.id = c.id;
-    src.version = c.version;
+    src.version = 1;
     return src;
 }
 
@@ -1116,6 +1157,7 @@ uint32_t GsFrontend::replacementTexture(const TextureName& name, const Replaceme
 void GsFrontend::resetTextures() {
     replacementTextures.clear();
     textureCache.clear();
+    decoded.clear();
     cachedTexels = 0;
     frame.textures.clear();
     frame.resetTextures = true;
@@ -1144,25 +1186,28 @@ void GsFrontend::vsync(uint64_t vblank, FrameList& out) {
                 ++it;
             }
         }
-        for (auto it = textureCache.begin(); it != textureCache.end();) {
+        // (the per-address entries own no texture: they go with their last use)
+        for (auto it = textureCache.begin(); it != textureCache.end();)
+            it = it->second.lastUsed + 120 < frameCount ? textureCache.erase(it) : std::next(it);
+        for (auto it = decoded.begin(); it != decoded.end();) {
             if (it->second.lastUsed + 120 < frameCount) {
                 frame.retiredTextures.push_back(it->second.id);
                 cachedTexels -= it->second.texels;
-                it = textureCache.erase(it);
+                it = decoded.erase(it);
             } else {
                 ++it;
             }
         }
         if (cachedTexels > kBudget) {
-            std::vector<std::pair<uint64_t, uint64_t>> byAge;   // last use, key
-            for (const auto& [key, c] : textureCache) byAge.emplace_back(c.lastUsed, key);
+            std::vector<std::pair<uint64_t, uint64_t>> byAge;   // last use, content key
+            for (const auto& [key, d] : decoded) byAge.emplace_back(d.lastUsed, key);
             std::sort(byAge.begin(), byAge.end());
             for (const auto& [used, key] : byAge) {
                 if (cachedTexels <= kBudget / 2 || used + 1 >= frameCount) break;
-                auto it = textureCache.find(key);
+                auto it = decoded.find(key);
                 frame.retiredTextures.push_back(it->second.id);
                 cachedTexels -= it->second.texels;
-                textureCache.erase(it);
+                decoded.erase(it);
             }
         }
     }

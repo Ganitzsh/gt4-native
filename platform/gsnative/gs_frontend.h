@@ -210,6 +210,7 @@ public:
     struct Stats {
         uint64_t primitives = 0, draws = 0, uploads = 0, copies = 0, decoded = 0, replaced = 0, targetReads = 0, reinterpreted = 0;
         uint64_t named = 0, found = 0;   // textures looked up in the texture pack, and those it has
+        uint64_t reused = 0;             // textures whose content was decoded before (GsFrontend::decoded)
         uint64_t droppedDraws = 0;   // past the target limit (targetFor)
         uint64_t targetsReused = 0;  // slots given to a new buffer at the limit
         uint64_t reads = 0, readsFromTargets = 0;   // LOCAL -> HOST transfers; those with drawn pages
@@ -289,8 +290,20 @@ private:
     std::atomic<bool> replacementsWanted{true};
     bool replacementsOn = false;
     // Decoded textures, by what they were decoded from.
+    // Decoded textures by content (contentKey): GT4 streams textures through the same GS memory over and over
+    // (129 decodes a frame in a race, each a GPU upload and mip chain), so what was decoded once is kept by what
+    // it is, not where it was, and the GPU texture is used again. They own the texture ids of memory textures.
+    struct Decoded {
+        uint32_t id = 0;
+        uint64_t lastUsed = 0, texels = 0;
+    };
+    std::unordered_map<uint64_t, Decoded> decoded;
+    // Each 8 KiB page's content hash, and the page generation it was computed at (pageContent).
+    std::vector<uint64_t> pageHash = std::vector<uint64_t>(512, 0), pageHashGeneration = std::vector<uint64_t>(512, ~0ull);
+    uint64_t pageContent(uint32_t page);
     struct Cached {
-        uint32_t id = 0, version = 0;
+        uint32_t id = 0, version = 0;   // id: the decoded texture shown (Decoded::id), or 0
+        uint64_t contentKey = 0;        // ... its key in `decoded`
         uint64_t generation = 0;   // sum of the covered pages' generations when decoded
         uint64_t clutHash = 0;
         uint64_t decodedFrame = ~0ull, lastUsed = 0;
