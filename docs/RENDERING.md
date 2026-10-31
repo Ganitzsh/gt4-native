@@ -366,6 +366,7 @@ Generated from `gt4_host --list-options` (defaults are the `high` preset).
 | `effects.ambient_occlusion` | `medium` | original \| off \| low \| medium \| high \| ultra | Ambient occlusion (an enhancement; the PS2 had none), horizon-based, from the game's own depth buffer, on its 3D scenes before the HUD; low..ultra = 4..16 directions (docs/LIGHTING.md). |
 | `effects.lighting` | `original` | original \| enhanced | The game's 3D scenes graded as a modern renderer's (filmic contrast, richer colour, cool shadows, warm highlights); the HUD keeps its colours (docs/LIGHTING.md). |
 | `effects.mirror` | `high` | original \| high | The rear-view mirror: original = the PS2's (no course detail objects, the lowest texture level, cars at a fixed low detail); high = the mirror's own vision list (what is behind the car) with the main view's course mode (detail objects), textures at their own level and cars at the detail their distance gives. Sent to the game as option 1 (runtime.h kOptionMirrorDetail). |
+| `effects.model_detail` | `high` | original \| high \| ultra | Detail at distance: each model's detailed levels (cars, scenery) kept 1, 2 or 4 times as far: GT4 picks a level from the model's projected size (00455708, 00454FB0), whose scale (00456918) this multiplies. Sent to the game as option 2 (runtime.h kOptionModelDetail). |
 
 #### [post]
 

@@ -153,6 +153,7 @@ const std::vector<const char*> kPresets{"original", "low", "medium", "high", "ul
 const std::vector<const char*> kCatchUp{"original", "reduced", "off"};
 const std::vector<const char*> kLighting{"original", "enhanced"};
 const std::vector<const char*> kMirror{"original", "high"};
+const std::vector<const char*> kModelDetail{"original", "high", "ultra"};
 
 const std::vector<Option>& options() {
     static const std::vector<Option> table = [] {
@@ -265,6 +266,9 @@ const std::vector<Option>& options() {
         o.push_back(enumOption("effects.mirror", &Settings::mirror, kMirror,
             "The rear-view mirror: original (the PS2's: no course detail objects, the lowest texture level, low-detail "
             "cars) or high (the course's detail objects, textures at their own level and cars as the main view draws them)."));
+        o.push_back(enumOption("effects.model_detail", &Settings::modelDetail, kModelDetail,
+            "Detail at distance: original (the PS2's), high or ultra keep each model's detailed levels (cars, scenery) "
+            "twice or four times as far before the simpler ones take over."));
         o.push_back(enumOption("post.tonemapper", &Settings::tonemapper, kTonemappers,
             "HDR to display: original (clamp, as the PS2), reinhard (luminance), aces (Hill fit), agx and "
             "agx_punchy (Sobotka, Wrensch fit), pbr_neutral (Khronos PBR Neutral)."));
@@ -318,7 +322,7 @@ const PresetTable& presetValues(Preset preset) {
         {"texture.lod_bias", "0"}, {"effects.shadows", "original"}, {"effects.reflections", "original"},
         {"effects.bloom", "original"}, {"effects.dof", "original"}, {"effects.motion_blur", "original"},
         {"effects.heat_haze", "original"}, {"effects.particles", "original"}, {"effects.sky_fog", "original"},
-        {"effects.ambient_occlusion", "original"}, {"post.tonemapper", "original"}, {"post.auto_exposure", "off"},
+        {"effects.ambient_occlusion", "original"}, {"effects.model_detail", "original"}, {"post.tonemapper", "original"}, {"post.auto_exposure", "off"},
         {"post.exposure", "0"}, {"post.film_grain", "0"}, {"post.vignette", "0"},
         {"post.chromatic_aberration", "0"}, {"post.dither", "off"}};
     static const PresetTable low{
@@ -326,25 +330,25 @@ const PresetTable& presetValues(Preset preset) {
         {"render.aa", "fxaa"}, {"render.msaa", "1"}, {"texture.filter", "trilinear"}, {"texture.anisotropy", "4"},
         {"effects.shadows", "low"}, {"effects.reflections", "low"}, {"effects.bloom", "low"},
         {"effects.heat_haze", "low"}, {"effects.particles", "low"}, {"effects.sky_fog", "low"},
-        {"effects.ambient_occlusion", "off"}, {"post.tonemapper", "agx_punchy"}, {"post.auto_exposure", "on"}};
+        {"effects.ambient_occlusion", "off"}, {"effects.model_detail", "original"}, {"post.tonemapper", "agx_punchy"}, {"post.auto_exposure", "on"}};
     static const PresetTable medium{
         {"render.gs", "native"}, {"render.quality", "quality"}, {"render.upscaler", "fsr2"}, {"render.sharpness", "0.25"},
         {"render.aa", "taa"}, {"render.msaa", "1"}, {"texture.filter", "trilinear"}, {"texture.anisotropy", "8"},
         {"effects.shadows", "medium"}, {"effects.reflections", "medium"}, {"effects.bloom", "medium"},
         {"effects.heat_haze", "medium"}, {"effects.particles", "medium"}, {"effects.sky_fog", "medium"},
-        {"effects.ambient_occlusion", "low"}, {"post.tonemapper", "agx_punchy"}, {"post.auto_exposure", "on"}};
+        {"effects.ambient_occlusion", "low"}, {"effects.model_detail", "high"}, {"post.tonemapper", "agx_punchy"}, {"post.auto_exposure", "on"}};
     static const PresetTable high{
         {"render.gs", "native"}, {"render.quality", "native"}, {"render.upscaler", "fsr1"}, {"render.sharpness", "0.2"},
         {"render.aa", "taa"}, {"render.msaa", "1"}, {"texture.filter", "trilinear"}, {"texture.anisotropy", "16"},
         {"effects.shadows", "high"}, {"effects.reflections", "high"}, {"effects.bloom", "high"},
         {"effects.heat_haze", "high"}, {"effects.particles", "high"}, {"effects.sky_fog", "high"},
-        {"effects.ambient_occlusion", "medium"}, {"post.tonemapper", "agx_punchy"}, {"post.auto_exposure", "on"}};
+        {"effects.ambient_occlusion", "medium"}, {"effects.model_detail", "high"}, {"post.tonemapper", "agx_punchy"}, {"post.auto_exposure", "on"}};
     static const PresetTable ultra{
         {"render.gs", "native"}, {"render.quality", "native"}, {"render.upscaler", "fsr2"}, {"render.sharpness", "0.15"},
         {"render.aa", "taa"}, {"render.msaa", "1"}, {"texture.filter", "trilinear"}, {"texture.anisotropy", "16"},
         {"effects.shadows", "ultra"}, {"effects.reflections", "ultra"}, {"effects.bloom", "ultra"},
         {"effects.heat_haze", "ultra"}, {"effects.particles", "ultra"}, {"effects.sky_fog", "ultra"},
-        {"effects.ambient_occlusion", "high"}, {"post.tonemapper", "agx_punchy"}, {"post.auto_exposure", "on"}};
+        {"effects.ambient_occlusion", "high"}, {"effects.model_detail", "ultra"}, {"post.tonemapper", "agx_punchy"}, {"post.auto_exposure", "on"}};
     static const PresetTable none;
     switch (preset) {
     case Preset::Original: return original;
@@ -397,6 +401,7 @@ const char* name(Tonemapper v) { return kTonemappers[static_cast<size_t>(v)]; }
 const char* name(EffectQuality v) { return kEffects[static_cast<size_t>(v)]; }
 const char* name(LightingMode v) { return kLighting[static_cast<size_t>(v)]; }
 const char* name(MirrorDetail v) { return kMirror[static_cast<size_t>(v)]; }
+const char* name(ModelDetail v) { return kModelDetail[static_cast<size_t>(v)]; }
 const char* name(TextureFilter v) { return kFilters[static_cast<size_t>(v)]; }
 const char* name(HudLayout v) { return kHud[static_cast<size_t>(v)]; }
 const char* name(AiCatchUp v) { return kCatchUp[static_cast<size_t>(v)]; }

@@ -28,6 +28,7 @@ enum class Tonemapper : uint8_t { Original, Reinhard, Aces, AgX, AgXPunchy, PbrN
 enum class EffectQuality : uint8_t { Original, Off, Low, Medium, High, Ultra };
 enum class LightingMode : uint8_t { Original, Enhanced };
 enum class MirrorDetail : uint8_t { Original, High };
+enum class ModelDetail : uint8_t { Original, High, Ultra };
 enum class Preset : uint8_t { Original, Low, Medium, High, Ultra, Custom };
 // The AI's catch-up (GT4's "slow car boost": cars behind sped up, cars ahead slowed down, by event).
 enum class AiCatchUp : uint8_t { Original, Reduced, Off };
@@ -84,6 +85,7 @@ struct Settings {
     EffectQuality ambientOcclusion = EffectQuality::Medium;
     LightingMode lighting = LightingMode::Original;   // the game's 3D scenes graded as a modern renderer's
     MirrorDetail mirror = MirrorDetail::High;         // the rear-view mirror's course, textures and cars (sent to the game)
+    ModelDetail modelDetail = ModelDetail::High;      // models' detail levels kept 1x / 2x / 4x as far (sent to the game)
 
     // [post]
     Tonemapper tonemapper = Tonemapper::AgXPunchy;
@@ -125,6 +127,7 @@ const char* name(Tonemapper);
 const char* name(EffectQuality);
 const char* name(LightingMode);
 const char* name(MirrorDetail);
+const char* name(ModelDetail);
 const char* name(TextureFilter);
 const char* name(HudLayout);
 const char* name(AiCatchUp);
