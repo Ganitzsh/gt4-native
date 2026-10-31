@@ -612,6 +612,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
     bool rendering = false;
     uint32_t boundColour = 0, boundDepth = 0;
     bool stencilFresh = false;   // the bound depth image's stencil holds the bound target's alpha bit 7
+    VkRect2D stencilRegion{};    // ... over this rectangle (render pixels)
     VkPipeline boundPipeline = VK_NULL_HANDLE;
     // GT4_GPU_PROFILE=2: a render pass's time under its target's name (block address, size in GS pixels, format).
     auto passLabel = [&](uint32_t id) -> const char* {
@@ -690,7 +691,9 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         vkCmdSetViewport(command, 0, 1, &viewport);
     };
     // The stencil copy of a target's alpha bit 7, for the destination alpha test.
-    auto prepareStencil = [&](uint32_t colourId, uint32_t depthId) {
+    // Only over `region` (render pixels): the draws that will test it (copying a whole 1280 x 1344 target 14 times a
+    // frame for the cars' reflection pass was 0.3 ms).
+    auto prepareStencil = [&](uint32_t colourId, uint32_t depthId, VkRect2D region) {
         end();
         if (perPass) mark(command, "between passes");
         tally("stencil copies");
@@ -710,12 +713,14 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         stencil.clearValue.depthStencil = {0.0f, 0};
         VkRenderingInfo info{};
         info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-        info.renderArea = {{0, 0}, {std::min(c.image.extent.width, depth.extent.width), std::min(c.image.extent.height, depth.extent.height)}};
+        const VkExtent2D whole{std::min(c.image.extent.width, depth.extent.width), std::min(c.image.extent.height, depth.extent.height)};
+        const uint32_t x0 = std::min(uint32_t(region.offset.x), whole.width), y0 = std::min(uint32_t(region.offset.y), whole.height);
+        info.renderArea = {{int32_t(x0), int32_t(y0)}, {std::min(region.extent.width, whole.width - x0), std::min(region.extent.height, whole.height - y0)}};
         info.layerCount = 1;
         info.pDepthAttachment = &ds;
         info.pStencilAttachment = &stencil;
         vkCmdBeginRendering(command, &info);
-        VkViewport viewport{0, 0, static_cast<float>(info.renderArea.extent.width), static_cast<float>(info.renderArea.extent.height), 0, 1};
+        VkViewport viewport{0, 0, static_cast<float>(whole.width), static_cast<float>(whole.height), 0, 1};
         VkRect2D scissor = info.renderArea;
         vkCmdSetViewport(command, 0, 1, &viewport);
         vkCmdSetScissor(command, 0, 1, &scissor);
@@ -804,6 +809,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         ensure(litImage, kColour, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, "gsn lit");
         const VkImageView depthOnly = depthView(depth);
         constexpr float kZScale = 1.6e6f;
+        constexpr uint32_t kAoStep = 2;
         static const uint32_t lightView = std::getenv("GT4_LIGHT_VIEW") ? static_cast<uint32_t>(std::atoi(std::getenv("GT4_LIGHT_VIEW"))) : 0;   // GT4's 3D Z = 1.6e6 / view distance (24-bit Z; race captures)
         vk::toSampled(b, colour, vk::kCompute);
         vk::toSampled(b, depth, vk::kCompute);
@@ -812,13 +818,14 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         if (lighting.occlusion > 0.0f) {
             vk::bind(command, aoPass);
             vk::Descriptors().sampled(0, depthOnly, samplers[0]).storage(1, aoImage.view).push(command, aoPass);
+            // At half resolution (the light pass's depth-aware blur reads it so): a quarter of the work.
             struct {
                 float size[2], tanHalf[2], zScale, radius, intensity, maxPixels;
-                uint32_t directions, pad;
+                uint32_t directions, step;
             } k{{float(e.width), float(e.height)}, {lighting.tanX, lighting.tanY}, kZScale, 1.2f, 1.4f, 40.0f * float(si.sy),
-                lighting.directions, 0};
+                lighting.directions, kAoStep};
             vk::pushConstants(command, aoPass, k);
-            vk::dispatch2D(command, e.width, e.height);
+            vk::dispatch2D(command, (e.width + kAoStep - 1) / kAoStep, (e.height + kAoStep - 1) / kAoStep);
         }
         vk::toSampled(b, aoImage, vk::kCompute);
         vk::toStorage(b, litImage, true);
@@ -832,8 +839,8 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
             .push(command, lightPass);
         struct {
             float size[2], occlusion, zScale, grade, contrast, vibrance, warmth;
-            uint32_t view;
-        } k{{float(e.width), float(e.height)}, lighting.occlusion, kZScale, lighting.grade, 1.18f, 0.3f, 1.0f, lightView};
+            uint32_t view, aoStep;
+        } k{{float(e.width), float(e.height)}, lighting.occlusion, kZScale, lighting.grade, 1.18f, 0.3f, 1.0f, lightView, kAoStep};
         vk::pushConstants(command, lightPass, k);
         vk::dispatch2D(command, e.width, e.height);
         b.image(litImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_READ_BIT);
@@ -1379,9 +1386,45 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
                 scratchDepth = vk::createImage(device, desc);
             }
         }
-        if (date && (!stencilFresh || boundColour != d.target || boundDepth != depthId)) {
-            prepareStencil(d.target, depthId);
-            stencilFresh = true;
+        if (date) {
+            // The draw's extent in render pixels (its vertices, a pixel's margin, inside its scissor).
+            auto box = [&](const gsn::Draw& e) {
+                float bx0 = 1e30f, by0 = 1e30f, bx1 = -1e30f, by1 = -1e30f;
+                for (uint32_t v = 0; v < e.count; ++v) {
+                    const gsn::Vertex& p = frame.vertices[e.first + v];
+                    bx0 = std::min(bx0, p.x); by0 = std::min(by0, p.y); bx1 = std::max(bx1, p.x); by1 = std::max(by1, p.y);
+                }
+                const gfx::Context& ec = e.state.c;
+                const float lx = std::max(std::floor(bx0) - 1.0f, float(ec.scissorX0)), ly = std::max(std::floor(by0) - 1.0f, float(ec.scissorY0));
+                const float hx = std::min(std::ceil(bx1) + 1.0f, float(ec.scissorX1 + 1)), hy = std::min(std::ceil(by1) + 1.0f, float(ec.scissorY1 + 1));
+                if (!(hx > lx && hy > ly)) return VkRect2D{{0, 0}, {0, 0}};
+                return VkRect2D{{int32_t(lx) * int32_t(sx), int32_t(ly) * int32_t(sy)}, {uint32_t(hx - lx) * sx, uint32_t(hy - ly) * sy}};
+            };
+            auto unite = [](VkRect2D a, VkRect2D r) {
+                if (!r.extent.width || !r.extent.height) return a;
+                if (!a.extent.width || !a.extent.height) return r;
+                const int32_t x0 = std::min(a.offset.x, r.offset.x), y0 = std::min(a.offset.y, r.offset.y);
+                const int32_t x1 = std::max(a.offset.x + int32_t(a.extent.width), r.offset.x + int32_t(r.extent.width));
+                const int32_t y1 = std::max(a.offset.y + int32_t(a.extent.height), r.offset.y + int32_t(r.extent.height));
+                return VkRect2D{{x0, y0}, {uint32_t(x1 - x0), uint32_t(y1 - y0)}};
+            };
+            const VkRect2D mine = box(d);
+            const bool inside = mine.offset.x >= stencilRegion.offset.x && mine.offset.y >= stencilRegion.offset.y &&
+                                mine.offset.x + int32_t(mine.extent.width) <= stencilRegion.offset.x + int32_t(stencilRegion.extent.width) &&
+                                mine.offset.y + int32_t(mine.extent.height) <= stencilRegion.offset.y + int32_t(stencilRegion.extent.height);
+            if (!stencilFresh || boundColour != d.target || boundDepth != depthId || !inside) {
+                // This draw's extent and the destination-alpha draws into the target that follow it, joined.
+                VkRect2D region = mine;
+                for (size_t j = at + 1, seen = 0; j < frame.commands.size() && seen < 128; ++j, ++seen) {
+                    const auto& next = frame.commands[j];
+                    if (next.kind != gsn::FrameList::Command::Kind::Draw) continue;
+                    const gsn::Draw& e = frame.draws[next.index];
+                    if (e.target == d.target && e.state.c.destTest) region = unite(region, box(e));
+                }
+                prepareStencil(d.target, depthId, region);
+                stencilRegion = region;
+                stencilFresh = true;
+            }
         }
         if (!date && mask & VK_COLOR_COMPONENT_A_BIT) stencilFresh = false;
         // Keep the bound Z buffer for a draw without depth test on the same target.
@@ -1627,7 +1670,7 @@ void GsnScene::prepare(const SceneFormats& formats) {
         s.lightPass = vk::createCompute(s.device, shaders::gsn_light_comp(),
                                         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                                          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
-                                        36, "gsn light");
+                                        40, "gsn light");
     if (!s.velocityPass.valid()) {
         vk::GraphicsDesc v;
         v.vertex = shaders::gsn_velocity_vert();

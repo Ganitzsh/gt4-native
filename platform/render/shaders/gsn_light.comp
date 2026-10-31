@@ -16,6 +16,7 @@ layout(push_constant) uniform Light {
     float grade;        // 0: the game's colours; 1: the enhanced grade
     float contrast, vibrance, warmth;
     uint view;          // debugging (GT4_LIGHT_VIEW): 1 the occlusion, 2 the view distance in 10 m bands
+    uint aoStep;        // the occlusion's texels per pixel (gsn_ao.comp's step)
 } p;
 
 const vec3 kLuma = vec3(0.2126, 0.7152, 0.0722);
@@ -38,7 +39,7 @@ void main() {
             for (int x = -2; x < 2; ++x) {
                 const ivec2 s = clamp(q + ivec2(x, y), ivec2(0), last);
                 const float w = abs(distanceAt(s) - d) < 0.05 * d ? 1.0 : 0.02;
-                sum += texelFetch(occlusion, s, 0).r * w;
+                sum += texelFetch(occlusion, s / int(p.aoStep), 0).r * w;
                 weights += w;
             }
         linear *= mix(1.0, sum / weights, p.aoStrength);
@@ -61,7 +62,7 @@ void main() {
                  vec3(1.0 + 0.04 * p.warmth, 1.0, 1.0 - 0.04 * p.warmth), t);
         linear = mix(linear, x, p.grade);
     }
-    if (p.view == 1u) linear = vec3(texelFetch(occlusion, q, 0).r);
+    if (p.view == 1u) linear = vec3(texelFetch(occlusion, q / int(p.aoStep), 0).r);
     if (p.view == 2u) { const float d = distanceAt(q); linear = vec3(d < 5.0 ? 1.0 : 0.0, d < 20.0 ? 1.0 : 0.0, d < 80.0 ? 1.0 : 0.0); }
     imageStore(result, q, vec4(pow(linear, vec3(1.0 / 2.2)), c.a));
 }

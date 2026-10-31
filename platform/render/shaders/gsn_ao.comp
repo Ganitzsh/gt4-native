@@ -15,6 +15,7 @@ layout(push_constant) uniform Ao {
     float intensity;
     float maxPixels;  // the disc's radius in render pixels at most
     uint directions;  // four samples each
+    uint step;        // one occlusion texel per step x step pixels (2: half resolution; gsn_light.comp reads it so)
 } p;
 
 float distanceAt(ivec2 q) {
@@ -28,15 +29,20 @@ vec3 positionAt(ivec2 q, float d) {
 }
 
 void main() {
-    const ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    const ivec2 h = ivec2(gl_GlobalInvocationID.xy);   // the occlusion texel
     const ivec2 last = ivec2(p.size) - 1;
-    if (any(greaterThan(q, last))) return;
+    const ivec2 q = h * int(p.step) + int(p.step) / 2;  // the pixel it is computed at
+    if (any(greaterThan(h * int(p.step), last))) return;
+    if (any(greaterThan(q, last))) {
+        imageStore(occlusion, h, vec4(1.0));
+        return;
+    }
     const float d = distanceAt(q);
     // Nothing drawn, or the sky: unoccluded.
     const float r2 = p.radius * p.radius;
     const float pixels = min(p.radius / (d * p.tanHalf.y) * p.size.y * 0.5, p.maxPixels);
     if (d > 1e4 || pixels < 1.5) {
-        imageStore(occlusion, q, vec4(1.0));
+        imageStore(occlusion, h, vec4(1.0));
         return;
     }
     const vec3 P = positionAt(q, d);
@@ -66,5 +72,5 @@ void main() {
         occluded += horizon;
     }
     const float ao = clamp(1.0 - p.intensity * occluded / float(p.directions), 0.0, 1.0);
-    imageStore(occlusion, q, vec4(ao));
+    imageStore(occlusion, h, vec4(ao));
 }
