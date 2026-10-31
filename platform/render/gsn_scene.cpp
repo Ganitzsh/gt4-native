@@ -470,14 +470,12 @@ struct GsnScene::Impl {
     // Executes every pending list in order into `command` (the scale from `extent`), then empties the queue.
     void executePending(VkCommandBuffer command, uint32_t slot, VkExtent2D extent);
 
-    // The GS pixels the display shows: DISPLAY's size over MAGH; interlaced with FFMD = 1 (field mode) each
-    // field shows every line of a half-height buffer.
+    // The pixels the display shows: the circuit's size in video clocks over its clocks per pixel; interlaced in
+    // field mode each field shows every line of a half-height buffer.
     static void displayedSize(const gsn::Display& d, uint32_t& w, uint32_t& h) {
-        const uint64_t disp = d.target2 ? d.display2 : d.display1;
-        const uint32_t magh = static_cast<uint32_t>((disp >> 23) & 0xF) + 1;
-        w = (static_cast<uint32_t>((disp >> 32) & 0xFFF) + 1) / magh;
-        h = static_cast<uint32_t>((disp >> 44) & 0x7FF) + 1;
-        if ((d.smode2 & 3) == 3) h /= 2;
+        const gfx::DisplayCircuit& c = d.record.circuit[d.target2 ? 1 : 0];
+        w = c.magH ? c.clocks / c.magH : 0;
+        h = d.record.interlaced && d.record.fieldMode ? c.lines / 2u : c.lines;
         if (!w || !h || w > 1024 || h > 1024) {
             w = 640;
             h = 448;
@@ -990,8 +988,8 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
     displayTarget = frame.display.target2 ? frame.display.target2 : frame.display.target1;
     auto shown = targets.find(displayTarget);
     if (shown != targets.end()) {
-        const uint64_t dispfb = frame.display.target2 ? frame.display.dispfb2 : frame.display.dispfb1;
-        const uint32_t dbx = static_cast<uint32_t>((dispfb >> 32) & 0x7FF), dby = static_cast<uint32_t>((dispfb >> 43) & 0x7FF);
+        const gfx::DisplayCircuit& c = frame.display.record.circuit[frame.display.target2 ? 1 : 0];
+        const uint32_t dbx = c.x, dby = c.y;
         uint32_t w, h;
         displayedSize(frame.display, w, h);
         const float tw = static_cast<float>(shown->second.image.extent.width) / sx, th = static_cast<float>(shown->second.image.extent.height) / sy;

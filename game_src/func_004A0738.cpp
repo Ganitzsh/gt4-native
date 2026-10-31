@@ -1,6 +1,7 @@
 /* compiler: ee-gcc2.96-no-strict-aliasing */
-/* Native copy of 004A0738 (matched): the graphics library's shutdown, without its EE-only last step (mtc0 to the
- * performance counter control and a sync.p). */
+/* Native copy of 004A0738 (matched): the graphics library's shutdown, without its writes to hardware: the GS
+ * interrupt mask to the GS's IMR (the library's copy at +0xD0 is kept) and its last step (mtc0 to the performance
+ * counter control and a sync.p). */
 #include "spr.h"
 typedef unsigned char u8;
 typedef unsigned long u64;
@@ -43,7 +44,6 @@ extern "C" void func_004A0738(void) {
         func_005AD9A0(2, q->fA0);
         u64 m = 0xFFFFFFFF;
         p->fD0 = m;
-        *(u64 *)0x12001010 = m;
         /* (the EE's performance counter control register, PCCR, cleared: none natively) */
         *flag = 0;
     }

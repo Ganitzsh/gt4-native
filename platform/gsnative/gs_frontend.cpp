@@ -948,10 +948,6 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
     return src;
 }
 
-void GsFrontend::privileged(uint32_t offset, uint64_t value) {
-    if (offset < 0x100 * 16 && !(offset & 0xF)) priv[offset >> 4] = value;
-}
-
 void GsFrontend::packed(uint32_t r, uint64_t a, uint64_t b) {
     switch (r) {
     case PRIM: write(PRIM, a & 0x7FF); break;
@@ -1127,21 +1123,14 @@ void GsFrontend::vsync(uint64_t vblank, FrameList& out) {
     frame.displayed = true;
     frame.targets = targets;
     Display& d = frame.display;
-    d.pmode = priv[0x00];
-    d.smode2 = priv[0x02];
-    d.dispfb1 = priv[0x07];
-    d.display1 = priv[0x08];
-    d.dispfb2 = priv[0x09];
-    d.display2 = priv[0x0A];
-    d.bgcolor = priv[0x0E];
-    auto displayed = [&](uint64_t dispfb) -> uint32_t {
-        const uint32_t bp = static_cast<uint32_t>(dispfb & 0x1FF) * 32, bw = static_cast<uint32_t>((dispfb >> 9) & 0x3F);
+    d.record = shown;
+    auto displayed = [&](const gfx::DisplayCircuit& c) -> uint32_t {
         for (const Target& t : targets)
-            if (!t.depth && t.bp == bp && t.bw == bw) return t.id;
+            if (!t.depth && t.bp == c.base && t.bw == c.width) return t.id;
         return 0;
     };
-    d.target1 = displayed(d.dispfb1);
-    d.target2 = displayed(d.dispfb2);
+    d.target1 = displayed(shown.circuit[0]);
+    d.target2 = displayed(shown.circuit[1]);
     for (Target& t : targets)
         if (t.id == d.target1 || t.id == d.target2) t.lastUsed = frameCount;
     std::swap(out, frame);

@@ -24,15 +24,10 @@ void link_send(uint32_t type, const void *payload, uint32_t size, const void *ex
 // Host -> game records, polled at each VBlank by the kernel's interrupt thread.
 void link_poll();
 
-// A GS -> EE download (BUSDIR): sends GS_READ {id, qwc} and waits (2 s at most) for the host's
+// A read of graphics memory (runtime/frame.cpp, a read record): sends GS_READ {id, qwc} and waits (2 s at most) for the host's
 // GS_IMAGE, copied to dst (qwc x 16 bytes). Without a host, or on timeout, dst is zero-filled and
 // false is returned.
 bool link_read_image(uint32_t qwc, void *dst);
-
-// A GS FINISH written by a VIF1 DIRECT packet, raised by the runtime as it sends the packet. The live host
-// reports the same FINISH much later (it draws behind the game; GT4 waits on it to start a GS -> EE download,
-// 004AB668), and that report is then dropped.
-void link_local_finish();
 
 // The pad state the host sent (18 bytes, libpad2 layout); false if none yet.
 bool link_pad(int port, uint8_t out[18]);

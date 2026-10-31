@@ -2,8 +2,9 @@
 #include "spr.h"
 // One-time graphics start-up: clears the scratchpad work area, creates its semaphore,
 // resets the GS (keeping its revision byte), installs the interrupt handlers, uploads the
-// VU microprograms and starts the performance counters.
-#define CSR (*(volatile unsigned long *)0x12001000)
+// VU microprograms and starts the performance counters. Natively there is no GS: the original's
+// writes to its CSR (a reset or a flush, then FINISH acknowledged) and IMR (FINISH unmasked) are
+// left out, and the revision byte it kept from CSR is 0 (what the run time's CSR always held).
 
 struct SemaParam {
     int currentCount;
@@ -77,13 +78,9 @@ extern "C" void func_004A03C0(unsigned char reset, int x, int y, int z)
         if (reset) {
             func_0049FEE8();
             func_0057FD08(0, x, y, z);
-        } else {
-            CSR = 0x100;
         }
-        state->revision = CSR >> 16;
+        state->revision = 0;
         *(long *)((char *)spr + 0xD0) = -0x201;
-        *(long *)0x12001010 = -0x201;
-        CSR = 2;
         func_004A0BB0(640, 448);
         func_004A0B78(0, 0, 640, 448);
         func_0049FF38();

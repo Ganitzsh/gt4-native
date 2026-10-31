@@ -105,8 +105,8 @@ struct Target {
 };
 
 struct Display {
-    uint64_t pmode = 0, smode2 = 0, dispfb1 = 0, display1 = 0, dispfb2 = 0, display2 = 0, bgcolor = 0;
-    uint32_t target1 = 0, target2 = 0;   // the targets DISPFB1/2 point at (0: memory, not drawn this way)
+    gfx::DisplayRecord record;
+    uint32_t target1 = 0, target2 = 0;   // the targets read circuits 1 and 2 show (0: memory, not drawn this way)
 };
 
 // One frame: commands in the game's order.
@@ -165,7 +165,8 @@ public:
     };
     void setPrim(uint32_t prim);
     void vertex(const InputVertex& v, bool withFog);
-    void privileged(uint32_t offset, uint64_t value);
+    // The display from this VBlank on.
+    void display(const gfx::DisplayRecord& d) { shown = d; }
     // Ends the frame: `out` receives it (swapped, so its buffers are reused).
     void vsync(uint64_t vblank, FrameList& out);
     const GsMemory& memory() const { return mem; }
@@ -219,7 +220,7 @@ private:
     gfx::Context contexts[2];
     gfx::Shared shared;
     std::array<uint64_t, 128> reg{};
-    uint64_t priv[0x100]{};
+    gfx::DisplayRecord shown;
     void contextGroupSet(uint32_t context, uint32_t group);   // a group's side effects (palette loads)
 
     // Vertex queue of the current primitive.

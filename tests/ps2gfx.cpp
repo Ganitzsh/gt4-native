@@ -34,10 +34,10 @@ void expect(bool ok, const char* what) {
 struct Recorder final : gt4::ps2::GsTarget {
     struct Packet { uint32_t path; std::vector<uint8_t> bytes; };
     std::vector<Packet> packets;
-    std::vector<std::pair<uint32_t, uint64_t>> priv;
+    std::vector<gt4::gfx::DisplayRecord> displays;
     std::vector<uint32_t> vsyncs;
     void gif(uint32_t path, const uint8_t* data, size_t bytes) override { packets.push_back({path, {data, data + bytes}}); }
-    void privileged(uint32_t offset, uint64_t value) override { priv.emplace_back(offset, value); }
+    void display(const gt4::gfx::DisplayRecord& d) override { displays.push_back(d); }
     void vsync(uint32_t field, uint32_t) override { vsyncs.push_back(field); }
     void readTransfer(void* out, uint32_t qwc) override {
         auto* w = static_cast<uint32_t*>(out);
@@ -393,14 +393,16 @@ void testDirectAndRecords() {
     std::memcpy(gif.data() + 4, packet, 32);
     stream.record({GT4_REC_GIF, static_cast<uint32_t>(gif.size()), 2}, gif.data());
     expect(gs.packets.size() == 2 && gs.packets[1].path == 3 && std::memcmp(gs.packets[1].bytes.data(), packet, 32) == 0, "GIF PATH3 record");
-    // Privileged register, VSYNC, GS read.
-    struct { uint32_t reg, pad; uint64_t value; } priv{0x80, 0, 0x1234};
-    stream.record({GT4_REC_GS_PRIV, sizeof(priv), 3}, reinterpret_cast<const uint8_t*>(&priv));
+    // Display, VSYNC, GS read.
+    gt4::gfx::DisplayRecord shown;
+    shown.circuit[1].enabled = 1;
+    shown.circuit[1].base = 0x1234;
+    stream.record({GT4_REC_DISPLAY, sizeof(shown), 3}, reinterpret_cast<const uint8_t*>(&shown));
     const uint32_t vs[2] = {1, 77};
     stream.record({GT4_REC_VSYNC, 8, 4}, reinterpret_cast<const uint8_t*>(vs));
     const uint32_t read[2] = {9, 2};
     stream.record({GT4_REC_GS_READ, 8, 5}, reinterpret_cast<const uint8_t*>(read));
-    expect(gs.priv.size() == 1 && gs.priv[0].first == 0x80 && gs.priv[0].second == 0x1234, "GS_PRIV record");
+    expect(gs.displays.size() == 1 && gs.displays[0] == shown, "DISPLAY record");
     expect(gs.vsyncs.size() == 1 && gs.vsyncs[0] == 1, "VSYNC record");
     expect(hostRecords.size() == 1 && hostRecords[0].first == GT4_REC_GS_IMAGE && hostRecords[0].second.size() == 8 + 32,
            "GS_READ answered by GS_IMAGE {id, qwc, data}");

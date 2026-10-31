@@ -1167,20 +1167,16 @@ SYSCALL int gt4_sys_ReleaseAlarm(int id) {
 SYSCALL int gt4_sys_FlushCache(int) { return 0; }
 SYSCALL int gt4_sys_SetGsCrt(int interlace, int mode, int field) {
     log_info("kernel: SetGsCrt(interlace %d, mode %d, field %d)", interlace, mode, field);
-    // the host keeps NTSC interlaced defaults; tell it SMODE1 as the BIOS sets it for NTSC
-    if (mode == 2 && interlace) {
-        struct { uint32_t reg, pad; uint64_t value; } smode1{0x10, 0, 0x740834504ull};
-        link_send(GT4_REC_GS_PRIV, &smode1, sizeof smode1);
-    }
+    // the video mode is the display's (gs.cpp, the library's SMODE2): nothing to set
     return 0;
 }
-// The GS interrupt mask lives in the guest's IMR register (0x12001010, 0xFF00 from gs_init): the game sets it
-// through GsPutIMR and also writes it directly (004A0808 unmasks FINISH for its GS -> EE downloads).
-uint32_t kernel_gs_imr() { return static_cast<uint32_t>(guest_ref<uint64_t>(0x12001010)); }
-SYSCALL uint32_t gt4_sys_GsGetIMR() { return kernel_gs_imr(); }
+// The GS interrupt mask the game sets (the kernel's reset value: every GS interrupt masked). Natively nothing raises
+// a GS interrupt; the mask is kept for the game to read back.
+static uint32_t g_gs_imr = 0xFF00;
+SYSCALL uint32_t gt4_sys_GsGetIMR() { return g_gs_imr; }
 SYSCALL uint32_t gt4_sys_GsPutIMR(uint32_t imr) {
-    const uint32_t old = kernel_gs_imr();
-    guest_ref<uint64_t>(0x12001010) = imr;
+    const uint32_t old = g_gs_imr;
+    g_gs_imr = imr;
     return old;
 }
 SYSCALL int gt4_sys_SetVSyncFlag(uint32_t, uint32_t) { return 0; }

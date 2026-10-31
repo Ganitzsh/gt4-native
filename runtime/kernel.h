@@ -36,7 +36,6 @@ bool kernel_interrupts_enabled();    // for the calling guest thread (Status.EIE
 
 // INTC causes (EE): GS 0, SBUS 1, VBLANK_START 2, VBLANK_END 3, VIF0 4, VIF1 5, VU0 6, VU1 7,
 // IPU 8, TIMER0..3 9-12, SFIFO 13, VU0WD 14. DMAC causes are the channel numbers 0-9 (plus 15).
-uint32_t kernel_gs_imr();            // the GS interrupt mask the game set (GsPutIMR)
 void kernel_raise_intc(int cause);   // from host services (e.g. GS FINISH, timer)
 void kernel_post_callback(void (*fn)(uint32_t), uint32_t arg);  // runs fn(arg) in interrupt context
 // Called on the interrupt thread at each VBlank start, before the INTC 2 handlers run.

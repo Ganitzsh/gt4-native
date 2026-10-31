@@ -1,6 +1,8 @@
 #pragma once
 // Builders for synthetic GIF / VIF streams used by the PS2 graphics tests. Register layouts from the
 // public GS documentation.
+#include "gt4/gfx.h"
+
 #include <cstdint>
 #include <cstring>
 #include <utility>
@@ -124,6 +126,29 @@ inline void sprite(Gif& g, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1, u
 // buffer read every other line per field (FFMD = 0).
 inline constexpr std::pair<uint32_t, uint64_t> kDisplay[] = {
     {0x00, pmode(true, false)}, {0x20, smode2(true, false)}, {0x70, dispfb(0, 10, PSMCT32)}, {0x80, display640x448()}, {0xE0, 0}};
+
+// The same display as the game sends it (GT4_REC_DISPLAY).
+inline gt4::gfx::DisplayRecord displayRecord() {
+    return gt4::gfx::displayFromRegisters(pmode(true, false), smode2(true, false), dispfb(0, 10, PSMCT32), display640x448(), 0, 0, 0);
+}
+
+// A display record as the GS's display registers (offset, value), for the GS reference.
+inline std::vector<std::pair<uint32_t, uint64_t>> displayRegisters(const gt4::gfx::DisplayRecord& d) {
+    std::vector<std::pair<uint32_t, uint64_t>> out;
+    out.emplace_back(0x00, uint64_t(d.circuit[0].enabled) | uint64_t(d.circuit[1].enabled) << 1 | 1ull << 2 |
+                               uint64_t(d.blendFixed) << 5 | uint64_t(d.alphaFromCircuit2) << 6 | uint64_t(d.blendBackground) << 7 |
+                               uint64_t(d.alpha) << 8);
+    out.emplace_back(0x20, uint64_t(d.interlaced) | uint64_t(d.fieldMode) << 1);
+    for (int k = 0; k < 2; ++k) {
+        const gt4::gfx::DisplayCircuit& c = d.circuit[k];
+        out.emplace_back(0x70 + 0x20 * k, uint64_t(c.base / 32) | uint64_t(c.width) << 9 | uint64_t(c.format) << 15 |
+                                              uint64_t(c.x) << 32 | uint64_t(c.y) << 43);
+        out.emplace_back(0x80 + 0x20 * k, uint64_t(c.left) | uint64_t(c.top) << 12 | uint64_t(c.magH - 1) << 23 |
+                                              uint64_t(c.magV - 1) << 27 | uint64_t(c.clocks - 1) << 32 | uint64_t(c.lines - 1) << 44);
+    }
+    out.emplace_back(0xE0, d.background);
+    return out;
+}
 
 // --- VU1 microcode (encodings from the public VU instruction set) ---------------------------------------
 namespace vu {

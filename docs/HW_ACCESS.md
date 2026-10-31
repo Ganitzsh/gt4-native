@@ -9,6 +9,37 @@ group of functions became natively, and whether it can still run.
 
 ## Native status
 
+2026-10-31: **no game code reaches the PS2's hardware.** The hardware blocks (`runtime/guest.h` kHwBlocks: EE
+registers, VU memory, GS privileged registers) are reserved without memory, so an access left over faults and the crash
+report names its function. Two checks:
+
+- Static: no instruction of the linked `gt4_game.exe` addresses those blocks (`objdump -d` of the executable, every
+  absolute memory operand in 0x10000000-0x1000FFFF, 0x11000000-0x1100FFFF, 0x12000000-0x12001FFF), and the one table
+  of hardware addresses (D_00629DC8, the DMA channels) has no native user left.
+- At run time: `GT4_HW_AUDIT=1` maps the blocks without access and logs every function that touches them, once per
+  register (runtime/hw_audit.cpp). Boot to an A-spec race: none.
+
+What each function in the tables below became:
+
+- The display (004A0910, 004A0C10): the library's display values go to `gt4_gfx_display` (compat/game/gt4_gfx.h) and
+  reach the host as a `gfx::DisplayRecord` (GT4_REC_DISPLAY) instead of PMODE .. BGCOLOR. The field the VBlank
+  handler 004AB430 keeps is the runtime's (runtime/gs.cpp), not CSR.FIELD.
+- The graphics start-up (004A03C0, 0049FEE8, 004A0808, 004A0738, 004A0D00, 004A20C8; sceGsResetGraph 0057FD08):
+  `game_src/` copies without the GS resets, the VSync wait on CSR, the IMR writes and the DMA channel registers.
+  GsPutIMR/GsGetIMR keep the mask in the kernel; nothing raises a GS interrupt (the host's SIGNAL/FINISH/LABEL
+  events are no longer taken).
+- The interrupt handlers of the old transfer path (004AB548 VIF1, 004AB668 GS, 004AB6D8 DMA) and the GS -> EE read
+  steps only they called (004AB930, 004AB9C0): `gt4_not_native` stubs; nothing raises those interrupts.
+- The `ipum` still-picture decoder's IPU functions (0054CDF0, 0054CFA8, 0054D070, 0054D0F0, 0054D3A8, 0054D470,
+  0054D530, 0054D5C8, 0054D888, 00562D58, 00563028, 00563298): `gt4_not_native` stubs; their only caller 0054C8F0 is
+  runtime/native/ipu_image.cpp (FFmpeg) since 2026-10-30.
+- Sony SDK functions (runtime/sdk.cpp): VSync waits for the runtime's next VBlank, kputchar writes to the log; VSync2,
+  InitAlarm and the timer library (InitTimer .. cbTimerHandler), which only a table of the SDK's own functions
+  (0068B410) refers to, stop the game if called. The timer counts 00539718 reads (runtime/eeops.cpp
+  `gt4_timer_count`) no longer read a mode register: timers 0-2 stand, timer 3 counts H-blanks.
+
+The rest of this section is the state before (2026-10-30).
+
 2026-10-30, the non-graphics functions (the graphics ones, DMA/VIF/GIF kicks on channels 0-2 and the GS privileged
 registers, are the renderer's: docs/GS_BACKEND.md). Reachability is static: calls and tail calls, function addresses
 built in code (`lui`/`addiu`), and function addresses stored as data words (vtables, callback tables, the static
@@ -32,7 +63,7 @@ runtime's `gt4_replace_*` functions cut out (their original bodies never run) an
   the reason) instead of driving the IPU: `0054D248`, `0054D2F8`, `0054D638`, `0054D730`, `0054D9A0`, `0054DA18`,
   `0054FEC8`, `00550188`, `005504C8`, `005627D0`, `00562B20`, `00562D20`, `00562E90`, `00563198`, `00563200`,
   `00563258`, `00568248`, `005684E0`, `00568568`, `00568610`, `00568660`; also `00562D90`, which nothing refers to.
-- IPU, the `ipum` still-image decoder: **reachable, not native yet**. `0054C8F0` and what only it and the movie loop
+- IPU, the `ipum` still-image decoder: reachable; native since 2026-10-30 (runtime/native/ipu_image.cpp, FFmpeg). `0054C8F0` and what only it and the movie loop
   use: `0054CDF0`, `0054CFA8` (its DMA channel 3 handler), `0054D070` (its IPU interrupt handler), `0054D0F0`,
   `0054D3A8`, `0054D470`, `0054D530`, `0054D5C8`, `0054D888`, `00562D58`, `00563028`, `00563298`. Callers:
   - the movie faces: mMoviePS2__virtual_09 `00273DE8` -> 001FE288 / 001FE2B8 -> 002771A8 -> 0054C8F0 (mode 0). When

@@ -46,39 +46,6 @@ void ring_read(const uint8_t *data, uint32_t size, uint64_t pos, void *dst, uint
     if (n > first) std::memcpy(static_cast<uint8_t *>(dst) + first, data, n - first);
 }
 
-// GS_EVENT {u32 kind (0 FINISH, 1 SIGNAL, 2 LABEL), u32 id, u64 value}: what the GS does when a
-// packet of any path writes those registers. SIGNAL and LABEL update SIGLBLID under the mask in
-// the value's upper half; SIGNAL and FINISH set their CSR bit and interrupt (INTC 0) unless IMR
-// masks them (bit 8 SIGMSK, bit 9 FINISHMSK).
-std::atomic<int> g_local_finish{0};  // FINISHes raised locally whose host report is still to come
-
-void gs_event(const uint8_t *p) {
-    uint32_t kind, id;
-    uint64_t value;
-    std::memcpy(&kind, p, 4);
-    std::memcpy(&id, p + 4, 4);
-    std::memcpy(&value, p + 8, 8);
-    auto &csr = guest_ref<uint32_t>(0x12001000);
-    auto &sig = guest_ref<uint32_t>(0x12001080);  // SIGLBLID: SIGID low, LBLID high
-    auto &lbl = guest_ref<uint32_t>(0x12001084);
-    const uint32_t mask = static_cast<uint32_t>(value >> 32);
-    const uint32_t imr = kernel_gs_imr();
-    if (kind == 1) {
-        sig = (sig & ~mask) | (id & mask);
-        csr |= 1;
-        if (!(imr & 0x100)) kernel_raise_intc(0);
-    } else if (kind == 0) {
-        if (g_local_finish > 0) {  // already raised (link_local_finish)
-            --g_local_finish;
-            return;
-        }
-        csr |= 2;
-        if (!(imr & 0x200)) kernel_raise_intc(0);
-    } else if (kind == 2) {
-        lbl = (lbl & ~mask) | (id & mask);
-    }
-}
-
 }  // namespace
 
 bool link_open(const char *name) {
@@ -151,12 +118,6 @@ bool link_capture(const char *path) {
 
 bool link_active() { return g_hdr || g_capture; }
 bool link_connected() { return g_hdr != nullptr; }
-
-void link_local_finish() {
-    ++g_local_finish;
-    guest_ref<uint32_t>(0x12001000) |= 2;  // CSR.FINISH
-    if (!(kernel_gs_imr() & 0x200)) kernel_raise_intc(0);
-}
 
 void link_send(uint32_t type, const void *payload, uint32_t size, const void *extra, uint32_t extra_size) {
     if (!g_hdr && !g_capture) return;
@@ -240,8 +201,6 @@ void link_poll() {
                 std::memcpy(g_image_dst, payload + 8, got * 16);
                 g_image_done = true;
             }
-        } else if (rec.type == GT4_REC_GS_EVENT && n >= 16) {
-            gs_event(payload);
         } else if (rec.type == GT4_REC_HOST_CMD && n >= 4) {
             uint32_t cmd;
             std::memcpy(&cmd, payload, 4);

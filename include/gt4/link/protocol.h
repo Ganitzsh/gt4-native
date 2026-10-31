@@ -29,7 +29,6 @@ enum Gt4LinkRecordType {
     GT4_REC_GIF = 1,        /* GIF data for one path: u32 path (1, 2, 3), then qwords (GS packets) */
     GT4_REC_VIF1 = 2,       /* the VIF1 stream as the DMA would feed it: qwords of VIF codes and data */
     GT4_REC_VIF0 = 3,       /* the VIF0 stream (VU0 micro mode), rare */
-    GT4_REC_GS_PRIV = 4,    /* privileged register write: u32 reg offset (0x00 PMODE ... 0x1000 CSR), u32 pad, u64 value */
     GT4_REC_VSYNC = 5,      /* VBlank: u32 field (CSR.FIELD), u32 vblank count; present the frame */
     GT4_REC_GS_READ = 6,    /* GS->EE transfer request (BUSDIR): u32 id, u32 qwc; the host answers GT4_REC_GS_IMAGE */
     GT4_REC_AUDIO = 7,      /* audio: u32 stream (0 SPU2 mix, 1 BGM, 2 voice, 3 movie), u32 rate, s16 stereo frames */
@@ -39,6 +38,7 @@ enum Gt4LinkRecordType {
     GT4_REC_STATE = 11,     /* host captures only: the state a capture taken mid-run starts from (GraphicsStream::saveState) */
     GT4_REC_GFX_DATA = 12,  /* bytes a native record refers to (include/gt4/gfx.h): u32 game address, u32 bytes, then the bytes */
     GT4_REC_GFX = 13,       /* native records (include/gt4/gfx.h) that take effect now, not in the VIF1 stream's order */
+    GT4_REC_DISPLAY = 14,   /* the display from the next VBlank on: include/gt4/gfx.h DisplayRecord */
     /* host -> game */
     GT4_REC_PAD = 64,       /* u32 port, u32 connected, 18 bytes libpad2 data (DualShock 2 layout) */
     GT4_REC_GS_EVENT = 65,  /* u32 kind (0 FINISH, 1 SIGNAL, 2 LABEL), u32 id, u64 value */
@@ -52,16 +52,16 @@ enum Gt4LinkRecordType {
  *                     GIF packet may continue in the next GIF record of the same path (per-path state).
  *   GT4_REC_VIF1      32-bit words in DMA order; with TTE the upper half of each DMA tag (two VIF codes)
  *                     precedes its data. A VIF command and its data may span records.
- *   GT4_REC_GS_PRIV   offset 0x00..0xE0 (PMODE..BGCOLOR) or 0x1000.. (CSR, IMR, BUSDIR, SIGLBLID). Zero
- *                     writes of SMODE1/SRFSH/SYNCH1/SYNCH2/SYNCV are ignored: the kernel's SetGsCrt sets
- *                     those, and the host keeps NTSC interlaced defaults.
+ *   GT4_REC_DISPLAY   sent before a VBlank's GT4_REC_VSYNC when the display changed (and at a capture
+ *                     window's start).
  *   GT4_REC_VSYNC     ends the frame: the host scans out the display (both read circuits) at this point.
  *   GT4_REC_GS_READ   after the GIF data that set TRXDIR = 1 (local -> host): the host replies GS_IMAGE
  *                     with the same id and qwc qwords of transfer data (zeros past the end of the area).
  *   GT4_REC_STATE     never on the link: the first record of a capture the host recorded from a later VBlank
- *                     (GT4_HOST_RECORD=PATH,FROM,COUNT). Version 2: the uploaded VU1 program image, VIF1's
- *                     two batch buffers, the 3D renderers' constants, VIF1 registers, the privileged and
- *                     general GS registers last written, then GS memory (4 MiB in address order); version 1
+ *                     (GT4_HOST_RECORD=PATH,FROM,COUNT). Version 4: the uploaded VU1 program image, VIF1's
+ *                     two batch buffers, the 3D renderers' constants, VIF1 registers, the display record and the
+ *                     general GS registers last set, the native state, then GS memory (4 MiB in address order);
+ *                     versions 2 and 3 had the display as the GS's privileged registers; version 1
  *                     (until 2026-10-30) had VU1's memories and registers in place of the buffers and
  *                     constants. The replay restores either (stream.cpp).
  *   GT4_REC_GS_EVENT  host -> game for SIGNAL / FINISH / LABEL written by any path (PATH1/2 included):

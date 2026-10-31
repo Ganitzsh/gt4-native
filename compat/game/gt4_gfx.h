@@ -51,6 +51,9 @@ void gt4_gfx_batch_run(void *context, unsigned int entry, unsigned int itop);
  * lane `mask` and `row` (null: zeros). */
 void gt4_gfx_batch_unpack(void *context, unsigned int qword, unsigned int format, int num, int usn, unsigned int cl,
                           unsigned int wl, unsigned int mask, const unsigned int *row, const void *data);
+/* The display from the next VBlank on, in the library's encoding (the GS's display register values): bit k of
+ * `which` gives values[k], k = 0 PMODE, 1 SMODE2, 2 DISPFB1, 3 DISPLAY1, 4 DISPFB2, 5 DISPLAY2, 6 BGCOLOR. */
+void gt4_gfx_display(unsigned int which, const unsigned long long *values);
 #define GT4_KEEP_ITOP 0xFFFFFFFFu
 /* A screen grid (program 0x3D50 or 0x3EA0): `qwords` of `block` as GT4's grid programs read them (parameters at
  * qword 0, the packet template at qword 0 .y), drawn piece by piece. */

@@ -50,7 +50,9 @@ struct Target final : gt4::ps2::GsTarget {
     gt4::gs::DisplayFrame frame;
     explicit Target(gt4::gs::Backend& backend) : gs(backend) {}
     void gif(uint32_t path, const uint8_t* data, size_t bytes) override { gs.gif(path, data, bytes); }
-    void privileged(uint32_t offset, uint64_t value) override { gs.writePrivileged(offset, value); }
+    void display(const gt4::gfx::DisplayRecord& d) override {
+        for (const auto& [offset, value] : displayRegisters(d)) gs.writePrivileged(offset, value);
+    }
     void vsync(uint32_t field, uint32_t count) override { gs.vsync(field, count, frame); }
     void readTransfer(void* out, uint32_t qwc) override { gs.readTransfer(out, qwc); }
 };

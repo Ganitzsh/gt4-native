@@ -23,7 +23,8 @@ class GsTarget : public GifSink {
 public:
     // Primitives from GT4's 3D renderers (VU1's path on the PS2), in order with the GIF packets.
     virtual void primitives(const GsPrimitives& p) { (void)p; }
-    virtual void privileged(uint32_t offset, uint64_t value) = 0;
+    // The display from this VBlank on (include/gt4/gfx.h DisplayRecord).
+    virtual void display(const gfx::DisplayRecord& d) = 0;
     // Native drawing state from the game (include/gt4/gfx.h), in order with the packets.
     virtual void state(const gfx::StateRecord& r) { (void)r; }
     // Pixels into graphics memory (`bytes` of packed pixels; fewer when the game's data was short).
@@ -61,7 +62,7 @@ public:
 
     // Statistics for the log.
     struct Stats {
-        uint64_t records = 0, gifPackets[4] = {}, gifBytes = 0, vif1Bytes = 0, vif0Records = 0, privWrites = 0;
+        uint64_t records = 0, gifPackets[4] = {}, gifBytes = 0, vif1Bytes = 0, vif0Records = 0, displays = 0;
         uint64_t vsyncs = 0, reads = 0, logs = 0, audio = 0, unknown = 0;
         uint64_t primitiveRuns = 0, primitiveVertices = 0;   // from the 3D renderers
         uint64_t unknownPrograms = 0;   // batches started in a program image that is not GT4's (nothing drawn)
@@ -150,11 +151,11 @@ private:
     std::vector<uint8_t> heldPath3;
     void releasePath3();
     // The GS registers last written, for saveState: general registers by address (as the GIF packets set
-    // them), privileged ones by offset / 16 (0x00-0xF0; IMR in the last slot).
+    // them); the display last set.
     static constexpr uint32_t kGsRegs = 0x64;
     uint64_t gsRegs[kGsRegs] = {}, gsRegsSet[2] = {};
-    uint64_t privRegs[17] = {};
-    uint32_t privSet = 0;
+    gfx::DisplayRecord displayState;
+    bool displaySet = false;
     struct GifShadow {
         uint64_t regs = 0;
         uint32_t left = 0;   // PACKED: qwords; REGLIST: words; IMAGE: qwords

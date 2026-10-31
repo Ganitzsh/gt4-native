@@ -6,6 +6,8 @@
 #include "runtime.h"
 #include "ps2float/ps2float.h"
 
+#include <windows.h>
+
 #include <cstdarg>
 #include <cstdlib>
 #include <cstdint>
@@ -214,3 +216,46 @@ extern "C" uint32_t gt4_ee_sub(uint32_t a, uint32_t b) { return ps2f_raw(ps2f_su
 
 // The VBlank counter, for game-side debugging checks (game_src copies).
 extern "C" unsigned gt4_vblank() { return gt4::rt::kernel_vblank_count(); }
+
+// Sony SDK functions that drive EE hardware directly (docs/HW_ACCESS.md). Natively there is none: each is replaced.
+
+// glue.o's VSync (005AE130): waited for the next VBlank by polling the interrupt controller's VBlank bit (I_STAT).
+extern "C" void gt4_replace_VSync() {
+    const uint32_t start = kernel_vblank_count();
+    while (kernel_vblank_count() == start) Sleep(1);
+}
+
+// kprintf2.o's kputchar (005AF4C8): one character to the EE's serial port (SIO). To the log, a line at a time.
+extern "C" int gt4_replace_kputchar(int c) {
+    static char line[256];
+    static size_t used = 0;
+    if (c == '\n' || used == sizeof line - 1) {
+        line[used] = 0;
+        log_info("kputchar: %s", line);
+        used = 0;
+    }
+    if (c != '\n') line[used++] = static_cast<char>(c);
+    return c;
+}
+
+// glue.o's VSync2 (005AE1C0), alarm.o's InitAlarm (005B7A40) and timer.o (005B7BB8 InitTimer .. 005B8158
+// cbTimerHandler): the VBlank wait with a value its handler stores, and the timer library on EE timers 2 and 3
+// (their registers, the timer interrupt). Natively nothing reaches them: no game code calls them, only a table of
+// the SDK's own functions holds their addresses (0068B410). Their time functions are the bus clock
+// (GetTimerSystemTime, iGetTimerSystemTime) and the kernel keeps alarms itself (kernel.cpp); if one is ever
+// called it stops the game, naming its caller (runtime/missing.cpp).
+extern "C" void gt4_not_native(uint32_t fn, const void *caller, const char *why);
+#define NOT_NATIVE(name, addr)                                                                                    \
+    extern "C" void gt4_replace_##name() {                                                                        \
+        gt4_not_native(addr, __builtin_return_address(0), #name " drives EE timers or the interrupt controller"); \
+    }
+NOT_NATIVE(VSync2, 0x005AE1C0)
+NOT_NATIVE(InitAlarm, 0x005B7A40)
+NOT_NATIVE(InitTimer, 0x005B7BB8)
+NOT_NATIVE(EndTimer, 0x005B7D10)
+NOT_NATIVE(GetTimerPreScaleFactor, 0x005B7DC8)
+NOT_NATIVE(StartTimerSystemTime, 0x005B7DF8)
+NOT_NATIVE(StopTimerSystemTime, 0x005B7E88)
+NOT_NATIVE(SetNextComp, 0x005B7F08)
+NOT_NATIVE(cbTimerHandler, 0x005B8158)
+#undef NOT_NATIVE

@@ -50,16 +50,21 @@ public:
             native->vertex({v.s, v.t, v.q, v.rgba, v.x, v.y, v.z, v.fog, v.adc}, p.fog);
         }
     }
-    void privileged(uint32_t offset, uint64_t value) override {
-        // GT4_DISPFB=FBP[,FBW[,PSM]] (hex FBP): scan out that frame buffer instead (debugging: look at
-        // an intermediate render target, e.g. the 3D before the post passes)
+    void display(const gfx::DisplayRecord& d) override {
+        // GT4_DISPFB=FBP[,FBW[,PSM]] (hex FBP, in 2048-word pages): show that frame buffer instead (debugging: look
+        // at an intermediate render target, e.g. the 3D before the post passes)
         static const char* over = std::getenv("GT4_DISPFB");
-        if (over && (offset == 0x70 || offset == 0x90)) {
+        gfx::DisplayRecord shown = d;
+        if (over) {
             unsigned fbp = 0, fbw = 10, psm = 0;
             std::sscanf(over, "%x,%u,%u", &fbp, &fbw, &psm);
-            value = (value & ~0xFFFFFull) | fbp | (fbw << 9) | (static_cast<uint64_t>(psm) << 15);
+            for (gfx::DisplayCircuit& c : shown.circuit) {
+                c.base = static_cast<uint16_t>(fbp * 32);
+                c.width = static_cast<uint8_t>(fbw);
+                c.format = static_cast<uint8_t>(psm);
+            }
         }
-        native->privileged(offset, value);
+        native->display(shown);
     }
     void vsync(uint32_t field, uint32_t count) override {
         (void)field;
@@ -160,16 +165,16 @@ public:
             for (const auto& d : list.draws) reinterpreted += d.texture.reinterpreted ? 1 : 0;
             std::printf("[gsn] vblank %u: %u draws read a target in another format\n", count, reinterpreted);
             std::printf("[gsn] vblank %u: %zu draws (%u untextured, %u from memory, %u from targets), %zu vertices, %zu textures decoded, "
-                        "%zu targets, display %u/%u (PMODE %llX SMODE2 %llX DISPFB1 %llX DISPLAY1 %llX DISPFB2 %llX DISPLAY2 %llX)\n",
+                        "%zu targets, display %u/%u (circuits %u%u, buffer %u width %u at %u,%u, %ux%u)\n",
                         count, list.draws.size(), untextured, memory, targets, list.vertices.size(),
                         list.textures.size(), list.targets.size(), list.display.target1, list.display.target2,
-                        (unsigned long long)list.display.pmode, (unsigned long long)list.display.smode2,
-                        (unsigned long long)list.display.dispfb1, (unsigned long long)list.display.display1,
-                        (unsigned long long)list.display.dispfb2, (unsigned long long)list.display.display2);
+                        list.display.record.circuit[0].enabled, list.display.record.circuit[1].enabled,
+                        list.display.record.shown().base, list.display.record.shown().width, list.display.record.shown().x,
+                        list.display.record.shown().y, list.display.record.shownWidth(), list.display.record.shownHeight());
             if (triggered) std::fflush(stdout);
         }
-        // Both read circuits off (PMODE EN1 = EN2 = 0): nothing is displayed this VBlank.
-        if (!(list.display.pmode & 3)) ++blankFrames;
+        // Both read circuits off: nothing is displayed this VBlank.
+        if (!list.display.record.circuit[0].enabled && !list.display.record.circuit[1].enabled) ++blankFrames;
         publishNative(list);
     }
     void readTransfer(void* out, uint32_t qwc) override {

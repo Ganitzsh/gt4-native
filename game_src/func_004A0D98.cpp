@@ -1,6 +1,6 @@
 /* compiler: ee-gcc2.96-no-strict-aliasing */
 /* Native version of 004A0D98 (from its source): the graphics library's DMA set-up at boot (004A03C0). It still resets
-   channels 0-2 (004A0D00: their register words and semaphores), adds the DMA end handler 004AB6D8 to each and enables
+   channels 0-2 (004A0D00: their flags and semaphores), adds the DMA end handler 004AB6D8 to each and enables
    them, but no longer writes the DMA controller: D_STAT &= 0x70007 (acknowledge and mask), D_PCR &= 0x7FF8FFF8 and
    D_CTRL = 1 (DMA enable), with the `sync` after them. Natively nothing reads those three registers: runtime/gs.cpp
    moves the graphics channels' data itself and the runtime's kernel raises the DMAC handlers it enabled. The scratchpad

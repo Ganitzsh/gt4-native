@@ -502,6 +502,72 @@ struct DrawRecord {
     uint32_t flags;   // DrawFlags
 };
 
+// The display: what the screen shows from the next VBlank on (the PS2 kept it in its display registers; the
+// link record GT4_REC_DISPLAY carries it). Two read circuits, each a rectangle of a frame buffer placed on the
+// screen; with both on, circuit 1 is blended over circuit 2 (GT4 uses circuit 2, and circuit 1 as well to blend
+// two fields).
+struct DisplayCircuit {
+    uint8_t enabled = 0;
+    uint8_t format = C32;
+    uint8_t width = 0;            // the buffer's width, 64-pixel units
+    uint8_t magH = 1, magV = 1;   // video clocks per pixel, lines per pixel
+    uint8_t pad = 0;
+    uint16_t base = 0;            // the buffer, in blocks
+    uint16_t x = 0, y = 0;        // the shown rectangle's corner in the buffer, pixels
+    uint16_t clocks = 0, lines = 0;   // its size on the screen: video clocks (magH per pixel) and lines
+    uint16_t left = 0, top = 0;   // its place on the screen, video clocks and lines
+    bool operator==(const DisplayCircuit&) const = default;
+};
+struct DisplayRecord {
+    DisplayCircuit circuit[2];
+    uint8_t interlaced = 1;
+    uint8_t fieldMode = 0;        // interlaced: 1 each field shows every line of the buffer, 0 every other line
+    uint8_t blendFixed = 0;       // circuit 1 over 2 with `alpha` (else with circuit 1's pixel alpha)
+    uint8_t alpha = 0;
+    uint8_t alphaFromCircuit2 = 0, blendBackground = 0;   // where the output alpha comes from; blend with the background
+    uint16_t pad = 0;
+    uint32_t background = 0;      // RGB
+    bool operator==(const DisplayRecord&) const = default;
+
+    // The pixels of the shown rectangle (GT4's buffers: 640 x 448, or a field's 224 lines in field mode), of
+    // circuit 2 when it is on.
+    const DisplayCircuit& shown() const { return circuit[1].enabled || !circuit[0].enabled ? circuit[1] : circuit[0]; }
+    uint32_t shownWidth() const { const DisplayCircuit& c = shown(); return c.magH ? c.clocks / c.magH : 0; }
+    uint32_t shownHeight() const { const DisplayCircuit& c = shown(); return interlaced && fieldMode ? c.lines / 2 : c.lines; }
+};
+static_assert(sizeof(DisplayRecord) == 52);
+
+// The display from the graphics library's encoding of it (its copy of the display registers PMODE, SMODE2,
+// DISPFB1, DISPLAY1, DISPFB2, DISPLAY2 and BGCOLOR, the GS's bit fields).
+inline DisplayRecord displayFromRegisters(uint64_t pmode, uint64_t smode2, uint64_t dispfb1, uint64_t display1, uint64_t dispfb2,
+                                          uint64_t display2, uint64_t bgcolor) {
+    DisplayRecord d;
+    const uint64_t fb[2] = {dispfb1, dispfb2}, disp[2] = {display1, display2};
+    for (int k = 0; k < 2; ++k) {
+        DisplayCircuit& c = d.circuit[k];
+        c.enabled = (pmode >> k) & 1;
+        c.base = static_cast<uint16_t>((fb[k] & 0x1FF) * 32);
+        c.width = static_cast<uint8_t>((fb[k] >> 9) & 0x3F);
+        c.format = static_cast<uint8_t>((fb[k] >> 15) & 0x1F);
+        c.x = static_cast<uint16_t>((fb[k] >> 32) & 0x7FF);
+        c.y = static_cast<uint16_t>((fb[k] >> 43) & 0x7FF);
+        c.left = static_cast<uint16_t>(disp[k] & 0xFFF);
+        c.top = static_cast<uint16_t>((disp[k] >> 12) & 0x7FF);
+        c.magH = static_cast<uint8_t>(((disp[k] >> 23) & 0xF) + 1);
+        c.magV = static_cast<uint8_t>(((disp[k] >> 27) & 0x3) + 1);
+        c.clocks = static_cast<uint16_t>(((disp[k] >> 32) & 0xFFF) + 1);
+        c.lines = static_cast<uint16_t>(((disp[k] >> 44) & 0x7FF) + 1);
+    }
+    d.alphaFromCircuit2 = (pmode >> 6) & 1;
+    d.blendFixed = (pmode >> 5) & 1;
+    d.blendBackground = (pmode >> 7) & 1;
+    d.alpha = static_cast<uint8_t>((pmode >> 8) & 0xFF);
+    d.interlaced = smode2 & 1;
+    d.fieldMode = (smode2 >> 1) & 1;
+    d.background = static_cast<uint32_t>(bgcolor & 0xFFFFFF);
+    return d;
+}
+
 constexpr uint32_t recordQwords(uint32_t payload) { return (static_cast<uint32_t>(sizeof(Header)) + payload + 15) / 16; }
 
 }  // namespace gt4::gfx

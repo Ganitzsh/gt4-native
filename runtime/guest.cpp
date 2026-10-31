@@ -3,6 +3,8 @@
 
 #include <windows.h>
 
+#include <cstdlib>
+
 extern "C" unsigned char gt4_guest_ram[];
 
 namespace gt4::rt {
@@ -23,8 +25,8 @@ bool map_mirror(HANDLE section, uint32_t mirror_base) {
     return true;
 }
 
-bool alloc_fixed(uint32_t base, uint32_t size, const char *name) {
-    void *p = VirtualAlloc(guest_ptr(base), size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+bool alloc_fixed(uint32_t base, uint32_t size, const char *name, bool commit = true) {
+    void *p = VirtualAlloc(guest_ptr(base), size, commit ? MEM_RESERVE | MEM_COMMIT : MEM_RESERVE, commit ? PAGE_READWRITE : PAGE_NOACCESS);
     if (p != guest_ptr(base)) {
         log_error("cannot map %s at %08x (Windows error %lu)", name, base, GetLastError());
         return false;
@@ -58,8 +60,13 @@ bool guest_memory_init() {
         return false;
     }
     if (!map_mirror(section, kUncachedMirror) || !map_mirror(section, kUncachedAccelMirror)) return false;
+    // No game code reaches the PS2's hardware natively: its blocks are reserved without memory, so an access left
+    // over faults and the crash report names its function. (Reserved, not left free: memory Windows placed there,
+    // a thread's stack, would be misread, as the graphics library keeps addresses in 28 bits.) GT4_HW_AUDIT gives
+    // them memory without access, to list such accesses and go on (hw_audit.cpp).
+    const char *audit = getenv("GT4_HW_AUDIT");
     for (const HwBlock &b : kHwBlocks)
-        if (!alloc_fixed(b.base, b.size, b.name)) return false;
+        if (!alloc_fixed(b.base, b.size, b.name, audit && *audit && *audit != '0')) return false;
     if (!alloc_fixed(kScratchpad, kScratchpadSize, "scratchpad")) return false;
     log_info("guest memory: RAM %08x-%08x, mirrors at %08x and %08x, scratchpad %08x", kGuestSectionStart,
              kRamSize, kUncachedMirror, kUncachedAccelMirror, kScratchpad);

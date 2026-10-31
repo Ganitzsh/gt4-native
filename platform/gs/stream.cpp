@@ -378,7 +378,8 @@ struct StateReader {
     uint64_t u64() { uint64_t v; bytes(&v, 8); return v; }
 };
 constexpr uint32_t kStateMagic = 0x53345447;   // "GT4S"
-constexpr uint32_t kStateVersion = 3;   // 1: VU1 memories and registers instead of the batch buffers; 2: no native state
+constexpr uint32_t kStateVersion = 4;   // 1: VU1 memories and registers instead of the batch buffers; 2: no native state;
+                                        // 3: the display as the GS's privileged registers
 constexpr size_t kVramBytes = 4u << 20;
 }  // namespace
 
@@ -397,8 +398,8 @@ std::vector<uint8_t> GraphicsStream::saveState(const uint8_t* vram) const {
         w.u32(v);
     w.bytes(vif1.row, sizeof vif1.row);
     w.bytes(vif1.col, sizeof vif1.col);
-    w.u32(privSet);
-    w.bytes(privRegs, sizeof privRegs);
+    w.u32(displaySet ? 1 : 0);
+    w.bytes(&displayState, sizeof displayState);
     w.bytes(gsRegsSet, sizeof gsRegsSet);
     w.bytes(gsRegs, sizeof gsRegs);
     w.u32(packedQ);
@@ -462,9 +463,19 @@ void GraphicsStream::restoreState(const uint8_t* payload, size_t size) {
     vif1.path3Masked = r.u32() != 0;
     r.bytes(vif1.row, sizeof vif1.row);
     r.bytes(vif1.col, sizeof vif1.col);
-    const uint32_t privMask = r.u32();
-    uint64_t priv[17];
-    r.bytes(priv, sizeof priv);
+    // the display: a record (version 4), or the privileged registers (PMODE .. BGCOLOR by offset / 16, and IMR)
+    gfx::DisplayRecord display;
+    bool hasDisplay = false;
+    if (version >= 4) {
+        hasDisplay = r.u32() != 0;
+        r.bytes(&display, sizeof display);
+    } else {
+        const uint32_t privMask = r.u32();
+        uint64_t priv[17];
+        r.bytes(priv, sizeof priv);
+        hasDisplay = (privMask & 0x4785) != 0;
+        display = gfx::displayFromRegisters(priv[0x0], priv[0x2], priv[0x7], priv[0x8], priv[0x9], priv[0xA], priv[0xE]);
+    }
     uint64_t regsSet[2], regs[kGsRegs];
     r.bytes(regsSet, sizeof regsSet);
     r.bytes(regs, sizeof regs);
@@ -476,13 +487,11 @@ void GraphicsStream::restoreState(const uint8_t* payload, size_t size) {
         std::fprintf(stderr, "Replay: a truncated saved state (ignored)\n");
         return;
     }
-    for (uint32_t k = 0; k < 17; ++k)
-        if (privMask >> k & 1) {
-            const uint32_t offset = k < 16 ? k * 0x10 : 0x1010;
-            privRegs[k] = priv[k];
-            gs.privileged(offset, priv[k]);
-        }
-    privSet = privMask;
+    if (hasDisplay) {
+        displayState = display;
+        displaySet = true;
+        gs.display(display);
+    }
     gs.writeVram(r.p);
     // The general registers, as one A+D packet; not the ones that start something (vertex kicks, a
     // transfer, the events).
@@ -568,19 +577,12 @@ void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload)
     case GT4_REC_VIF0:
         ++counters.vif0Records;   // VU0 micro mode: not used by the renderer (logged in the statistics)
         break;
-    case GT4_REC_GS_PRIV: {
-        if (size < 16) break;
-        uint32_t reg = 0;
-        uint64_t value = 0;
-        std::memcpy(&reg, payload, 4);
-        std::memcpy(&value, payload + 8, 8);
-        ++counters.privWrites;
-        if (reg < 0x100 || reg == 0x1010) {
-            const uint32_t slot = reg < 0x100 ? reg >> 4 : 16;
-            privRegs[slot] = value;
-            privSet |= 1u << slot;
-        }
-        gs.privileged(reg, value);
+    case GT4_REC_DISPLAY: {
+        if (size < sizeof(gfx::DisplayRecord)) break;
+        std::memcpy(&displayState, payload, sizeof displayState);
+        displaySet = true;
+        ++counters.displays;
+        gs.display(displayState);
         break;
     }
     case GT4_REC_STATE:
@@ -660,7 +662,7 @@ std::string GraphicsStream::describe() const {
         << r.oversized << " oversized, " << v.outsideBatch << " qwords outside the batch buffers), " << v.directQwords
         << " DIRECT qwords, " << v.mpgInstructions << " MPG instructions, " << v.unknownCodes << " unknown codes; "
         << counters.gfxRecords << " native records (" << counters.uploads << " uploads, " << counters.uploadsWithoutData
-         << " without data, " << counters.draws << " draws, " << counters.badRecords << " bad); " << counters.privWrites << " privileged writes, " << counters.reads
+         << " without data, " << counters.draws << " draws, " << counters.badRecords << " bad); " << counters.displays << " displays, " << counters.reads
         << " GS reads, " << counters.path3Held << " PATH3 records held by MSKPATH3 (" << counters.path3ForcedAtVsync
         << " released at VSYNC)";
     if (!vif1.lastWarning.empty()) out << "; last VIF warning: " << vif1.lastWarning;

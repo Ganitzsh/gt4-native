@@ -24,15 +24,17 @@ struct HwBlock {
     uint32_t base, size;
     const char *name;
 };
-// EE registers (timers, IPU, GIF, VIF, DMA, INTC...), VU0/VU1 micro and data memory, GS privileged.
+// The PS2's hardware: EE registers (timers, IPU, GIF, VIF, DMA, INTC...), VU0/VU1 micro and data memory, GS
+// privileged registers. Reserved without memory natively (guest.cpp): only GT4_HW_AUDIT gives them memory, to
+// find code that still reaches them.
 inline constexpr HwBlock kHwBlocks[] = {
     {0x10000000, 0x00010000, "EE registers"},
     {0x11000000, 0x00010000, "VU0/VU1 memory"},
     {0x12000000, 0x00002000, "GS privileged registers"},
 };
 
-// Maps the mirrors, the hardware blocks and the scratchpad; checks that the guest RAM section is where
-// the link put it. Returns false (with a message on stderr) if any range cannot be mapped.
+// Maps the mirrors and the scratchpad and reserves the hardware blocks; checks that the guest RAM
+// section is where the link put it. Returns false (with a message on stderr) if any range cannot be mapped.
 bool guest_memory_init();
 
 inline void *guest_ptr(uint32_t addr) { return reinterpret_cast<void *>(static_cast<uintptr_t>(addr)); }

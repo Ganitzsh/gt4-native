@@ -45,10 +45,8 @@ void writeReplay(const std::string& path) {
         writer.write(GT4_REC_GIF, &three, 4, g.data(), static_cast<uint32_t>(g.bytes()));
         const vif::Stream s = transformStream(kTriangle, 255, 0, 255);
         writer.write(GT4_REC_VIF1, s.bytes(), static_cast<uint32_t>(s.size()));
-        for (const auto& [offset, value] : kDisplay) {
-            struct { uint32_t reg, pad; uint64_t value; } priv{offset, 0, value};
-            writer.write(GT4_REC_GS_PRIV, &priv, sizeof(priv));
-        }
+        const gt4::gfx::DisplayRecord shown = displayRecord();
+        writer.write(GT4_REC_DISPLAY, &shown, sizeof(shown));
         const uint32_t vs[2] = {static_cast<uint32_t>(field), static_cast<uint32_t>(field)};
         writer.write(GT4_REC_VSYNC, vs, sizeof(vs));
     }
