@@ -31,8 +31,8 @@ constexpr int kMaxThreads = 256;
 constexpr int kMaxSemas = 256;
 constexpr int kPriorities = 128;
 constexpr double kBusHz = 147456000.0;
-constexpr double kVblankHz = 59.94;
-constexpr double kHsyncHz = 15734.26;
+constexpr double kFrameHz = 59.94;       // the game's frame rate (it steps its simulation once a frame)
+constexpr double kHsyncHz = 15734.26;    // the unit of the EE kernel's alarms (SetAlarm counts H-blanks)
 
 // ee_thread_t / ee_thread_status_t as the game passes them (all 32-bit fields).
 struct GuestThreadParam {
@@ -74,12 +74,6 @@ struct Sema {
     std::deque<int> waiters;
 };
 
-struct Handler {
-    int id;
-    uint32_t func, arg;
-    bool enabled;
-};
-
 struct Alarm {
     bool used = false;
     uint64_t due_cycles = 0;
@@ -94,13 +88,18 @@ std::deque<Thread *> g_ready[kPriorities];
 Thread *g_running = nullptr;
 thread_local Thread *t_self = nullptr;
 std::atomic<bool> g_in_interrupt{false};
-std::vector<Handler> g_intc[16], g_dmac[16];
-uint32_t g_intc_mask = 0, g_dmac_mask = 0;
-int g_next_handler_id = 1;
-uint32_t g_pending_intc = 0, g_pending_dmac = 0;  // raised, not yet delivered
+// The frame clock's callbacks (gt4_frame_tick_add), in order; a frame come due and not yet delivered.
+struct FrameTick {
+    int id;
+    void (*fn)(uint32_t);
+    uint32_t arg;
+};
+std::vector<FrameTick> g_ticks;
+int g_next_tick_id = 1;
+bool g_tick_pending = false;
 Alarm g_alarms[64];
 LARGE_INTEGER g_qpc_freq, g_qpc_start;
-std::atomic<uint32_t> g_vblanks{0};
+std::atomic<uint32_t> g_frames{0};
 HANDLE g_irq_wake = nullptr;
 struct Callback {
     void (*fn)(uint32_t);
@@ -108,7 +107,7 @@ struct Callback {
 };
 std::vector<Callback> g_callbacks;
 void (*g_interrupt_hook)() = nullptr;  // run in interrupt context (SIF completions...)
-void (*g_vblank_hook)(uint32_t) = nullptr;
+void (*g_frame_hook)(uint32_t) = nullptr;
 
 struct Lock {
     Lock() { EnterCriticalSection(&g_lock); }
@@ -222,45 +221,24 @@ void wake(Thread *t) {
 // ---------------------------------------------------------------------------------------------
 // Interrupts
 
-using IntcFn = int (*)(int cause, uint32_t arg, uint32_t addr);
 using AlarmFn = void (*)(int id, uint16_t ticks, uint32_t arg);
 
-void run_handlers(std::vector<Handler> &list, int cause) {
-    // GT4_TRACE_INTC=CAUSE: every 120th dispatch of that INTC cause, the handlers with their results
-    static const int traced = getenv("GT4_TRACE_INTC") ? atoi(getenv("GT4_TRACE_INTC")) : -1;
-    static unsigned dispatches = 0;
-    const bool trace = cause == traced && &list != &g_dmac[cause] && dispatches++ % 120 == 0;
-    for (const Handler &h : list) {
-        if (!h.enabled) {
-            if (trace) log_info("intc %d: handler %08x disabled", cause, h.func);
-            continue;
-        }
-        int r = reinterpret_cast<IntcFn>(guest_ptr(h.func))(cause, h.arg, 0);
-        if (trace) log_info("intc %d: handler %08x returned %d", cause, h.func, r);
-        if (r < 0) break;  // the handler ends the chain
-    }
-}
-
-// Runs the pending handlers (the caller holds g_lock and has made sure no guest thread runs).
+// Runs what came due (the caller holds g_lock and has made sure no guest thread runs): the frame's callbacks,
+// the runtime's completions, the alarms. Nothing here may allocate or free memory: the guest thread was frozen
+// wherever it was, possibly inside the C runtime's heap holding its lock.
 void deliver_pending() {
     g_in_interrupt = true;
-    for (int guard = 0; (g_pending_intc || g_pending_dmac) && guard < 8; ++guard) {
-        uint32_t intc = g_pending_intc & g_intc_mask, dmac = g_pending_dmac & g_dmac_mask;
-        g_pending_intc &= ~intc;
-        g_pending_dmac &= ~dmac;
-        for (int c = 0; c < 16; ++c) {
-            if (intc & (1u << c)) run_handlers(g_intc[c], c);
-            if (dmac & (1u << c)) run_handlers(g_dmac[c], c);
-        }
-        // causes that stay masked are dropped, as the hardware's status bit would be cleared by the game
-        g_pending_intc &= g_intc_mask;
-        g_pending_dmac &= g_dmac_mask;
-        if (!intc && !dmac) break;
+    if (g_tick_pending) {
+        g_tick_pending = false;
+        for (size_t k = 0; k < g_ticks.size(); ++k) g_ticks[k].fn(g_ticks[k].arg);
     }
     if (g_interrupt_hook) g_interrupt_hook();
-    std::vector<Callback> callbacks;
-    callbacks.swap(g_callbacks);
-    for (const Callback &c : callbacks) c.fn(c.arg);
+    const size_t posted = g_callbacks.size();   // what was posted until now (a callback may post more)
+    for (size_t k = 0; k < posted; ++k) {
+        const Callback c = g_callbacks[k];
+        c.fn(c.arg);
+    }
+    g_callbacks.erase(g_callbacks.begin(), g_callbacks.begin() + static_cast<std::ptrdiff_t>(posted));   // keeps the storage
     const uint64_t now = kernel_bus_cycles();
     for (int i = 0; i < 64; ++i) {
         Alarm &a = g_alarms[i];
@@ -300,7 +278,7 @@ void interrupt_now() {
 }
 
 bool g_alarms_due() {
-    if (!g_callbacks.empty()) return true;
+    if (!g_callbacks.empty() || g_tick_pending) return true;
     const uint64_t now = kernel_bus_cycles();
     for (const Alarm &a : g_alarms)
         if (a.used && a.due_cycles <= now) return true;
@@ -310,7 +288,7 @@ bool g_alarms_due() {
 // Delivers held interrupts on the calling guest thread (leaving runtime code, or EI).
 void deliver_on_self(Thread *me) {
     EnterCriticalSection(&g_lock);
-    if ((g_pending_intc & g_intc_mask) || (g_pending_dmac & g_dmac_mask) || g_alarms_due()) {
+    if (g_alarms_due()) {
         // the handlers run on this thread: a syscall or EI they make must not deliver again (it
         // would take g_lock a second time, and switch_away below releases it only once)
         ++me->kernel_depth;
@@ -329,9 +307,8 @@ DWORD WINAPI interrupt_thread(void *) {
     set_guest_fpu();
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
     HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
-    const uint64_t vblank_cycles = static_cast<uint64_t>(kBusHz / kVblankHz);
-    const uint64_t vblank_len = static_cast<uint64_t>(kBusHz * 22 / kHsyncHz);  // ~22 lines
-    uint64_t next_start = vblank_cycles, next_end = ~0ull;
+    const uint64_t frame_cycles = static_cast<uint64_t>(kBusHz / kFrameHz);
+    uint64_t next_frame = frame_cycles;
     for (;;) {
         if (kernel_paused()) {   // nothing comes due; keep reading the host's records (the resume)
             Sleep(5);
@@ -339,7 +316,7 @@ DWORD WINAPI interrupt_thread(void *) {
             continue;
         }
         uint64_t now = kernel_bus_cycles();
-        uint64_t due = std::min(next_start, next_end);
+        uint64_t due = next_frame;
         {
             Lock lock;
             for (const Alarm &a : g_alarms)
@@ -356,26 +333,21 @@ DWORD WINAPI interrupt_thread(void *) {
         }
         {
             Lock lock;
-            if (now >= next_start) {
-                g_pending_intc |= 1u << 2;  // VBLANK_START
-                ++g_vblanks;
-                if (g_vblank_hook) g_vblank_hook(g_vblanks);
+            if (now >= next_frame) {   // a frame: the runtime's frame end (display, host), then the game's callbacks
+                g_tick_pending = true;
+                ++g_frames;
+                if (g_frame_hook) g_frame_hook(g_frames);
                 static const char *trap = getenv("GT4_FPU_TRAP");
-                if (trap && !std::strncmp(trap, "file:", 5) && g_vblanks % 30 == 0 && !g_fpu_trap_armed &&
+                if (trap && !std::strncmp(trap, "file:", 5) && g_frames % 30 == 0 && !g_fpu_trap_armed &&
                     GetFileAttributesA(trap + 5) != INVALID_FILE_ATTRIBUTES) {
                     g_fpu_trap_armed = true;
-                    log_info("x87 trap armed at VBlank %u", g_vblanks.load());
+                    log_info("x87 trap armed at frame %u", g_frames.load());
                 }
-                next_start += vblank_cycles;
-                if (next_start < now) next_start = now + vblank_cycles;  // fell behind: skip
-                next_end = now + vblank_len;
-            }
-            if (now >= next_end) {
-                g_pending_intc |= 1u << 3;  // VBLANK_END
-                next_end = ~0ull;
+                next_frame += frame_cycles;
+                if (next_frame < now) next_frame = now + frame_cycles;  // fell behind: skip
             }
         }
-        if (g_pending_intc || g_pending_dmac || g_alarms_due()) interrupt_now();
+        if (g_alarms_due()) interrupt_now();
     }
 }
 
@@ -426,7 +398,7 @@ KernelScope::~KernelScope() {
     Thread *t = self();
     if (!t) return;
     if (--t->kernel_depth == 0 && !t->di && t == g_running && !g_in_interrupt) {
-        if (g_pending_intc || g_pending_dmac || g_alarms_due()) deliver_on_self(t);
+        if (g_alarms_due()) deliver_on_self(t);
     }
 }
 
@@ -443,7 +415,7 @@ int kernel_ei() {
     if (!t) return 1;
     const bool was = !t->di;
     t->di = false;
-    if (t->kernel_depth == 0 && !g_in_interrupt && (g_pending_intc || g_pending_dmac || g_alarms_due()))
+    if (t->kernel_depth == 0 && !g_in_interrupt && g_alarms_due())
         deliver_on_self(t);
     return was;
 }
@@ -455,15 +427,7 @@ bool kernel_interrupts_enabled() {
     return t && !t->di && !g_in_interrupt;
 }
 
-void kernel_raise_intc(int cause) {
-    {
-        Lock lock;
-        g_pending_intc |= 1u << cause;
-    }
-    SetEvent(g_irq_wake);
-}
-
-void kernel_set_vblank_hook(void (*fn)(uint32_t)) { g_vblank_hook = fn; }
+void kernel_set_frame_hook(void (*fn)(uint32_t)) { g_frame_hook = fn; }
 void kernel_set_interrupt_hook(void (*fn)()) { g_interrupt_hook = fn; }
 
 void kernel_post_callback(void (*fn)(uint32_t), uint32_t arg) {
@@ -474,30 +438,8 @@ void kernel_post_callback(void (*fn)(uint32_t), uint32_t arg) {
     SetEvent(g_irq_wake);
 }
 
-void kernel_raise_dmac(int channel) {
-    {
-        Lock lock;
-        g_pending_dmac |= 1u << channel;
-    }
-    SetEvent(g_irq_wake);
-}
-
-bool kernel_interrupt_now(bool dmac, int index) {
-    if (!((dmac ? g_dmac_mask : g_intc_mask) & (1u << index))) return false;
-    Thread *t = self();
-    EnterCriticalSection(&g_lock);
-    if (t) ++t->kernel_depth;  // a syscall or EI in the handler must not deliver other interrupts here
-    const bool was = g_in_interrupt;
-    g_in_interrupt = true;
-    run_handlers(dmac ? g_dmac[index] : g_intc[index], index);
-    g_in_interrupt = was;
-    if (t) --t->kernel_depth;
-    LeaveCriticalSection(&g_lock);
-    return true;
-}
-
 // The host's settings menu pauses the game (GT4_REC_HOST_CMD 2 / 3): the bus clock stands still, so no
-// VBlank, alarm or timer comes due, and the time spent paused is left out afterwards.
+// frame, alarm or timer comes due, and the time spent paused is left out afterwards.
 namespace {
 std::atomic<bool> g_paused{false};
 std::atomic<int64_t> g_paused_ticks{0};   // QPC ticks spent paused before the current pause
@@ -522,7 +464,7 @@ uint64_t kernel_bus_cycles() {
 }
 
 // Time the game did not run (a debugging tool's faults), taken off the bus clock like a pause,
-// so that VBlank-driven game logic stays closer to its usual pace while the tool slows the game down.
+// so that frame-driven game logic stays closer to its usual pace while the tool slows the game down.
 void kernel_add_stall(int64_t qpc_ticks) {
     if (qpc_ticks <= 0) return;
     g_stalled.store(true, std::memory_order_relaxed);
@@ -548,7 +490,7 @@ void kernel_set_paused(bool paused) {
 
 bool kernel_paused() { return g_paused.load(std::memory_order_acquire); }
 
-uint32_t kernel_vblank_count() { return g_vblanks; }
+uint32_t kernel_frame_count() { return g_frames; }
 
 void kernel_init() {
     InitializeCriticalSection(&g_lock);
@@ -576,7 +518,7 @@ DWORD WINAPI watchdog_thread(void *p) {
     for (;;) {
         Sleep(period);
         char line[1024];
-        int n = snprintf(line, sizeof line, "watch: vblank %u, threads:", g_vblanks.load());
+        int n = snprintf(line, sizeof line, "watch: frame %u, threads:", g_frames.load());
         uint32_t pc = 0;
         int running = 0;
         char chain[600] = "";
@@ -698,7 +640,7 @@ DWORD WINAPI watchdog_thread(void *p) {
 void kernel_start_interrupts() {
     HANDLE h = CreateThread(nullptr, 1u << 20, interrupt_thread, nullptr, 0, nullptr);
     if (!h) fatal("cannot start the interrupt thread");
-    log_info("kernel: vblank at %.2f Hz", kVblankHz);
+    log_info("kernel: frame clock at %.2f Hz", kFrameHz);
     if (const char *w = getenv("GT4_WATCH"))
         CreateThread(nullptr, 1u << 16, watchdog_thread, reinterpret_cast<void *>(static_cast<uintptr_t>(atoi(w))), 0,
                      nullptr);
@@ -1064,82 +1006,49 @@ SYSCALL int gt4_sys_ReferSemaStatus(int id, GuestSemaParam *out) {
     return id;
 }
 
-SYSCALL int gt4_sys_AddIntcHandler(int cause, uint32_t func, int next, uint32_t arg) {
-    KERNEL_ENTRY;
-    if (cause < 0 || cause > 15) return -1;
-    Handler h{g_next_handler_id++, func, arg, true};
-    if (next == 0)
-        g_intc[cause].insert(g_intc[cause].begin(), h);
-    else
-        g_intc[cause].push_back(h);
-    log_info("kernel: INTC handler %d for cause %d: %08x", h.id, cause, func);
-    return h.id;
+// The PS2's interrupt controller and DMA controller have no counterpart natively: game code takes its once-a-frame
+// work from the frame clock (gt4_frame_tick_add) and nothing raises the hardware's causes. Adding a handler stops
+// the game, naming its caller (the handler would never run); removing, enabling or disabling one does nothing.
+extern "C" void gt4_not_native(uint32_t fn, const void *caller, const char *why);
+SYSCALL int gt4_sys_AddIntcHandler(int cause, uint32_t func, int, uint32_t) {
+    char why[112];
+    std::snprintf(why, sizeof why, "AddIntcHandler(%d, %08x): no interrupt controller natively (gt4_frame_tick_add)", cause, func);
+    gt4_not_native(func, __builtin_return_address(0), why);
+    return -1;
 }
+SYSCALL int gt4_sys_AddDmacHandler(int channel, uint32_t func, int, uint32_t) {
+    char why[112];
+    std::snprintf(why, sizeof why, "AddDmacHandler(%d, %08x): no DMA controller natively", channel, func);
+    gt4_not_native(func, __builtin_return_address(0), why);
+    return -1;
+}
+SYSCALL int gt4_sys_RemoveIntcHandler(int, int) { return 0; }
+SYSCALL int gt4_sys_RemoveDmacHandler(int, int) { return 0; }
+SYSCALL int gt4_sys_EnableIntc(int) { return 0; }
+SYSCALL int gt4_sys_DisableIntc(int) { return 0; }
+SYSCALL int gt4_sys_EnableDmac(int) { return 0; }
+SYSCALL int gt4_sys_DisableDmac(int) { return 0; }
+SYSCALL int gt4_sys_EnableIntcHandler(int, int) { return 0; }
+SYSCALL int gt4_sys_DisableIntcHandler(int, int) { return 0; }
+SYSCALL int gt4_sys_EnableDmacHandler(int, int) { return 0; }
+SYSCALL int gt4_sys_DisableDmacHandler(int, int) { return 0; }
 
-SYSCALL int gt4_sys_RemoveIntcHandler(int cause, int id) {
-    KERNEL_ENTRY;
-    if (cause < 0 || cause > 15) return -1;
-    auto &l = g_intc[cause];
-    for (auto it = l.begin(); it != l.end(); ++it)
+// The frame clock's callbacks (compat/game/gt4_prelude.h).
+extern "C" int gt4_frame_tick_add(void (*fn)(uint32_t), uint32_t arg, int first) {
+    Lock lock;
+    const FrameTick t{g_next_tick_id++, fn, arg};
+    if (first) g_ticks.insert(g_ticks.begin(), t);
+    else g_ticks.push_back(t);
+    return t.id;
+}
+extern "C" void gt4_frame_tick_remove(int id) {
+    Lock lock;
+    for (auto it = g_ticks.begin(); it != g_ticks.end(); ++it)
         if (it->id == id) {
-            l.erase(it);
-            return id;
+            g_ticks.erase(it);
+            return;
         }
-    return -1;
 }
-
-SYSCALL int gt4_sys_AddDmacHandler(int channel, uint32_t func, int next, uint32_t arg) {
-    KERNEL_ENTRY;
-    if (channel < 0 || channel > 15) return -1;
-    Handler h{g_next_handler_id++, func, arg, true};
-    if (next == 0)
-        g_dmac[channel].insert(g_dmac[channel].begin(), h);
-    else
-        g_dmac[channel].push_back(h);
-    log_info("kernel: DMAC handler %d for channel %d: %08x", h.id, channel, func);
-    return h.id;
-}
-
-SYSCALL int gt4_sys_RemoveDmacHandler(int channel, int id) {
-    KERNEL_ENTRY;
-    if (channel < 0 || channel > 15) return -1;
-    auto &l = g_dmac[channel];
-    for (auto it = l.begin(); it != l.end(); ++it)
-        if (it->id == id) {
-            l.erase(it);
-            return id;
-        }
-    return -1;
-}
-
-static int set_mask(uint32_t &mask, int bit, bool on) {
-    if (bit < 0 || bit > 15) return -1;
-    const bool was = mask & (1u << bit);
-    if (on)
-        mask |= 1u << bit;
-    else
-        mask &= ~(1u << bit);
-    return was;
-}
-
-SYSCALL int gt4_sys_EnableIntc(int cause) { Lock l; return set_mask(g_intc_mask, cause, true); }
-SYSCALL int gt4_sys_DisableIntc(int cause) { Lock l; return set_mask(g_intc_mask, cause, false); }
-SYSCALL int gt4_sys_EnableDmac(int ch) { Lock l; return set_mask(g_dmac_mask, ch, true); }
-SYSCALL int gt4_sys_DisableDmac(int ch) { Lock l; return set_mask(g_dmac_mask, ch, false); }
-
-static int handler_enable(std::vector<Handler> *lists, int cause, int id, bool on) {
-    if (cause < 0 || cause > 15) return -1;
-    for (Handler &h : lists[cause])
-        if (h.id == id) {
-            h.enabled = on;
-            return 0;
-        }
-    return -1;
-}
-SYSCALL int gt4_sys_EnableIntcHandler(int cause, int id) { Lock l; return handler_enable(g_intc, cause, id, true); }
-SYSCALL int gt4_sys_DisableIntcHandler(int cause, int id) { Lock l; return handler_enable(g_intc, cause, id, false); }
-SYSCALL int gt4_sys_EnableDmacHandler(int ch, int id) { Lock l; return handler_enable(g_dmac, ch, id, true); }
-SYSCALL int gt4_sys_DisableDmacHandler(int ch, int id) { Lock l; return handler_enable(g_dmac, ch, id, false); }
 
 SYSCALL int gt4_sys_SetAlarm(uint32_t ticks, uint32_t func, uint32_t arg) {
     KERNEL_ENTRY;

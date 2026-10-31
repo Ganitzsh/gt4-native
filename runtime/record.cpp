@@ -112,7 +112,7 @@ void write_state(const Hook &hook, uint32_t index, uint32_t kind, const uint32_t
     std::memcpy(h.magic, "GT4REC3", 8);
     h.addr = hook.addr;
     h.index = index;
-    h.vblank = kernel_vblank_count();
+    h.vblank = kernel_frame_count();
     h.kind = kind;
     if (args) std::memcpy(h.args, args, sizeof h.args);
     h.eax = eax;
@@ -214,7 +214,7 @@ LONG CALLBACK on_break(EXCEPTION_POINTERS *e) {
     CONTEXT *c = e->ContextRecord;
     auto *sp = reinterpret_cast<uint32_t *>(static_cast<uintptr_t>(c->Esp));
     const bool in_scope = !g_rooted || (hook == &g_hooks[0] ? hook->taken == 0 : t_depth > 0 && t_pending[0].hook == &g_hooks[0]);
-    if (in_scope && kernel_vblank_count() >= g_vblank && hook->taken < static_cast<LONG>(g_count) && t_depth < 8) {
+    if (in_scope && kernel_frame_count() >= g_vblank && hook->taken < static_cast<LONG>(g_count) && t_depth < 8) {
         Pending &p = t_pending[t_depth++];
         p.hook = hook;
         p.index = static_cast<uint32_t>(InterlockedIncrement(&hook->taken) - 1);
@@ -224,7 +224,7 @@ LONG CALLBACK on_break(EXCEPTION_POINTERS *e) {
         write_state(*hook, p.index, 0, sp + 1, p.stack, 0, 0, p.ram);
         p.ret = sp[0];
         sp[0] = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&gt4_record_return));
-        log_info("record: call %u of %08x at VBlank %u", p.index, hook->addr, kernel_vblank_count());
+        log_info("record: call %u of %08x at VBlank %u", p.index, hook->addr, kernel_frame_count());
         if (g_rooted && hook == &g_hooks[0]) arm_scoped(true);
     }
     // a hook that has its calls no longer traps (hundreds of hooks at once: GT4_RECORD over every draft)
@@ -256,7 +256,7 @@ DWORD WINAPI snapshot_thread(void *) {
             Sleep(200);
             if (GetFileAttributesA(file) == INVALID_FILE_ATTRIBUTES) continue;
             DeleteFileA(file);
-            const uint32_t v = kernel_vblank_count();
+            const uint32_t v = kernel_frame_count();
             char path[512];
             snprintf(path, sizeof path, "%s/snap_%u.ram", g_dir, v);
             if (FILE *f = fopen(path, "wb")) {
@@ -273,14 +273,14 @@ DWORD WINAPI snapshot_thread(void *) {
         }
     }
     for (uint32_t v : at) {
-        while (kernel_vblank_count() < v) Sleep(1);
+        while (kernel_frame_count() < v) Sleep(1);
         char path[512];
         snprintf(path, sizeof path, "%s/snap_%u.ram", g_dir, v);
         if (FILE *f = fopen(path, "wb")) {
             fwrite(zeros, 1, kGuestSectionStart, f);
             fwrite(guest_ptr(kGuestSectionStart), 1, kRamSize - kGuestSectionStart, f);
             fclose(f);
-            log_info("record: guest RAM at VBlank %u -> %s", kernel_vblank_count(), path);
+            log_info("record: guest RAM at VBlank %u -> %s", kernel_frame_count(), path);
         }
     }
     return 0;
@@ -309,13 +309,13 @@ DWORD WINAPI poke_thread(void *) {
         const uint32_t v = static_cast<uint32_t>(strtoul(p, &end, 0));
         if (*end != ':') break;
         p = end + 1;
-        while (kernel_vblank_count() < v) Sleep(1);
+        while (kernel_frame_count() < v) Sleep(1);
         while (*p && *p != ';') {
             const uint32_t addr = poke_address(p, &end);
             if (*end != '=') return 0;
             const uint32_t word = static_cast<uint32_t>(strtoul(end + 1, &end, 16));
             if (addr) *static_cast<volatile uint32_t *>(guest_ptr(addr)) = word;
-            log_info("record: VBlank %u: [%08X] = %08X", kernel_vblank_count(), addr, word);
+            log_info("record: VBlank %u: [%08X] = %08X", kernel_frame_count(), addr, word);
             p = *end == ',' ? end + 1 : end;
         }
         if (*p == ';') ++p;

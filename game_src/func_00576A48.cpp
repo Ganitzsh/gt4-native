@@ -1,8 +1,8 @@
 /* compiler: ee-gcc2.96-no-strict-aliasing */
-/* Native version of 00576A48 (from its source): from an interrupt handler, wakes every waiter of q (iWakeupThread),
-   or moves them to its pending list while it is deferred. The original acts only when Status.IE is clear (mfc0 $12
-   after a sync.p), i.e. inside the EE kernel's handlers; here gt4_status_ie() (gt4_prelude.h), which reads 1 as the
-   translated mfc0 always did, so natively this does nothing, as before. */
+/* Native version of 00576A48 (from its source): from an interrupt handler, wakes every waiter of q
+   (iWakeupThread), or moves them to its pending list while it is deferred. The original acts only when Status.IE
+   is clear (mfc0 $12 after a sync.p), i.e. inside the EE kernel's handlers; here gt4_status_ie() (gt4_prelude.h),
+   which reads it clear in the runtime's frame callbacks, completions and alarms, as on the EE. */
 struct Waiter {
     Waiter *next;
     int thread;

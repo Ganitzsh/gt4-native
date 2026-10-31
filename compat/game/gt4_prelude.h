@@ -79,15 +79,22 @@ void gt4_set_gp (void *gp);
  *   why; for the game_src/ stubs of hardware paths the native program never runs (runtime/missing.cpp). */
 unsigned int gt4_timer_count (int timer);
 void gt4_not_native (unsigned int fn, const void *caller, const char *why) __attribute__ ((noreturn));
+/* The runtime's frame clock (runtime/kernel.cpp), in place of the PS2's VBlank interrupt: gt4_frame_tick_add
+ * has fn (arg) called once a frame, at the game's frame rate (59.94 Hz), with no game thread between two
+ * instructions of its own (as an interrupt handler ran: a thread that disabled interrupts, di, holds it back),
+ * before the callbacks added earlier when `first` is set, after them otherwise. Returns an id for
+ * gt4_frame_tick_remove. */
+int gt4_frame_tick_add (void (*fn) (unsigned int arg), unsigned int arg, int first);
+void gt4_frame_tick_remove (int id);
 #ifdef __cplusplus
 }
 #endif
 /* Status.IE (mfc0 $12 & 1), which libstream's lock, cache and thread helpers test to tell an interrupt
- * handler (the EE kernel runs handlers with IE clear) and then take the kernel's i-variants. The
- * translated mfc0 has always read IE = 1 (runtime/eeops.cpp), so natively they take their thread
- * path everywhere; this keeps that. `!gt4_in_interrupt ()` would be the faithful value (a behaviour
- * change: those functions would then run their interrupt-context path inside handlers). */
-static __inline__ int gt4_status_ie (void) { return 1; }
+ * handler (the EE kernel runs handlers with IE clear) and then take the kernel's i-variants: clear inside
+ * the runtime's frame callbacks, completions and alarms, as runtime/eeops.cpp's mfc0 reads it. (Until
+ * 2026-10-31 it read 1 everywhere: a frame callback that found its semaphore gone then slept in
+ * DelayThread holding the kernel's lock.) */
+static __inline__ int gt4_status_ie (void) { return !gt4_in_interrupt (); }
 
 /* min.s/max.s compare as the EE FPU does, as sign-magnitude integers: it has no NaN or infinity, so
  * 0x7FFFFFFF is its largest value, not a NaN. */

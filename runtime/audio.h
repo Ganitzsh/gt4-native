@@ -12,7 +12,7 @@
 namespace gt4::rt {
 
 void audio_init();
-void audio_vblank();  // mixes one VBlank of sound (called by the VBlank interrupt thread)
+void audio_frame();  // mixes one frame of sound (called by the frame clock)
 
 uint8_t *spu_ram();  // 2 MB
 void spu_apply(const uint8_t *image);  // SPUP fno 4: 2 cores x 0x1D0 bytes

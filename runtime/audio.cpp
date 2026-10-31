@@ -658,7 +658,7 @@ void spu_trace() {
     log_info("%s", line);
 }
 
-void audio_vblank() {
+void audio_frame() {
     {
         std::lock_guard<std::mutex> lock(g_mutex);
         spu_trace();

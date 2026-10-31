@@ -1,7 +1,7 @@
 /* compiler: ee-gcc2.96-no-strict-aliasing */
 /* Native version of 00578828 (from its source): changes a thread's priority, with the interrupt-handler variant
    (iChangeThreadPriority) when Status.IE is clear (mfc0 $12 after a sync.p); here gt4_status_ie() (gt4_prelude.h),
-   which reads 1 as the translated mfc0 always did, so the thread variant runs. */
+   which reads it clear in the runtime's frame callbacks, completions and alarms, as on the EE. */
 struct Thread {
     char pad[0x30];
     int id;

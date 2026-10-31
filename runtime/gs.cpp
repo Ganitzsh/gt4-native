@@ -1,9 +1,10 @@
 // The display side of the graphics boundary (docs/HW_ACCESS.md, docs/IOP_SERVICES.md section 4).
 //
 // What the game draws reaches the host as native records (runtime/frame.cpp, runtime/native/pgl.cpp). Here: the
-// display the graphics library sets (gt4_gfx_display: which buffer the screen shows), sent to the host before a
-// VBlank when it changed, then a frame marker; the field of the interlaced NTSC display, which alternates every
-// VBlank; and the graphics library's VBlank handler (004AB430), native.
+// display the graphics library sets (gt4_gfx_display: which buffer the screen shows), sent to the host at the end
+// of a frame when it changed, then a frame marker; the field GT4 renders (it draws one field of an interlaced
+// picture a frame), which alternates every frame; and the graphics library's frame callback (004AB430, its VBlank
+// handler on the PS2), native.
 #include "audio.h"
 #include "guest.h"
 #include "gt4/gfx.h"
@@ -24,18 +25,17 @@ namespace {
 
 uint32_t g_field = 0;
 // The display in the library's encoding (PMODE, SMODE2, DISPFB1, DISPLAY1, DISPFB2, DISPLAY2, BGCOLOR), as game
-// threads last set it; read at the VBlank without a lock, as the PS2 read its registers (a display set halfway is
-// sent whole at the next VBlank).
+// threads last set it; read at the frame's end without a lock (a display set halfway is sent whole at the next).
 volatile uint64_t g_display[7] = {0, 0, 0, 0, 0, 0, 0};
 gfx::DisplayRecord g_display_sent;
 bool g_display_valid = false;
 
-void on_vblank(uint32_t count) {
-    g_field ^= 1;   // the field alternates every VBlank on an interlaced display
-    audio_vblank();
+void on_frame(uint32_t count) {
+    g_field ^= 1;   // the field alternates every frame
+    audio_frame();
     if (link_capture_finished() && !link_connected()) {  // a standalone capture run ends with its window
         link_capture_close();
-        log_info("capture window closed at VBlank %u: exiting", count);
+        log_info("capture window closed at frame %u: exiting", count);
         ExitProcess(0);
     }
     if (!link_active()) return;
@@ -72,10 +72,10 @@ extern "C" void gt4_replace_func_004ABA50(int channel, uint32_t address) {
 // 0049FF38: reset VIF0, VIF1, both VUs and the GIF and set the VIFs' error masks: nothing of them exists.
 extern "C" void gt4_replace_func_0049FF38() {}
 
-// 004AB430: the graphics library's VBlank (INTC 2) handler (no matched source; docs/IOP_SERVICES.md
-// section 4). State S = scratchpad 0x70002050: +0 u64 VBlank counter, +0x10 optional hook
-// fn(counter), +0x14 u8 the field (CSR.FIELD), +0x40 list of VSync waiters {next, thread id}, +0x20/+0x2C/+0x38
-// the DMA channels' waiter lists, +0x48/+0x50 accumulated performance counters (0 here).
+// 004AB430: the graphics library's frame callback (its VBlank interrupt handler on the PS2, no matched source;
+// 004A03C0 adds it to the runtime's frame clock). State S = scratchpad 0x70002050: +0 u64 frame counter, +0x10
+// optional hook fn(counter), +0x14 u8 the field, +0x40 list of waiters for the next frame {next, thread id},
+// +0x20/+0x2C/+0x38 the transfer channels' waiter lists, +0x48/+0x50 accumulated performance counters (0 here).
 extern "C" int gt4_sys_WakeupThread(int);
 extern "C" int gt4_replace_func_004AB430(int) {
     const uint32_t s = 0x70002050;
@@ -106,7 +106,7 @@ void hw_audit_init();     // hw_audit.cpp
 
 void gs_init() {
     watch_write_init();  // GT4_WATCH_WRITE (debugging)
-    kernel_set_vblank_hook(on_vblank);
+    kernel_set_frame_hook(on_frame);
     hw_audit_init();     // GT4_HW_AUDIT (checking the port)
 }
 

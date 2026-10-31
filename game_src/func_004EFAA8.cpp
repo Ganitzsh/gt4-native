@@ -1,8 +1,8 @@
 /* compiler: ee-gcc2.96-no-strict-aliasing */
-/* Native version of 004EFAA8 (from its source): signals a device's event, from an interrupt handler (the wait queue
-   wake-up 00576A48) or from a thread (under the device's lock). The original tells them apart by Status.IE (mfc0 $12
-   after a sync.p); here gt4_status_ie() (gt4_prelude.h), which reads 1 as the translated mfc0 always did, so the
-   thread path runs. */
+/* Native version of 004EFAA8 (from its source): signals a device's event, from an interrupt handler (the wait
+   queue wake-up 00576A48) or from a thread (under the device's lock). The original tells them apart by Status.IE
+   (mfc0 $12 after a sync.p); here gt4_status_ie() (gt4_prelude.h), which reads it clear in the runtime's frame
+   callbacks, completions and alarms, as on the EE. */
 struct Device {
     char pad[0x38];
     char event[0x30];

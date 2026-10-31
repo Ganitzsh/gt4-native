@@ -26,7 +26,7 @@ uint64_t g_seq = 0;
 uint8_t g_pad[2][18];
 bool g_pad_valid[2];
 std::mutex g_pad_mutex;
-std::recursive_mutex g_poll_mutex;  // the interrupt thread's VBlank poll and link_read_image
+std::recursive_mutex g_poll_mutex;  // the frame clock's poll and link_read_image
 uint32_t g_image_id = 0;           // the download waiting for its GS_IMAGE (0: none)
 uint8_t *g_image_dst = nullptr;
 uint32_t g_image_qwc = 0;
@@ -93,12 +93,12 @@ void link_remember(uint32_t type, const void *payload, uint32_t size) {
 
 bool link_capture_window() {
     if (!g_capture) return false;
-    const uint32_t v = kernel_vblank_count();
+    const uint32_t v = kernel_frame_count();
     return v >= g_capture_from && (!g_capture_frames || v - g_capture_from < g_capture_frames);
 }
 
 bool link_capture_finished() {
-    return g_capture && g_capture_frames && kernel_vblank_count() >= g_capture_from + g_capture_frames;
+    return g_capture && g_capture_frames && kernel_frame_count() >= g_capture_from + g_capture_frames;
 }
 
 void link_capture_close() {

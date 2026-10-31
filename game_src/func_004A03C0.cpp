@@ -5,6 +5,9 @@
 // VU microprograms and starts the performance counters. Natively there is no GS: the original's
 // writes to its CSR (a reset or a flush, then FINISH acknowledged) and IMR (FINISH unmasked) are
 // left out, and the revision byte it kept from CSR is 0 (what the run time's CSR always held).
+// The library's VBlank handler (004AB430) is a callback of the runtime's frame clock instead
+// (gt4_frame_tick_add, first); its GS (004AB668) and VIF1 (004AB548) interrupt handlers are not
+// installed: there is no interrupt controller natively.
 
 struct SemaParam {
     int currentCount;
@@ -52,8 +55,6 @@ void func_004AA350(unsigned char *, int);
 void func_0057FD08(short, short, short, short);
 void *func_005A48D8(void *, int, unsigned int);
 int func_005ADCA0(SemaParam *);
-int func_005AD980(int, void (*)(), int);
-int func_005AE7E8(int);
 void func_004AB430();
 void func_004AB548();
 void func_004AB668();
@@ -87,12 +88,9 @@ extern "C" void func_004A03C0(unsigned char reset, int x, int y, int z)
         func_004A0D98();
         func_004AA350(D_00624DD0, 0x3FF0);
         state->frame = 0;
-        state->handlerA0 = func_005AD980(2, func_004AB430, 0);
-        state->handlerB4 = func_005AD980(5, func_004AB548, 0);
-        state->handlerB8 = func_005AD980(0, func_004AB668, 0);
-        func_005AE7E8(2);
-        func_005AE7E8(5);
-        func_005AE7E8(0);
+        state->handlerA0 = gt4_frame_tick_add((void (*)(unsigned int))func_004AB430, 0, 1);
+        state->handlerB4 = 0;
+        state->handlerB8 = 0;
         func_004A02A0(spr);
         func_004A12B8(0, 0, 0xA80, D_006D3280);
         /* VU0 vi14 = 0x100 (ctc2.i) and the performance counters (mtc0 $25, mtpc): nothing to drive

@@ -21,7 +21,7 @@ bool link_connected();                    // a live host (--link), which reports
 void link_send(uint32_t type, const void *payload, uint32_t size, const void *extra = nullptr,
                uint32_t extra_size = 0);
 
-// Host -> game records, polled at each VBlank by the kernel's interrupt thread.
+// Host -> game records, polled at each frame by the kernel's frame clock.
 void link_poll();
 
 // A read of graphics memory (runtime/frame.cpp, a read record): sends GS_READ {id, qwc} and waits (2 s at most) for the host's

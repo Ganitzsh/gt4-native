@@ -21,8 +21,9 @@ void __gt4_ee_di(void) { kernel_di(); }
 // performance counters (25), which the renderer accumulates per frame.
 unsigned int __gt4_ee_mfc0(int reg) {
     switch (reg) {
-    case 12: {  // Status: EIE (bit 16) + IE (bit 0); EXL (bit 1) inside an interrupt handler
-        if (kernel_in_interrupt()) return 0x10003;
+    case 12: {  // Status: EIE (bit 16) + IE (bit 0); inside the frame callbacks, completions and alarms (the
+                // runtime's interrupt handlers) EXL (bit 1) and IE clear, as the EE kernel runs its handlers
+        if (kernel_in_interrupt()) return 0x10002;
         return kernel_interrupts_enabled() ? 0x10001 : 0x00001;
     }
     case 9:  // Count: the CPU clock, twice the bus clock

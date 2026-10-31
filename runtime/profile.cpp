@@ -125,7 +125,7 @@ DWORD WINAPI profile_thread(void *) {
             WaitForSingleObject(timer, INFINITE);
         else
             Sleep(1);
-        const uint32_t vb = gt4::rt::kernel_vblank_count();
+        const uint32_t vb = gt4::rt::kernel_frame_count();
         if (vb < g_from) continue;
         if (vb >= g_to) {
             write_report();
