@@ -54,12 +54,21 @@ public:
         uint64_t oversized = 0;        // strips longer than a batch can hold: not drawn
         std::map<uint32_t, uint64_t> parts;   // runs per renderer, lighting body and unpack routine (byte address)
         uint64_t setups = 0, matched = 0;     // objects (setups), and those found in the previous frame
+        uint64_t gpu = 0;                     // batches handed to the GPU whole (docs/NATIVE_V2.md, step 2)
+        uint64_t redrawn = 0;                 // ... of them, drawn again without new vertices (the chain run again)
     } stats;
 
 private:
     std::unordered_map<uint64_t, std::vector<Constants>> lastFrame, thisFrame;
     bool hasPrevious = false;
     Constants previous;   // the current object's constants in the previous frame (when hasPrevious)
+    // The lighting chain that last decoded each batch buffer's vertices on the GPU (which leaves them as sent):
+    // a batch that draws them again without sending new ones runs it again (docs/VU1_PROGRAMS.md "The batch").
+    struct Decoded {
+        const BatchBuffer* buffer = nullptr;
+        uint32_t writes = 0;   // BatchBuffer::vertexWrites then
+        uint32_t chain = 0, dot = 0;
+    } decoded[2];
 };
 
 // A saved state's VU1 registers vf23..vf31 (GT4_REC_STATE version 1) as the setup's constants.

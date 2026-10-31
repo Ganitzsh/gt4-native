@@ -53,6 +53,12 @@ public:
     void draw(const gfx::DrawRecord& d, const gfx::Vertex* vertices) override { native->draw(d, vertices); }
     void read(const gfx::ReadRecord& r) override { native->read(r); }
     void texSet(const uint8_t* payload, size_t bytes) override { native->texSet(payload, bytes); }
+    // GT4_GPU_MODELS=0: the 3D renderers on the CPU, as before
+    bool models() const override {
+        static const bool on = [] { const char* e = std::getenv("GT4_GPU_MODELS"); return !(e && *e == '0'); }();
+        return on;
+    }
+    void model(const gfx::ModelJob& job, const uint32_t* words) override { native->model(job, words); }
     void primitives(const ps2::GsPrimitives& p) override {
         GT4_CPU_SCOPE("front end: the renderers' primitives");
         if (p.setPrim) native->setPrim(p.prim);
@@ -135,7 +141,7 @@ public:
                     const gsn::Target* t = nullptr;
                     for (const auto& x : list.targets) if (x.id == d.target) t = &x;
                     float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f, u0 = 1e9f, v0 = 1e9f, u1 = -1e9f, v1 = -1e9f;
-                    for (uint32_t k = 0; k < d.count; ++k) {
+                    for (uint32_t k = 0; k < (d.modeled ? 0u : d.count); ++k) {   // (3D on the GPU: not here)
                         const auto& v = list.vertices[d.first + k];
                         x0 = std::min(x0, v.x); x1 = std::max(x1, v.x); y0 = std::min(y0, v.y); y1 = std::max(y1, v.y);
                         u0 = std::min(u0, v.u); u1 = std::max(u1, v.u); v0 = std::min(v0, v.v); v1 = std::max(v1, v.v);
@@ -148,7 +154,7 @@ public:
                                 t0.clutOffset, t0.clutLoad, static_cast<int>(d.texture.kind), d.texture.id, c.blendA, c.blendB, c.blendC, c.blendD,
                                 c.blendFixed, c.alphaTest, c.alphaFunc, c.alphaRef, c.alphaFail, c.destTest, c.destPass, c.depthTest, c.depthFunc,
                                 c.scissorX0, c.scissorX1, c.scissorY0, c.scissorY1, d.count, x0, y0, x1, y1, u0, v0, u1, v1,
-                                d.count ? list.vertices[d.first].rgba : 0u);
+                                d.count && !d.modeled ? list.vertices[d.first].rgba : 0u);
                     if (d.texture.kind == gsn::TextureSource::Kind::Reinterpreted && d.texture.id < list.reinterpretations.size()) {
                         const auto& r = list.reinterpretations[d.texture.id];
                         std::printf(" | from t%u clut t%u", r.target, r.clutTarget);
@@ -264,6 +270,10 @@ public:
     }
     void read(const gfx::ReadRecord& r) override { put(Op::Read, 0, 0, &r, sizeof r); }
     void texSet(const uint8_t* payload, size_t bytes) override { put(Op::TexSet, 0, 0, payload, bytes); }
+    bool models() const override { return inner.models(); }
+    void model(const gfx::ModelJob& job, const uint32_t* words) override {
+        put(Op::Model, 0, 0, &job, sizeof job, words, gfx::kModelWords * 4);
+    }
     void draw(const gfx::DrawRecord& d, const gfx::Vertex* vertices) override {
         put(Op::Draw, 0, 0, &d, sizeof d, vertices, size_t(d.count) * sizeof(gfx::Vertex));
     }
@@ -291,7 +301,7 @@ public:
     }
 
 private:
-    enum class Op : uint32_t { Gif, Primitives, Display, State, Upload, Read, Draw, Vsync, TexSet };
+    enum class Op : uint32_t { Gif, Primitives, Display, State, Upload, Read, Draw, Vsync, TexSet, Model };
     struct Entry {
         Op op;
         uint32_t a, b;
@@ -372,6 +382,12 @@ private:
             case Op::Draw: inner.draw(*reinterpret_cast<const gfx::DrawRecord*>(first), reinterpret_cast<const gfx::Vertex*>(second)); break;
             case Op::Vsync: inner.vsync(e.a, e.b); break;
             case Op::TexSet: inner.texSet(first, e.first); break;
+            case Op::Model: {
+                gfx::ModelJob job;
+                std::memcpy(&job, first, sizeof job);
+                inner.model(job, reinterpret_cast<const uint32_t*>(second));
+                break;
+            }
             }
         }
     }

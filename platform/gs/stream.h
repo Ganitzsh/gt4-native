@@ -35,6 +35,9 @@ public:
     virtual void draw(const gfx::DrawRecord& d, const gfx::Vertex* vertices) { (void)d; (void)vertices; }
     // A texture set (docs/NATIVE_V2.md): gfx::TexSetRecord, its uploads and textures, then (when sent) the bytes.
     virtual void texSet(const uint8_t* payload, size_t bytes) { (void)payload; (void)bytes; }
+    // A 3D batch for the GPU (docs/NATIVE_V2.md, step 2; PrimitiveSink::model), when the target takes them.
+    virtual bool models() const { return false; }
+    virtual void model(const gfx::ModelJob& job, const uint32_t* words) { (void)job; (void)words; }
     // A VBlank: present the displayed frame. `field` is CSR.FIELD, `count` the game's VBlank counter.
     virtual void vsync(uint32_t field, uint32_t count) = 0;
     // GS -> EE transfer data (after TRXDIR = 1), `qwc` qwords into `out`.
@@ -68,6 +71,7 @@ public:
         uint64_t vsyncs = 0, reads = 0, logs = 0, audio = 0, unknown = 0;
         uint64_t primitiveRuns = 0, primitiveVertices = 0;   // from the 3D renderers
         uint64_t texSets = 0;   // native texture set records (docs/NATIVE_V2.md)
+        uint64_t modelBatches = 0;   // 3D batches drawn on the GPU (docs/NATIVE_V2.md, step 2)
         uint64_t unknownPrograms = 0;   // batches started in a program image that is not GT4's (nothing drawn)
         uint64_t path3Held = 0, path3ForcedAtVsync = 0;   // PATH3 records held by MSKPATH3
         uint64_t gfxRecords = 0, badRecords = 0;   // native records in the VIF1 stream (include/gt4/gfx.h)
@@ -105,6 +109,11 @@ private:
             owner->sendGif(1, gif, bytes);
         }
         void primitives(const GsPrimitives& p) override { owner->sendPrimitives(p); }
+        bool models() const override { return owner->gs.models(); }
+        void model(const gfx::ModelJob& job, const uint32_t* words) override {
+            ++owner->counters.modelBatches;
+            owner->gs.model(job, words);
+        }
     };
     void runBatch(const Batch3d& batch);
     // GT4_DIRECT_LOG=N (debugging): the first N GIF packets that still come through VIF1 DIRECT, with the VBlank

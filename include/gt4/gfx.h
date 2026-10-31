@@ -504,6 +504,28 @@ struct TexSetUpload {
 };
 static_assert(sizeof(TexSetUpload) == 16);
 
+// GT4's 3D renderers on the GPU (docs/NATIVE_V2.md, step 2): one batch for gsn_models.comp, its 256 qwords (1024
+// words) in the frame's model data. Laid out as the shader reads it (std430). The renderer's part comes from the
+// batch (platform/gs/renderers3d.cpp), the drawing state's from the front end.
+struct ModelJob {
+    uint32_t first;        // the first output vertex in the frame's vertices (3 per triangle, the strips' order)
+    uint32_t data;         // the batch's first word in the frame's model data
+    uint32_t count;        // vertices drawn: the tag's NLOOP, at most the strips' total
+    uint32_t nloop;        // vertices the lighting chain processes
+    uint32_t renderer;     // 0..5: 0x1EC8, 0x2058, 0x2070, 0x2300, 0x27A8, 0x2AD8
+    uint32_t chain;        // bit 0: a lighting chain; bits 4..7 its decompression routine (5: none); bits 16..31 its body
+    uint32_t dot;          // the N.L model: squarings A | second set << 4 | squarings B << 8 | next normal << 12
+    uint32_t flags;        // bit 0 fog (XYZF2), bit 1 Gouraud, bit 2 the previous frame's constants known
+    uint32_t fogRegister;  // FOG's F for XYZ2 (no fog in the vertices)
+    float originX, originY, u, v;   // XYOFFSET (pixels), UV (texels)
+    uint32_t prim;         // the batch's PRIM (its tag sets it)
+    uint32_t pad[2];
+    float matrix[4][4], scale[4], offset[4], clamp[4], guard[4];
+    float previousMatrix[4][4], previousScale[4], previousOffset[4];
+};
+static_assert(sizeof(ModelJob) == 64 + 14 * 16);
+inline constexpr uint32_t kModelWords = 1024;   // a batch: 256 qwords
+
 // The texture sets in graphics memory, as the runtime's frame walker and the host both keep them (in the order of
 // the set records): a set lives until another is uploaded over its slot, and a content (by hash) until its last
 // set goes. add() calls `gone(hash)` for each content that went: the walker sends its bytes again if it comes back,

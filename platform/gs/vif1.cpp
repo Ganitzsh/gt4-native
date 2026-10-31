@@ -174,6 +174,7 @@ void Vif1::batchWrite(uint32_t qword, const uint32_t* words, uint32_t count, uin
         }
         for (uint32_t f = 0; f < 4; ++f)
             if ((lanes >> f) & 1) b.words[qword + k][f] = words[4 * k + f];
+        if (qword + k < 192) ++b.vertexWrites;
     }
 }
 
@@ -246,12 +247,14 @@ void Vif1::unpack(uint32_t code, const uint32_t* source) {
     auto destinationOf = [&](uint32_t a, uint32_t& vuAddress) -> uint32_t* {
         if (relative) {
             vuAddress = (bufferStart[current] + a) & 0x3FF;
+            if (a < 192) ++buffers[current].vertexWrites;
             if (a < BatchBuffer::kQwords) return buffers[current].words[a];
             return nullptr;
         }
         vuAddress = a & 0x3FF;
         for (uint32_t b : {current, current ^ 1u}) {
             const uint32_t r = (vuAddress - bufferStart[b]) & 0x3FF;
+            if (r < 192) ++buffers[b].vertexWrites;
             if (r < BatchBuffer::kQwords) return buffers[b].words[r];
         }
         return nullptr;

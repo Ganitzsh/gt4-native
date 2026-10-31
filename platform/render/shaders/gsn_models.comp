@@ -1,0 +1,379 @@
+#version 460
+// GT4's 3D renderers on the GPU (docs/NATIVE_V2.md, step 2; docs/VU1_PROGRAMS.md): one workgroup per batch
+// (gfx::ModelJob, its 256 qwords in `words`). The batch's vertices are decompressed and lit (the lighting chain),
+// put in homogeneous window coordinates, their triangles culled as the renderer culls them (ADC), and written
+// into the frame's vertex buffer as the front end writes a run (gsn::Vertex, three per triangle in the strips'
+// order; a triangle not drawn is left degenerate). The rules are platform/gs/renderers3d.cpp's, in its order;
+// the VU's number rules are written out there.
+layout(local_size_x = 256) in;
+
+struct Job {
+    uint first, data, count, nloop, renderer, chain, dotModel, flags, fogRegister;
+    float originX, originY, u, v;
+    uint prim, pad0, pad1;
+    vec4 matrix[4];
+    vec4 scale, offset, clampLimit, guard;
+    vec4 previousMatrix[4];
+    vec4 previousScale, previousOffset;
+};
+layout(std430, set = 0, binding = 0) readonly buffer Jobs { Job jobs[]; };
+layout(std430, set = 0, binding = 1) readonly buffer Words { uint words[]; };
+layout(std430, set = 0, binding = 2) writeonly buffer Vertices { uint vertices[]; };   // gsn::Vertex: 18 words
+layout(push_constant) uniform Constants { uint modelBase; } constants;   // where the jobs' vertices start
+
+const float kMax = 3.40282347e38;
+const float kMinNormal = 1.17549435e-38;
+
+uint base;   // the job's first word
+
+uint word(uint q, uint lane) { return words[base + (q & 255u) * 4u + lane]; }
+uvec4 wordsAt(uint q) { return uvec4(word(q, 0u), word(q, 1u), word(q, 2u), word(q, 3u)); }
+float vuFloat(uint b) {
+    if ((b & 0x7F800000u) == 0u) b &= 0x80000000u;
+    else if ((b & 0x7F800000u) == 0x7F800000u) b = (b & 0x80000000u) | 0x7F7FFFFFu;
+    return uintBitsToFloat(b);
+}
+vec4 floatsAt(uint q) { const uvec4 w = wordsAt(q); return vec4(vuFloat(w.x), vuFloat(w.y), vuFloat(w.z), vuFloat(w.w)); }
+float sat(float f) { return isnan(f) ? 0.0 : clamp(f, -kMax, kMax); }
+vec4 sat(vec4 v) { return vec4(sat(v.x), sat(v.y), sat(v.z), sat(v.w)); }
+vec3 sat(vec3 v) { return vec3(sat(v.x), sat(v.y), sat(v.z)); }
+bool negative(float x) { return (floatBitsToUint(x) >> 31) != 0u; }
+float divide(float a, float b) {
+    if (b == 0.0) return negative(a) != negative(b) ? -kMax : kMax;
+    return sat(a / b);
+}
+float rsqrtOf(float a, float b) {
+    b = abs(b);
+    if (b == 0.0) return negative(a) ? -kMax : kMax;
+    return sat(a / sqrt(b));
+}
+// FTOI0 / FTOI4: truncation toward zero, saturating at the 32-bit limits
+uint fixedPoint(float v, float scale) {
+    if (isnan(v)) return 0u;
+    const float s = trunc(v * scale);
+    if (s >= 2147483647.0) return 0x7FFFFFFFu;
+    if (s <= -2147483648.0) return 0x80000000u;
+    return uint(int(s));
+}
+uvec4 toIntegers(vec4 v) { return uvec4(fixedPoint(v.x, 1.0), fixedPoint(v.y, 1.0), fixedPoint(v.z, 1.0), fixedPoint(v.w, 1.0)); }
+float itof0(uint w) { return float(int(w)); }
+float itof12(uint w) { return float(int(w)) / 4096.0; }
+vec4 itof0(uvec4 w) { return vec4(itof0(w.x), itof0(w.y), itof0(w.z), itof0(w.w)); }
+bool positiveFlag(float z) { return z >= kMinNormal; }
+bool negativeFlag(float z) { return z <= -kMinNormal; }
+float power(float x, uint squarings) {
+    for (uint k = 0u; k < squarings; ++k) x = sat(x * x);
+    return x;
+}
+
+// The working copy (renderers3d.cpp Vertices), reused as the stages go: positions then homogeneous window
+// coordinates; ST then STQ (w: the motion's x); colour words then (RGBA, fog lane or fog and ADC, motion y, w);
+// normals then clip-space points.
+shared vec4 sPosition[257];
+shared vec4 sSt[257];
+shared uvec4 sColour[257];
+shared vec4 sNormal[257];
+shared uint sIndex[256];      // the vertex's index in its strip
+shared uint sTriangle[256];   // its triangle's slot (vertices from the third of a strip on)
+shared uint sTotal;
+
+vec4 byteNormal(uvec4 w, float keepW) { return vec4(itof0(w.x) / 127.0, itof0(w.y) / 127.0, itof0(w.z) / 127.0, keepW); }
+
+// max(m0 n.x + m1 n.y + m2 n.z, 0) per lane
+vec4 dots(vec4 m0, vec4 m1, vec4 m2, vec4 n) { return max(sat(m0 * n.x + m1 * n.y + m2 * n.z), vec4(0.0)); }
+
+vec4 reflection(vec4 m0, vec4 m1, vec4 m2, vec3 v, vec3 n, float d) {
+    const vec3 r = v - 2.0 * n * d;
+    return vec4(sat(m0.xyz * r.x + m1.xyz * r.y + m2.xyz * r.z), 0.0);
+}
+uvec4 reflectiveColour(uvec4 given, vec4 baseColour, vec4 rim, float t) { return toIntegers(sat(itof0(given) * (baseColour + rim * t))); }
+
+void lightVertex(const Job job, uint k, uint body) {
+    const uint n = job.nloop;
+    if (body == 0x0B0u) return;
+    if (body == 0xCA8u || body == 0xEA0u) {   // specular from the eye
+        const vec4 eye = floatsAt(204u), coefficient = floatsAt(205u);
+        const vec3 light = vec3(floatsAt(201u).x, floatsAt(202u).x, floatsAt(203u).x);
+        const vec3 v = sPosition[k].xyz - eye.xyz;
+        const vec3 normal = sNormal[k].xyz;
+        const float twice = 2.0 * dot(v, normal);
+        const float inverseLength = rsqrtOf(1.0, dot(v, v));
+        vec3 reflected = v - normal * twice;
+        float s;
+        if (body == 0xCA8u) {
+            reflected = sat(vec4(reflected * inverseLength, 0.0)).xyz;
+            s = power(max(sat(dot(light, reflected)), 0.0), 3u);
+        } else {
+            s = power(max(sat(dot(light, reflected) * inverseLength), 0.0), 4u);
+        }
+        sColour[k] = toIntegers(vec4(coefficient.x * s, coefficient.y * s, coefficient.z * s, 128.0));
+        return;
+    }
+    if (body == 0x10A8u || body == 0x12C8u) {   // reflective paint: a sphere map, or a map by quadrant
+        const vec4 eye = floatsAt(204u), baseColour = floatsAt(205u), rim = floatsAt(206u);
+        const vec4 m0 = floatsAt(201u), m1 = floatsAt(202u), m2 = floatsAt(203u);
+        const vec3 normal = sSt[k].xyz;
+        const vec3 v = sPosition[k].xyz - eye.xyz;
+        const float d = dot(v, normal);
+        const float e = rsqrtOf(1.0, dot(v, v));
+        sColour[k] = reflectiveColour(sColour[k], baseColour, rim, sat(min(d, 0.0) * e));
+        if (body == 0x10A8u) {
+            vec4 s = sat(reflection(m0, m1, m2, v, normal, d) * e);
+            s.z = s.z + 1.0;
+            const float scaleBy = rsqrtOf(0.5, s.x * s.x + s.y * s.y + s.z * s.z);
+            sSt[k].x = s.x * scaleBy + 0.5;
+            sSt[k].y = 0.5 - s.y * scaleBy;
+        } else {
+            const vec4 s = reflection(m0, m1, m2, v, normal, d);
+            const bool a = negative(s.x - s.z), c = negative(s.x + s.z);
+            float numerator, denominator, quadrant;
+            if (a == c) {
+                numerator = s.z;
+                denominator = s.x;
+                quadrant = a ? 4.0 : 0.0;
+            } else {
+                numerator = -s.x;
+                denominator = s.z;
+                quadrant = a ? 2.0 : 6.0;
+            }
+            const float u = sat(quadrant + divide(numerator, denominator));
+            const float t = sat(e * s.y);
+            const float vv = sat(t * t * t + (t + t));
+            sSt[k].x = sat(m1.w + m0.w * u);
+            sSt[k].y = sat(eye.w + m2.w * vv);
+        }
+        return;
+    }
+    if (body == 0x1608u) {   // a planar projection
+        const vec4 m0 = floatsAt(201u), m1 = floatsAt(202u), m2 = floatsAt(203u), offset = floatsAt(204u);
+        const vec4 p = sPosition[k];
+        sColour[k] = toIntegers(floatsAt(205u));
+        sSt[k].x = sat(offset.x + m0.x * p.x + m1.x * p.y + m2.x * p.z);
+        sSt[k].y = sat(offset.y + m0.y * p.x + m1.y * p.y + m2.y * p.z);
+        return;
+    }
+    if (body == 0x1508u) {   // prelit colours
+        const vec4 scaleBy = floatsAt(201u), limit = floatsAt(202u), offset = floatsAt(203u);
+        sColour[k] = toIntegers(min(max(sat(offset + itof0(sColour[k]) * scaleBy), vec4(0.0)), limit));
+        return;
+    }
+    if (body == 0x16F8u) {   // fade (alpha 0 drew nothing: not sent here)
+        const uint table = (word(202u, 0u) & 0xFFFFu) + 203u;
+        const float alpha = itof0(word(table & 0x3FFu, 0u)) * (1.0 / 255.0);
+        const vec4 scaleBy = floatsAt(201u);
+        const vec4 c = itof0(sColour[k]);
+        sColour[k] = toIntegers(vec4(min(c.x * scaleBy.x, 255.0), min(c.y * scaleBy.y, 255.0), min(c.z * scaleBy.z, 255.0), min(c.w * alpha, 255.0)));
+        return;
+    }
+    // the N.L model of the other bodies
+    const uint squaringsA = job.dotModel & 15u, squaringsB = (job.dotModel >> 8) & 15u;
+    const bool second = ((job.dotModel >> 4) & 1u) != 0u, nextNormal = ((job.dotModel >> 12) & 1u) != 0u;
+    const vec4 a0 = floatsAt(201u), a1 = floatsAt(202u), a2 = floatsAt(203u);
+    const vec4 ambient = floatsAt(204u);
+    const vec4 limit = floatsAt(second ? 216u : 209u);
+    const vec4 normal = sNormal[k];
+    vec4 d = dots(a0, a1, a2, normal), f = vec4(0.0);
+    d.z = power(d.z, squaringsA);
+    d.w = power(d.w, squaringsA);
+    if (second) {
+        f = dots(floatsAt(209u), floatsAt(210u), floatsAt(211u), normal);
+        f = vec4(power(f.x, squaringsB), power(f.y, squaringsB), power(f.z, squaringsB), power(f.w, squaringsB));
+    }
+    const vec4 next = k + 1u < n ? sNormal[k + 1u] : floatsAt(128u + n);
+    vec4 acc = nextNormal ? (a0 * next.x + a1 * next.y) + ambient : ambient;
+    acc += floatsAt(205u) * d.x + floatsAt(206u) * d.y + floatsAt(207u) * d.z + floatsAt(208u) * d.w;
+    if (second) acc += floatsAt(212u) * f.x + floatsAt(213u) * f.y + floatsAt(214u) * f.z + floatsAt(215u) * f.w;
+    sColour[k] = toIntegers(min(max(sat(acc), vec4(0.0)), limit));
+}
+
+void decodeVertex(uint k, uint unpack) {
+    if (unpack == 0u || unpack == 1u || unpack == 2u) {
+        const uvec4 p = wordsAt(k);
+        sPosition[k].xyz = vec3(itof0(p.x), itof0(p.y), itof0(p.z));
+    }
+    if (unpack == 0u) {        // 0x1908: normals in the ST slot
+        sSt[k] = byteNormal(wordsAt(64u + k), sSt[k].w);
+    } else if (unpack == 1u) { // 0x1878: ST, normals in the colour slot
+        const uvec4 st = wordsAt(64u + k);
+        sSt[k].xy = vec2(itof12(st.x), itof12(st.y));
+        sNormal[k] = byteNormal(wordsAt(128u + k), sNormal[k].w);
+        sColour[k].xyz = floatBitsToUint(sNormal[k].xyz);
+    } else if (unpack == 2u) { // 0x1810: ST
+        const uvec4 st = wordsAt(64u + k);
+        sSt[k].xy = vec2(itof12(st.x), itof12(st.y));
+    } else if (unpack == 3u || unpack == 4u) {   // 0x1990 / 0x1A38: two key frames blended
+        const float t = floatsAt(242u).w, rest = 1.0 - t;
+        sPosition[k].xyz = sat(vec4(floatsAt(k).xyz * rest + floatsAt(32u + k).xyz * t, 0.0)).xyz;
+        sSt[k].xyz = sat(vec4(floatsAt(64u + k).xyz * rest + floatsAt(96u + k).xyz * t, 0.0)).xyz;
+        if (unpack == 4u) {
+            sColour[k] = toIntegers(itof0(wordsAt(128u + k)) * rest + itof0(wordsAt(160u + k)) * t);
+            const uvec4 c = sColour[k];
+            sNormal[k] = vec4(vuFloat(c.x), vuFloat(c.y), vuFloat(c.z), vuFloat(c.w));
+        } else {
+            const vec4 c = sat(floatsAt(128u + k) * rest + floatsAt(160u + k) * t);
+            sNormal[k] = c;
+            sColour[k] = floatBitsToUint(c);
+        }
+    }
+}
+
+uint clipFlags(vec4 p) {
+    const float limit = abs(p.w);
+    uint f = 0u;
+    for (int i = 0; i < 3; ++i) {
+        if (p[i] > limit) f |= 1u << (i * 2);
+        if (p[i] < -limit) f |= 2u << (i * 2);
+    }
+    return f;
+}
+
+float homogeneousFacing(vec4 a, vec4 b, vec4 c, bool oddOrder) {
+    const float d = a.x * (b.y * c.w - c.y * b.w) - a.y * (b.x * c.w - c.x * b.w) + a.w * (b.x * c.y - c.x * b.y);
+    return oddOrder ? -d : d;
+}
+
+void writeVertex(const Job job, uint slot, uint k, uint rgba) {
+    const uint at = slot * 18u;
+    const vec4 h = sPosition[k];
+    float w = h.w;
+    if (w == 0.0) w = kMinNormal;   // (w 0 means "not homogeneous" to the renderer)
+    const vec4 stq = sSt[k];
+    const uvec4 c = sColour[k];
+    const float mx = stq.w, my = uintBitsToFloat(c.z), mw = uintBitsToFloat(c.w);
+    vertices[at + 0u] = floatBitsToUint(h.x - job.originX * w);
+    vertices[at + 1u] = floatBitsToUint(h.y - job.originY * w);
+    vertices[at + 2u] = floatBitsToUint(h.z);
+    vertices[at + 3u] = rgba;
+    vertices[at + 4u] = floatBitsToUint(stq.x);
+    vertices[at + 5u] = floatBitsToUint(stq.y);
+    vertices[at + 6u] = floatBitsToUint(stq.z);
+    vertices[at + 7u] = floatBitsToUint(job.u);
+    vertices[at + 8u] = floatBitsToUint(job.v);
+    vertices[at + 9u] = (job.flags & 1u) != 0u ? (c.y & 0xFFu) : job.fogRegister;
+    vertices[at + 10u] = floatBitsToUint(1.0);   // no sprite rectangle (min > max)
+    vertices[at + 11u] = floatBitsToUint(1.0);
+    vertices[at + 12u] = 0u;
+    vertices[at + 13u] = 0u;
+    vertices[at + 14u] = floatBitsToUint(mx - job.originX * mw);
+    vertices[at + 15u] = floatBitsToUint(my - job.originY * mw);
+    vertices[at + 16u] = floatBitsToUint(mw);
+    vertices[at + 17u] = floatBitsToUint(w);
+}
+
+void writeNothing(uint slot) {
+    const uint at = slot * 18u;
+    for (uint i = 0u; i < 18u; ++i) vertices[at + i] = 0u;
+    vertices[at + 6u] = floatBitsToUint(1.0);
+    vertices[at + 17u] = floatBitsToUint(1.0);
+}
+
+void main() {
+    const Job job = jobs[gl_WorkGroupID.x];
+    base = job.data;
+    const uint t = gl_LocalInvocationID.x;
+    if (t == 0u) {   // the strips: each vertex's index in its strip and its triangle's slot
+        const uint strips = word(64u, 3u) & 0xFFFFu;
+        uint v = 0u, triangle = 0u;
+        for (uint k = 0u; k < strips && v < 256u; ++k) {
+            const uint n = (word(65u + k, 3u) & 0xFFFFu) / 3u + 2u;
+            for (uint j = 0u; j < n && v < 256u; ++j, ++v) {
+                sIndex[v] = j;
+                sTriangle[v] = triangle;
+                if (j >= 2u && v < job.count) ++triangle;
+            }
+        }
+        sTotal = v;
+    }
+    barrier();
+    const uint n = job.nloop, count = job.count;
+    const uint loaded = min(max(sTotal, n + 1u), 257u);
+    for (uint k = t; k < loaded; k += 256u) {
+        sPosition[k] = floatsAt(k);
+        sSt[k] = floatsAt(64u + k);
+        sColour[k] = wordsAt(128u + k);
+        sNormal[k] = floatsAt(128u + k);
+    }
+    barrier();
+    // the lighting chain
+    if ((job.chain & 1u) != 0u) {
+        const uint unpack = (job.chain >> 4) & 15u, body = job.chain >> 16;
+        for (uint k = t; k < n; k += 256u) decodeVertex(k, unpack);
+        barrier();
+        const uint lit = body == 0x16F8u ? min((n + 1u) & ~1u, 257u) : n;   // (the fade converts an even number)
+        for (uint k = t; k < lit; k += 256u) lightVertex(job, k, body);
+        barrier();
+    }
+    // per vertex: the clip-space point, homogeneous window coordinates, STQ, the colour, the fog lane, the motion
+    const bool fog = (job.flags & 1u) != 0u, previous = (job.flags & 4u) != 0u;
+    for (uint v = t; v < count; v += 256u) {
+        const vec4 p = sPosition[v];
+        const vec4 clip = sat(job.matrix[0] * p.x + job.matrix[1] * p.y + job.matrix[2] * p.z + job.matrix[3]);
+        const float q = divide(1.0, clip.w);
+        const vec4 projected = sat(min(clip, job.clampLimit) * q);
+        const float w = clip.w;
+        const vec4 h = vec4(job.offset.x * w + job.scale.x * min(clip.x, job.clampLimit.x),
+                            job.offset.y * w + job.scale.y * min(clip.y, job.clampLimit.y),
+                            (job.offset.z * w + job.scale.z * min(clip.z, job.clampLimit.z)) * (fog ? 1.0 : 16.0), w);
+        vec3 motion = vec3(0.0);
+        if (previous) {   // where the previous frame's transform put it, over this frame's w
+            const vec4 r = job.previousMatrix[0] * p.x + job.previousMatrix[1] * p.y + job.previousMatrix[2] * p.z + job.previousMatrix[3];
+            if (r.w > 1e-6 && !isinf(r.x) && !isinf(r.y) && !isinf(r.w) && !isnan(r.x) && !isnan(r.y) && !isnan(r.w) && q > 0.0 && q < kMax) {
+                const vec3 m = vec3(job.previousOffset.x * r.w + job.previousScale.x * r.x, job.previousOffset.y * r.w + job.previousScale.y * r.y, r.w) * q;
+                if (!any(isinf(m)) && !any(isnan(m)) && m.z > 0.0) motion = m;
+            }
+        }
+        const uvec4 c = sColour[v];
+        const uint rgba = (c.x & 0xFFu) | (c.y & 0xFFu) << 8 | (c.z & 0xFFu) << 16 | (c.w & 0xFFu) << 24;
+        const vec4 st = sSt[v];
+        sNormal[v] = clip;
+        sPosition[v] = h;
+        sSt[v] = vec4(st.x * q, st.y * q, q, motion.x);
+        sColour[v] = uvec4(rgba, floatBitsToUint(projected.w * job.scale.w), floatBitsToUint(motion.y), floatBitsToUint(motion.z));
+    }
+    barrier();
+    // per vertex: hidden (the strip's start, all three outside one plane) or culled: the fog word, with ADC
+    const uint renderer = job.renderer;
+    for (uint v = t; v < count; v += 256u) {
+        const uint j = sIndex[v];
+        float raise = 0.0, after = 0.0;
+        if (renderer == 0u) {
+            raise = j < 2u ? 2048.0 : 0.0;
+        } else if (renderer <= 2u) {
+            bool culled = j < 2u;
+            if (!culled) {
+                const float z = homogeneousFacing(sNormal[v - 2u], sNormal[v - 1u], sNormal[v], (j & 1u) != 0u);
+                culled = renderer == 2u ? !negativeFlag(z) : !positiveFlag(z);
+            }
+            raise = culled ? 2048.0 : 0.0;
+        } else {
+            bool hidden = j < 2u;
+            if (!hidden && (clipFlags(sNormal[v - 2u]) & clipFlags(sNormal[v - 1u]) & clipFlags(sNormal[v])) != 0u) hidden = true;
+            raise = hidden ? (renderer == 3u ? 2048.0 : 3072.0) : 0.0;
+            if (renderer != 3u && j >= 2u) {
+                const bool odd = ((j & 1u) != 0u) != (renderer == 5u);
+                if (!positiveFlag(homogeneousFacing(sNormal[v - 2u], sNormal[v - 1u], sNormal[v], odd))) after = 3072.0;
+            }
+        }
+        float fogWord = (job.offset.w + raise) + uintBitsToFloat(sColour[v].y);
+        fogWord = fogWord + after;
+        const uint fixedWord = fixedPoint(fogWord, 16.0);
+        sColour[v].y = ((fixedWord >> 4) & 0xFFu) | ((fixedWord >> 15) & 1u) << 8;
+    }
+    barrier();
+    // the triangles: one per vertex from a strip's third on, unless it carries ADC
+    const bool gouraud = (job.flags & 2u) != 0u;
+    for (uint v = t; v < count; v += 256u) {
+        if (sIndex[v] < 2u) continue;
+        const uint slot = constants.modelBase + job.first + sTriangle[v] * 3u;
+        if (((sColour[v].y >> 8) & 1u) != 0u) {
+            writeNothing(slot);
+            writeNothing(slot + 1u);
+            writeNothing(slot + 2u);
+            continue;
+        }
+        const uint last = sColour[v].x;   // (flat shading: the last vertex's colour)
+        writeVertex(job, slot, v - 2u, gouraud ? sColour[v - 2u].x : last);
+        writeVertex(job, slot + 1u, v - 1u, gouraud ? sColour[v - 1u].x : last);
+        writeVertex(job, slot + 2u, v, last);
+    }
+}

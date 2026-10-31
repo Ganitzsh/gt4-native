@@ -31,6 +31,7 @@ public:
 struct BatchBuffer {
     static constexpr uint32_t kQwords = 256;   // the batch layout ends at qword 242 (docs/VU1_PROGRAMS.md)
     uint32_t words[kQwords][4] = {};
+    uint32_t vertexWrites = 0;   // writes into the vertex data (qwords 0..191) so far (renderers3d: a batch drawn again)
     const uint32_t* qword(uint32_t q) const { return words[q % kQwords]; }
     uint32_t* qword(uint32_t q) { return words[q % kQwords]; }
 };

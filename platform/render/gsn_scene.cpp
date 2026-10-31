@@ -131,6 +131,7 @@ struct GsnScene::Impl {
     vk::Image scratchDepth;              // stencil for destination-alpha tests without a Z buffer
     // Per frame slot and per list executed in it (list * kSlots + slot).
     std::vector<vk::Buffer> vertexBuffers, staging, clutBuffers, indexBuffers;
+    std::vector<vk::Buffer> modelJobs, modelData;   // GT4's 3D batches on the GPU (gsn_models.comp)
     struct Pool {
         std::vector<std::unique_ptr<vk::Image>> images;
         size_t used = 0;
@@ -139,6 +140,7 @@ struct GsnScene::Impl {
     std::vector<vk::Image*> reinterpretImages;            // this frame's, per reinterpretation
     std::vector<bool> built;
     vk::Pipeline reinterpret;
+    vk::Pipeline models;
     // Lighting of the game's 3D scenes (docs/LIGHTING.md, GsnScene::setLighting).
     struct Lighting {
         float occlusion = 0.0f;      // 0: no ambient occlusion
@@ -308,10 +310,13 @@ struct GsnScene::Impl {
         for (auto& b : vertexBuffers) vk::destroy(device, b);
         for (auto& b : staging) vk::destroy(device, b);
         for (auto& b : clutBuffers) vk::destroy(device, b);
+        for (auto& b : modelJobs) vk::destroy(device, b);
+        for (auto& b : modelData) vk::destroy(device, b);
         for (auto& b : indexBuffers) vk::destroy(device, b);
         for (auto& [size, pool] : reinterpretPool)
             for (auto& i : pool.images) vk::destroy(device, *i);
         vk::destroy(device, reinterpret);
+        vk::destroy(device, models);
         vk::destroy(device, aoPass);
         vk::destroy(device, lightPass);
         vk::destroy(device, aoImage);
@@ -382,6 +387,7 @@ struct GsnScene::Impl {
 
     // Whether a draw maps its texture's texels 1:1 onto GS pixels (within 3 %) on both axes.
     bool oneToOne(const gsn::Draw& d, const DrawConstants& k) const {
+        if (d.modeled) return false;   // 3D on the GPU: its vertices are not here
         float x0 = 1e30f, x1 = -1e30f, y0 = 1e30f, y1 = -1e30f, u0 = 1e30f, u1 = -1e30f, v0 = 1e30f, v1 = -1e30f;
         const bool uv = (k.flags & kUv) != 0;
         for (uint32_t i = 0; i < d.count; ++i) {
@@ -610,9 +616,38 @@ struct GsnScene::Impl {
 };
 
 void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
-    vk::Buffer& vertices = buffer(vertexBuffers, slot, std::max<VkDeviceSize>(frame.vertices.size() * sizeof(gsn::Vertex), 64),
-                                  VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+    const VkDeviceSize vertexBytes = std::max<VkDeviceSize>((frame.vertices.size() + frame.modelVertices) * sizeof(gsn::Vertex), 64);
+    vk::Buffer& vertices = buffer(vertexBuffers, slot, vertexBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    const uint32_t modelBase = static_cast<uint32_t>(frame.vertices.size());   // where the GPU's vertices start
     std::memcpy(vertices.mapped, frame.vertices.data(), frame.vertices.size() * sizeof(gsn::Vertex));
+    // GT4's 3D batches (docs/NATIVE_V2.md, step 2): gsn_models.comp writes their triangles into the ranges their
+    // draws hold, before any draw reads them.
+    if (!frame.models.empty()) {
+        static_assert(sizeof(gsn::Vertex) == 18 * 4, "gsn_models.comp writes 18 words a vertex");
+        vk::Buffer& jobs = buffer(modelJobs, slot, frame.models.size() * sizeof(gfx::ModelJob), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        std::memcpy(jobs.mapped, frame.models.data(), frame.models.size() * sizeof(gfx::ModelJob));
+        vk::Buffer& data = buffer(modelData, slot, frame.modelData.size() * 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        std::memcpy(data.mapped, frame.modelData.data(), frame.modelData.size() * 4);
+        vk::bind(command, models);
+        vk::Descriptors()
+            .storageBuffer(0, jobs.buffer, 0, frame.models.size() * sizeof(gfx::ModelJob))
+            .storageBuffer(1, data.buffer, 0, frame.modelData.size() * 4)
+            .storageBuffer(2, vertices.buffer, 0, vertexBytes)
+            .push(command, models);
+        const uint32_t constants[4] = {modelBase, 0, 0, 0};
+        vk::pushConstants(command, models, constants);
+        vkCmdDispatch(command, static_cast<uint32_t>(frame.models.size()), 1, 1);
+        VkMemoryBarrier2 m{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        m.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        m.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+        m.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT;
+        m.dstAccessMask = VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT;
+        VkDependencyInfo d{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        d.memoryBarrierCount = 1;
+        d.pMemoryBarriers = &m;
+        vkCmdPipelineBarrier2(command, &d);
+        tally("3D batches on the GPU", frame.models.size());
+    }
     vk::Barriers b;
     bool rendering = false;
     uint32_t boundColour = 0, boundDepth = 0;
@@ -926,7 +961,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
             if (cmd.kind != gsn::FrameList::Command::Kind::Draw) continue;
             const gsn::Draw& d = frame.draws[cmd.index];
             if (d.target != l.target || d.topology != gsn::Topology::Triangles || !d.count) continue;
-            if (!(frame.vertices[d.first].mw > 0.0f || frame.vertices[d.first + d.count - 1].mw > 0.0f)) continue;
+            if (!(d.moving || (!d.modeled && (frame.vertices[d.first].mw > 0.0f || frame.vertices[d.first + d.count - 1].mw > 0.0f)))) continue;
             const gfx::Context& c = d.state.c;
             const bool zt = d.depth && c.depthTest;
             if (d.depth && d.depth != l.depth) continue;
@@ -942,7 +977,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
             k.jitter[0] = jittered[at] ? phase[0] / float(sx) : 0.0f;
             k.jitter[1] = jittered[at] ? phase[1] / float(sy) : 0.0f;
             vk::pushConstants(command, velocityPass, k);
-            vkCmdDraw(command, d.count, 1, d.first, 0);
+            vkCmdDraw(command, d.count, 1, d.modeled ? modelBase + d.first : d.first, 0);
         }
         vkCmdEndRendering(command);
         return true;
@@ -1417,7 +1452,8 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
             // The draw's extent in render pixels (its vertices, a pixel's margin, inside its scissor).
             auto box = [&](const gsn::Draw& e) {
                 float bx0 = 1e30f, by0 = 1e30f, bx1 = -1e30f, by1 = -1e30f;
-                for (uint32_t v = 0; v < e.count; ++v) {
+                if (e.modeled) bx0 = by0 = -1e30f, bx1 = by1 = 1e30f;   // (its vertices are the GPU's: the scissor)
+                for (uint32_t v = 0; v < (e.modeled ? 0u : e.count); ++v) {
                     const gsn::Vertex& p = frame.vertices[e.first + v];
                     float x = p.x, y = p.y;
                     if (p.w != 0.0f) {   // homogeneous: projected; behind the eye: the scissor
@@ -1562,7 +1598,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
                 recorded.pushed = true;
                 tally("constant pushes");
             }
-            vkCmdDraw(command, d.count, 1, d.first, 0);
+            vkCmdDraw(command, d.count, 1, d.modeled ? modelBase + d.first : d.first, 0);
             tally("draws");
         }
     }
@@ -1742,6 +1778,10 @@ void GsnScene::prepare(const SceneFormats& formats) {
                                        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                                        VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
                                       40, "gsn temporal anti-aliasing");
+    if (!s.models.valid())
+        s.models = vk::createCompute(s.device, shaders::gsn_models_comp(),
+                                     {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, 16,
+                                     "gsn 3D batches");
     if (!s.reinterpret.valid())
         s.reinterpret = vk::createCompute(s.device, shaders::gsn_reinterpret_comp(),
                                           {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,

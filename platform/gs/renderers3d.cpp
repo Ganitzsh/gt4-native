@@ -1036,6 +1036,62 @@ bool Renderers3d::run(const Batch3d& batch, PrimitiveSink& sink, uint32_t& conti
         ++stats.oversized;
         return true;
     }
+    // On the GPU (docs/NATIVE_V2.md, step 2): a batch of triangle strips with perspective texturing goes whole to
+    // the front end, which draws it with gsn_models.comp (the same rules as below, in homogeneous coordinates).
+    if (sink.models() && homogeneousOutput() && tag.drawable && !tag.adcAlways && tag.pre && (tag.prim & 7) == 4 && !((tag.prim >> 8) & 1)) {
+        if (entry.header) {
+            const std::vector<uint8_t> header = copyPacket(r, kHeader);
+            sink.packet(header.data(), header.size());
+        }
+        // a fade to alpha 0 ends the program with nothing drawn
+        if (entry.lighting && chain.body == 0x16F8 && !static_cast<uint16_t>(r.words((r.half(202, 0) + 203u) & 0x3FF)[0])) {
+            r.store(kWeight, 0, 0x8000u);
+            continueAt = 0x1810 / 8;
+            return true;
+        }
+        gfx::ModelJob job{};
+        job.count = std::min(n, total);
+        job.nloop = n;
+        static const Renderer order[6] = {Renderer::Strip, Renderer::CulledBack, Renderer::CulledFront, Renderer::R2300, Renderer::R27A8, Renderer::R2AD8};
+        for (uint32_t k = 0; k < 6; ++k)
+            if (order[k] == entry.renderer) job.renderer = k;
+        Decoded* known = nullptr;
+        for (Decoded& d : decoded)
+            if (d.buffer == batch.buffer) known = &d;
+        if (!known) known = decoded[0].buffer ? &decoded[1] : &decoded[0];
+        Decoded& slot = *known;
+        if (entry.lighting) {
+            job.chain = 1u | chain.unpack << 4 | chain.body << 16;
+            job.dot = uint32_t(chain.model.squaringsA) | uint32_t(chain.model.second) << 4 | uint32_t(chain.model.squaringsB) << 8 |
+                      uint32_t(chain.model.nextNormal) << 12;
+            slot = {batch.buffer, batch.buffer->vertexWrites, job.chain, job.dot};
+        } else if (slot.buffer == batch.buffer && slot.writes == batch.buffer->vertexWrites && slot.chain) {
+            job.chain = slot.chain;   // drawn again: as the chain left the vertices
+            job.dot = slot.dot;
+            ++stats.redrawn;
+        } else {
+            job.chain = 5u << 4;
+        }
+        job.flags = (tag.fog ? 1u : 0u) | (hasPrevious ? 4u : 0u);
+        job.prim = tag.prim;
+        for (int k = 0; k < 4; ++k)
+            for (int i = 0; i < 4; ++i) {
+                job.matrix[k][i] = constants.matrix[k][i];
+                job.previousMatrix[k][i] = previous.matrix[k][i];
+            }
+        for (int i = 0; i < 4; ++i) {
+            job.scale[i] = constants.scale[i];
+            job.offset[i] = constants.offset[i];
+            job.clamp[i] = constants.clamp[i];
+            job.guard[i] = constants.guard[i];
+            job.previousScale[i] = previous.scale[i];
+            job.previousOffset[i] = previous.offset[i];
+        }
+        sink.model(job, &batch.buffer->words[0][0]);   // (as sent: qword 242 still holds the weight it had)
+        for (int i = 0; i < 4; ++i) r.store(kWeight, i, tag.words[i]);
+        ++stats.gpu;
+        return true;
+    }
     static thread_local Vertices in;
     const uint32_t count = std::max(total, n + 1);   // n + 1: 0x16F8 converts an even count
     in.resize(count);

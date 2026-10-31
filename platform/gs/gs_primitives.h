@@ -2,6 +2,7 @@
 // What GT4's 3D renderers (renderers3d.h) give the GS front end: primitives with the GS state that goes with
 // them, as values, with no GIF packet in between. The state comes from the batch's GIF tag (PRIM) and the
 // packets the game wrote for the GS (a batch's state header, the screen grids), which pass unchanged.
+#include "gt4/gfx.h"
 #include <cstddef>
 #include <cstdint>
 
@@ -43,6 +44,10 @@ public:
     // grid program steps), whole.
     virtual void packet(const uint8_t* gif, size_t bytes) = 0;
     virtual void primitives(const GsPrimitives& p) = 0;
+    // GT4's 3D renderers on the GPU (docs/NATIVE_V2.md, step 2): whether the sink takes a batch whole, and one
+    // (gfx::ModelJob, its gfx::kModelWords words).
+    virtual bool models() const { return false; }
+    virtual void model(const gfx::ModelJob& job, const uint32_t* words) { (void)job; (void)words; }
 };
 
 }  // namespace gt4::ps2

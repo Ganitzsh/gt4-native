@@ -55,6 +55,9 @@ void FrameList::clear() {
     lights.clear();
     textures.clear();
     reinterpretations.clear();
+    models.clear();
+    modelData.clear();
+    modelVertices = 0;
     retiredTextures.clear();
     resetTextures = false;
     targets.clear();
@@ -843,16 +846,21 @@ void GsFrontend::loadSetContent(uint64_t hash, const SetContent& sc) {
 }
 
 // The CLUT buffer's entries an indexed texture reads (a 4-bit one: 16 at CSA), hashed.
-uint64_t GsFrontend::paletteHash(const GsMemory::Tex0& t) const {
+uint64_t GsFrontend::paletteHash(const GsMemory::Tex0& t) {
     const uint16_t* buf = reinterpret_cast<const uint16_t*>(mem.clutBuffer());
     const bool four = t.psm == PSMT4 || t.psm == PSMT4HL || t.psm == PSMT4HH;
     const bool ct32 = t.cpsm == PSMCT32 || t.cpsm == PSMCT24;
     const uint32_t first = four ? (ct32 ? (t.csa & 15) * 16 : t.csa * 16) : 0, count = four ? 16 : 256;
+    // (the CLUT buffer changes only with a load: the last few hashes, by the loads so far)
+    const uint32_t which = first | count << 10 | uint32_t(ct32) << 20;
+    PaletteMemo& memo = paletteMemo[(which * 2654435761u >> 28) & 15];
+    if (memo.loads == clutLoads && memo.which == which) return memo.hash;
     uint64_t h = 0x9A1E77E5ull;
     for (uint32_t i = 0; i < count; ++i) {
         const uint32_t e = (first + i) & (ct32 ? 255 : 511);
         h = mix(h, ct32 ? (uint64_t(buf[e]) | uint64_t(buf[256 + e]) << 16) : buf[e]);
     }
+    memo = {clutLoads, which, h};
     return h;
 }
 
@@ -1385,6 +1393,109 @@ void GsFrontend::packed(uint32_t r, uint64_t a, uint64_t b) {
 }
 
 void GsFrontend::setPrim(uint32_t prim) { write(PRIM, prim & 0x7FF); }
+
+void GsFrontend::model(const gfx::ModelJob& in, const uint32_t* words) {
+    GT4_CPU_SCOPE("front end: 3D batches");
+    setPrim(in.prim);
+    const uint32_t prim = primValue();
+    queued = 0;   // (the next batch starts its strips again: its first two vertices complete no triangle)
+    // Its triangles: per strip, one per vertex from the third on, of the first `count` vertices.
+    uint32_t triangles = 0;
+    {
+        const uint32_t strips = words[64 * 4 + 3] & 0xFFFF;
+        uint32_t v = 0;
+        for (uint32_t k = 0; k < strips && v < in.count; ++k) {
+            const uint32_t n = (words[(65 + k) * 4 + 3] & 0xFFFF) / 3u + 2;
+            const uint32_t drawn = std::min(n, in.count - v);
+            if (drawn > 2) triangles += drawn - 2;
+            v += n;
+        }
+    }
+    if (!triangles) return;
+    const DrawState s = currentState(prim);
+    const gfx::Context& c = contexts[(prim & gfx::kContext2) ? 1 : 0];
+    static const bool keepJitter = [] { const char* e = std::getenv("GT4_GSN_JITTER"); return e && !std::strcmp(e, "keep"); }();
+    const uint32_t jitter = keepJitter ? 0xFFFFu : 0xFFF8u;
+    const uint32_t scissorX0 = s.c.scissorX0, scissorX1 = s.c.scissorX1, scissorY0 = s.c.scissorY0, scissorY1 = s.c.scissorY1;
+    const uint32_t width = s.c.colorWidth;
+    const uint32_t colour = targetFor(s.c.colorBase, s.c.colorFormat, false, scissorY1 + 1, width);
+    const bool zte = s.c.depthTest && !(s.c.depthFunc == 1 && !s.c.depthWrite);
+    const uint32_t depth = zte ? targetFor(s.c.depthBase, s.c.depthFormat, true, scissorY1 + 1, width) : 0;
+    if (!colour || (zte && !depth)) return;   // past the target limit
+    // what it writes: its scissor (the vertices are the GPU's); again only when something else wrote since
+    const std::array<uint32_t, 8> marking = {colour, s.c.colorKeep != 0xFFFFFFFFu, depth, depth && s.c.depthWrite, scissorX0, scissorX1, scissorY0, scissorY1};
+    if (marking != lastModelMarking || serial != lastModelSerial) {
+        if (s.c.colorKeep != 0xFFFFFFFFu) markWritten(colour, s.c.colorBase, width, s.c.colorFormat, scissorX0, scissorX1, scissorY0, scissorY1);
+        if (depth && s.c.depthWrite) markWritten(depth, s.c.depthBase, width, s.c.depthFormat, scissorX0, scissorX1, scissorY0, scissorY1);
+        lastModelMarking = marking;
+        lastModelSerial = serial;
+    }
+    TextureSource texture;
+    if ((prim >> 4) & 1) {
+        const LastTexture& m = lastTexture;
+        if (m.valid && m.uploads == uploads && m.ownerChanges == ownerChanges && m.clutLoads == clutLoads && m.state == s) {
+            texture = m.source;
+        } else {
+            texture = textureFor(s);
+            lastTexture = {texture.kind == TextureSource::Kind::Memory, s, texture, uploads, ownerChanges, clutLoads};
+        }
+    }
+    if (texture.kind == TextureSource::Kind::Target && texture.id != colour) sceneRead(texture.id);
+    const bool moving = (in.flags & 4) != 0;
+    Draw* batch = nullptr;
+    if (!frame.commands.empty() && frame.commands.back().kind == FrameList::Command::Kind::Draw) {
+        Draw& last = frame.draws[frame.commands.back().index];
+        if (last.modeled && last.topology == Topology::Triangles && last.state == s && last.target == colour && last.depth == depth &&
+            last.texture.kind == texture.kind && last.texture.id == texture.id && last.texture.version == texture.version &&
+            last.first + last.count == frame.modelVertices)
+            batch = &last;
+    }
+    if (!batch) {
+        Draw d;
+        d.state = s;
+        d.topology = Topology::Triangles;
+        d.first = frame.modelVertices;
+        d.target = colour;
+        d.depth = depth;
+        d.texture = texture;
+        d.modeled = true;
+        frame.commands.push_back({FrameList::Command::Kind::Draw, static_cast<uint32_t>(frame.draws.size())});
+        frame.draws.push_back(d);
+        ++stats.draws;
+        batch = &frame.draws.back();
+    }
+    batch->moving = batch->moving || moving;
+    gfx::ModelJob job = in;
+    job.first = frame.modelVertices;
+    job.data = static_cast<uint32_t>(frame.modelData.size());
+    job.originX = static_cast<float>(c.originX & jitter) / 16.0f;
+    job.originY = static_cast<float>(c.originY & jitter) / 16.0f;
+    job.u = static_cast<float>(reg[UV] & 0x3FFF) / 16.0f;
+    job.v = static_cast<float>((reg[UV] >> 16) & 0x3FFF) / 16.0f;
+    job.fogRegister = static_cast<uint32_t>(reg[FOG] >> 56);
+    if ((prim >> 3) & 1) job.flags |= 2;   // Gouraud
+    frame.modelVertices += triangles * 3;
+    batch->count += triangles * 3;
+    frame.modelData.insert(frame.modelData.end(), words, words + gfx::kModelWords);
+    frame.models.push_back(job);
+    stats.primitives += triangles;
+    if (depth) {
+        Scene& scene = scenes[colour];
+        scene.draws += triangles;
+        scene.depth = depth;
+        scene.width = std::max<uint32_t>(scene.width, scissorX1 + 1);
+        scene.height = std::max<uint32_t>(scene.height, scissorY1 + 1);
+        if ((prim >> 5) & 1) {
+            scene.fogColour = s.fogColor;
+            scene.fogged = true;
+        }
+        const std::array<uint16_t, 4> rect = {static_cast<uint16_t>(scissorX0), static_cast<uint16_t>(scissorY0),
+                                              static_cast<uint16_t>(scissorX1), static_cast<uint16_t>(scissorY1)};
+        auto known = std::find_if(scene.viewports.begin(), scene.viewports.end(), [&](const auto& v) { return v.first == rect; });
+        if (known != scene.viewports.end()) known->second += triangles;
+        else if (scene.viewports.size() < 8) scene.viewports.push_back({rect, triangles});
+    }
+}
 
 void GsFrontend::vertices(const InputVertex* in, size_t count, bool withFog) {
     const uint32_t prim = primValue();

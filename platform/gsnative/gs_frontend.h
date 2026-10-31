@@ -80,6 +80,9 @@ struct Draw {
     uint32_t first = 0, count = 0;   // vertices
     uint32_t target = 0, depth = 0;  // target ids (depth 0: none)
     TextureSource texture;
+    // Its vertices come from gsn_models.comp (FrameList::models): not known here, `first` counts from the end of
+    // FrameList::vertices; `moving`: motion vectors known.
+    bool modeled = false, moving = false;
 };
 
 // A decoded texture the back end must (re)upload: RGBA8, R in the low byte, the GS's alpha (0x80 = 1.0).
@@ -143,6 +146,11 @@ struct FrameList {
     std::vector<Command> commands;
     std::vector<TextureImage> textures;   // new or changed this frame
     std::vector<Reinterpretation> reinterpretations;
+    // GT4's 3D batches drawn on the GPU (docs/NATIVE_V2.md, step 2): gsn_models.comp writes their triangles into
+    // `vertices` (the ranges their draws hold) from the batches' words in `modelData`.
+    std::vector<gfx::ModelJob> models;
+    std::vector<uint32_t> modelData;
+    uint32_t modelVertices = 0;   // their vertices: after `vertices` in the GPU's buffer (a modeled draw's first counts from there)
     std::vector<uint32_t> retiredTextures;   // texture ids no longer used after this frame
     bool resetTextures = false;              // every earlier texture is gone (GsFrontend::resetTextures)
     std::vector<Target> targets;          // every target known (created or grown this frame included)
@@ -187,6 +195,9 @@ public:
     // draw state, targets and texture worked out once for the run when it is a triangle strip with perspective
     // texturing or none (what the 3D renderers send); other runs go vertex by vertex.
     void vertices(const InputVertex* v, size_t count, bool withFog);
+    // A batch of the 3D renderers drawn on the GPU (docs/NATIVE_V2.md, step 2): the draw state, targets and
+    // texture as vertices() works them out for a run, its triangles' vertices left to gsn_models.comp.
+    void model(const gfx::ModelJob& job, const uint32_t* words);
     // The display from this VBlank on.
     void display(const gfx::DisplayRecord& d) { shown = d; }
     // Ends the frame: `out` receives it (swapped, so its buffers are reused).
@@ -359,10 +370,18 @@ private:
     }
     std::unordered_map<uint64_t, SetContent> setContents;
     uint64_t setContentBytes = 0;
+    // model(): the targets and scissor the last batch marked written, and the write serial after it
+    std::array<uint32_t, 8> lastModelMarking{};
+    uint64_t lastModelSerial = ~0ull;
     std::unique_ptr<GsMemory> assetMemory;
     uint64_t assetLoaded = 0;   // the content written into assetMemory (0: none)
     void loadSetContent(uint64_t hash, const SetContent& sc);
-    uint64_t paletteHash(const GsMemory::Tex0& t) const;
+    uint64_t paletteHash(const GsMemory::Tex0& t);
+    struct PaletteMemo {
+        uint64_t loads = ~0ull;   // clutLoads when computed
+        uint32_t which = 0;
+        uint64_t hash = 0;
+    } paletteMemo[16];
     bool setTexture(const DrawState& s, TextureSource& out);
     // Each 8 KiB page's content hash, and the page generation it was computed at (pageContent).
     std::vector<uint64_t> pageHash = std::vector<uint64_t>(512, 0), pageHashGeneration = std::vector<uint64_t>(512, ~0ull);
