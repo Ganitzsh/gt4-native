@@ -29,6 +29,7 @@ enum class EffectQuality : uint8_t { Original, Off, Low, Medium, High, Ultra };
 enum class LightingMode : uint8_t { Original, Enhanced };
 enum class MirrorDetail : uint8_t { Original, High };
 enum class ModelDetail : uint8_t { Original, High, Ultra };
+enum class RaceFrames : uint8_t { Fields, Progressive };
 enum class Preset : uint8_t { Original, Low, Medium, High, Ultra, Custom };
 // The AI's catch-up (GT4's "slow car boost": cars behind sped up, cars ahead slowed down, by event).
 enum class AiCatchUp : uint8_t { Original, Reduced, Off };
@@ -88,6 +89,7 @@ struct Settings {
     LightingMode lighting = LightingMode::Original;   // the game's 3D scenes graded as a modern renderer's
     MirrorDetail mirror = MirrorDetail::High;         // the rear-view mirror's course, textures and cars (sent to the game)
     ModelDetail modelDetail = ModelDetail::High;      // models' detail levels kept 1x / 2x / 4x as far (sent to the game)
+    RaceFrames raceFrames = RaceFrames::Progressive;  // races drawn as 224-line fields or whole 448-line frames (the game's 480p)
 
     // [post]
     Tonemapper tonemapper = Tonemapper::AgXPunchy;
@@ -130,6 +132,7 @@ const char* name(EffectQuality);
 const char* name(LightingMode);
 const char* name(MirrorDetail);
 const char* name(ModelDetail);
+const char* name(RaceFrames);
 const char* name(TextureFilter);
 const char* name(HudLayout);
 const char* name(AiCatchUp);

@@ -1965,10 +1965,23 @@ void GsFrontend::vsync(uint64_t vblank, FrameList& out) {
     frame.targets = targets;
     Display& d = frame.display;
     d.record = shown;
+    // the target at the circuit's buffer: of its format's layout (GT4's 480p frames are 16-bit where the 480i ones
+    // were 32-bit, at the same address), else the one written last
     auto displayed = [&](const gfx::DisplayCircuit& c) -> uint32_t {
-        for (const Target& t : targets)
-            if (!t.depth && t.bp == c.base && t.bw == c.width) return t.id;
-        return 0;
+        uint32_t best = 0;
+        uint64_t bestWritten = 0;
+        bool bestLayout = false;
+        for (const Target& t : targets) {
+            if (t.depth || t.bp != c.base || t.bw != c.width) continue;
+            const bool layout = layout32(t.psm) == layout32(c.format);
+            const uint64_t written = t.id < targetWritten.size() ? targetWritten[t.id] : 0;
+            if (!best || (layout && !bestLayout) || (layout == bestLayout && written > bestWritten)) {
+                best = t.id;
+                bestWritten = written;
+                bestLayout = layout;
+            }
+        }
+        return best;
     };
     d.target1 = displayed(shown.circuit[0]);
     d.target2 = displayed(shown.circuit[1]);

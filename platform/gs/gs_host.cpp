@@ -182,7 +182,7 @@ public:
                             c.scissorX0, c.scissorX1, c.scissorY0, c.scissorY1, d.count);
                 // GT4_GSN_VERTS=N: the first N vertices of each draw (default 6)
                 static const uint32_t verts = std::getenv("GT4_GSN_VERTS") ? std::strtoul(std::getenv("GT4_GSN_VERTS"), nullptr, 10) : 6;
-                for (uint32_t k = 0; k < std::min<uint32_t>(d.count, verts); ++k) {
+                for (uint32_t k = 0; k < (d.modeled ? 0u : std::min<uint32_t>(d.count, verts)); ++k) {   // (3D on the GPU: not here)
                     const auto& v = list.vertices[d.first + k];
                     std::printf("    z %08X xy %.2f %.2f uv %.2f %.2f stq %.4f %.4f %.4f rgba %08X\n", v.z, v.x, v.y, v.u, v.v, v.s, v.t, v.q, v.rgba);
                 }

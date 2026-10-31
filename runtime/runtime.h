@@ -22,7 +22,7 @@ void record_install();
 void profile_start();
 
 // The host's gameplay options (runtime/sdk.cpp), read by game_src copies through gt4_game_option(id).
-enum GameOption : uint32_t { kOptionAiCatchUp = 0, kOptionMirrorDetail = 1, kOptionModelDetail = 2, kGameOptionCount = 8 };
+enum GameOption : uint32_t { kOptionAiCatchUp = 0, kOptionMirrorDetail = 1, kOptionModelDetail = 2, kOptionRaceFrames = 3, kGameOptionCount = 8 };
 void set_game_option(uint32_t id, uint32_t value);   // GT4_REC_HOST_CMD 4 (runtime/link.cpp)
 
 }  // namespace gt4::rt
