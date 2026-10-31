@@ -104,7 +104,10 @@ extern "C" void gt4_logf(const char *fmt, ...) {
 
 // The display shape for game_src/func_004365B8.cpp (the game's wide mode): --aspect W:H or a
 // number, x 1000; 0 when not given (the game's own option is kept).
+extern "C" int gt4_game_option(int id);
 extern "C" int gt4_display_aspect_milli() {
+    // the host's current content shape (a window resized, aspect.ratio changed), else the start-up one
+    if (const int live = gt4_game_option(gt4::rt::kOptionAspect); live >= 1000) return live;
     const char *a = gt4::rt::g_config.aspect;
     if (!a || !*a) return 0;
     double w = 0, h = 1;

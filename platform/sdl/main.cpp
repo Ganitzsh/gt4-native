@@ -559,7 +559,12 @@ int run(const Options& options) {
         // A wide content shape switches on the game's own 16:9 mode, generalised to that aspect (the
         // game's --aspect: Hor+ 3D in the anamorphic 640 x 448 frame, which the host presents at the
         // aspect). Read at start-up: changing aspect.ratio later needs a restart of the game.
-        if (const float a = gt4::aspectValue(settings.aspect); !options.game.empty() && a >= 1.5f) {
+        // (aspect.ratio = window: the window's own shape)
+        const VkExtent2D startExtent = renderer->drawableExtent();
+        const float startAspect = settings.aspect == gt4::AspectRatio::Window
+                                      ? (startExtent.height ? float(startExtent.width) / float(startExtent.height) : 0.0f)
+                                      : gt4::aspectValue(settings.aspect);
+        if (const float a = startAspect; !options.game.empty() && a >= 1.5f) {
             gsOptions.gameArgs.push_back("--aspect");
             gsOptions.gameArgs.push_back(std::to_string(a));
             // The menus' 2D: in a centred 4:3 area, or stretched as on the PS2 (aspect.hud = stretched).
@@ -815,6 +820,12 @@ int run(const Options& options) {
                 gs->setGameOption(1, static_cast<uint32_t>(settings.mirror));      // kOptionMirrorDetail
                 gs->setGameOption(2, static_cast<uint32_t>(settings.modelDetail)); // kOptionModelDetail
                 gs->setGameOption(3, static_cast<uint32_t>(settings.raceFrames));  // kOptionRaceFrames
+                {   // kOptionAspect: the content's shape now (aspect.ratio, or the window's)
+                    const VkExtent2D e = renderer->drawableExtent();
+                    const float a = settings.aspect == gt4::AspectRatio::Window ? (e.height ? float(e.width) / float(e.height) : 0.0f)
+                                                                               : gt4::aspectValue(settings.aspect);
+                    gs->setGameOption(4, a > 0.0f ? static_cast<uint32_t>(a * 1000.0f + 0.5f) : 0u);
+                }
                 // Nothing reaches the game while the menu is open, nor afterwards until every button is up
                 // (the button that closed the menu would act in the game).
                 gt4::ps2::PadInput input = readPad(session ? session->gamepad() : gamepad);
