@@ -5,15 +5,17 @@
 // coloured matte surfaces (grass, gravel, sand) reflect little. The ray is marched in screen space with depth
 // interpolated in 1 / z, refined by bisection, and its direction is perturbed per pixel and frame for a slightly
 // rough lobe that the temporal resolve integrates. Rays leaving the screen or the scene fade out.
+// Traced at half resolution (one ray per 2 x 2 pixels, from the pixel at their centre): the reflected colour (linear)
+// times its share, and the share, for gsn_ssr_composite.comp to blend in at full resolution.
 #extension GL_GOOGLE_include_directive : require
 #include "gsn_view.glsl"
 layout(local_size_x = 8, local_size_y = 8) in;
 layout(set = 0, binding = 0) uniform sampler2D scene;         // colour / 255
 layout(set = 0, binding = 1) uniform sampler2D depthBuffer;   // GS Z / 2^32
 layout(set = 0, binding = 2) uniform sampler2D unused;
-layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D result;
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D reflection;   // half resolution
 layout(push_constant) uniform Ssr {
-    vec2 size;
+    vec2 size;        // the scene's full-resolution area
     vec2 tanHalf;
     float zScale;
     float strength;   // 0..1: how much of the Fresnel term reaches the picture
@@ -24,10 +26,11 @@ layout(push_constant) uniform Ssr {
 } p;
 
 void main() {
-    const ivec2 q = ivec2(gl_GlobalInvocationID.xy);
-    if (any(greaterThanEqual(q, ivec2(p.size)))) return;
+    const ivec2 h = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(h * 2, ivec2(p.size)))) return;
+    const ivec2 q = min(h * 2 + 1, ivec2(p.size) - 1);
+    imageStore(reflection, h, vec4(0.0));
     const vec4 c = texelFetch(scene, q, 0);
-    imageStore(result, q, c);
     const float d = viewDistance(depthBuffer, q, p.zScale);
     if (d > 3000.0) return;   // sky, or nothing drawn
     const vec3 P = viewPosition(vec2(q) + 0.5, d, p.size, p.tanHalf);
@@ -38,10 +41,10 @@ void main() {
     const vec3 V = normalize(P);
     const float cosine = max(dot(-V, n), 0.0);
     weight *= (0.04 + 0.96 * pow(1.0 - cosine, 5.0)) * p.strength;
-    if (p.view == 1u) imageStore(result, q, vec4(weight, 0.0, 0.0, c.a));
+    if (p.view == 1u) imageStore(reflection, h, vec4(weight, 0.0, 0.0, -1.0));
     if (weight < 0.003) return;
 
-    const float noise = gradientNoise(vec2(q) + float(p.frame % 64u) * vec2(5.588, 3.17));
+    const float noise = gradientNoise(vec2(h) + float(p.frame % 64u) * vec2(5.588, 3.17));
     const float angle = noise * 6.2831853;
     vec3 R = reflect(V, n);
     R = normalize(R + p.roughness * (vec3(cos(angle), 0.0, sin(angle)) * fract(noise * 7.31) + vec3(0.0, -0.5 * fract(noise * 3.7), 0.0)));
@@ -67,7 +70,7 @@ void main() {
         before = f;
     }
     if (hit < 0.0) {
-        if (p.view == 1u) imageStore(result, q, vec4(weight, 0.0, 1.0, c.a));
+        if (p.view == 1u) imageStore(reflection, h, vec4(weight, 0.0, 1.0, -1.0));
         return;
     }
     for (int k = 0; k < 4; ++k) {   // bisection between the last miss and the hit
@@ -80,7 +83,7 @@ void main() {
     const vec2 s = mix(s0, s1, hit);
     const vec2 edge = min(s, p.size - s) / (0.1 * p.size);
     const float fade = clamp(min(edge.x, edge.y), 0.0, 1.0) * (1.0 - hit);
+    const float share = clamp(weight * fade, 0.0, 1.0);
     const vec3 reflected = toLinear(texelFetch(scene, ivec2(s), 0).rgb);
-    const vec3 lit = mix(toLinear(c.rgb), reflected, clamp(weight * fade, 0.0, 1.0));
-    imageStore(result, q, p.view == 1u ? vec4(weight, fade, 0.0, c.a) : vec4(toDisplay(lit), c.a));
+    imageStore(reflection, h, p.view == 1u ? vec4(weight, fade, 0.0, -1.0) : vec4(reflected * share, share));
 }

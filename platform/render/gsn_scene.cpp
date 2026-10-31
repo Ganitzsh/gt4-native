@@ -162,7 +162,8 @@ struct GsnScene::Impl {
     std::unordered_map<uint32_t, History> histories;   // by scene target
     // The scene stage's other effects (GsnScene::setEffects), each a compute pass over the scene.
     SceneEffects effects;
-    vk::Pipeline ssrPass, fogPass, blurPass, dofPass;
+    vk::Pipeline ssrPass, ssrComposite, fogPass, blurPass, dofPass;
+    vk::Image ssrImage;   // the reflections at half resolution (gsn_ssr.comp)
     // A Z buffer's depth plane as a sampled view (kept with the image's other views, destroyed with it).
     VkImageView depthView(vk::Image& image) {
         if (!image.mipViews.empty()) return image.mipViews[0];
@@ -316,7 +317,8 @@ struct GsnScene::Impl {
         vk::destroy(device, litImage);
         vk::destroy(device, velocityPass);
         vk::destroy(device, taaPass);
-        for (vk::Pipeline* p : {&ssrPass, &fogPass, &blurPass, &dofPass}) vk::destroy(device, *p);
+        for (vk::Pipeline* p : {&ssrPass, &ssrComposite, &fogPass, &blurPass, &dofPass}) vk::destroy(device, *p);
+        vk::destroy(device, ssrImage);
         vk::destroy(device, velocityImage);
         for (auto& [id, h] : histories)
             for (vk::Image& i : h.image) vk::destroy(device, i);
@@ -944,22 +946,23 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
     };
     // A pass of the scene stage over the scene's area: the scene (binding 0, linear), its Z (1), the motion
     // vectors (2: the scene when there are none) into litImage (3), copied back.
+    // `third`: the image at binding 2 (the motion vectors, the half-resolution reflections; else the scene again).
     auto stagePass = [&](const gsn::FrameList::Lighting& l, const SceneImages& si, vk::Pipeline& pass, const void* push, uint32_t pushSize,
-                         bool motion) {
+                         vk::Image* third) {
         end();
         vk::Image& colour = *si.colour;
         const VkExtent2D e = si.area;
         ensureImage(litImage, e, kColour, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, "gsn lit");
         vk::toSampled(b, colour, vk::kCompute);
         vk::toSampled(b, *si.depth, vk::kCompute);
-        if (motion) vk::toSampled(b, velocityImage, vk::kCompute);
+        if (third) vk::toSampled(b, *third, vk::kCompute);
         vk::toStorage(b, litImage, true);
         b.flush(command);
         vk::bind(command, pass);
         vk::Descriptors()
             .sampled(0, colour.view, samplers[2])
             .sampled(1, depthView(*si.depth), samplers[0])
-            .sampled(2, motion ? velocityImage.view : colour.view, samplers[0])
+            .sampled(2, third ? third->view : colour.view, samplers[0])
             .storage(3, litImage.view)
             .push(command, pass);
         vk::pushConstants(command, pass, push, pushSize);
@@ -981,7 +984,28 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
             uint32_t view;
         } k{{float(si.area.width), float(si.area.height)}, {lighting.tanX, lighting.tanY}, kZScale, effects.reflections,
             effects.reflectionSteps, static_cast<uint32_t>(displayedFrames), temporal ? 0.06f : 0.0f, ssrView};
-        stagePass(l, si, ssrPass, &k, sizeof k, false);
+        // Traced at half resolution into ssrImage, then blended in at full resolution (gsn_ssr_composite.comp).
+        end();
+        const VkExtent2D half{(si.area.width + 1) / 2, (si.area.height + 1) / 2};
+        ensureImage(ssrImage, half, kColour, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, "gsn reflections");
+        vk::toSampled(b, *si.colour, vk::kCompute);
+        vk::toSampled(b, *si.depth, vk::kCompute);
+        vk::toStorage(b, ssrImage, true);
+        b.flush(command);
+        vk::bind(command, ssrPass);
+        vk::Descriptors()
+            .sampled(0, si.colour->view, samplers[0])
+            .sampled(1, depthView(*si.depth), samplers[0])
+            .sampled(2, si.colour->view, samplers[0])
+            .storage(3, ssrImage.view)
+            .push(command, ssrPass);
+        vk::pushConstants(command, ssrPass, k);
+        vk::dispatch2D(command, half.width, half.height);
+        struct {
+            float size[2], zScale;
+            uint32_t view;
+        } c{{float(si.area.width), float(si.area.height)}, kZScale, ssrView};
+        stagePass(l, si, ssrComposite, &c, sizeof c, &ssrImage);
     };
     auto haze = [&](const gsn::FrameList::Lighting& l) {
         SceneImages si;
@@ -992,7 +1016,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
             float colour[4];
         } k{{float(si.area.width), float(si.area.height)}, {lighting.tanX, lighting.tanY}, kZScale, effects.fogDensity, 0.02f, 1.5f,
             {float(f & 0xFF) / 255.0f, float((f >> 8) & 0xFF) / 255.0f, float((f >> 16) & 0xFF) / 255.0f, 1.0f}};
-        stagePass(l, si, fogPass, &k, sizeof k, false);
+        stagePass(l, si, fogPass, &k, sizeof k, nullptr);
     };
     auto blur = [&](const gsn::FrameList::Lighting& l) {
         SceneImages si;
@@ -1003,7 +1027,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         } k{{float(si.area.width), float(si.area.height)}, {float(si.sx), float(si.sy)},
             {float(si.colour->extent.width), float(si.colour->extent.height)}, effects.shutter, 0.05f * float(si.area.height), kZScale,
             effects.blurSamples, static_cast<uint32_t>(displayedFrames)};
-        stagePass(l, si, blurPass, &k, sizeof k, true);
+        stagePass(l, si, blurPass, &k, sizeof k, &velocityImage);
     };
     auto focus = [&](const gsn::FrameList::Lighting& l) {
         SceneImages si;
@@ -1014,7 +1038,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         } k{{float(si.area.width), float(si.area.height)}, {lighting.tanX, lighting.tanY},
             {float(si.colour->extent.width), float(si.colour->extent.height)}, kZScale, effects.focus, effects.aperture,
             0.02f * float(si.area.height), effects.dofSamples};
-        stagePass(l, si, dofPass, &k, sizeof k, false);
+        stagePass(l, si, dofPass, &k, sizeof k, nullptr);
     };
 
     // The resolve: the scene against its history (gsn_taa.comp), into the history's other image, copied back.
@@ -1693,6 +1717,8 @@ void GsnScene::prepare(const SceneFormats& formats) {
     const auto stage = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE};
     if (!s.ssrPass.valid()) s.ssrPass = vk::createCompute(s.device, shaders::gsn_ssr_comp(), stage, 48, "gsn reflections");
+    if (!s.ssrComposite.valid())
+        s.ssrComposite = vk::createCompute(s.device, shaders::gsn_ssr_composite_comp(), stage, 48, "gsn reflections composite");
     if (!s.fogPass.valid()) s.fogPass = vk::createCompute(s.device, shaders::gsn_fog_comp(), stage, 48, "gsn fog");
     if (!s.blurPass.valid()) s.blurPass = vk::createCompute(s.device, shaders::gsn_motionblur_comp(), stage, 48, "gsn motion blur");
     if (!s.dofPass.valid()) s.dofPass = vk::createCompute(s.device, shaders::gsn_dof_comp(), stage, 48, "gsn depth of field");

@@ -1,0 +1,52 @@
+#version 460
+// The screen-space reflections (gsn_ssr.comp, half resolution) blended into the scene at full resolution: of the
+// four nearest half-resolution samples, bilinearly weighted, only those on the same surface (their distance within
+// 5 % of the pixel's) count, so that the road's reflection does not spill onto a car's edge. In linear light:
+// the scene times one less the share, plus the reflected colour times its share.
+#extension GL_GOOGLE_include_directive : require
+#include "gsn_view.glsl"
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D scene;
+layout(set = 0, binding = 1) uniform sampler2D depthBuffer;
+layout(set = 0, binding = 2) uniform sampler2D reflection;    // half resolution: colour x share, share
+layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D result;
+layout(push_constant) uniform Composite {
+    vec2 size;
+    float zScale;
+    uint view;        // debugging (GT4_SSR_VIEW): the half-resolution values as they are
+} p;
+
+void main() {
+    const ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(q, ivec2(p.size)))) return;
+    const vec4 c = texelFetch(scene, q, 0);
+    const ivec2 halfLast = (ivec2(p.size) - 1) / 2;
+    if (p.view == 1u) {
+        const vec4 r = texelFetch(reflection, min(q / 2, halfLast), 0);
+        imageStore(result, q, r.a < 0.0 ? vec4(r.rgb, c.a) : c);
+        return;
+    }
+    const float d = viewDistance(depthBuffer, q, p.zScale);
+    // The half-resolution samples around: texel h holds the pixel 2h + 1.
+    const vec2 at = (vec2(q) + 0.5) * 0.5 - 0.5 - 0.25;
+    const ivec2 base = ivec2(floor(at));
+    const vec2 f = at - vec2(base);
+    vec4 sum = vec4(0.0);
+    float weights = 0.0;
+    for (int y = 0; y < 2; ++y)
+        for (int x = 0; x < 2; ++x) {
+            const ivec2 h = clamp(base + ivec2(x, y), ivec2(0), halfLast);
+            const ivec2 s = min(h * 2 + 1, ivec2(p.size) - 1);
+            const float ds = viewDistance(depthBuffer, s, p.zScale);
+            const float w = (x == 1 ? f.x : 1.0 - f.x) * (y == 1 ? f.y : 1.0 - f.y) * (abs(ds - d) < 0.05 * min(d, 1e4) ? 1.0 : 0.0);
+            sum += texelFetch(reflection, h, 0) * w;
+            weights += w;
+        }
+    if (weights < 1e-4) {
+        imageStore(result, q, c);
+        return;
+    }
+    const vec4 r = sum / weights;
+    const vec3 lit = toLinear(c.rgb) * (1.0 - r.a) + r.rgb;
+    imageStore(result, q, vec4(toDisplay(lit), c.a));
+}
