@@ -37,7 +37,7 @@ int wrap(int i, uint mode, int size) {
 // holds what the GS draws at the point j / scale (gsn.vert), and the GS reads that point back at u =
 // j / scale + 0.5 (u in [k, k + 1) is the GS pixel k): u - 0.5 + 0.5 / scale puts it at that render pixel's
 // centre. At 1x it is u itself.
-vec2 fromTargetPosition(vec2 position) { return position - 0.5 + 0.5 / draw.scale; }
+vec2 fromTargetPosition(vec2 position) { return position - 0.5 + 0.5 / draw.sourceScale; }
 
 // Point sampling as the GS: the texel under the coordinate (in texels; a small bias keeps exact integers
 // from rounding down), wrapped. From a target at a higher scale, the render pixel within that texel.

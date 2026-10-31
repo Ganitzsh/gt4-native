@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <map>
 #include <string>
 #include <unordered_map>
@@ -35,8 +36,9 @@ struct DrawConstants {
     uint32_t clampU, clampV;   // WMS/WMT (0-1), MINU/MINV (2-11), MAXU/MAXV (12-21): CLAMP
     uint32_t lod;              // LCM (0), L (1-2), K (3-14, signed 7.4), MXL (16-18): TEX1
     float jitter[2];           // the scene stage's sub-pixel offset, GS pixels (temporal anti-aliasing)
+    float sourceScale[2];      // a texture from a target: that target's render pixels per GS pixel (else scale's)
 };
-static_assert(sizeof(DrawConstants) == 80);
+static_assert(sizeof(DrawConstants) == 88);
 
 // The temporal anti-aliasing's sub-pixel offsets: Halton (2, 3), 8 phases, in render pixels from the centre.
 constexpr float kHalton[8][2] = {{0.0f, -1.0f / 6.0f},   {-0.25f, 1.0f / 6.0f}, {0.25f, -7.0f / 18.0f}, {-0.375f, -1.0f / 18.0f},
@@ -90,10 +92,24 @@ struct GsnScene::Impl {
     VkExtent2D lastExtent{640, 448};   // the render extent of the last frame (the scale of reads between frames)
     // Render pixels per GS pixel, per axis: the anamorphic 16:9 frame gets more across than down.
     uint32_t scaleSetting = 0, sx = 1, sy = 1;
+    // While the display shows fields (the race: 224 lines a field, sy from them), a target of 384 lines or more
+    // (the 448-line 3D scene, which GT4's post effects take down to the field) gets half the vertical scale,
+    // rounded up: about the output's rows rather than twice them (at 1080p, 2240 rows for 1080 shown).
+    bool fieldMode = false;
+    uint32_t verticalScaleFor(const gsn::Target& t) const { return fieldMode && t.height >= 384 ? (sy + 1) / 2 : sy; }
+    // A target narrower than the screen (under 512 GS pixels: GT4's environment maps, the car paint's reflection,
+    // the glare's levels) is a texture other draws read, never shown pixel for pixel: at most 2 render pixels per
+    // GS pixel each way (a 128 x 256 environment map was drawn at 2 x 5 at 1080p, 0.44 ms of 4.5).
+    std::pair<uint32_t, uint32_t> scaleFor(const gsn::Target& t) const {
+        const uint32_t x = sx, y = verticalScaleFor(t);
+        return t.bw * 64 < 512 ? std::make_pair(std::min(x, 2u), std::min(y, 2u)) : std::make_pair(x, y);
+    }
+    bool warnedScales = false;
 
     struct GpuTarget {
         vk::Image image;
         uint32_t width = 0, height = 0;   // GS pixels
+        uint32_t scaleX = 1, scaleY = 1;  // render pixels per GS pixel (scaleFor)
         uint32_t psm = 0;
         bool depth = false;
         uint32_t generation = 0;
@@ -175,6 +191,9 @@ struct GsnScene::Impl {
     // averaged per frame and printed when the scene goes.
     struct Profile {
         bool on = false;
+        int level = 1;   // 2: each render pass by its target, the reinterpretations, the stencil copies
+        std::deque<std::string> labelStore;
+        std::unordered_map<uint64_t, const char*> passLabels;
         VkQueryPool pool = VK_NULL_HANDLE;
         static constexpr uint32_t kPerSlot = 256;
         std::vector<const char*> labels[kSlots];
@@ -242,6 +261,7 @@ struct GsnScene::Impl {
             q.queryType = VK_QUERY_TYPE_TIMESTAMP;
             q.queryCount = Profile::kPerSlot * kSlots;
             profile.on = vkCreateQueryPool(device.device, &q, nullptr, &profile.pool) == VK_SUCCESS;
+            profile.level = std::atoi(e);
         }
         for (int linear = 0; linear < 2; ++linear)
             for (int repeat = 0; repeat < 2; ++repeat)
@@ -379,14 +399,18 @@ struct GsnScene::Impl {
             g = GpuTarget{};
         }
         g.generation = t.generation;
+        const auto [tx, ty] = scaleFor(t);
         // Within Vulkan's guaranteed image size at this scale (a 2048-line target at 8x is 16384 tall).
-        const uint32_t width = std::min(std::max<uint32_t>(64, t.bw * 64), 16384 / sx),
-                       height = std::min(std::max<uint32_t>(32, t.height), 16384 / sy);
-        if (g.image.valid() && g.width >= width && g.height >= height && g.image.extent.width == g.width * sx &&
-            g.image.extent.height == g.height * sy) {
+        const uint32_t width = std::min(std::max<uint32_t>(64, t.bw * 64), 16384 / tx),
+                       height = std::min(std::max<uint32_t>(32, t.height), 16384 / ty);
+        if (g.image.valid() && g.width >= width && g.height >= height && g.scaleX == tx && g.scaleY == ty &&
+            g.image.extent.width == g.width * tx && g.image.extent.height == g.height * ty) {
             g.psm = t.psm;
             return;
         }
+        if (g.scaleX != tx || g.scaleY != ty) g.width = g.height = 0;   // another scale: sized afresh
+        g.scaleX = tx;
+        g.scaleY = ty;
         if (g.image.valid()) retire(g.image);   // still used by frames in flight or earlier lists of this one
         g.width = std::max(g.width, width);
         g.height = std::max(g.height, height);
@@ -394,7 +418,7 @@ struct GsnScene::Impl {
         g.psm = t.psm;
         vk::ImageDesc desc;
         desc.format = t.depth ? kDepth : kColour;
-        desc.extent = {g.width * sx, g.height * sy};
+        desc.extent = {g.width * tx, g.height * ty};
         desc.usage = t.depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT
                              : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                                    VK_IMAGE_USAGE_TRANSFER_DST_BIT;
@@ -589,12 +613,43 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
     uint32_t boundColour = 0, boundDepth = 0;
     bool stencilFresh = false;   // the bound depth image's stencil holds the bound target's alpha bit 7
     VkPipeline boundPipeline = VK_NULL_HANDLE;
+    // GT4_GPU_PROFILE=2: a render pass's time under its target's name (block address, size in GS pixels, format).
+    auto passLabel = [&](uint32_t id) -> const char* {
+        uint32_t bp = 0, psm = 0;
+        for (const gsn::Target& t : frame.targets)
+            if (t.id == id) bp = t.bp, psm = t.psm;
+        const GpuTarget& g = targets[id];
+        const uint64_t key = (uint64_t(bp) << 40) | (uint64_t(g.width) << 28) | (uint64_t(g.height) << 16) | psm;
+        auto it = profile.passLabels.find(key);
+        if (it != profile.passLabels.end()) return it->second;
+        char name[64];
+        std::snprintf(name, sizeof name, "pass bp%04x %ux%u psm%02x", bp, g.width, g.height, psm);
+        profile.labelStore.emplace_back(name);
+        return profile.passLabels[key] = profile.labelStore.back().c_str();
+    };
+    const bool perPass = profile.on && profile.level >= 2;
+    // The draws' state as last set in this render pass: only changes are recorded (a draw's state commands cost the
+    // GPU's command processor more than its few vertices). Forgotten when the pass ends or another pass runs.
+    struct Recorded {
+        int depthTest = -1, compare = -1, stencilTest = -1, reference = -1, depthWrite = -1;
+        bool stencilFixed = false;
+        VkRect2D scissor{{-1, -1}, {0, 0}};
+        VkImageView view = VK_NULL_HANDLE;
+        VkSampler sampler = VK_NULL_HANDLE;
+        bool pushed = false;
+        DrawConstants constants{};
+    } recorded;
     auto end = [&] {
-        if (rendering) vkCmdEndRendering(command);
+        if (rendering) {
+            vkCmdEndRendering(command);
+            if (perPass) mark(command, passLabel(boundColour));
+        }
         rendering = false;
         boundPipeline = VK_NULL_HANDLE;
+        recorded = Recorded{};
     };
     auto begin = [&](uint32_t colourId, uint32_t depthId) {
+        if (perPass) mark(command, "between passes");
         GpuTarget& c = targets[colourId];
         vk::toColor(b, c.image);
         vk::Image* depth = depthId == ~0u ? &scratchDepth : depthId ? &targets[depthId].image : nullptr;
@@ -637,6 +692,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
     // The stencil copy of a target's alpha bit 7, for the destination alpha test.
     auto prepareStencil = [&](uint32_t colourId, uint32_t depthId) {
         end();
+        if (perPass) mark(command, "between passes");
         tally("stencil copies");
         GpuTarget& c = targets[colourId];
         vk::Image& depth = depthId == ~0u ? scratchDepth : targets[depthId].image;
@@ -672,6 +728,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         vk::Descriptors().sampled(0, c.image.view, samplers[0]).push(command, stencilPrep);
         vkCmdDraw(command, 3, 1, 0, 0);
         vkCmdEndRendering(command);
+        if (perPass) mark(command, "stencil copies");
     };
 
     // The scene stage (docs/NATIVE_RENDERER.md, docs/LIGHTING.md): a 3D scene complete in its target (the
@@ -680,6 +737,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         vk::Image* colour = nullptr;
         vk::Image* depth = nullptr;
         VkExtent2D area{};
+        uint32_t sx = 1, sy = 1;   // the scene target's scale
     };
     auto sceneImages = [&](const gsn::FrameList::Lighting& l, SceneImages& out) {
         auto ct = targets.find(l.target), dt = targets.find(l.depth);
@@ -687,13 +745,16 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         if (!ct->second.image.valid() || !dt->second.image.valid()) return false;
         out.colour = &ct->second.image;
         out.depth = &dt->second.image;
+        out.sx = ct->second.scaleX;
+        out.sy = ct->second.scaleY;
+        if (dt->second.scaleX != out.sx || dt->second.scaleY != out.sy) return false;   // (never seen: they pair by size)
         VkExtent2D e{std::min(out.colour->extent.width, out.depth->extent.width), std::min(out.colour->extent.height, out.depth->extent.height)};
-        if (l.width && l.height) e = {std::min(e.width, l.width * sx), std::min(e.height, l.height * sy)};
+        if (l.width && l.height) e = {std::min(e.width, l.width * out.sx), std::min(e.height, l.height * out.sy)};
         out.area = e;
         return true;
     };
     // The stage's result copied back into the scene, except an inset view (another camera: the mirror).
-    auto copyBack = [&](vk::Image& from, vk::Image& colour, VkExtent2D e, const gsn::FrameList::Lighting& l) {
+    auto copyBack = [&](vk::Image& from, vk::Image& colour, VkExtent2D e, const gsn::FrameList::Lighting& l, uint32_t sx, uint32_t sy) {
         VkImageCopy regions[4]{};
         uint32_t n = 0;
         auto add = [&](uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1) {   // [x0, x1) x [y0, y1), clipped to e
@@ -754,7 +815,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
             struct {
                 float size[2], tanHalf[2], zScale, radius, intensity, maxPixels;
                 uint32_t directions, pad;
-            } k{{float(e.width), float(e.height)}, {lighting.tanX, lighting.tanY}, kZScale, 1.2f, 1.4f, 40.0f * float(sy),
+            } k{{float(e.width), float(e.height)}, {lighting.tanX, lighting.tanY}, kZScale, 1.2f, 1.4f, 40.0f * float(si.sy),
                 lighting.directions, 0};
             vk::pushConstants(command, aoPass, k);
             vk::dispatch2D(command, e.width, e.height);
@@ -778,14 +839,13 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         b.image(litImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_READ_BIT);
         b.image(colour, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_WRITE_BIT);
         b.flush(command);
-        copyBack(litImage, colour, e, l);
+        copyBack(litImage, colour, e, l, si.sx, si.sy);
     };
 
     // Temporal anti-aliasing: the 3D draws (depth-tested) into a scene's target before its Light command are
     // jittered by this frame's sub-pixel offset, the same for every scene of the frame.
     std::vector<uint8_t> jittered(frame.commands.size(), 0);
-    const float* phase = kHalton[displayedFrames % 8];
-    const float jitterGs[2] = {phase[0] / float(sx), phase[1] / float(sy)};
+    const float* phase = kHalton[displayedFrames % 8];   // render pixels: over each target's own scale
     if (temporal) {
         std::vector<std::pair<uint32_t, uint32_t>> lit;   // (target, Z buffer) of the scenes lit later
         for (size_t at = frame.commands.size(); at-- > 0;) {
@@ -844,8 +904,11 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         DrawConstants k{};
         k.targetSize[0] = static_cast<float>(colour.extent.width);
         k.targetSize[1] = static_cast<float>(colour.extent.height);
-        k.scale[0] = static_cast<float>(sx);
-        k.scale[1] = static_cast<float>(sy);
+        k.scale[0] = static_cast<float>(si.sx);
+        k.scale[1] = static_cast<float>(si.sy);
+        k.sourceScale[0] = k.scale[0];
+        k.sourceScale[1] = k.scale[1];
+        const uint32_t sx = si.sx, sy = si.sy;
         for (size_t at = 0; at < lightAt; ++at) {
             const auto& cmd = frame.commands[at];
             if (cmd.kind != gsn::FrameList::Command::Kind::Draw) continue;
@@ -864,8 +927,8 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
             if (right <= x0 * sx || bottom <= y0 * sy) continue;
             const VkRect2D scissor{{static_cast<int32_t>(x0 * sx), static_cast<int32_t>(y0 * sy)}, {right - x0 * sx, bottom - y0 * sy}};
             vkCmdSetScissor(command, 0, 1, &scissor);
-            k.jitter[0] = jittered[at] ? jitterGs[0] : 0.0f;
-            k.jitter[1] = jittered[at] ? jitterGs[1] : 0.0f;
+            k.jitter[0] = jittered[at] ? phase[0] / float(sx) : 0.0f;
+            k.jitter[1] = jittered[at] ? phase[1] / float(sy) : 0.0f;
             vk::pushConstants(command, velocityPass, k);
             vkCmdDraw(command, d.count, 1, d.first, 0);
         }
@@ -897,7 +960,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         b.image(litImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_READ_BIT);
         b.image(colour, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_WRITE_BIT);
         b.flush(command);
-        copyBack(litImage, colour, e, l);
+        copyBack(litImage, colour, e, l, si.sx, si.sy);
     };
     constexpr float kZScale = 1.6e6f;   // GT4's 3D Z = 1.6e6 / view distance (docs/LIGHTING.md)
     static const uint32_t ssrView = std::getenv("GT4_SSR_VIEW") ? static_cast<uint32_t>(std::atoi(std::getenv("GT4_SSR_VIEW"))) : 0;
@@ -930,7 +993,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         struct {
             float size[2], scale[2], imageSize[2], shutter, maxBlur, zScale;
             uint32_t samples, frame;
-        } k{{float(si.area.width), float(si.area.height)}, {float(sx), float(sy)},
+        } k{{float(si.area.width), float(si.area.height)}, {float(si.sx), float(si.sy)},
             {float(si.colour->extent.width), float(si.colour->extent.height)}, effects.shutter, 0.05f * float(si.area.height), kZScale,
             effects.blurSamples, static_cast<uint32_t>(displayedFrames)};
         stagePass(l, si, blurPass, &k, sizeof k, true);
@@ -978,7 +1041,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         struct {
             float size[2], historySize[2], scale[2], jitter[2], reset;
             uint32_t view;
-        } k{{float(e.width), float(e.height)}, {float(before.extent.width), float(before.extent.height)}, {float(sx), float(sy)},
+        } k{{float(e.width), float(e.height)}, {float(before.extent.width), float(before.extent.height)}, {float(si.sx), float(si.sy)},
             {phase[0], phase[1]}, reset ? 1.0f : 0.0f, view};
         vk::pushConstants(command, taaPass, k);
         vk::dispatch2D(command, e.width, e.height);
@@ -1014,13 +1077,16 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
     // Their images come from a pool by size (sizes change from frame to frame; no waiting on the GPU).
     for (auto& [size, pool] : reinterpretPool) pool.used = 0;
     reinterpretImages.assign(count, nullptr);
+    // Each is built at the scale of the target its draw renders into (gsn.frag's kSnap reads it per render pixel).
+    std::vector<std::pair<uint32_t, uint32_t>> builtScale(count, {sx, sy});
     auto imageFor = [&](uint32_t index) -> vk::Image& {
         const gsn::Reinterpretation& r = frame.reinterpretations[index];
-        Pool& pool = reinterpretPool[(uint64_t(r.width * sx) << 32) | (r.height * sy)];
+        const auto [bx, by] = builtScale[index];
+        Pool& pool = reinterpretPool[(uint64_t(r.width * bx) << 32) | (r.height * by)];
         if (pool.used == pool.images.size()) {
             vk::ImageDesc desc;
             desc.format = VK_FORMAT_R8G8B8A8_UNORM;
-            desc.extent = {r.width * sx, r.height * sy};   // sx x sy per GS texel
+            desc.extent = {r.width * bx, r.height * by};   // the drawing target's scale per GS texel
             desc.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
             desc.name = "gsn reinterpreted";
             pool.images.push_back(std::make_unique<vk::Image>(vk::createImage(device, desc)));
@@ -1044,8 +1110,14 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         if (frame.reinterpretations[index].target && !sourceOf(frame.reinterpretations[index])) return nullptr;
         if (built[index]) return reinterpretImages[index];
         end();
+        if (perPass) mark(command, "between passes");
         std::vector<uint32_t> batch{index};
         std::vector<uint32_t> written;
+        auto drawnScale = [&](uint32_t target) {
+            auto t = targets.find(target);
+            return t == targets.end() ? std::make_pair(sx, sy) : std::make_pair(t->second.scaleX, t->second.scaleY);
+        };
+        builtScale[index] = drawnScale(frame.draws[frame.commands[at].index].target);
         for (size_t j = at + 1, seen = 0; j < frame.commands.size() && seen < 256; ++j, ++seen) {
             const auto& cmd = frame.commands[j];
             if (cmd.kind != gsn::FrameList::Command::Kind::Draw) continue;
@@ -1055,7 +1127,10 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
                 const gsn::Reinterpretation& r = frame.reinterpretations[d.texture.id];
                 const bool stale = std::find(written.begin(), written.end(), r.target) != written.end() ||
                                    std::find(written.begin(), written.end(), r.clutTarget) != written.end();
-                if (!stale && (!r.target || sourceOf(r))) batch.push_back(d.texture.id);
+                if (!stale && (!r.target || sourceOf(r))) {
+                    batch.push_back(d.texture.id);
+                    builtScale[d.texture.id] = drawnScale(d.target);
+                }
             }
             written.push_back(d.target);
             if (d.depth) written.push_back(d.depth);
@@ -1077,12 +1152,13 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
                 uint32_t targetBp, targetBw, targetHeight, scaleX, tbp, tbw, psm, width, height, cpsm, csa, texa;
                 uint32_t clutTargetBp, clutBw, clutHeight, cbp;
                 uint32_t indexStart, scaleY, pad[2];
-            } k{r.targetBp, source ? r.targetBw : 0, source ? source->height : 0, sx, r.texture.base,
+            } k{r.targetBp, source ? r.targetBw : 0, source ? source->height : 0, builtScale[i].first, r.texture.base,
                 r.texture.width, r.texture.format, r.width, r.height,
                 r.texture.clutFormat, r.texture.clutOffset,
                 r.texAlpha0 | (static_cast<uint32_t>(r.texAlpha1) << 8) | (static_cast<uint32_t>(r.texBlackTransparent) << 16),
                 palette ? r.clutTargetBp : 0, palette ? r.clutTargetBw : 0, palette ? palette->height : 0,
-                r.texture.clutBase, source ? 0 : indexStart[i], sy, {}};
+                r.texture.clutBase, source ? 0 : indexStart[i], builtScale[i].second,
+                {source ? source->scaleX | (source->scaleY << 8) : sx | (sy << 8), palette ? palette->scaleX | (palette->scaleY << 8) : sx | (sy << 8)}};
             const VkImageView fallback = source ? source->image.view : palette ? palette->image.view : blank.view;
             vk::Descriptors()
                 .sampled(0, fallback, samplers[0])
@@ -1092,13 +1168,14 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
                 .storageBuffer(4, indexBuffer.buffer, 0, indexWords * 4)
                 .push(command, reinterpret);
             vk::pushConstants(command, reinterpret, k);
-            vk::dispatch2D(command, r.width * sx, r.height * sy);
+            vk::dispatch2D(command, r.width * builtScale[i].first, r.height * builtScale[i].second);
             built[i] = true;
         }
         tally("reinterpret batches");
         tally("reinterpret dispatches", batch.size());
         for (const uint32_t i : batch) vk::toSampled(b, *reinterpretImages[i], vk::kFragment);
         b.flush(command);
+        if (perPass) mark(command, "reinterpretations");
         return reinterpretImages[index];
     };
 
@@ -1140,10 +1217,13 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         const uint32_t prim = s.prim;
         DrawConstants k{};
         GpuTarget& colourTarget = targetIt->second;
+        const uint32_t sx = colourTarget.scaleX, sy = colourTarget.scaleY;   // this draw's
         k.targetSize[0] = static_cast<float>(colourTarget.image.extent.width);
         k.targetSize[1] = static_cast<float>(colourTarget.image.extent.height);
         k.scale[0] = static_cast<float>(sx);
         k.scale[1] = static_cast<float>(sy);
+        k.sourceScale[0] = k.scale[0];
+        k.sourceScale[1] = k.scale[1];
         // The texture.
         VkImageView view = blank.view;
         VkSampler sampler = samplers[0];
@@ -1190,8 +1270,11 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
                         k.sourceSize[0] = static_cast<float>(feedback.extent.width) / sx;
                         k.sourceSize[1] = static_cast<float>(feedback.extent.height) / sy;
                     } else {
-                        k.sourceSize[0] = static_cast<float>(source->second.image.extent.width) / sx;
-                        k.sourceSize[1] = static_cast<float>(source->second.image.extent.height) / sy;
+                        const uint32_t ox = source->second.scaleX, oy = source->second.scaleY;
+                        k.sourceSize[0] = static_cast<float>(source->second.image.extent.width) / ox;
+                        k.sourceSize[1] = static_cast<float>(source->second.image.extent.height) / oy;
+                        k.sourceScale[0] = static_cast<float>(ox);
+                        k.sourceScale[1] = static_cast<float>(oy);
                     }
                     if (image->layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
                         end();
@@ -1309,18 +1392,34 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
             if (depthId == 0) stencilFresh = false;
         }
         const bool hasDepth = depthId != 0;
+        if (d.depth && !warnedScales) {
+            const GpuTarget& z = targets[d.depth];
+            if (z.scaleX != sx || z.scaleY != sy) {
+                warnedScales = true;
+                std::fprintf(stderr, "gsn: a %ux%u target drawn at %ux%u with a %ux%u Z buffer at %ux%u (scales differ)\n", colourTarget.width,
+                             colourTarget.height, sx, sy, z.width, z.height, z.scaleX, z.scaleY);
+            }
+        }
         // Depth and stencil state.
         const bool zte = c.depthTest;
         const uint32_t ztst = c.depthFunc;
         static const VkCompareOp zops[4] = {VK_COMPARE_OP_NEVER, VK_COMPARE_OP_ALWAYS, VK_COMPARE_OP_GREATER_OR_EQUAL, VK_COMPARE_OP_GREATER};
         const bool zwrite = hasDepth && zte && d.depth && c.depthWrite;
-        vkCmdSetDepthTestEnable(command, hasDepth && zte && d.depth ? VK_TRUE : VK_FALSE);
-        vkCmdSetDepthCompareOp(command, zops[ztst]);
-        vkCmdSetStencilTestEnable(command, date && hasDepth ? VK_TRUE : VK_FALSE);
-        vkCmdSetStencilOp(command, VK_STENCIL_FACE_FRONT_AND_BACK, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP, VK_COMPARE_OP_EQUAL);
-        vkCmdSetStencilCompareMask(command, VK_STENCIL_FACE_FRONT_AND_BACK, 1);
-        vkCmdSetStencilWriteMask(command, VK_STENCIL_FACE_FRONT_AND_BACK, 0);
-        vkCmdSetStencilReference(command, VK_STENCIL_FACE_FRONT_AND_BACK, c.destPass);
+        const int depthTest = hasDepth && zte && d.depth ? 1 : 0, stencilTest = date && hasDepth ? 1 : 0;
+        if (recorded.depthTest != depthTest) vkCmdSetDepthTestEnable(command, depthTest ? VK_TRUE : VK_FALSE);
+        if (recorded.compare != int(ztst)) vkCmdSetDepthCompareOp(command, zops[ztst]);
+        if (recorded.stencilTest != stencilTest) vkCmdSetStencilTestEnable(command, stencilTest ? VK_TRUE : VK_FALSE);
+        if (!recorded.stencilFixed) {
+            vkCmdSetStencilOp(command, VK_STENCIL_FACE_FRONT_AND_BACK, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP, VK_COMPARE_OP_EQUAL);
+            vkCmdSetStencilCompareMask(command, VK_STENCIL_FACE_FRONT_AND_BACK, 1);
+            vkCmdSetStencilWriteMask(command, VK_STENCIL_FACE_FRONT_AND_BACK, 0);
+        }
+        if (recorded.reference != int(c.destPass)) vkCmdSetStencilReference(command, VK_STENCIL_FACE_FRONT_AND_BACK, c.destPass);
+        recorded.depthTest = depthTest;
+        recorded.compare = int(ztst);
+        recorded.stencilTest = stencilTest;
+        recorded.stencilFixed = true;
+        recorded.reference = int(c.destPass);
         // Scissor, in render pixels.
         const uint32_t x0 = c.scissorX0, x1 = c.scissorX1;
         const uint32_t y0 = c.scissorY0, y1 = c.scissorY1;
@@ -1329,7 +1428,10 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         const uint32_t right = std::min((x1 + 1) * sx, colourTarget.image.extent.width), bottom = std::min((y1 + 1) * sy, colourTarget.image.extent.height);
         scissor.extent = {right > x0 * sx ? right - x0 * sx : 0, bottom > y0 * sy ? bottom - y0 * sy : 0};
         if (!scissor.extent.width || !scissor.extent.height) continue;
-        vkCmdSetScissor(command, 0, 1, &scissor);
+        if (std::memcmp(&scissor, &recorded.scissor, sizeof scissor) != 0) {
+            vkCmdSetScissor(command, 0, 1, &scissor);
+            recorded.scissor = scissor;
+        }
         // The alpha test: pixels that pass are drawn as usual; those that fail, under AFAIL, update only the
         // frame buffer (FB_ONLY), only Z (ZB_ONLY) or only RGB (RGB_ONLY), or nothing (KEEP): a second pass
         // with the test inverted.
@@ -1355,16 +1457,31 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
                 const VkDeviceSize zero = 0;
                 vkCmdBindVertexBuffers(command, 0, 1, &vertices.buffer, &zero);
                 boundPipeline = p.pipeline;
+                recorded.view = VK_NULL_HANDLE;   // (the layouts are alike, but bindings are not assumed to survive)
+                recorded.pushed = false;
             }
-            vkCmdSetDepthWriteEnable(command, ps.zwrite ? VK_TRUE : VK_FALSE);
+            if (recorded.depthWrite != int(ps.zwrite)) {
+                vkCmdSetDepthWriteEnable(command, ps.zwrite ? VK_TRUE : VK_FALSE);
+                recorded.depthWrite = int(ps.zwrite);
+            }
             DrawConstants pk = k;
             if (ps.inverted) pk.flags |= kAlphaInvert;
             if (jittered[at]) {
-                pk.jitter[0] = jitterGs[0];
-                pk.jitter[1] = jitterGs[1];
+                pk.jitter[0] = phase[0] / float(sx);
+                pk.jitter[1] = phase[1] / float(sy);
             }
-            vk::Descriptors().sampled(0, view, sampler).push(command, p);
-            vk::pushConstants(command, p, pk);
+            if (recorded.view != view || recorded.sampler != sampler) {
+                vk::Descriptors().sampled(0, view, sampler).push(command, p);
+                recorded.view = view;
+                recorded.sampler = sampler;
+                tally("descriptor pushes");
+            }
+            if (!recorded.pushed || std::memcmp(&pk, &recorded.constants, sizeof pk) != 0) {
+                vk::pushConstants(command, p, pk);
+                recorded.constants = pk;
+                recorded.pushed = true;
+                tally("constant pushes");
+            }
             vkCmdDraw(command, d.count, 1, d.first, 0);
             tally("draws");
         }
@@ -1381,7 +1498,8 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         const uint32_t dbx = c.x, dby = c.y;
         uint32_t w, h;
         displayedSize(frame.display, w, h);
-        const float tw = static_cast<float>(shown->second.image.extent.width) / sx, th = static_cast<float>(shown->second.image.extent.height) / sy;
+        const float tw = static_cast<float>(shown->second.image.extent.width) / shown->second.scaleX,
+                    th = static_cast<float>(shown->second.image.extent.height) / shown->second.scaleY;
         displayRect[0] = dbx / tw;
         displayRect[1] = dby / th;
         displayRect[2] = (w ? w : 640) / tw;
@@ -1580,6 +1698,7 @@ void GsnScene::Impl::executePending(VkCommandBuffer command, uint32_t slot, VkEx
     if (shown || scaleSetting) {
         uint32_t shownWidth = 640, shownHeight = 448;
         if (shown) displayedSize(shown->display, shownWidth, shownHeight);
+        if (shown) fieldMode = shownHeight <= 256;
         const uint32_t wantedX = scaleSetting ? scaleSetting
                                               : std::clamp<uint32_t>(static_cast<uint32_t>(std::lround(extent.width / double(shownWidth))), 1, 8);
         const uint32_t wantedY = scaleSetting ? scaleSetting
@@ -1682,8 +1801,9 @@ bool GsnScene::read(const gsn::ReadRequest& request, std::vector<uint8_t>& out) 
         return false;
     }
     vk::Image& image = it->second.image;
-    const uint32_t x0 = std::min(request.x * s.sx, image.extent.width), y0 = std::min(request.y * s.sy, image.extent.height);
-    const uint32_t w = std::min(request.width * s.sx, image.extent.width - x0), h = std::min(request.height * s.sy, image.extent.height - y0);
+    const uint32_t scaleX = it->second.scaleX, scaleY = it->second.scaleY;
+    const uint32_t x0 = std::min(request.x * scaleX, image.extent.width), y0 = std::min(request.y * scaleY, image.extent.height);
+    const uint32_t w = std::min(request.width * scaleX, image.extent.width - x0), h = std::min(request.height * scaleY, image.extent.height - y0);
     vk::Buffer pixels = vk::createBuffer(s.device, std::max<VkDeviceSize>(VkDeviceSize(w) * h * 8, 8), VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, true);
     vk::Barriers b;
     if (w && h) {
@@ -1720,7 +1840,7 @@ bool GsnScene::read(const gsn::ReadRequest& request, std::vector<uint8_t>& out) 
     out.assign(size_t(request.width) * request.height * bytes, 0);
     for (uint32_t y = 0; y < request.height; ++y)
         for (uint32_t x = 0; x < request.width; ++x) {
-            const uint32_t px = x * s.sx, py = y * s.sy;
+            const uint32_t px = x * scaleX, py = y * scaleY;
             if (px >= w || py >= h) continue;
             const uint16_t* p = half + (size_t(py) * w + px) * 4;
             auto channel = [&](int c, float range) {

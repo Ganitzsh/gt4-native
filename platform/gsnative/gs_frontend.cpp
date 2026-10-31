@@ -532,7 +532,9 @@ void GsFrontend::emit(const Vertex* v, uint32_t n, Topology topology) {
         return;
     const uint32_t width = s.c.colorWidth;
     const uint32_t colour = targetFor(s.c.colorBase, s.c.colorFormat, false, scissorY1 + 1, width);
-    const bool zte = s.c.depthTest;
+    // ZTE with ZTST = ALWAYS and ZMSK set (the GS wants ZTE on: games "switch Z off" this way) neither tests nor
+    // writes Z: no Z buffer (GT4's composition into the field buffer named the 448-line scene's).
+    const bool zte = s.c.depthTest && !(s.c.depthFunc == 1 && !s.c.depthWrite);
     const uint32_t depth = zte ? targetFor(s.c.depthBase, s.c.depthFormat, true, scissorY1 + 1, width) : 0;
     if (!colour || (zte && !depth)) return;   // past the target limit
     if (s.c.colorKeep != 0xFFFFFFFFu) markWritten(colour, s.c.colorBase, width, s.c.colorFormat, left, right, top, bottom);

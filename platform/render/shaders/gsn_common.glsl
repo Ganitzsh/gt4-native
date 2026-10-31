@@ -13,6 +13,7 @@ layout(push_constant) uniform Draw {
     uint clampU, clampV; // WMS/WMT (0-1), MINU/MINV (2-11), MAXU/MAXV (12-21): CLAMP
     uint lod;            // LCM (0), L (1-2), K (3-14, signed 7.4), MXL (16-18): TEX1
     vec2 jitter;         // the scene stage's sub-pixel offset, in GS pixels (temporal anti-aliasing; else 0)
+    vec2 sourceScale;    // a texture from a target: that target's render pixels per GS pixel (else scale's)
 } draw;
 
 bool atNativeScale() { return draw.scale.x <= 1.0 && draw.scale.y <= 1.0; }
