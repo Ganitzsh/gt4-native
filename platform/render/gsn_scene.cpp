@@ -150,6 +150,8 @@ struct GsnScene::Impl {
     } lighting;
     vk::Pipeline aoPass, lightPass;
     vk::Image aoImage, litImage;
+    vk::Image gradeImage;                      // the colour grading's result (gsn_grade.comp), copied back
+    std::vector<vk::Buffer> curveBuffers;      // its curves, per frame
     // The scene stage's temporal anti-aliasing (docs/NATIVE_RENDERER.md): the 3D draws of a scene are jittered,
     // drawn again for their motion vectors (velocityPass) and resolved against the scene's history.
     bool temporal = false;
@@ -165,7 +167,7 @@ struct GsnScene::Impl {
     std::unordered_map<uint32_t, History> histories;   // by scene target
     // The scene stage's other effects (GsnScene::setEffects), each a compute pass over the scene.
     SceneEffects effects;
-    vk::Pipeline ssrPass, ssrComposite, fogPass, blurPass, dofPass;
+    vk::Pipeline ssrPass, ssrComposite, fogPass, blurPass, dofPass, gradePass;
     vk::Image ssrImage;   // the reflections at half resolution (gsn_ssr.comp)
     // A Z buffer's depth plane as a sampled view (kept with the image's other views, destroyed with it).
     VkImageView depthView(vk::Image& image) {
@@ -321,9 +323,11 @@ struct GsnScene::Impl {
         vk::destroy(device, lightPass);
         vk::destroy(device, aoImage);
         vk::destroy(device, litImage);
+        vk::destroy(device, gradeImage);
+        for (auto& b : curveBuffers) vk::destroy(device, b);
         vk::destroy(device, velocityPass);
         vk::destroy(device, taaPass);
-        for (vk::Pipeline* p : {&ssrPass, &ssrComposite, &fogPass, &blurPass, &dofPass}) vk::destroy(device, *p);
+        for (vk::Pipeline* p : {&ssrPass, &ssrComposite, &fogPass, &blurPass, &dofPass, &gradePass}) vk::destroy(device, *p);
         vk::destroy(device, ssrImage);
         vk::destroy(device, velocityImage);
         for (auto& [id, h] : histories)
@@ -1248,6 +1252,59 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         return reinterpretImages[index];
     };
 
+    // GT4's post effects as passes (docs/NATIVE_V2.md, step 3): the colour grading, computed into gradeImage over
+    // the rectangle and copied back into the destination.
+    vk::Buffer* curves = nullptr;
+    if (!frame.effects.empty()) {
+        curves = &buffer(curveBuffers, slot, frame.effects.size() * 1024, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+        for (size_t i = 0; i < frame.effects.size(); ++i)
+            std::memcpy(static_cast<uint8_t*>(curves->mapped) + i * 1024, frame.effects[i].curve.data(), 1024);
+    }
+    auto grade = [&](uint32_t index) {
+        const gsn::FrameList::Effect& e = frame.effects[index];
+        auto s = targets.find(e.source), d = targets.find(e.destination);
+        if (s == targets.end() || d == targets.end() || !curves) return;
+        end();
+        GpuTarget& source = s->second;
+        GpuTarget& destination = d->second;
+        const VkExtent2D full = destination.image.extent;
+        const uint32_t x0 = std::min(e.x0 * destination.scaleX, full.width), y0 = std::min(e.y0 * destination.scaleY, full.height);
+        const uint32_t x1 = std::min((e.x1 + 1) * destination.scaleX, full.width), y1 = std::min((e.y1 + 1) * destination.scaleY, full.height);
+        if (x0 >= x1 || y0 >= y1) return;
+        const VkExtent2D area{x1 - x0, y1 - y0};
+        ensureImage(gradeImage, area, kColour, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, "gsn graded");
+        vk::toSampled(b, source.image, vk::kCompute);
+        if (&destination != &source) vk::toSampled(b, destination.image, vk::kCompute);
+        vk::toStorage(b, gradeImage, true);
+        b.flush(command);
+        vk::bind(command, gradePass);
+        vk::Descriptors()
+            .sampled(0, source.image.view, samplers[0])
+            .sampled(1, destination.image.view, samplers[0])
+            .storage(2, gradeImage.view)
+            .storageBuffer(3, curves->buffer, VkDeviceSize(index) * 1024, 1024)
+            .push(command, gradePass);
+        struct {
+            int32_t origin[2], size[2];
+            float sourcePerDestination[2];
+            uint32_t weights[3];
+        } k{{int32_t(x0), int32_t(y0)}, {int32_t(area.width), int32_t(area.height)},
+            {float(source.scaleX) / float(destination.scaleX), float(source.scaleY) / float(destination.scaleY)},
+            {e.weights[0], e.weights[1], e.weights[2]}};
+        vk::pushConstants(command, gradePass, &k, sizeof k);
+        vk::dispatch2D(command, area.width, area.height);
+        b.image(gradeImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_READ_BIT);
+        b.image(destination.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        b.flush(command);
+        VkImageCopy c{};
+        c.srcSubresource = c.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        c.dstOffset = {int32_t(x0), int32_t(y0), 0};
+        c.extent = {area.width, area.height, 1};
+        vkCmdCopyImage(command, gradeImage.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, destination.image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
+        tally("colour gradings");
+        mark(command, "colour grading");
+    };
+
     // GT4_GSN_LIMIT=K (debugging): only the first K draws of each frame.
     static const long limit = std::getenv("GT4_GSN_LIMIT") ? std::strtol(std::getenv("GT4_GSN_LIMIT"), nullptr, 10) : -1;
     long executed = 0;
@@ -1275,6 +1332,10 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
             mark(command, "motion blur");
             if (effects.aperture > 0.0f) focus(l);
             mark(command, "depth of field");
+            continue;
+        }
+        if (cmd.kind == gsn::FrameList::Command::Kind::Effect) {
+            if (cmd.index < frame.effects.size()) grade(cmd.index);
             continue;
         }
         if (cmd.kind != gsn::FrameList::Command::Kind::Draw) continue;
@@ -1770,6 +1831,11 @@ void GsnScene::prepare(const SceneFormats& formats) {
     if (!s.ssrComposite.valid())
         s.ssrComposite = vk::createCompute(s.device, shaders::gsn_ssr_composite_comp(), stage, 48, "gsn reflections composite");
     if (!s.fogPass.valid()) s.fogPass = vk::createCompute(s.device, shaders::gsn_fog_comp(), stage, 48, "gsn fog");
+    if (!s.gradePass.valid())
+        s.gradePass = vk::createCompute(s.device, shaders::gsn_grade_comp(),
+                                        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                         VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
+                                        36, "gsn colour grading");
     if (!s.blurPass.valid()) s.blurPass = vk::createCompute(s.device, shaders::gsn_motionblur_comp(), stage, 48, "gsn motion blur");
     if (!s.dofPass.valid()) s.dofPass = vk::createCompute(s.device, shaders::gsn_dof_comp(), stage, 48, "gsn depth of field");
     if (!s.taaPass.valid())

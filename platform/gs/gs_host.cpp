@@ -59,6 +59,7 @@ public:
         return on;
     }
     void model(const gfx::ModelJob& job, const uint32_t* words) override { native->model(job, words); }
+    void effect(const gfx::EffectRecord& r) override { native->effect(r); }
     void primitives(const ps2::GsPrimitives& p) override {
         GT4_CPU_SCOPE("front end: the renderers' primitives");
         if (p.setPrim) native->setPrim(p.prim);
@@ -274,6 +275,7 @@ public:
     void read(const gfx::ReadRecord& r) override { put(Op::Read, 0, 0, &r, sizeof r); }
     void texSet(const uint8_t* payload, size_t bytes) override { put(Op::TexSet, 0, 0, payload, bytes); }
     bool models() const override { return inner.models(); }
+    void effect(const gfx::EffectRecord& r) override { put(Op::Effect, 0, 0, &r, sizeof r); }
     void model(const gfx::ModelJob& job, const uint32_t* words) override {
         put(Op::Model, 0, 0, &job, sizeof job, words, gfx::kModelWords * 4);
     }
@@ -304,7 +306,7 @@ public:
     }
 
 private:
-    enum class Op : uint32_t { Gif, Primitives, Display, State, Upload, Read, Draw, Vsync, TexSet, Model };
+    enum class Op : uint32_t { Gif, Primitives, Display, State, Upload, Read, Draw, Vsync, TexSet, Model, Effect };
     struct Entry {
         Op op;
         uint32_t a, b;
@@ -385,6 +387,12 @@ private:
             case Op::Draw: inner.draw(*reinterpret_cast<const gfx::DrawRecord*>(first), reinterpret_cast<const gfx::Vertex*>(second)); break;
             case Op::Vsync: inner.vsync(e.a, e.b); break;
             case Op::TexSet: inner.texSet(first, e.first); break;
+            case Op::Effect: {
+                gfx::EffectRecord r;
+                std::memcpy(&r, first, sizeof r);
+                inner.effect(r);
+                break;
+            }
             case Op::Model: {
                 gfx::ModelJob job;
                 std::memcpy(&job, first, sizeof job);

@@ -182,6 +182,16 @@ void GraphicsStream::records(const uint8_t* data, size_t bytes) {
             }
             break;
         }
+        case gfx::kEffect: {
+            gfx::EffectRecord r;
+            if (h.bytes() < sizeof r) {
+                ++counters.badRecords;
+                break;
+            }
+            std::memcpy(&r, payload, sizeof r);
+            gs.effect(r);
+            break;
+        }
         case gfx::kTexSet: {
             gfx::TexSetRecord r;
             if (h.bytes() < sizeof r) {

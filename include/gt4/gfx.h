@@ -299,6 +299,7 @@ enum RecordType : uint32_t {
     kBatchModel = 7,   // BatchModel
     kBatchRun = 8,     // BatchRun
     kTexSet = 9,       // TexSetRecord, its uploads, its texture records (docs/NATIVE_V2.md)
+    kEffect = 10,      // EffectRecord (docs/NATIVE_V2.md, step 3)
 };
 
 struct Header {
@@ -537,6 +538,24 @@ struct TexSetUpload {
     uint32_t qwords;
 };
 static_assert(sizeof(TexSetUpload) == 16);
+
+// GT4's post effects as passes of their own (docs/NATIVE_V2.md, step 3), in order with the draws.
+// kGrade (004A7D90 -> 004A81A8, the race's colour grading): every pixel of the source frame within `scissor`
+// (SCISSOR's value) through the curve palette (256 32-bit entries at `clutBase`, loaded as an 8-bit texture's
+// palette), its three channels weighted by a column each (`weights`: R, G, B columns of a saturation matrix, 0x80
+// = 1) and summed, into the destination frame (alpha kept): out_k = min(255, sum_c (curve[c].k * weight_c.k) >> 7).
+// kSkipBegin / kSkipEnd (checking: the runtime's GT4_EFFECTS_BOTH=1): the GS's way of the effect just sent follows
+// between them; the host draws one or the other (its GT4_NATIVE_EFFECTS).
+enum EffectKind : uint32_t { kGrade = 1, kSkipBegin = 0x100, kSkipEnd = 0x101 };
+struct EffectRecord {
+    uint32_t kind;
+    uint16_t sourcePage, destinationPage;   // the frames (2048-word pages), `width` 64-pixel units wide
+    uint16_t width, destinationFormat;
+    uint16_t clutBase, pad;                 // blocks
+    uint32_t weights[3];                    // R, G, B in the low three bytes each
+    uint64_t scissor;
+};
+static_assert(sizeof(EffectRecord) == 40);
 
 // GT4's 3D renderers on the GPU (docs/NATIVE_V2.md, step 2): one batch for gsn_models.comp, its 256 qwords (1024
 // words) in the frame's model data. Laid out as the shader reads it (std430). The renderer's part comes from the

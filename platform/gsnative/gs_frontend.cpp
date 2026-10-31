@@ -57,6 +57,7 @@ void FrameList::clear() {
     reinterpretations.clear();
     models.clear();
     modelData.clear();
+    effects.clear();
     modelVertices = 0;
     retiredTextures.clear();
     resetTextures = false;
@@ -79,6 +80,7 @@ void carryOver(FrameList& dropped, FrameList& into) {
 
 GsFrontend::GsFrontend() : pages(512), pageGeneration(512, 0) {
     if (const char* e = std::getenv("GT4_NATIVE_TEXTURES")) nativeTextures = *e != '0';
+    if (const char* e = std::getenv("GT4_NATIVE_EFFECTS")) nativeEffects = *e != '0';
 }
 
 uint32_t GsFrontend::primValue() const {
@@ -122,6 +124,7 @@ void GsFrontend::contextGroupSet(uint32_t context, uint32_t group) {
 }
 
 void GsFrontend::applyState(const gfx::StateRecord& r) {
+    if (skipping) return;
     ++stateSerial;
     gfx::applyState(shared, contexts, r, [this](uint32_t context, uint32_t group) { contextGroupSet(context, group); });
 }
@@ -156,6 +159,7 @@ void GsFrontend::upload(const gfx::UploadRecord& u, const uint8_t* data, size_t 
 
 void GsFrontend::draw(const gfx::DrawRecord& d, const gfx::Vertex* vertices) {
     GT4_CPU_SCOPE("front end: draw records");
+    if (skipping) return;
     if (d.flags & gfx::kDrawPrim) write(PRIM, d.prim & 0x7FF);
     const bool fog = d.flags & gfx::kDrawFog;
     for (uint32_t k = 0; k < d.count; ++k) {
@@ -1512,6 +1516,37 @@ void GsFrontend::packed(uint32_t r, uint64_t a, uint64_t b) {
 }
 
 void GsFrontend::setPrim(uint32_t prim) { write(PRIM, prim & 0x7FF); }
+
+void GsFrontend::effect(const gfx::EffectRecord& r) {
+    if (r.kind == gfx::kSkipBegin || r.kind == gfx::kSkipEnd) {
+        skipping = r.kind == gfx::kSkipBegin && nativeEffects;
+        return;
+    }
+    if (r.kind != gfx::kGrade || !nativeEffects) return;
+    FrameList::Effect e;
+    e.kind = r.kind;
+    e.x0 = static_cast<uint32_t>(r.scissor & 0x7FF);
+    e.x1 = static_cast<uint32_t>((r.scissor >> 16) & 0x7FF);
+    e.y0 = static_cast<uint32_t>((r.scissor >> 32) & 0x7FF);
+    e.y1 = static_cast<uint32_t>((r.scissor >> 48) & 0x7FF);
+    if (e.x0 > e.x1 || e.y0 > e.y1) return;
+    // the frames as the draws know them (a 24-bit frame: the 32-bit layout)
+    e.source = targetFor(r.sourcePage * 32u, PSMCT32, false, e.y1 + 1, r.width);
+    e.destination = targetFor(r.destinationPage * 32u, r.destinationFormat, false, e.y1 + 1, r.width);
+    if (!e.source || !e.destination) return;
+    for (int k = 0; k < 3; ++k) e.weights[k] = r.weights[k];
+    // the curve: an 8-bit texture's palette at clutBase, 32-bit, as the GS loads it
+    GsMemory::Tex0 t;
+    t.psm = PSMT8;
+    t.cpsm = PSMCT32;
+    t.cbp = r.clutBase;
+    materializeRect(r.clutBase, 1, PSMCT32, 0, 0, 16, 16);
+    mem.readClut(t, e.curve.data());
+    sceneRead(e.source);   // (a 3D scene read into another: complete)
+    markWritten(e.destination, r.destinationPage * 32u, r.width, r.destinationFormat, e.x0, e.x1, e.y0, e.y1);
+    frame.commands.push_back({FrameList::Command::Kind::Effect, static_cast<uint32_t>(frame.effects.size())});
+    frame.effects.push_back(e);
+}
 
 void GsFrontend::model(const gfx::ModelJob& in, const uint32_t* words) {
     GT4_CPU_SCOPE("front end: 3D batches");

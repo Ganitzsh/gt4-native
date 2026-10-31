@@ -190,7 +190,7 @@ void walk(uint32_t start) {
             uint8_t *block = ptr(id == 3 || id == 4 || id == 0 ? addr : body | self);
             gfx::Header first;
             std::memcpy(&first, block, sizeof first);
-            if (first.type() <= gfx::kTexSet && sizeof first + first.bytes() <= bytes) {
+            if (first.type() <= gfx::kEffect && sizeof first + first.bytes() <= bytes) {
                 send_block(block, bytes);
             } else {
                 static int warned = 0;

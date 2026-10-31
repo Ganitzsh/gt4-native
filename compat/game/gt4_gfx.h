@@ -58,6 +58,13 @@ void gt4_gfx_display(unsigned int which, const unsigned long long *values);
 /* A screen grid (program 0x3D50 or 0x3EA0): `qwords` of `block` as GT4's grid programs read them (parameters at
  * qword 0, the packet template at qword 0 .y), drawn piece by piece. */
 void gt4_gfx_grid(void *context, unsigned int program, const void *block, int qwords);
+/* The race's colour grading as a pass of its own (include/gt4/gfx.h kGrade): the frames by page, their width, the
+ * curve palette's block, the R, G, B weight columns, SCISSOR. Zero when the GS's way is wanted
+ * (GT4_NATIVE_EFFECTS=0): the caller draws it as before. */
+int gt4_gfx_grade(void *context, unsigned int sourcePage, unsigned int destinationPage, unsigned int width, unsigned int clutBase,
+                  unsigned int red, unsigned int green, unsigned int blue, unsigned long long scissor);
+/* After an effect drawn the GS's way too (GT4_EFFECTS_BOTH=1, checking): its end. */
+void gt4_gfx_effect_end(void *context);
 #ifdef __cplusplus
 }
 #endif

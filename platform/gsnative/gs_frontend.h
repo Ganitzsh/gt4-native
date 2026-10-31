@@ -125,8 +125,8 @@ struct Display {
 // One frame: commands in the game's order.
 struct FrameList {
     struct Command {
-        enum class Kind : uint8_t { Draw, Clear, Light } kind = Kind::Draw;
-        uint32_t index = 0;   // into draws (Light: into lights)
+        enum class Kind : uint8_t { Draw, Clear, Light, Effect } kind = Kind::Draw;
+        uint32_t index = 0;   // into draws (Light: into lights, Effect: into effects)
     };
     // A 3D scene complete in its target (the next draw reads it into another): the back end may relight it
     // there with its Z buffer (docs/LIGHTING.md).
@@ -141,6 +141,16 @@ struct FrameList {
         bool hasInset = false;
     };
     std::vector<Lighting> lights;
+    // A post effect as a pass (docs/NATIVE_V2.md, step 3; gfx::EffectRecord): its targets, the rectangle (GS pixels,
+    // inclusive), the colour grading's curve (RGBA, R in the low byte) and weight columns.
+    struct Effect {
+        uint32_t kind = 0;
+        uint32_t source = 0, destination = 0;
+        uint32_t x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+        uint32_t weights[3] = {};
+        std::array<uint32_t, 256> curve{};
+    };
+    std::vector<Effect> effects;
     std::vector<Vertex> vertices;
     std::vector<Draw> draws;
     std::vector<Command> commands;
@@ -198,6 +208,10 @@ public:
     // A batch of the 3D renderers drawn on the GPU (docs/NATIVE_V2.md, step 2): the draw state, targets and
     // texture as vertices() works them out for a run, its triangles' vertices left to gsn_models.comp.
     void model(const gfx::ModelJob& job, const uint32_t* words);
+    // A post effect as a pass (docs/NATIVE_V2.md, step 3).
+    void effect(const gfx::EffectRecord& r);
+    bool nativeEffects = true;   // GT4_NATIVE_EFFECTS=0: the GS's way where the runtime sent both (GT4_EFFECTS_BOTH)
+    bool skipping = false;       // inside kSkipBegin .. kSkipEnd with native effects: the GS's way left out
     // The display from this VBlank on.
     void display(const gfx::DisplayRecord& d) { shown = d; }
     // Ends the frame: `out` receives it (swapped, so its buffers are reused).

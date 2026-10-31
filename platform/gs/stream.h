@@ -36,6 +36,8 @@ public:
     virtual void draw(const gfx::DrawRecord& d, const gfx::Vertex* vertices) { (void)d; (void)vertices; }
     // A texture set (docs/NATIVE_V2.md): gfx::TexSetRecord, its uploads and textures, then (when sent) the bytes.
     virtual void texSet(const uint8_t* payload, size_t bytes) { (void)payload; (void)bytes; }
+    // A post effect as a pass (docs/NATIVE_V2.md, step 3).
+    virtual void effect(const gfx::EffectRecord& r) { (void)r; }
     // A 3D batch for the GPU (docs/NATIVE_V2.md, step 2; PrimitiveSink::model), when the target takes them.
     virtual bool models() const { return false; }
     virtual void model(const gfx::ModelJob& job, const uint32_t* words) { (void)job; (void)words; }

@@ -1,0 +1,34 @@
+#version 460
+// The race's colour grading as a pass of its own (docs/NATIVE_V2.md, step 3; include/gt4/gfx.h kGrade). The PS2
+// read the 24-bit frame as 8-bit indices in three additive sprite passes through the curve palette, one channel
+// each, modulated by a column of a saturation matrix, then drew the sum back through palettes loaded from it. Per
+// pixel that is: out_k = min(255, sum over the channels c of (curve[byte c].k * weight_c.k) >> 7), the GS's
+// integer steps; the destination's alpha stays.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D source;        // colour / 255, alpha / 128 (the native targets)
+layout(set = 0, binding = 1) uniform sampler2D destination;
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D result;
+layout(std430, set = 0, binding = 3) readonly buffer Curve { uint curve[256]; };
+layout(push_constant) uniform Grade {
+    ivec2 origin;          // the rectangle's corner in the destination's render pixels
+    ivec2 size;
+    vec2 sourcePerDestination;   // source render pixels per destination render pixel
+    uint weights[3];       // R, G, B columns (0x80 = 1), R in the low byte
+} p;
+
+uint channel(uint word, uint k) { return (word >> (8u * k)) & 0xFFu; }
+
+void main() {
+    const ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(q, p.size))) return;
+    const ivec2 at = p.origin + q;
+    const vec4 c = texelFetch(source, ivec2((vec2(at) + 0.5) * p.sourcePerDestination), 0);
+    const uvec3 bytes = uvec3(clamp(round(c.rgb * 255.0), 0.0, 255.0));
+    uvec3 sum = uvec3(0u);
+    for (uint ch = 0u; ch < 3u; ++ch) {
+        const uint e = curve[bytes[ch]];
+        for (uint k = 0u; k < 3u; ++k) sum[k] += min((channel(e, k) * channel(p.weights[ch], k)) >> 7, 255u);
+    }
+    const vec3 graded = vec3(min(sum, uvec3(255u))) / 255.0;
+    imageStore(result, q, vec4(graded, texelFetch(destination, at, 0).a));
+}

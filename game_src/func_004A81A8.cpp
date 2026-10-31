@@ -206,6 +206,7 @@ extern "C" void func_004A81A8(u32 a0, u32 a1, s32 a2, u32 a3, u32 t0, u32 t1, u6
     }
     *(u64 *)(spr + 0x1D8) |= 0x3107FB07FBUL;
 
+
     /* natively: the set-up's register pairs (t4 + 0x30 .. 0x120) as state, then the grid on its block (the qwords
        the UNPACK would have sent, from hdr + 16); the packet area is reused for the records */
     {
@@ -219,7 +220,12 @@ extern "C" void func_004A81A8(u32 a0, u32 a1, s32 a2, u32 a3, u32 t0, u32 t1, u6
         }
         for (int k = 0; k < blockQwords * 16; k++) block[k] = (hdr + 16)[k];
         *(char **)(spr + 0x1F8) = t4;
+        /* a pass of its own (include/gt4/gfx.h kGrade): the source frame (a0), the destination (FRAME_2), the curve
+           palette (t0), the weight columns of the three passes (R: rgb0, B: rgb1, G: rgb2) */
+        if (gt4_gfx_grade(spr, base0, (a1 >> 11) & 0x1FF, (u32)a2, t0 >> 6, rgb0, (u32)rgb2, (u32)rgb1, scissor))
+            return;
         gt4_gfx_set(spr, state, pairs);
         gt4_gfx_grid(spr, 0x3D50, block, blockQwords);
+        gt4_gfx_effect_end(spr);
     }
 }

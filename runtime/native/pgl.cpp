@@ -495,6 +495,41 @@ void gt4_gfx_grid(uint32_t context, uint32_t program, const void *block, int qwo
     }
 }
 
+// The race's colour grading (game_src/func_004A81A8.cpp): one effect record.
+int gt4_gfx_grade(uint32_t context, uint32_t sourcePage, uint32_t destinationPage, uint32_t width, uint32_t clutBase, uint32_t red,
+                  uint32_t green, uint32_t blue, uint64_t scissor) {
+    static const bool native = [] { const char *e = std::getenv("GT4_NATIVE_EFFECTS"); return !(e && *e == '0'); }();
+    static const bool both = std::getenv("GT4_EFFECTS_BOTH") != nullptr;
+    if (!native) return 0;
+    gfx::EffectRecord r{};
+    r.kind = gfx::kGrade;
+    r.sourcePage = static_cast<uint16_t>(sourcePage & 0x1FF);
+    r.destinationPage = static_cast<uint16_t>(destinationPage & 0x1FF);
+    r.width = static_cast<uint16_t>(width & 0x3F);
+    r.destinationFormat = 1;   // PSMCT24
+    r.clutBase = static_cast<uint16_t>(clutBase & 0x3FFF);
+    r.weights[0] = red;
+    r.weights[1] = green;
+    r.weights[2] = blue;
+    r.scissor = scissor;
+    append(context, gfx::kEffect, &r, sizeof r);
+    if (both) {   // the GS's way follows, between markers (gt4_gfx_effect_end)
+        gfx::EffectRecord m{};
+        m.kind = gfx::kSkipBegin;
+        append(context, gfx::kEffect, &m, sizeof m);
+        return 0;
+    }
+    return 1;
+}
+
+void gt4_gfx_effect_end(uint32_t context) {
+    static const bool both = std::getenv("GT4_EFFECTS_BOTH") != nullptr;
+    if (!both) return;
+    gfx::EffectRecord m{};
+    m.kind = gfx::kSkipEnd;
+    append(context, gfx::kEffect, &m, sizeof m);
+}
+
 // The batch run (itop 0xFFFFFFFF: the lighting chain the last run had).
 void gt4_gfx_batch_run(uint32_t context, uint32_t entry, uint32_t itop) {
     const gfx::BatchRun r{entry, itop};
