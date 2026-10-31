@@ -253,11 +253,29 @@ void deliver_pending() {
     g_in_interrupt = false;
 }
 
-// From the interrupt thread: freeze the running guest thread, run handlers, resume or preempt.
-void interrupt_now() {
+// How the frame's callbacks, completions and alarms reach a running guest thread (docs/NATIVE_V2.md, step 4):
+// cooperative (the default, GT4_FRAME_DELIVERY=cooperative): at its next safe point, a syscall or the end of runtime
+// code (deliver_on_self), as calls in its own flow, no thread frozen at an arbitrary instruction; kept waiting longer
+// than kCooperativeLimit (a thread that never makes a syscall), they are delivered the PS2's way after all.
+// preemptive: the PS2's interrupts, always.
+bool cooperative_delivery() {
+    static const bool on = [] { const char *e = getenv("GT4_FRAME_DELIVERY"); return !(e && !strcmp(e, "preemptive")); }();
+    return on;
+}
+constexpr uint64_t kCooperativeLimit = static_cast<uint64_t>(kBusHz * 0.05);   // 50 ms of bus cycles
+uint64_t g_due_since = 0;   // when something to deliver came due (0: nothing waits)
+uint64_t g_delivered_cooperatively = 0, g_delivered_preemptively = 0;
+
+// From the interrupt thread: freeze the running guest thread, run handlers, resume or preempt. False when it left
+// them for the running thread's next safe point.
+bool interrupt_now() {
     Lock lock;
     Thread *r = g_running;
-    if (r && (r->kernel_depth > 0 || r->di)) return;  // delivered when it leaves (KernelScope/EI)
+    if (r && (r->kernel_depth > 0 || r->di)) return false;  // delivered when it leaves (KernelScope/EI)
+    if (!g_due_since) g_due_since = kernel_bus_cycles();
+    if (r && cooperative_delivery() && kernel_bus_cycles() - g_due_since < kCooperativeLimit) return false;
+    g_due_since = 0;
+    if (r) ++g_delivered_preemptively;
     if (r) {
         SuspendThread(r->host);
         CONTEXT ctx;
@@ -278,6 +296,7 @@ void interrupt_now() {
     } else if (best && !g_running) {
         dispatch(best);
     }
+    return true;
 }
 
 bool g_alarms_due() {
@@ -297,6 +316,8 @@ void deliver_on_self(Thread *me) {
         ++me->kernel_depth;
         deliver_pending();
         --me->kernel_depth;
+        g_due_since = 0;
+        ++g_delivered_cooperatively;
         Thread *best = best_ready();
         if (best && me == g_running && best->prio < me->prio) {
             make_ready(me, true);
@@ -350,7 +371,16 @@ DWORD WINAPI interrupt_thread(void *) {
                 if (next_frame < now) next_frame = now + frame_cycles;  // fell behind: skip
             }
         }
-        if (g_alarms_due()) interrupt_now();
+        // (left for a safe point: look again shortly, for the limit)
+        if (g_alarms_due() && !interrupt_now()) WaitForSingleObject(g_irq_wake, 1);
+        if (g_frames % 3600 == 0 && now >= next_frame - frame_cycles && g_frames) {
+            static uint32_t logged = 0;
+            if (logged != g_frames) {
+                logged = g_frames;
+                log_info("kernel: frame callbacks delivered at safe points %llu, by interrupting %llu",
+                         static_cast<unsigned long long>(g_delivered_cooperatively), static_cast<unsigned long long>(g_delivered_preemptively));
+            }
+        }
     }
 }
 

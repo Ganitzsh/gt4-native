@@ -128,10 +128,15 @@ GT4's post effects that worked through the GS's memory tricks become passes of t
   and objects not seen in the previous frame step at 60 Hz. GPU cost: the frame's work per refresh (1080p high: about
   5 ms).
 - **Any shape** (done): the content aspect reaches the game at start-up and every frame (`aspect.ratio = window`: the
-  window's), so Hor+ 3D and the anchored HUD follow 21:9 and 32:9 (checked live) as well as 16:9 and 16:10. Not yet:
-  the rear-view mirror and the minimap keep their 16:9 placement.
-- Left: VBlank in the interfaces. The frame clock still delivers the game's frame callbacks as interrupts (the
-  kernel suspends the running guest thread), and the link's record is named VSYNC.
+  window's), so Hor+ 3D and the anchored HUD follow 21:9 and 32:9 (checked live) as well as 16:9 and 16:10. The
+  rear-view mirror keeps its share of the width (on 32:9 a wide strip; its projection follows its shape, so the view
+  is wider, not stretched), the minimap its 16:9 placement.
+- **No interrupts** (done): the game's frame callbacks (six: the graphics library's 004AB430 and five library
+  timers), completions and alarms reach a running guest thread at its next safe point, a syscall or the end of
+  runtime code, as calls in its own flow; the kernel no longer freezes a thread at an arbitrary instruction.
+  Callbacks kept waiting more than 50 ms (a thread that makes no syscall) are delivered the old way: 17 of 8,911 in
+  a session to a race. `GT4_FRAME_DELIVERY=preemptive`: always the old way. The link's frame-end record keeps its
+  name (GT4_REC_VSYNC) for the recordings' sake; it marks the end of a game frame.
 
 ## State
 
@@ -140,4 +145,4 @@ GT4's post effects that worked through the GS's memory tricks become passes of t
 | 1 | in progress. 2026-10-31: texture sets are native: sent once per content, named by the draws, decoded once (pixel-identical to the address path). Graphics memory gets set bytes lazily. Targets: with step 3 |
 | 2 | done 2026-10-31: the renderers run on the GPU (homogeneous output, hardware clipping, a compute shader); model packets go once and decode once. Live race 60 fps at 1080p; front end 10 ms, stream 3 ms a frame |
 | 3 | in progress. 2026-10-31: the race's colour grading is a pass of its own; no reinterpretation left in the race |
-| 4 | in progress. 2026-10-31: 60 Hz clock, progressive races, presentation interpolated to any refresh rate, any aspect ratio; left: the frame callbacks as interrupts |
+| 4 | done. 2026-10-31: 60 Hz clock, progressive races, presentation interpolated to any refresh rate, any aspect ratio; the frame callbacks at safe points instead of interrupts |
