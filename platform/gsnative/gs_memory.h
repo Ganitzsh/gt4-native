@@ -82,6 +82,10 @@ public:
     bool tex0Written(const Tex0& t);
     const uint8_t* clutBuffer() const { return clut; }   // 1 KiB
     void setClutBuffer(const uint8_t* buffer) { std::memcpy(clut, buffer, sizeof clut); }
+    // A palette load in two halves: the entries TEX0 names, read from this memory (16 for a 4-bit format, else 256),
+    // and those entries into the CLUT buffer where the load puts them.
+    void readClut(const Tex0& t, uint32_t* entries) const;
+    void storeClut(const Tex0& t, const uint32_t* entries);
 
     // Decodes a w x h region of the texture TEX0 describes (from texel (u0, v0)) into RGBA8 (R in the low
     // byte), with the CLUT buffer for indexed formats, TEXA for 16/24-bit alpha; TCC = 0 keeps the

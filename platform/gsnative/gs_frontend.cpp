@@ -122,6 +122,7 @@ void GsFrontend::contextGroupSet(uint32_t context, uint32_t group) {
 }
 
 void GsFrontend::applyState(const gfx::StateRecord& r) {
+    ++stateSerial;
     gfx::applyState(shared, contexts, r, [this](uint32_t context, uint32_t group) { contextGroupSet(context, group); });
 }
 
@@ -182,6 +183,7 @@ void GsFrontend::write(uint32_t r, uint64_t value) {
     bool isShared = false;
     uint32_t context = 0, group = 0;
     if (gfx::groupOfRegister(r, isShared, context, group)) {
+        ++stateSerial;
         if (isShared) {
             gfx::setSharedGroup(shared, group, value);
             return;
@@ -270,6 +272,28 @@ void GsFrontend::clutWritten(const gfx::Texture& texture) {
     const GsMemory::Tex0 t = GsMemory::Tex0::of(texture);
     if (!mem.tex0Written(t)) return;
     ++clutLoads;
+    // A palette in a page that holds a set's content (not in graphics memory): from the content, each (content,
+    // place, load) read once.
+    if (nativeTextures) {
+        const uint32_t page = (t.cbp / 32) & 511;
+        const SetPage& sp = setPages[page];
+        const bool held = sp.id && !sp.materialized && pages[page].serial == sp.serial;
+        auto content = held ? setContents.find(sp.hash) : setContents.end();
+        if (content != setContents.end()) {
+            GsMemory::Tex0 own = t;
+            own.cbp = (t.cbp - sp.lo + content->second.base) & 0x3FFF;
+            const bool four = t.psm == PSMT4 || t.psm == PSMT4HL || t.psm == PSMT4HH;
+            const uint64_t key = mix(mix(sp.hash, uint64_t(own.cbp) | uint64_t(t.cpsm) << 16 | uint64_t(t.csm) << 24), four);
+            if (setPalettes.size() > 8192 && !setPalettes.count(key)) setPalettes.clear();   // (a bound: contents come and go)
+            std::vector<uint32_t>& entries = setPalettes[key];
+            if (entries.empty()) {
+                entries.resize(four ? 16 : 256);
+                loadSetContent(sp.hash, content->second);
+                assetMemory->readClut(own, entries.data());
+            }
+            mem.storeClut(t, entries.data());
+        }
+    }
     static const bool logLoads = std::getenv("GT4_GSN_XFER") != nullptr;
     if (logLoads) {
         const uint16_t* c = reinterpret_cast<const uint16_t*>(mem.clutBuffer());
@@ -314,6 +338,8 @@ void GsFrontend::transferStarted(uint32_t dir) {
         memoryWritten(t.dbp, t.dbw, t.dpsm, t.dsax, t.dsay, t.rrw, t.rrh, false);
         ++stats.uploads;
     } else if (dir == 2) {
+        materializeRect(t.sbp, t.sbw, t.spsm, t.ssax, t.ssay, t.rrw, t.rrh);
+        materializeRect(t.dbp, t.dbw, t.dpsm, t.dsax, t.dsay, t.rrw, t.rrh);
         mem.copy(t);   // a copy out of a render target is stale here (the target lives on the GPU)
         memoryWritten(t.dbp, t.dbw, t.dpsm, t.dsax, t.dsay, t.rrw, t.rrh);
         ++stats.copies;
@@ -342,6 +368,7 @@ void GsFrontend::read(const gfx::ReadRecord& r) {
 // A GS -> host read starts: the packed pixels from the memory model, or from the GPU where a draw made them.
 void GsFrontend::readStarted(const GsMemory::Transfer& t) {
     {
+        materializeRect(t.sbp, t.sbw, t.spsm, t.ssax, t.ssay, t.rrw, t.rrh);
         readData = mem.read(t);
         readPos = 0;
         // Whether a draw wrote any of the source pages after the last transfer into them.
@@ -435,6 +462,7 @@ void GsFrontend::imageWritten(const uint8_t* bytes, size_t size) {
 }
 
 void GsFrontend::memoryWritten(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y, uint32_t w, uint32_t h, bool changed) {
+    materializeRect(bp, bw, psm, x, y, w, h);   // (a write into part of a set's page keeps the rest)
     if (!changed) uploadPages.clear();
     uint32_t pw, ph;
     pageSize(psm, pw, ph);
@@ -524,7 +552,14 @@ void GsFrontend::kick(bool draw) {
 void GsFrontend::emit(const Vertex* v, uint32_t n, Topology topology) {
     const uint32_t prim = primValue();
     ++stats.primitives;
-    DrawState s = currentState(prim);
+    // the drawing state: once while it is unchanged (a draw record's primitives, a packet's)
+    EmitCache& cache = emitCache;
+    const bool cached = cache.valid && cache.prim == prim && cache.serial == stateSerial && cache.frame == frameCount;
+    if (!cached) {
+        cache.state = currentState(prim);
+        cache.valid = false;
+    }
+    const DrawState& s = cache.state;
     // Flat shading: the last vertex's colour for the whole primitive.
     Vertex out[3];
     for (uint32_t k = 0; k < n; ++k) {
@@ -565,22 +600,45 @@ void GsFrontend::emit(const Vertex* v, uint32_t n, Topology topology) {
          std::max(std::ceil(y0), static_cast<float>(scissorY0)) > std::min(std::ceil(y1) - 1.0f, static_cast<float>(scissorY1))))
         return;
     const uint32_t width = s.c.colorWidth;
-    const uint32_t colour = targetFor(s.c.colorBase, s.c.colorFormat, false, scissorY1 + 1, width);
     // ZTE with ZTST = ALWAYS and ZMSK set (the GS wants ZTE on: games "switch Z off" this way) neither tests nor
     // writes Z: no Z buffer (GT4's composition into the field buffer named the 448-line scene's).
-    const bool zte = s.c.depthTest && !(s.c.depthFunc == 1 && !s.c.depthWrite);
-    const uint32_t depth = zte ? targetFor(s.c.depthBase, s.c.depthFormat, true, scissorY1 + 1, width) : 0;
+    if (!cached) {
+        cache.colour = targetFor(s.c.colorBase, s.c.colorFormat, false, scissorY1 + 1, width);
+        cache.zte = s.c.depthTest && !(s.c.depthFunc == 1 && !s.c.depthWrite);
+        cache.depth = cache.zte ? targetFor(s.c.depthBase, s.c.depthFormat, true, scissorY1 + 1, width) : 0;
+        cache.prim = prim;
+        cache.serial = stateSerial;
+        cache.frame = frameCount;
+        cache.valid = true;
+    }
+    const uint32_t colour = cache.colour, depth = cache.depth;
+    const bool zte = cache.zte;
     if (!colour || (zte && !depth)) return;   // past the target limit
     if (s.c.colorKeep != 0xFFFFFFFFu) markWritten(colour, s.c.colorBase, width, s.c.colorFormat, left, right, top, bottom);
     if (depth && s.c.depthWrite) markWritten(depth, s.c.depthBase, width, s.c.depthFormat, left, right, top, bottom);
     TextureSource texture;
     if ((prim >> 4) & 1) {
+        // The last primitive's texture while nothing it depends on changed. A target's pixels too (GT4's post
+        // effects draw grids of pieces from one target): when this draw does not write that target (or the one the
+        // palette came from) and nothing else wrote it since.
         const LastTexture& m = lastTexture;
-        if (m.valid && m.uploads == uploads && m.ownerChanges == ownerChanges && m.clutLoads == clutLoads && m.state == s) {
+        auto writtenOf = [&](uint32_t id) -> uint64_t { return id && id < targetWritten.size() ? targetWritten[id] : 0; };
+        if (m.valid && m.uploads == uploads && m.ownerChanges == ownerChanges && m.clutLoads == clutLoads && m.state == s &&
+            writtenOf(m.sourceTarget) == m.sourceWritten && writtenOf(m.paletteTarget) == m.paletteWritten) {
             texture = m.source;
         } else {
             texture = textureFor(s);
-            lastTexture = {texture.kind == TextureSource::Kind::Memory, s, texture, uploads, ownerChanges, clutLoads};
+            uint32_t source = 0, palette = 0;
+            if (texture.kind == TextureSource::Kind::Target) {
+                source = texture.id;
+            } else if (texture.kind == TextureSource::Kind::Reinterpreted && texture.id < frame.reinterpretations.size()) {
+                source = frame.reinterpretations[texture.id].target;
+                palette = frame.reinterpretations[texture.id].clutTarget;
+            }
+            const bool pixels = texture.kind == TextureSource::Kind::Target || texture.kind == TextureSource::Kind::Reinterpreted;
+            auto drawnHere = [&](uint32_t id) { return id && (id == colour || id == depth); };
+            const bool keep = texture.kind == TextureSource::Kind::Memory || (pixels && !drawnHere(source) && !drawnHere(palette));
+            lastTexture = {keep, s, texture, uploads, ownerChanges, clutLoads, source, writtenOf(source), palette, writtenOf(palette)};
         }
     }
     // A 3D scene's target read into another one (GT4's post effects, its composite into the display buffer)
@@ -715,6 +773,7 @@ void GsFrontend::markWritten(uint32_t targetId, uint32_t bp, uint32_t bw, uint32
     const uint32_t first = std::min(x0 / pw, perRow - 1), last = std::min(x1 / pw, perRow - 1);
     for (uint32_t py = y0 / ph; py <= y1 / ph; ++py)
         for (uint32_t px = first; px <= last; ++px) {
+            materializePage(bp / 32 + py * perRow + px);   // (a draw over part of a set's page keeps the rest)
             PageOwner& p = pages[(bp / 32 + py * perRow + px) & 511];
             if (p.target != targetId) ++ownerChanges;
             p = {targetId, ++serial};
@@ -732,6 +791,7 @@ bool sameTexAlpha(const Reinterpretation& a, const Reinterpretation& b) {
 // A page's content hash (64-bit words, multiply-xorshift), computed again only after a transfer wrote the page.
 uint64_t GsFrontend::pageContent(uint32_t page) {
     page &= 511;
+    materializePage(page);
     if (pageHashGeneration[page] == pageGeneration[page]) return pageHash[page];
     const uint8_t* bytes = mem.data() + size_t(page) * 8192;
     uint64_t h = 0x9E3779B97F4A7C15ull ^ page;
@@ -755,6 +815,18 @@ void GsFrontend::texSet(const uint8_t* payload, size_t bytes) {
     std::vector<gfx::TexSetUpload> uploads(r.uploads);
     std::memcpy(uploads.data(), payload + sizeof r, r.uploads * sizeof(gfx::TexSetUpload));
     const gfx::SetSlots::Slot slot = gfx::SetSlots::of(r, uploads.data());
+    if (!r.id) {   // a content kept with no set holding it (exportSets: a recording that starts mid-run)
+        if (r.sent && !setContents.count(slot.hash)) {
+            SetContent c;
+            c.base = slot.lo;
+            c.uploads = std::move(uploads);
+            c.bytes.assign(payload + head, payload + bytes);
+            setContentBytes += c.bytes.size();
+            setContents.emplace(slot.hash, std::move(c));
+        }
+        setSlots.keep(slot.hash);
+        return;
+    }
     if (r.sent && !setContents.count(slot.hash)) {
         SetContent c;
         c.base = slot.lo;
@@ -769,34 +841,35 @@ void GsFrontend::texSet(const uint8_t* payload, size_t bytes) {
         std::memcpy(&u, payload + sizeof r + k * sizeof u, sizeof u);
         setUploadsToo.emplace_back(u.source, u.destination & 0x3FFF);
     }
-    // The content into graphics memory at the slot, from the host's copy (the runtime sends a content's bytes once):
-    // what the address paths and the palette loads read, as the PS2's uploads left it. Its pages hold this set until
-    // something writes them.
-    auto content = setContents.find(slot.hash);
-    if (nativeTextures && content != setContents.end()) {
-        GT4_CPU_SCOPE("front end: texture sets");
-        const SetContent& c = content->second;
-        size_t at = 0;
-        for (const gfx::TexSetUpload& u : c.uploads) {
-            GsMemory::Transfer t;
-            t.dbp = ((u.destination & 0x3FFF) - c.base + slot.lo) & 0x3FFF;
-            t.dbw = (u.destination >> 16) & 0x3F;
-            t.dpsm = (u.destination >> 24) & 0x3F;
-            t.rrw = u.w;
-            t.rrh = u.h;
-            mem.beginWrite(t);
-            memoryWritten(t.dbp, t.dbw, t.dpsm, 0, 0, t.rrw, t.rrh, false);
-            const size_t n = std::min<size_t>(size_t(u.qwords) * 16, c.bytes.size() - std::min(at, c.bytes.size()));
-            if (n) imageWritten(c.bytes.data() + at, n);
-            imageActive = false;
-            at += size_t(u.qwords) * 16;
-            for (const uint32_t page : uploadPages) setPages[page] = {slot.id, pages[page].serial};
+    // The pages its uploads cover: written now (as the PS2's uploads wrote them), holding this set; its bytes go
+    // into graphics memory only where something reads or writes them there (materializePage).
+    if (nativeTextures) {
+        const auto* sent = payload + sizeof r;
+        for (uint32_t k = 0; k < r.uploads; ++k) {
+            gfx::TexSetUpload u;
+            std::memcpy(&u, sent + k * sizeof u, sizeof u);
+            const uint32_t bp = u.destination & 0x3FFF, bw = (u.destination >> 16) & 0x3F, psm = (u.destination >> 24) & 0x3F;
+            uint32_t pw, ph;
+            pageSize(psm, pw, ph);
+            const uint32_t perRow = std::max<uint32_t>(1, (psm == PSMT8 || psm == PSMT4) ? bw / 2 : bw);
+            for (uint32_t py = 0; py <= (std::max<uint32_t>(u.h, 1) - 1) / ph; ++py)
+                for (uint32_t px = 0; px <= (std::max<uint32_t>(u.w, 1) - 1) / pw; ++px)
+                    for (uint32_t extra = 0; extra < 2; ++extra) {
+                        if (extra && !(bp % 32)) break;
+                        const uint32_t page = (bp / 32 + py * perRow + px + extra) & 511;
+                        pages[page] = {0, ++serial};
+                        ++pageGeneration[page];
+                        setPages[page] = {slot.id, serial, false, slot.hash, slot.lo};
+                    }
         }
     }
-    // (the same lifetime as the runtime's: a content goes with the last set that holds it)
+    // (the same lifetime as the runtime's: a content goes with the last set that holds it; pages that still hold
+    // it get its bytes first)
     setSlots.add(slot, [this](uint64_t gone) {
         auto it = setContents.find(gone);
         if (it == setContents.end()) return;
+        for (uint32_t page = 0; page < 512; ++page)
+            if (setPages[page].hash == gone) materializePage(page);
         setContentBytes -= it->second.bytes.size();
         if (assetLoaded == gone) assetLoaded = 0;
         setContents.erase(it);
@@ -805,9 +878,20 @@ void GsFrontend::texSet(const uint8_t* payload, size_t bytes) {
 
 void GsFrontend::exportSets(const std::function<void(const gfx::TexSetRecord&, const std::vector<gfx::TexSetUpload>&,
                                                      const std::vector<uint8_t>&)>& out) const {
-    // each set in graphics memory, with its uploads at its slot; a content's bytes with the first set that holds it
+    // the contents kept with no set holding them (id 0, in the order they went), then each set in graphics memory
+    // with its uploads at its slot; a content's bytes with the first set that holds it
     std::unordered_set<uint64_t> exported;
     static const std::vector<uint8_t> none;
+    for (const uint64_t hash : setSlots.kept()) {
+        auto c = setContents.find(hash);
+        if (c == setContents.end()) continue;
+        gfx::TexSetRecord r{};
+        r.hashLow = static_cast<uint32_t>(hash);
+        r.hashHigh = static_cast<uint32_t>(hash >> 32);
+        r.uploads = static_cast<uint16_t>(c->second.uploads.size());
+        r.sent = exported.insert(hash).second ? 1u : 0u;
+        out(r, c->second.uploads, r.sent ? c->second.bytes : none);
+    }
     for (const gfx::SetSlots::Slot& slot : setSlots.all()) {
         auto c = setContents.find(slot.hash);
         if (c == setContents.end()) continue;
@@ -843,6 +927,40 @@ void GsFrontend::loadSetContent(uint64_t hash, const SetContent& sc) {
         at += size_t(u.qwords) * 16;
     }
     assetLoaded = hash;
+}
+
+void GsFrontend::materializePage(uint32_t page) {
+    page &= 511;
+    SetPage& sp = setPages[page];
+    if (!sp.id || sp.materialized || pages[page].serial != sp.serial) return;
+    sp.materialized = true;
+    auto content = setContents.find(sp.hash);
+    if (content == setContents.end()) return;
+    GT4_CPU_SCOPE("front end: set pages into memory");
+    // (slots are 64-block aligned: a page of the slot is a page of the content where it was first sent)
+    const uint32_t from = (page - (sp.lo - content->second.base) / 32) & 511;
+    // the content's pages, kept (the slot cache brings the same sets back every frame, elsewhere)
+    const uint64_t key = mix(sp.hash, from);
+    if (setPageBytes.size() > 2048 && !setPageBytes.count(key)) setPageBytes.clear();   // (16 MiB)
+    std::vector<uint8_t>& bytes = setPageBytes[key];
+    if (bytes.empty()) {
+        loadSetContent(sp.hash, content->second);
+        bytes.assign(assetMemory->data() + size_t(from) * 8192, assetMemory->data() + size_t(from + 1) * 8192);
+    }
+    std::memcpy(mem.data() + size_t(page) * 8192, bytes.data(), 8192);
+    ++stats.setPagesWritten;
+}
+
+void GsFrontend::materializeRect(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+    uint32_t pw, ph;
+    pageSize(psm, pw, ph);
+    const uint32_t perRow = std::max<uint32_t>(1, (psm == PSMT8 || psm == PSMT4) ? bw / 2 : bw);
+    for (uint32_t py = y / ph; py <= (y + std::max<uint32_t>(h, 1) - 1) / ph; ++py)
+        for (uint32_t px = x / pw; px <= (x + std::max<uint32_t>(w, 1) - 1) / pw; ++px)
+            for (uint32_t extra = 0; extra < 2; ++extra) {
+                if (extra && !(bp % 32)) break;
+                materializePage(bp / 32 + py * perRow + px + extra);
+            }
 }
 
 // The CLUT buffer's entries an indexed texture reads (a 4-bit one: 16 at CSA), hashed.
@@ -1021,6 +1139,7 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
             for (uint32_t extra = 0; extra < 2; ++extra) {
                 if (extra && !(t.tbp % 32)) break;
                 const uint32_t page = (t.tbp / 32 + py * perRow + px + extra) & 511;
+                materializePage(page);   // (read from memory by address)
                 generation += pageGeneration[page] * (page + 1);
                 content = mix(content, page);
                 if (pages[page].target && pages[page].serial > newest) {
@@ -1746,6 +1865,7 @@ uint32_t GsFrontend::replacementTexture(const TextureName& name, const Replaceme
 void GsFrontend::resetTextures() {
     lastTexture.valid = false;
     assetLoaded = 0;
+    setPalettes.clear();
     replacementTextures.clear();
     textureCache.clear();
     decoded.clear();

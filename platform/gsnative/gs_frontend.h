@@ -232,6 +232,7 @@ public:
         uint64_t named = 0, found = 0;   // textures looked up in the texture pack, and those it has
         uint64_t reused = 0;             // textures whose content was decoded before (GsFrontend::decoded)
         uint64_t setTextures = 0, setMisses = 0, setDecodes = 0;   // textures named by their set; not held now; decodes
+        uint64_t setPagesWritten = 0;   // pages of sets written into graphics memory (materializePage)
         uint64_t byAddress = 0;   // textures still named by graphics-memory address (lookups)
         uint64_t droppedDraws = 0;   // past the target limit (targetFor)
         uint64_t targetsReused = 0;  // slots given to a new buffer at the limit
@@ -316,6 +317,11 @@ private:
         DrawState state;
         TextureSource source;
         uint64_t uploads = 0, ownerChanges = 0, clutLoads = 0;
+        // a target's pixels (emit): the target read and the one the palette came from, as written then
+        uint32_t sourceTarget = 0;
+        uint64_t sourceWritten = 0;
+        uint32_t paletteTarget = 0;
+        uint64_t paletteWritten = 0;
     } lastTexture;
     // The target the CLUT buffer was last loaded from (0: memory), and the texture of that load (samePalette).
     struct ClutSource {
@@ -362,6 +368,9 @@ private:
     struct SetPage {
         uint32_t id = 0;
         uint64_t serial = 0;
+        bool materialized = false;   // graphics memory holds the set's bytes there (materializePage)
+        uint64_t hash = 0;           // its content, and where (its slot's lowest upload): kept after the set goes
+        uint32_t lo = 0;
     };
     std::vector<SetPage> setPages = std::vector<SetPage>(512);
     bool holdsSet(uint32_t block, uint32_t id) const {
@@ -370,12 +379,33 @@ private:
     }
     std::unordered_map<uint64_t, SetContent> setContents;
     uint64_t setContentBytes = 0;
+    // The drawing state changes (register writes of its groups, state records): emit() works out the state and the
+    // targets once while it stays.
+    uint64_t stateSerial = 0;
+    struct EmitCache {
+        bool valid = false;
+        uint32_t prim = 0;
+        uint64_t serial = 0, frame = 0;
+        DrawState state;
+        uint32_t colour = 0, depth = 0;
+        bool zte = false;
+    } emitCache;
     // model(): the targets and scissor the last batch marked written, and the write serial after it
     std::array<uint32_t, 8> lastModelMarking{};
     uint64_t lastModelSerial = ~0ull;
     std::unique_ptr<GsMemory> assetMemory;
     uint64_t assetLoaded = 0;   // the content written into assetMemory (0: none)
     void loadSetContent(uint64_t hash, const SetContent& sc);
+    // A page that holds a set's content (not written since) gets its bytes in graphics memory before anything
+    // reads or writes it there; sets themselves are not written into it (most of their pages are only read as
+    // textures and palettes, from the content).
+    void materializePage(uint32_t page);
+    void materializeRect(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y, uint32_t w, uint32_t h);
+    std::unordered_map<uint64_t, std::vector<uint32_t>> setPalettes;   // palettes from sets' contents (clutWritten)
+    std::unordered_map<uint64_t, std::vector<uint8_t>> setPageBytes;   // (content, page) -> its 8 KiB (materializePage)
+public:
+    void materializeAll() { for (uint32_t page = 0; page < 512; ++page) materializePage(page); }
+private:
     uint64_t paletteHash(const GsMemory::Tex0& t);
     struct PaletteMemo {
         uint64_t loads = ~0ull;   // clutLoads when computed

@@ -407,9 +407,14 @@ bool GsMemory::tex0Written(const Tex0& t) {
 // CSM1 stores a 256-colour palette as 16 x 16 pixels with entries 8-15 and 16-23 of each 32 swapped, a
 // 16-colour one as 8 x 2 pixels.
 void GsMemory::loadClut(const Tex0& t) {
+    uint32_t entries[256];
+    readClut(t, entries);
+    storeClut(t, entries);
+}
+
+void GsMemory::readClut(const Tex0& t, uint32_t* entries) const {
     const bool four = t.psm == PSMT4 || t.psm == PSMT4HL || t.psm == PSMT4HH;
     const uint32_t count = four ? 16 : 256;
-    const bool ct32 = t.cpsm == PSMCT32 || t.cpsm == PSMCT24;
     for (uint32_t i = 0; i < count; ++i) {
         uint32_t x, y;
         if (four) {
@@ -420,7 +425,16 @@ void GsMemory::loadClut(const Tex0& t) {
             x = p & 15;
             y = p >> 4;
         }
-        const uint32_t v = readPixel(t.cpsm == PSMCT24 ? PSMCT32 : t.cpsm, t.cbp, 1, x, y);
+        entries[i] = readPixel(t.cpsm == PSMCT24 ? PSMCT32 : t.cpsm, t.cbp, 1, x, y);
+    }
+}
+
+void GsMemory::storeClut(const Tex0& t, const uint32_t* entries) {
+    const bool four = t.psm == PSMT4 || t.psm == PSMT4HL || t.psm == PSMT4HH;
+    const uint32_t count = four ? 16 : 256;
+    const bool ct32 = t.cpsm == PSMCT32 || t.cpsm == PSMCT24;
+    for (uint32_t i = 0; i < count; ++i) {
+        const uint32_t v = entries[i];
         uint16_t* buf = reinterpret_cast<uint16_t*>(clut);
         if (ct32) {
             const uint32_t e = four ? ((t.csa & 15) * 16 + i) & 255 : i;

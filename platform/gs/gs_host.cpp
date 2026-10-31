@@ -229,7 +229,10 @@ public:
             }
         }
     }
-    void readVram(void* out) override { std::memcpy(out, native->memory().data(), gsn::GsMemory::kBytes); }
+    void readVram(void* out) override {
+        native->materializeAll();   // (the sets' pages too)
+        std::memcpy(out, native->memory().data(), gsn::GsMemory::kBytes);
+    }
     void writeVram(const void* data) override { native->restoreMemory(data); }
     uint64_t blankFrames = 0, gpuReads = 0, staleReads = 0;
 private:
@@ -869,7 +872,7 @@ std::string GsHost::summary() const {
     }
     if (h.target && (h.target->frontend().stats.setTextures || h.target->frontend().stats.setMisses)) {
         const auto& s = h.target->frontend().stats;
-        out << "; native textures: " << s.setTextures << " lookups by set, " << s.setMisses << " not held, " << s.setDecodes << " decoded, "
+        out << "; native textures: " << s.setTextures << " lookups by set, " << s.setMisses << " not held, " << s.setDecodes << " decoded, " << s.setPagesWritten << " set pages into memory, "
             << s.byAddress << " lookups by address (" << s.targetReads << " of targets, " << s.reinterpreted << " reinterpreted)";
     }
     if (h.target && (h.target->gpuReads || h.target->staleReads))

@@ -18,7 +18,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace gt4::gfx {
@@ -527,24 +529,26 @@ static_assert(sizeof(ModelJob) == 64 + 14 * 16);
 inline constexpr uint32_t kModelWords = 1024;   // a batch: 256 qwords
 
 // The texture sets in graphics memory, as the runtime's frame walker and the host both keep them (in the order of
-// the set records): a set lives until another is uploaded over its slot, and a content (by hash) until its last
-// set goes. add() calls `gone(hash)` for each content that went: the walker sends its bytes again if it comes back,
-// the host drops them.
+// the set records): a set lives until another is uploaded over its slot, and a content (by hash) while a set holds
+// it and for kKept contents dropped after it (GT4's slot cache sends the same sets again frame after frame, into
+// other slots). add() calls `gone(hash)` for each content that went: the walker sends its bytes again if it comes
+// back, the host drops them.
 class SetSlots {
 public:
     struct Slot {
         uint32_t id, lo, hi;   // its slot (blocks)
         uint64_t hash;
     };
+    static constexpr size_t kKept = 512;
     template <class Gone> void add(const Slot& slot, Gone&& gone) {
-        ++refs[slot.hash];
+        if (++refs[slot.hash] == 1) unheld.erase(slot.hash);   // back before it went
         for (size_t k = 0; k < slots.size();) {
             const Slot& s = slots[k];
             if (s.lo < slot.hi && slot.lo < s.hi) {
                 auto ref = refs.find(s.hash);
                 if (ref != refs.end() && --ref->second == 0) {
                     refs.erase(ref);
-                    gone(s.hash);
+                    keep(s.hash);
                 }
                 slots[k] = slots.back();
                 slots.pop_back();
@@ -553,6 +557,22 @@ public:
             }
         }
         slots.push_back(slot);
+        while (unheld.size() > kKept) {
+            const uint64_t oldest = dropped.front();
+            dropped.pop_front();
+            if (unheld.erase(oldest)) gone(oldest);
+        }
+    }
+    // A content no set holds, kept for now (a recording that starts mid-run: the host's copy of the runtime's).
+    void keep(uint64_t hash) {
+        if (unheld.insert(hash).second) dropped.push_back(hash);
+    }
+    // The contents kept so, oldest first.
+    std::vector<uint64_t> kept() const {
+        std::vector<uint64_t> out;
+        for (const uint64_t h : dropped)
+            if (unheld.count(h)) out.push_back(h);
+        return out;
     }
     const Slot* find(uint32_t id) const {
         for (const Slot& s : slots)
@@ -571,6 +591,8 @@ public:
 private:
     std::vector<Slot> slots;
     std::unordered_map<uint64_t, uint32_t> refs;
+    std::deque<uint64_t> dropped;           // contents no set holds, in the order they went (some came back)
+    std::unordered_set<uint64_t> unheld;    // ... those still waiting
 };
 
 // A vertex: position in 1/16 pixel in the drawing context's coordinates (its origin, at 2048 pixels on
