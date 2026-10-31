@@ -15,8 +15,20 @@ layout(push_constant) uniform Push {
     float dither;           // 0 off, otherwise 1 / (2^bits - 1)
     float frame;
     float srgbTarget;       // 1: the swapchain format encodes sRGB itself, write linear
-    float heat;             // unused here (reserved)
+    float paperWhite;       // HDR10 output (PQ, BT.2020): the nits of SDR white; 0: SDR output
+    float peak;             // ... the display's peak, nits: SDR highlights expand towards it
 } push;
+
+// HDR10: the SDR picture (linear, 0..1) in nits. Up to a knee at half of white it keeps SDR's look at paper white;
+// above, its highlights expand smoothly (no kink: the added term starts flat) to the display's peak at white,
+// scaling the colour by its luminance's gain so that hues stay.
+vec3 toNits(vec3 c) {
+    const float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    const float knee = 0.5;
+    const float t = max(l - knee, 0.0) / (1.0 - knee);
+    const float target = push.paperWhite * l + max(push.peak - push.paperWhite, 0.0) * t * t;
+    return l > 1e-6 ? c * (target / l) : c * push.paperWhite;
+}
 
 vec3 fetchLinear(vec2 uv) { return srgbDecode(textureLod(image, uv, 0.0).rgb); }
 
@@ -47,7 +59,8 @@ void main() {
         float n = (hashToFloat(pcgHash(seed)) + hashToFloat(pcgHash(seed ^ 0x9e3779b9u)) - 1.0);
         color = max(color + n * push.grain * 0.08 * sqrt(max(color, vec3(0.0))), vec3(0.0));
     }
-    vec3 encoded = srgbEncode(color);
+    const bool hdr = push.paperWhite > 0.0;
+    vec3 encoded = hdr ? pqEncode(max(bt709ToBt2020(toNits(color)), vec3(0.0)) / 10000.0) : srgbEncode(color);
     if (push.dither > 0.0) {
         // Triangular-distributed dither of +-1 quantisation step (Gjoel 2016, "Banding in Games").
         uint seed = uint(gl_FragCoord.x) * 7919u + uint(gl_FragCoord.y) * 104729u + uint(push.frame) * 15485863u;
@@ -56,5 +69,5 @@ void main() {
         encoded += (n + m - 1.0) * push.dither;
     }
     encoded = clamp(encoded, 0.0, 1.0);
-    outColor = vec4(push.srgbTarget > 0.5 ? srgbDecode(encoded) : encoded, 1.0);
+    outColor = vec4(push.srgbTarget > 0.5 && !hdr ? srgbDecode(encoded) : encoded, 1.0);
 }

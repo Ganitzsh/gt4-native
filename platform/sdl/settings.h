@@ -47,7 +47,9 @@ struct Settings {
     int fpsLimit = 0;                 // 0 = unlimited (vsync still applies)
     int outputBits = 8;               // 8 or 10 bits per channel swapchain
     bool highDpi = true;
-    bool hdr = false;                 // reserved: HDR10 output is a later milestone
+    bool hdr = false;                 // HDR10 output (PQ, BT.2020) where the display offers it
+    float hdrPaperWhite = 200.0f;     // HDR: the nits of SDR white
+    float hdrPeak = 1000.0f;          // HDR: the display's peak, nits (highlights expand towards it)
 
     // [aspect]
     AspectRatio aspect = AspectRatio::Window;

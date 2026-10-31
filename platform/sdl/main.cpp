@@ -206,9 +206,13 @@ struct Instance {
         vkEnumerateInstanceExtensionProperties(nullptr, &available, nullptr);
         std::vector<VkExtensionProperties> properties(available);
         vkEnumerateInstanceExtensionProperties(nullptr, &available, properties.data());
-        bool debugUtils = false;
-        for (const auto& p : properties) debugUtils |= std::strcmp(p.extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0;
+        bool debugUtils = false, colourSpaces = false;
+        for (const auto& p : properties) {
+            debugUtils |= std::strcmp(p.extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0;
+            colourSpaces |= std::strcmp(p.extensionName, VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME) == 0;
+        }
         if (debugUtils) extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        if (colourSpaces) extensions.push_back(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);   // HDR10 swapchains (display.hdr)
         VkApplicationInfo app{};
         app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
         app.pApplicationName = "GT4 native host";

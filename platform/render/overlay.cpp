@@ -67,6 +67,7 @@ struct Overlay::Impl {
     uint32_t slot = 0;
     VkExtent2D target{};
     bool srgbTarget = false;
+    float paperWhite = 0.0f;   // HDR10 output (Overlay::setHdr)
 
     Impl(const vk::Device& d, VkCommandPool p) : device(d), pool(p) {
         std::vector<uint8_t> pixels(kAtlasWidth * kAtlasHeight * 4, 0);
@@ -137,6 +138,8 @@ struct Overlay::Impl {
 
 Overlay::Overlay(const vk::Device& device, VkCommandPool pool) : impl(std::make_unique<Impl>(device, pool)) {}
 Overlay::~Overlay() = default;
+
+void Overlay::setHdr(float paperWhite) { impl->paperWhite = paperWhite; }
 
 void Overlay::prepare(VkFormat swapchainFormat, bool srgbTarget) {
     vk::destroy(impl->device, impl->pipeline);
@@ -212,8 +215,8 @@ void Overlay::record(VkCommandBuffer command) {
     vkCmdSetViewport(command, 0, 1, &viewport);
     vkCmdSetScissor(command, 0, 1, &scissor);
     vk::bind(command, impl->pipeline);
-    struct { float width, height, srgb, pad; } push{static_cast<float>(impl->target.width),
-        static_cast<float>(impl->target.height), impl->srgbTarget ? 1.0f : 0.0f, 0.0f};
+    struct { float width, height, srgb, paperWhite; } push{static_cast<float>(impl->target.width),
+        static_cast<float>(impl->target.height), impl->srgbTarget ? 1.0f : 0.0f, impl->paperWhite};
     vk::pushConstants(command, impl->pipeline, push);
     VkDeviceSize offset = 0;
     vkCmdBindVertexBuffers(command, 0, 1, &buffer.buffer, &offset);

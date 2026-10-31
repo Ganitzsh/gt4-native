@@ -100,6 +100,7 @@ struct FramePipeline::Impl {
     VkFormat outputFormat = VK_FORMAT_UNDEFINED;
     bool srgbOutput = false;
     uint32_t outputBits = 8;
+    float hdrPaperWhite = 0.0f, hdrPeak = 0.0f;   // HDR10 output (setHdr); 0: SDR
 
     // Frame state.
     uint32_t frameIndex = 0;
@@ -851,10 +852,10 @@ struct FramePipeline::Impl {
         viewport(command, config.content);
         vk::bind(command, finalPass);
         vk::Descriptors().sampled(0, out->view, linearClamp).push(command, finalPass);
-        struct { float w, h, aberration, vignette, grain, dither, frame, srgb, heat, pad; } push{
+        struct { float w, h, aberration, vignette, grain, dither, frame, srgb, paperWhite, peak; } push{
             static_cast<float>(config.output.width), static_cast<float>(config.output.height), settings.chromaticAberration,
             settings.vignette, settings.filmGrain, settings.dither ? 1.0f / static_cast<float>((1u << outputBits) - 1u) : 0.0f,
-            static_cast<float>(frameIndex % 65536u), srgbOutput ? 1.0f : 0.0f, 0.0f, 0.0f};
+            static_cast<float>(frameIndex % 65536u), srgbOutput ? 1.0f : 0.0f, hdrPaperWhite, hdrPeak};
         vk::pushConstants(command, finalPass, push);
         vkCmdDraw(command, 3, 1, 0, 0);
         overlay.record(command);
@@ -956,6 +957,10 @@ FramePipeline::FramePipeline(const vk::Device& device, VkCommandPool pool) : imp
 FramePipeline::~FramePipeline() = default;
 void FramePipeline::configure(const Settings& settings, VkExtent2D swapchain, SceneSource& scene) { impl->configure(settings, swapchain, scene); }
 void FramePipeline::prepareOutput(VkFormat format, bool srgb, uint32_t bits) { impl->prepareOutput(format, srgb, bits); }
+void FramePipeline::setHdr(float paperWhite, float peak) {
+    impl->hdrPaperWhite = paperWhite;
+    impl->hdrPeak = peak;
+}
 SceneView FramePipeline::beginFrame(uint32_t slot, uint32_t frameIndex) { return impl->beginFrame(slot, frameIndex); }
 void FramePipeline::record(VkCommandBuffer command, SceneSource& scene, const SceneView& view, vk::Image& target,
                            Overlay& overlay, float dt) { impl->record(command, scene, view, target, overlay, dt); }

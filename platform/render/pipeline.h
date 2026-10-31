@@ -27,6 +27,9 @@ public:
     void configure(const Settings& settings, VkExtent2D swapchain, SceneSource& scene);
     // Creates the output pass for the swapchain format (srgbFormat: the format encodes sRGB itself).
     void prepareOutput(VkFormat format, bool srgbFormat, uint32_t outputBits);
+    // HDR10 output (a swapchain in the ST 2084 colour space): SDR white at `paperWhite` nits, highlights expanded
+    // towards `peak`; paperWhite 0: SDR.
+    void setHdr(float paperWhite, float peak);
     // Per-frame camera inputs for the scene (jitter, sizes, sampler).
     SceneView beginFrame(uint32_t slot, uint32_t frameIndex);
     void record(VkCommandBuffer command, SceneSource& scene, const SceneView& view, vk::Image& swapchainImage,

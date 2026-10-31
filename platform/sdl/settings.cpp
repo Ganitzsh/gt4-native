@@ -184,8 +184,13 @@ const std::vector<Option>& options() {
             "Swapchain precision: 8 or 10 bits per channel (10 reduces banding where the display supports it).", {8, 10}));
         o.push_back(boolOption("display.high_dpi", &Settings::highDpi,
             "Render at the full pixel density of high-DPI displays (otherwise the OS scales the window)."));
+        o.push_back(floatOption("display.hdr_paper_white", &Settings::hdrPaperWhite, 80.0f, 500.0f,
+            "HDR: the brightness of the game's white (its menus, the sky) in nits."));
+        o.push_back(floatOption("display.hdr_peak", &Settings::hdrPeak, 200.0f, 10000.0f,
+            "HDR: the display's peak brightness in nits; the game's highlights (sun, glare, lights at night) expand towards it."));
         o.push_back(boolOption("display.hdr", &Settings::hdr,
-            "Reserved for HDR10 output (not implemented yet; ignored)."));
+            "HDR10 output (PQ, BT.2020) where the display offers it: the game's picture at display.hdr_paper_white, its "
+            "highlights expanded towards display.hdr_peak. Off, or a display without HDR: SDR."));
         o.push_back(enumOption("aspect.ratio", &Settings::aspect, kAspects,
             "Content aspect ratio. Other window shapes get black bars (letterbox or pillarbox). 3D is Hor+: the "
             "vertical field of view stays fixed and wider ratios see more to the sides."));

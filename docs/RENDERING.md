@@ -116,9 +116,13 @@ option with its values and effect is in the reference at the end, and `gt4_host 
   flight.
 - **High DPI**: SDL 3 declares per-monitor-v2 DPI awareness on Windows. With `display.high_dpi` the swapchain
   has the monitor's full pixel count and the 2D layer scales with the content rectangle.
-- **HDR output** (`display.hdr`) is reserved. The pipeline is HDR internally; HDR10 output needs an
-  `HDR10_ST2084` (or scRGB) swapchain, a PQ encode after a display-referred tonemap with a paper-white level,
-  metadata, and a 2D layer composited at paper white. A later item.
+- **HDR output** (`display.hdr`, 2026-10-31): a 10-bit swapchain in the `HDR10_ST2084` colour space
+  (`VK_EXT_swapchain_colorspace`) when the display offers one, SDR otherwise (logged). The output pass takes the
+  SDR picture (the game's is graded for SDR) to nits by an inverse tone map: up to a knee at half of white it is
+  SDR at `display.hdr_paper_white`, above it the highlights expand smoothly to `display.hdr_peak` at white (the
+  colour scaled by its luminance's gain, so hues stay), then BT.709 to BT.2020 and the PQ curve (`final.frag`).
+  The 2D layer is drawn at paper white. Not yet: HDR metadata (`VK_EXT_hdr_metadata`). The project's machine has
+  no HDR display: the PQ path has not been seen on a screen.
 - **Device selection**: every Vulkan device is examined: Vulkan 1.3 with dynamic rendering and
   synchronization2, `VK_KHR_push_descriptor`, a graphics+compute queue and, with a window, a queue that can
   present to the window's surface *and* successful surface capability, format and present-mode queries (a GPU
@@ -297,7 +301,7 @@ renders the default preset at 1280x720 in about 8 ms.
 - R1 replaces the test scene: motion vectors and the FSR 2 reactive mask for the game's geometry and effects
   (see the scene contract); its 2D GS primitives go through the 2D layer mapping (`docs/WIDESCREEN.md`).
 - Heat haze, particles and ambient occlusion are settings without an implementation in the test scene.
-- HDR10 output, FSR 2's auto-generated reactive mask, and FSR 3 / frame generation are not done.
+- FSR 2's auto-generated reactive mask and FSR 3 / frame generation are not done.
 - Window moves between adapters are handled but could not be exercised on the test machine (one active display).
 
 ## Settings reference
@@ -320,7 +324,9 @@ Generated from `gt4_host --list-options` (defaults are the `high` preset).
 | `display.fps_limit` | `0` | 0..1000 | Frame-rate cap in frames per second; 0 = no cap. The game simulation stays at its own 60 Hz. |
 | `display.output_bits` | `8` | 8 \| 10 | Swapchain precision: 8 or 10 bits per channel (10 reduces banding where the display supports it). |
 | `display.high_dpi` | `on` | on \| off | Render at the full pixel density of high-DPI displays (otherwise the OS scales the window). |
-| `display.hdr` | `off` | on \| off | Reserved for HDR10 output (not implemented yet; ignored). |
+| `display.hdr` | `off` | on \| off | HDR10 output (PQ, BT.2020) where the display offers it: the game's picture at `display.hdr_paper_white`, its highlights expanded towards `display.hdr_peak`. Off, or a display without HDR: SDR. |
+| `display.hdr_paper_white` | `200` | 80..500 | HDR: the brightness of the game's white (its menus, the sky) in nits. |
+| `display.hdr_peak` | `1000` | 200..10000 | HDR: the display's peak brightness in nits; the game's highlights (sun, glare, lights at night) expand towards it. |
 
 #### [aspect]
 

@@ -39,6 +39,8 @@ public:
     Overlay& operator=(const Overlay&) = delete;
 
     void prepare(VkFormat swapchainFormat, bool srgbTarget);
+    // HDR10 output (PQ, BT.2020): the overlay at `paperWhite` nits; 0: SDR.
+    void setHdr(float paperWhite);
     void setFilter(TextureFilter filter);
 
     // Building a frame: canvas-space (anchored) and pixel-space primitives.

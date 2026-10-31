@@ -16,6 +16,17 @@ vec3 srgbEncode(vec3 linear) {
     vec3 high = 1.055 * pow(linear, vec3(1.0 / 2.4)) - 0.055;
     return mix(high, low, lessThanEqual(linear, vec3(0.0031308)));
 }
+// HDR10 output: BT.709 to BT.2020 primaries (ITU-R BT.2087), and the PQ curve (SMPTE ST 2084) of a
+// luminance in units of 10000 nits.
+vec3 bt709ToBt2020(vec3 c) {
+    return mat3(0.6274, 0.0691, 0.0164, 0.3293, 0.9195, 0.0880, 0.0433, 0.0114, 0.8956) * c;
+}
+vec3 pqEncode(vec3 y) {
+    const float m1 = 0.1593017578125, m2 = 78.84375, c1 = 0.8359375, c2 = 18.8515625, c3 = 18.6875;
+    const vec3 p = pow(clamp(y, 0.0, 1.0), vec3(m1));
+    return pow((c1 + c2 * p) / (1.0 + c3 * p), vec3(m2));
+}
+
 vec3 srgbDecode(vec3 encoded) {
     encoded = max(encoded, vec3(0.0));
     vec3 low = encoded / 12.92;

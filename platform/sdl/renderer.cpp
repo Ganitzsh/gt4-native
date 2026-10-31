@@ -230,6 +230,8 @@ struct Renderer::Impl {
     bool resized = true, suspended = false, displayMoved = false, sceneSwitched = false;
     gt4::VSync presentedVsync = gt4::VSync::On;
     int presentedBits = 8;
+    bool presentedHdr = false;   // the swapchain is HDR10 (display.hdr, and the display offers it)
+    bool wantedHdr = false;      // display.hdr as the swapchain was made
 
     std::unique_ptr<gt4::TestScene> scene;
     std::unique_ptr<gt4::GsnScene> gsnScene;   // the native renderer: the game's frames
@@ -465,7 +467,15 @@ struct Renderer::Impl {
             preferred.push_back(f);
         VkSurfaceFormatKHR chosen = formats.empty() ? VkSurfaceFormatKHR{VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR} : formats[0];
         bool found = false;
+        // HDR10 (display.hdr): a 10-bit format in the ST 2084 colour space, when the display offers one.
+        if (settings.hdr)
+            for (VkFormat want : {VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_FORMAT_A2R10G10B10_UNORM_PACK32}) {
+                for (const auto& f : formats)
+                    if (f.format == want && f.colorSpace == VK_COLOR_SPACE_HDR10_ST2084_EXT) { chosen = f; found = true; break; }
+                if (found) break;
+            }
         for (VkFormat want : preferred) {
+            if (found) break;
             for (const auto& f : formats)
                 if (f.format == want && f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) { chosen = f; found = true; break; }
             if (found) break;
@@ -533,6 +543,9 @@ struct Renderer::Impl {
         extent = size;
         format = chosen.format;
         srgbFormat = chosen.format == VK_FORMAT_B8G8R8A8_SRGB || chosen.format == VK_FORMAT_R8G8B8A8_SRGB;
+        presentedHdr = chosen.colorSpace == VK_COLOR_SPACE_HDR10_ST2084_EXT;
+        wantedHdr = settings.hdr;
+        if (settings.hdr && !presentedHdr) std::printf("HDR: the display offers no HDR10 format; SDR\n");
         presentedVsync = settings.vsync;
         presentedBits = settings.outputBits;
         overlay->prepare(format, srgbFormat);
@@ -766,7 +779,7 @@ struct Renderer::Impl {
     bool draw(float deltaSeconds) {
         if (!headless && (suspended || (SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED))) { resized = true; return false; }
         if (displayMoved) checkPresentation();
-        if (!headless && (presentedVsync != settings.vsync || presentedBits != settings.outputBits)) resized = true;
+        if (!headless && (presentedVsync != settings.vsync || presentedBits != settings.outputBits || wantedHdr != settings.hdr)) resized = true;
         if (headless && presentedBits != settings.outputBits) resized = true;
         if (resized && !recreateTarget()) return false;
         Frame& frame = frames[slot];
@@ -793,6 +806,9 @@ struct Renderer::Impl {
         if (sceneSwitched) { vkDeviceWaitIdle(device.device); pipeline.reset(); pipeline = std::make_unique<gt4::FramePipeline>(device, pool);
                              pipeline->prepareOutput(format, srgbFormat, static_cast<uint32_t>(presentedBits)); sceneSwitched = false; }
         pipeline->configure(settings, extent, active);
+        // HDR10 output when the swapchain is (display.hdr on a display that offers it).
+        pipeline->setHdr(presentedHdr ? settings.hdrPaperWhite : 0.0f, settings.hdrPeak);
+        overlay->setHdr(presentedHdr ? settings.hdrPaperWhite : 0.0f);
         if (gameFrame) {
             gsnScene->setAnisotropy(settings.anisotropy);
             // render.gs = original: the PS2's own resolution (one render pixel per GS pixel); native: the
