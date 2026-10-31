@@ -281,7 +281,7 @@ GS features — the tricks a native interface must keep:
 | 0049EA80 -> 0049E698, 0049E918, 0049EB90, 0049EE00; 0049F170, 0049F0F0, 0049F448, 0049F4C8, 0049F1F8, 0049CFE8 | light matrices and colours in object space (qwords 201..216) | game_src / matched | 0.1-7 K |
 | 0049E480, 0049E228 | composite matrix; material colours | game_src | - |
 | 0049DA60 -> 0049D580, 0049D728, 0049DB08, 0049DCB0 | skinned/dynamic vertices computed per frame (driver, pit crew) | game_src | not seen |
-| 0049BBB0, 0049C0D8, 0049BBF0 | immediate mode (billboards, car env composite) | matched | not seen |
+| 0049BBB0, 0049C0D8 -> 0049BE10, 0049BBF0 | immediate mode: light glows (003B8EA0), billboard sets | matched; 0049BE10 and 0049BBF0 game_src (batch records since 2026-10-31: the frame walk had dropped them, night courses lost their light glows) | not seen |
 | 0049E5F8 | the batch's GS state (C) | matched | above |
 | 004A81A8, 004A9470 | the screen-grid batches (F) | game_src | not seen |
 

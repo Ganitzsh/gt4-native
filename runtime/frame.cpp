@@ -123,12 +123,13 @@ void walk(uint32_t start) {
                              h[2], h[3], reinterpret_cast<const uint32_t *>(block)[0], reinterpret_cast<const uint32_t *>(block)[1]);
             }
         } else if (qwc) {
-            // each kind once (its size and first words), with how often it was left out
+            // each kind once (its tag type and the VIF command in its upper word) with its size and first words, and
+            // how often blocks were left out so far
             static std::vector<uint64_t> seen;
             static uint32_t total = 0;
             ++total;
             const uint32_t *w = reinterpret_cast<const uint32_t *>(ptr(id == 3 || id == 4 || id == 0 ? addr : body | self));
-            const uint64_t kind = static_cast<uint64_t>(qwc) << 32 | h[3];
+            const uint64_t kind = static_cast<uint64_t>(id) << 32 | (h[3] >> 24 & 0x7F) << 8 | (h[2] >> 24 & 0x7F);
             if (std::find(seen.begin(), seen.end(), kind) == seen.end() && seen.size() < 32) {
                 seen.push_back(kind);
                 log_warn("frame: a list block of %u qwords that is not records (at %08x, id %u, codes %08x %08x; %u left out so far): "
