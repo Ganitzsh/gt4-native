@@ -86,9 +86,15 @@ Done in two parts (2026-10-31):
 On the race recording: 97.5% of the pixels identical to the CPU renderers, 99.97% within 4 per channel (edges a
 subpixel apart); the stream thread's renderers 7.2 ms a frame -> 0.5 ms; live, 60 fps at 1080p.
 
-What remains of the PS2's 3D path: the VIF1 decoding of the model packets on the CPU (UNPACK into the batch
-buffers, 4.9 ms a frame) and the batch buffers themselves. Next: the model packets as vertex buffers made once
-per model, decoded on the GPU.
+- **Model packets once per content.** The runtime's frame walker hashes each model packet and sends its bytes
+  only when the host lacks them (`gfx::ContentFifo`, the last 8192 on both ends); the host decodes a packet once
+  per (content, VIF state) and replays its effect on the batch buffers after that (`Vif1::batchModel`; 97% of the
+  packets replayed; `GT4_VIF_MODELS=0`: decoded every time). A 100-VBlank race recording went from 690 MB to
+  119 MB; the stream thread from 13 ms a frame to 2.8 ms.
+
+What is left of the PS2's 3D path: the batch buffers' layout (the job the GPU reads is the batch as the VU saw
+it), the VIF decoder for a packet's first decode, and the CPU renderers as the reference (`GT4_GPU_MODELS=0`)
+and for the screen grids, whose packets are post effects (step 3).
 
 ## Step 3: native effects
 
@@ -107,6 +113,6 @@ record, the host's counters).
 | Step | State |
 |---|---|
 | 1 | in progress. 2026-10-31: texture sets are native: sent once per content, named by the draws, decoded once (pixel-identical to the address path). Graphics memory gets set bytes lazily. Targets: with step 3 |
-| 2 | in progress. 2026-10-31: the renderers run on the GPU (homogeneous output, hardware clipping, a compute shader); next: model packets as vertex buffers |
+| 2 | done 2026-10-31: the renderers run on the GPU (homogeneous output, hardware clipping, a compute shader); model packets go once and decode once. Live race 60 fps at 1080p; front end 10 ms, stream 3 ms a frame |
 | 3 | - |
 | 4 | - |
