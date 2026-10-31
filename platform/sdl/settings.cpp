@@ -181,6 +181,10 @@ const std::vector<Option>& options() {
             "back to FIFO when the surface lacks the mode."));
         o.push_back(intOption("display.fps_limit", &Settings::fpsLimit, 0, 1000,
             "Frame-rate cap in frames per second; 0 = no cap. The game simulation stays at its own 60 Hz."));
+        o.push_back(boolOption("display.frame_interpolation", &Settings::frameInterpolation,
+            "Presentation above 60 Hz: the game runs at 60 Hz; on = between two of its frames each display refresh "
+            "shows the cars and the scenery moved on by the time passed (interpolated, one game frame behind), off = "
+            "each game frame is shown until the next."));
         o.push_back(intOption("display.output_bits", &Settings::outputBits, 8, 10,
             "Swapchain precision: 8 or 10 bits per channel (10 reduces banding where the display supports it).", {8, 10}));
         o.push_back(boolOption("display.high_dpi", &Settings::highDpi,

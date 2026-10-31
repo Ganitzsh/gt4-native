@@ -831,6 +831,7 @@ struct Renderer::Impl {
             // Temporal anti-aliasing in the game's 3D scenes (motion vectors from its 3D renderers): for TAA, and for
             // FSR 2, whose temporal part it takes (the game's frames reach the pipeline whole, HUD included).
             gsnScene->setTemporal(settings.aa == gt4::AntiAliasing::Taa || settings.upscaler == gt4::Upscaler::Fsr2);
+            gsnScene->setInterpolation(settings.frameInterpolation);
             // The scene stage's effects, by their settings' levels (original and off: none).
             auto level = [](gt4::EffectQuality q) {
                 switch (q) {

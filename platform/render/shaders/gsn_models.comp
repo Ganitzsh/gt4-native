@@ -19,7 +19,9 @@ struct Job {
 layout(std430, set = 0, binding = 0) readonly buffer Jobs { Job jobs[]; };
 layout(std430, set = 0, binding = 1) readonly buffer Words { uint words[]; };
 layout(std430, set = 0, binding = 2) writeonly buffer Vertices { uint vertices[]; };   // gsn::Vertex: 18 words
-layout(push_constant) uniform Constants { uint modelBase; } constants;   // where the jobs' vertices start
+// where the jobs' vertices start; how far between the previous frame's transforms and this one's the batches are
+// drawn (1: this frame's), and where the frame shown before had them (the motion vectors)
+layout(push_constant) uniform Constants { uint modelBase; float t; float tPrevious; } constants;
 
 const float kMax = 3.40282347e38;
 const float kMinNormal = 1.17549435e-38;
@@ -305,20 +307,35 @@ void main() {
     }
     // per vertex: the clip-space point, homogeneous window coordinates, STQ, the colour, the fog lane, the motion
     const bool fog = (job.flags & 1u) != 0u, previous = (job.flags & 4u) != 0u;
+    // the transform at constants.t between the previous frame's and this one's (an object seen in both)
+    mat4 M = mat4(job.matrix[0], job.matrix[1], job.matrix[2], job.matrix[3]);
+    vec4 offset = job.offset, scale = job.scale;
+    mat4 P = mat4(job.previousMatrix[0], job.previousMatrix[1], job.previousMatrix[2], job.previousMatrix[3]);
+    vec4 previousOffset = job.previousOffset, previousScale = job.previousScale;
+    if (previous && constants.t < 1.0) {
+        const mat4 C = M;
+        const vec4 co = offset, cs = scale;
+        for (int k = 0; k < 4; ++k) M[k] = mix(P[k], C[k], constants.t);
+        offset = mix(previousOffset, co, constants.t);
+        scale = mix(previousScale, cs, constants.t);
+        for (int k = 0; k < 4; ++k) P[k] = mix(P[k], C[k], constants.tPrevious);
+        previousOffset = mix(previousOffset, co, constants.tPrevious);
+        previousScale = mix(previousScale, cs, constants.tPrevious);
+    }
     for (uint v = t; v < count; v += 256u) {
         const vec4 p = sPosition[v];
-        const vec4 clip = sat(job.matrix[0] * p.x + job.matrix[1] * p.y + job.matrix[2] * p.z + job.matrix[3]);
+        const vec4 clip = sat(M[0] * p.x + M[1] * p.y + M[2] * p.z + M[3]);
         const float q = divide(1.0, clip.w);
         const vec4 projected = sat(min(clip, job.clampLimit) * q);
         const float w = clip.w;
-        const vec4 h = vec4(job.offset.x * w + job.scale.x * min(clip.x, job.clampLimit.x),
-                            job.offset.y * w + job.scale.y * min(clip.y, job.clampLimit.y),
-                            (job.offset.z * w + job.scale.z * min(clip.z, job.clampLimit.z)) * (fog ? 1.0 : 16.0), w);
+        const vec4 h = vec4(offset.x * w + scale.x * min(clip.x, job.clampLimit.x),
+                            offset.y * w + scale.y * min(clip.y, job.clampLimit.y),
+                            (offset.z * w + scale.z * min(clip.z, job.clampLimit.z)) * (fog ? 1.0 : 16.0), w);
         vec3 motion = vec3(0.0);
         if (previous) {   // where the previous frame's transform put it, over this frame's w
-            const vec4 r = job.previousMatrix[0] * p.x + job.previousMatrix[1] * p.y + job.previousMatrix[2] * p.z + job.previousMatrix[3];
+            const vec4 r = P[0] * p.x + P[1] * p.y + P[2] * p.z + P[3];
             if (r.w > 1e-6 && !isinf(r.x) && !isinf(r.y) && !isinf(r.w) && !isnan(r.x) && !isnan(r.y) && !isnan(r.w) && q > 0.0 && q < kMax) {
-                const vec3 m = vec3(job.previousOffset.x * r.w + job.previousScale.x * r.x, job.previousOffset.y * r.w + job.previousScale.y * r.y, r.w) * q;
+                const vec3 m = vec3(previousOffset.x * r.w + previousScale.x * r.x, previousOffset.y * r.w + previousScale.y * r.y, r.w) * q;
                 if (!any(isinf(m)) && !any(isnan(m)) && m.z > 0.0) motion = m;
             }
         }
@@ -328,7 +345,7 @@ void main() {
         sNormal[v] = clip;
         sPosition[v] = h;
         sSt[v] = vec4(st.x * q, st.y * q, q, motion.x);
-        sColour[v] = uvec4(rgba, floatBitsToUint(projected.w * job.scale.w), floatBitsToUint(motion.y), floatBitsToUint(motion.z));
+        sColour[v] = uvec4(rgba, floatBitsToUint(projected.w * scale.w), floatBitsToUint(motion.y), floatBitsToUint(motion.z));
     }
     barrier();
     // per vertex: hidden (the strip's start, all three outside one plane) or culled: the fog word, with ADC
@@ -354,7 +371,7 @@ void main() {
                 if (!positiveFlag(homogeneousFacing(sNormal[v - 2u], sNormal[v - 1u], sNormal[v], odd))) after = 3072.0;
             }
         }
-        float fogWord = (job.offset.w + raise) + uintBitsToFloat(sColour[v].y);
+        float fogWord = (offset.w + raise) + uintBitsToFloat(sColour[v].y);
         fogWord = fogWord + after;
         const uint fixedWord = fixedPoint(fogWord, 16.0);
         sColour[v].y = ((fixedWord >> 4) & 0xFFu) | ((fixedWord >> 15) & 1u) << 8;

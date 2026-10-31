@@ -64,7 +64,7 @@ const char* kUsage =
     "  --game PATH          start gt4_game.exe with a link and display its frames (GS back end)\n"
     "  --game-args \"ARGS\"  extra arguments for the game (after --link NAME)\n"
     "  --replay FILE        display a capture of the game's graphics stream (gt4_game --capture) instead;\n"
-    "                       with --fixed-step (headless) one VBlank per rendered frame, else 60 Hz\n"
+    "                       with --fixed-step (headless; --realtime: not) one VBlank per rendered frame, else 60 Hz\n"
     "  --replay-loop        start the replay again at its end\n"
     "  --import-save PATH   copy Gran Turismo 4's saves from a PS2 memory card image (PCSX2 .ps2, a raw dump),\n"
     "                       a folder memory card or a .psu export into the save folder, then exit\n"
@@ -79,7 +79,7 @@ const char* kUsage =
 
 struct Options {
     bool probe = false, smoke = false, headless = false, listGpus = false, listDisplays = false, listOptions = false;
-    bool fixedStep = false, audio = true, replayLoop = false;
+    bool fixedStep = false, audio = true, replayLoop = false, realtime = false;
     std::string game, replay;
     std::vector<std::string> gameArgs;
     uint32_t frames = 0;
@@ -130,6 +130,7 @@ Options parse(int argc, char** argv) {
         else if (a == "--list-displays") o.listDisplays = true;
         else if (a == "--list-options") o.listOptions = true;
         else if (a == "--fixed-step") o.fixedStep = true;
+        else if (a == "--realtime") o.realtime = true;
         else if (a == "--no-audio") o.audio = false;
         else if (a == "--gpu") o.gpu = value(i);
         else if (a == "--settings") o.settingsPath = value(i);
@@ -169,7 +170,7 @@ Options parse(int argc, char** argv) {
     if (!o.game.empty() && !o.replay.empty()) throw std::invalid_argument("Choose one of --game and --replay");
     if (!o.capture.empty() && !o.frames) throw std::invalid_argument("--capture needs --frames");
     if (o.smoke) o.frames = 180;
-    if (o.headless || !o.sessionDirectory.empty()) o.fixedStep = true;
+    if ((o.headless || !o.sessionDirectory.empty()) && !o.realtime) o.fixedStep = true;
     return o;
 }
 
@@ -976,7 +977,8 @@ int run(const Options& options) {
         // Without a window, a live game or a real-time replay is shown at its own 60 Hz.
         const bool paceToGame = gs && !windowed && !lockstep;
         if ((settings.fpsLimit > 0 && windowed) || paceToGame) {
-            const Uint64 interval = paceToGame ? 16683350ull : 1000000000ull / static_cast<Uint64>(settings.fpsLimit);
+            // (headless, display.fps_limit sets the presentation rate: the decoupled presentation without a window)
+            const Uint64 interval = settings.fpsLimit > 0 ? 1000000000ull / static_cast<Uint64>(settings.fpsLimit) : 16666667ull;
             nextFrame += interval;
             const Uint64 current = SDL_GetTicksNS();
             if (nextFrame > current) SDL_DelayPrecise(nextFrame - current);

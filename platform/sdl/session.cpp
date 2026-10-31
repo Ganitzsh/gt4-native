@@ -58,6 +58,8 @@ struct Session::Impl {
     Uint64 resizeDeadline = 0;
     Uint64 toneUntil = 0;
     std::vector<fs::path> captures;
+    std::string burstName;   // "capture NAME COUNT": the next COUNT presented frames, NAME_000..
+    int burstLeft = 0, burstIndex = 0;
     uint32_t waitFrames = 0;   // "wait N": frames to render before the next command
     std::function<uint64_t()> gameClock;
     uint64_t waitVblank = 0;   // "vwait N": the game VBlank to reach before the next command
@@ -195,11 +197,18 @@ struct Session::Impl {
         } else if (op == "reset") reset();
         else if (op == "capture") {
             std::string name; input >> name;
+            int count = 1; input >> count;
             if (name.empty() || name.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != std::string::npos)
                 throw std::runtime_error("Capture name must contain only letters, numbers, underscores and hyphens");
-            auto path = directory / "frames" / (name + ".ppm");
-            if (fs::exists(path)) throw std::runtime_error("Capture name already exists");
-            renderer.capture(path.string()); captures.push_back(path);
+            if (count > 1) {   // a burst: one each presented frame from here (tick)
+                burstName = name;
+                burstLeft = std::min(count, 600);
+                burstIndex = 0;
+            } else {
+                auto path = directory / "frames" / (name + ".ppm");
+                if (fs::exists(path)) throw std::runtime_error("Capture name already exists");
+                renderer.capture(path.string()); captures.push_back(path);
+            }
         } else if (op == "tone") {
             double seconds, candidate;
             if (!(input >> candidate >> seconds) || !std::isfinite(candidate) || candidate < 20 || candidate > 20000 ||
@@ -256,6 +265,14 @@ struct Session::Impl {
 Session::Session(const std::string& directory, bool audio, bool diagnostics) : impl(std::make_unique<Impl>(directory)) { impl->diagnostics = diagnostics; impl->initialize(audio); }
 Session::~Session() = default;
 bool Session::tick(Renderer& renderer, SDL_Window* window, uint32_t frame) {
+    if (impl->burstLeft > 0) {
+        char suffix[16];
+        std::snprintf(suffix, sizeof suffix, "_%03d", impl->burstIndex++);
+        const auto path = impl->directory / "frames" / (impl->burstName + suffix + ".ppm");
+        renderer.capture(path.string());
+        impl->captures.push_back(path);
+        --impl->burstLeft;
+    }
     if (impl->resizeWidth) {
         const auto extent = renderer.drawableExtent();
         if (extent.width == static_cast<uint32_t>(impl->resizeWidth) && extent.height == static_cast<uint32_t>(impl->resizeHeight))

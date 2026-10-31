@@ -48,6 +48,9 @@ public:
     // Temporal anti-aliasing of the 3D scenes in the scene stage (render.aa = taa, or FSR 2): jittered draws,
     // motion vectors from the 3D renderers, a resolve against each scene's history (docs/NATIVE_RENDERER.md).
     void setTemporal(bool on);
+    // Presentation decoupled from the game's 60 Hz: at each display refresh between two game frames, the last one
+    // drawn again with its moving 3D interpolated (display.frame_interpolation).
+    void setInterpolation(bool on);
     void setEffects(const SceneEffects& effects);
     bool antiAliasesItself() const override;
 

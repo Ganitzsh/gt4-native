@@ -46,6 +46,7 @@ struct Settings {
     float refreshRate = 0.0f;         // exclusive mode; 0 = highest available for the size
     VSync vsync = VSync::On;
     int fpsLimit = 0;                 // 0 = unlimited (vsync still applies)
+    bool frameInterpolation = true;   // the game's 60 Hz frames interpolated to the display's refresh (moving 3D)
     int outputBits = 8;               // 8 or 10 bits per channel swapchain
     bool highDpi = true;
     bool hdr = false;                 // HDR10 output (PQ, BT.2020) where the display offers it

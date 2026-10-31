@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <bit>
+#include <chrono>
+#include <bit>
 #include <memory>
 #include <array>
 #include <cmath>
@@ -156,6 +158,15 @@ struct GsnScene::Impl {
     // drawn again for their motion vectors (velocityPass) and resolved against the scene's history.
     bool temporal = false;
     uint64_t displayedFrames = 0;   // frames shown so far (the jitter's phase, the histories' age)
+    // Presentation decoupled from the game's 60 Hz (docs/NATIVE_V2.md, step 4): the last list drawn again at each
+    // display refresh with its 3D batches' transforms blended from the previous frame's by modelT, the fraction of
+    // a game frame since the list came (gsn_models.comp); modelTPrevious: the one shown before (motion vectors).
+    bool interpolate = true;
+    std::chrono::steady_clock::time_point arrival{};
+    float modelT = 1.0f, modelTPrevious = 0.0f;
+    float sinceArrival() const {
+        return std::clamp(std::chrono::duration<float>(std::chrono::steady_clock::now() - arrival).count() * 60.0f, 0.0f, 1.0f);
+    }
     vk::Pipeline velocityPass, taaPass;
     vk::Image velocityImage;
     struct History {
@@ -638,7 +649,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
             .storageBuffer(1, data.buffer, 0, frame.modelData.size() * 4)
             .storageBuffer(2, vertices.buffer, 0, vertexBytes)
             .push(command, models);
-        const uint32_t constants[4] = {modelBase, 0, 0, 0};
+        const uint32_t constants[4] = {modelBase, std::bit_cast<uint32_t>(modelT), std::bit_cast<uint32_t>(modelTPrevious), 0};
         vk::pushConstants(command, models, constants);
         vkCmdDispatch(command, static_cast<uint32_t>(frame.models.size()), 1, 1);
         VkMemoryBarrier2 m{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
@@ -1669,6 +1680,28 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
     if (!frame.displayed) return;
     ++displayedFrames;
     displayTarget = frame.display.target2 ? frame.display.target2 : frame.display.target1;
+    // Interpolating: the buffer this list draws into, not the one it shows. The game draws into a back buffer while
+    // the display shows the front one, which the list before drew: shown now, the back buffer at modelT is the
+    // state between the frame on screen (0) and this one (1). (The last target drawn of the shown one's size and
+    // format; a single buffer is the shown one.)
+    if (interpolate) {
+        const gsn::Target* shownTarget = nullptr;
+        for (const gsn::Target& t : frame.targets)
+            if (t.id == displayTarget) shownTarget = &t;
+        for (size_t at = frame.commands.size(); shownTarget && at-- > 0;) {
+            const auto& cmd = frame.commands[at];
+            if (cmd.kind != gsn::FrameList::Command::Kind::Draw) continue;
+            const uint32_t id = frame.draws[cmd.index].target;
+            const gsn::Target* drawn = nullptr;
+            for (const gsn::Target& t : frame.targets)
+                if (t.id == id) drawn = &t;
+            if (drawn && !drawn->depth && drawn->bw == shownTarget->bw && drawn->height == shownTarget->height &&
+                (drawn->psm == shownTarget->psm || (drawn->psm <= 1 && shownTarget->psm <= 1))) {   // (CT32 and CT24: one layout)
+                displayTarget = id;
+                break;
+            }
+        }
+    }
     auto shown = targets.find(displayTarget);
     if (shown != targets.end()) {
         const gfx::DisplayCircuit& c = frame.display.record.circuit[frame.display.target2 ? 1 : 0];
@@ -1742,6 +1775,8 @@ GsnScene::~GsnScene() = default;
 
 void GsnScene::addFrames(std::vector<gsn::FrameList>& lists) {
     Impl& s = *impl;
+    for (const auto& list : lists)
+        if (list.displayed) s.arrival = std::chrono::steady_clock::now();
     for (auto& list : lists) s.pending.push_back(std::move(list));
     lists.clear();
     // Not drawn for long (a minimised window draws nothing): the oldest lists' draws are dropped, their
@@ -1901,6 +1936,9 @@ void GsnScene::Impl::executePending(VkCommandBuffer command, uint32_t slot, VkEx
         }
     }
     writeDump();   // a dump recorded in an earlier submission is complete now
+    // (a new list: from the previous frame's state, where the one before ended)
+    modelTPrevious = 0.0f;
+    modelT = interpolate ? sinceArrival() : 1.0f;
     vk::beginLabel(command, "gsn frame");
     for (listIndex = 0; listIndex < pending.size(); ++listIndex) {
         std::swap(frame, pending[listIndex]);
@@ -1973,10 +2011,30 @@ void GsnScene::recordPrepass(VkCommandBuffer command, const SceneView& view) {
     GT4_CPU_SCOPE("render: native renderer's commands");
     Impl& s = *impl;
     s.lastExtent = view.renderExtent;
-    // Each list is executed once (its blends would apply again).
-    if (s.pending.empty()) return;
-    s.executePending(command, view.slot, view.renderExtent, true);
+    // Each list is executed once (its blends would apply again)...
+    if (!s.pending.empty()) {
+        s.executePending(command, view.slot, view.renderExtent, true);
+        return;
+    }
+    // ... except the last one, drawn again whole between two of the game's frames with its moving 3D a step further
+    // (a list that blends onto what a target held before, a feedback effect, blends once more each time).
+    if (!s.interpolate || !s.frame.displayed || s.frame.models.empty()) return;
+    const float t = s.sinceArrival();
+    if (t <= s.modelT + 1e-3f) return;   // nothing moved since
+    s.modelTPrevious = s.modelT;
+    s.modelT = t;
+    { static int n = 0; if (n++ % 50 == 0) std::fprintf(stderr, "again: t %.3f previous %.3f models %zu\n", t, s.modelTPrevious, s.frame.models.size()); }
+    vk::beginLabel(command, "gsn frame again");
+    s.execute(command, view.slot);
+    if (auto it = s.targets.find(s.displayTarget); it != s.targets.end() && it->second.image.valid() && !it->second.depth) {
+        vk::Barriers b;
+        vk::toSampled(b, it->second.image, vk::kFragment);
+        b.flush(command);
+    }
+    vk::endLabel(command);
 }
+
+void GsnScene::setInterpolation(bool on) { impl->interpolate = on; }
 
 bool GsnScene::read(const gsn::ReadRequest& request, std::vector<uint8_t>& out) {
     Impl& s = *impl;
