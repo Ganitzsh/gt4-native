@@ -15,6 +15,7 @@
 #include <functional>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace gt4::gsn {
@@ -215,6 +216,8 @@ public:
         uint64_t primitives = 0, draws = 0, uploads = 0, copies = 0, decoded = 0, replaced = 0, targetReads = 0, reinterpreted = 0;
         uint64_t named = 0, found = 0;   // textures looked up in the texture pack, and those it has
         uint64_t reused = 0;             // textures whose content was decoded before (GsFrontend::decoded)
+        uint64_t setTextures = 0, setMisses = 0, setDecodes = 0;   // textures named as (set, record); unknown ones; decodes
+        uint64_t byAddress = 0;   // textures still named by graphics-memory address (lookups)
         uint64_t droppedDraws = 0;   // past the target limit (targetFor)
         uint64_t targetsReused = 0;  // slots given to a new buffer at the limit
         uint64_t reads = 0, readsFromTargets = 0;   // LOCAL -> HOST transfers; those with drawn pages
@@ -229,6 +232,13 @@ public:
     void draw(const gfx::DrawRecord& d, const gfx::Vertex* vertices);
     // A read record: the pixels for readTransfer.
     void read(const gfx::ReadRecord& r);
+    // A texture set record (docs/NATIVE_V2.md): gfx::TexSetRecord, its uploads, its textures, then (when `sent`) the
+    // uploads' bytes in order.
+    void texSet(const uint8_t* payload, size_t bytes);
+    // Every set id known, as a set record with its bytes (`sent` 1), for a recording that starts mid-run (its replay
+    // knows the sets bound before it).
+    void exportSets(const std::function<void(const gfx::TexSetRecord&, const std::vector<gfx::TexSetUpload>&,
+                                             const std::vector<gfx::TexSetTexture>&, const std::vector<uint8_t>&)>& out) const;
 
 private:
     GsMemory mem;
@@ -315,8 +325,29 @@ private:
         bool named = false, found = false;
         TextureName name;
         uint32_t origin[2] = {};
+        // a set texture's replacement (setTexture): its texture, the pack's loads when last asked
+        uint32_t replacedId = 0;
+        uint64_t packLoads = ~0ull;
     };
     std::unordered_map<uint64_t, Decoded> decoded;
+    // Native texture sets (docs/NATIVE_V2.md): the game's set ids to contents, the contents (uploads, texture records,
+    // the uploads' pixels) by hash. A set's textures are decoded from a private copy of its uploads (assetMemory),
+    // once per (content, record, TEXA where the format uses it), into `decoded`.
+    struct SetContent {
+        std::vector<gfx::TexSetUpload> uploads;
+        std::vector<gfx::TexSetTexture> textures;
+        std::vector<uint8_t> bytes;
+    };
+    struct SetId {
+        uint64_t hash = 0, lastUsed = 0;
+    };
+    std::unordered_map<uint32_t, SetId> setIds;
+    std::unordered_map<uint64_t, SetContent> setContents;
+    uint64_t setContentBytes = 0;
+    void pruneSets();
+    std::unique_ptr<GsMemory> assetMemory;
+    uint64_t assetLoaded = 0;   // the content written into assetMemory (0: none)
+    bool setTexture(const DrawState& s, TextureSource& out);
     // Each 8 KiB page's content hash, and the page generation it was computed at (pageContent).
     std::vector<uint64_t> pageHash = std::vector<uint64_t>(512, 0), pageHashGeneration = std::vector<uint64_t>(512, ~0ull);
     uint64_t pageContent(uint32_t page);

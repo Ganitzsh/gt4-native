@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <unordered_set>
 #include <vector>
 
 using namespace gt4::rt;
@@ -68,13 +69,54 @@ void send_data(uint32_t source, uint32_t bytes) {
     link_send(GT4_REC_GFX_DATA, head, sizeof head, data.data(), bytes);
 }
 
+// The texture sets' contents the host has (docs/NATIVE_V2.md): their bytes go once.
+std::unordered_set<uint64_t> g_sent_sets;
+
+// A texture set record (gfx::TexSetRecord, in the frame's buffer): its content hashed now, as the frame is sent (the
+// game changes some sets in place: the PS2 uploaded what was there then), and its bytes sent when the host has not
+// had that content.
+void send_tex_set(uint8_t *payload, uint32_t bytes) {
+    gfx::TexSetRecord r;
+    std::memcpy(&r, payload, sizeof r);
+    if (sizeof r + r.uploads * sizeof(gfx::TexSetUpload) > bytes) return;
+    const auto *uploads = reinterpret_cast<const gfx::TexSetUpload *>(payload + sizeof r);
+    std::vector<std::vector<uint8_t>> data(r.uploads);
+    uint64_t hash = 0xCBF29CE484222325ull ^ r.uploads;
+    for (uint32_t k = 0; k < r.uploads; ++k) {
+        data[k] = read_mapped(ptr(uploads[k].source), uploads[k].qwords * 16);
+        const uint64_t layout[2] = {uploads[k].destination & 0xFFFF0000u | (uint64_t(uploads[k].w) << 32 | uint64_t(uploads[k].h) << 48),
+                                    uploads[k].qwords};
+        for (const uint64_t v : layout) hash = (hash ^ v) * 0x100000001B3ull;
+        const uint8_t *b = data[k].data();
+        const size_t n = data[k].size();
+        size_t i = 0;
+        for (; i + 8 <= n; i += 8) {
+            uint64_t w;
+            std::memcpy(&w, b + i, 8);
+            hash = (hash ^ w) * 0x9E3779B97F4A7C15ull;
+            hash ^= hash >> 31;
+        }
+        for (; i < n; ++i) hash = (hash ^ b[i]) * 0x100000001B3ull;
+    }
+    r.hashLow = static_cast<uint32_t>(hash);
+    r.hashHigh = static_cast<uint32_t>(hash >> 32);
+    r.sent = g_sent_sets.insert(hash).second ? 1u : 0u;
+    std::memcpy(payload, &r, sizeof r);
+    if (!r.sent) return;
+    for (uint32_t k = 0; k < r.uploads; ++k) {
+        const uint32_t head[2] = {uploads[k].source, uploads[k].qwords * 16};
+        link_send(GT4_REC_GFX_DATA, head, sizeof head, data[k].data(), uploads[k].qwords * 16);
+    }
+}
+
 // One record block: the bytes its records refer to, the block, then its reads.
-void send_block(const uint8_t *block, uint32_t bytes) {
+void send_block(uint8_t *block, uint32_t bytes) {
     std::vector<gfx::ReadRecord> reads;
     for (uint32_t at = 0; at + sizeof(gfx::Header) <= bytes;) {
         gfx::Header h;
         std::memcpy(&h, block + at, sizeof h);
         const uint8_t *payload = block + at + sizeof h;
+        (void)payload;
         if (h.type() == gfx::kUpload && h.bytes() >= sizeof(gfx::UploadRecord)) {
             gfx::UploadRecord u;
             std::memcpy(&u, payload, sizeof u);
@@ -83,6 +125,8 @@ void send_block(const uint8_t *block, uint32_t bytes) {
             gfx::BatchModel m;
             std::memcpy(&m, payload, sizeof m);
             send_data(m.source, m.qwords * 16);
+        } else if (h.type() == gfx::kTexSet && h.bytes() >= sizeof(gfx::TexSetRecord)) {
+            send_tex_set(block + at + sizeof h, h.bytes());
         } else if (h.type() == gfx::kRead && h.bytes() >= sizeof(gfx::ReadRecord)) {
             gfx::ReadRecord r;
             std::memcpy(&r, payload, sizeof r);
@@ -111,10 +155,10 @@ void walk(uint32_t start) {
         const uint32_t body = (at & ~0x80000000u) + 16;
         if ((h[3] >> 24 & 0x7F) == 0x08 && (h[2] >> 24 & 0x7F) != 0x20) {   // a record block (not STMASK's data word)
             const uint32_t bytes = (h[3] & 0xFFFF) * 16;
-            const uint8_t *block = ptr(id == 3 || id == 4 || id == 0 ? addr : body | self);
+            uint8_t *block = ptr(id == 3 || id == 4 || id == 0 ? addr : body | self);
             gfx::Header first;
             std::memcpy(&first, block, sizeof first);
-            if (first.type() <= gfx::kBatchRun && sizeof first + first.bytes() <= bytes) {
+            if (first.type() <= gfx::kTexSet && sizeof first + first.bytes() <= bytes) {
                 send_block(block, bytes);
             } else {
                 static int warned = 0;

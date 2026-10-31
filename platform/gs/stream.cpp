@@ -166,6 +166,35 @@ void GraphicsStream::records(const uint8_t* data, size_t bytes) {
             recordData.erase(it);
             break;
         }
+        case gfx::kTexSet: {
+            gfx::TexSetRecord r;
+            if (h.bytes() < sizeof r) {
+                ++counters.badRecords;
+                break;
+            }
+            std::memcpy(&r, payload, sizeof r);
+            // the record, then the uploads' bytes (GT4_REC_GFX_DATA ahead of the block) when the game sent them
+            std::vector<uint8_t>& blob = texSetBlob;
+            blob.assign(payload, payload + h.bytes());
+            if (r.sent && sizeof r + r.uploads * sizeof(gfx::TexSetUpload) <= h.bytes()) {
+                const auto* uploads = reinterpret_cast<const gfx::TexSetUpload*>(payload + sizeof r);
+                for (uint32_t k = 0; k < r.uploads; ++k) {
+                    const size_t n = size_t(uploads[k].qwords) * 16;
+                    auto it = std::find_if(recordData.begin(), recordData.end(), [&](const RecordData& d) { return d.source == uploads[k].source; });
+                    if (it == recordData.end()) {
+                        ++counters.uploadsWithoutData;
+                        blob.resize(blob.size() + n, 0);
+                        continue;
+                    }
+                    blob.insert(blob.end(), it->bytes.begin(), it->bytes.begin() + std::min(n, it->bytes.size()));
+                    if (it->bytes.size() < n) blob.resize(blob.size() + n - it->bytes.size(), 0);
+                    recordData.erase(it);
+                }
+            }
+            ++counters.texSets;
+            gs.texSet(blob.data(), blob.size());
+            break;
+        }
         case gfx::kBatchRun: {
             gfx::BatchRun r;
             if (h.bytes() < sizeof r) {

@@ -718,8 +718,230 @@ uint64_t GsFrontend::pageContent(uint32_t page) {
     return h;
 }
 
+void GsFrontend::texSet(const uint8_t* payload, size_t bytes) {
+    gfx::TexSetRecord r;
+    if (bytes < sizeof r) return;
+    std::memcpy(&r, payload, sizeof r);
+    const size_t head = sizeof r + r.uploads * sizeof(gfx::TexSetUpload) + r.records * sizeof(gfx::TexSetTexture);
+    if (head > bytes) return;
+    const uint64_t hash = (uint64_t(r.hashHigh) << 32) | r.hashLow;
+    setIds[r.id] = SetId{hash, frameCount};
+    if (!r.sent || setContents.count(hash)) return;
+    SetContent c;
+    c.uploads.resize(r.uploads);
+    c.textures.resize(r.records);
+    std::memcpy(c.uploads.data(), payload + sizeof r, r.uploads * sizeof(gfx::TexSetUpload));
+    std::memcpy(c.textures.data(), payload + sizeof r + r.uploads * sizeof(gfx::TexSetUpload), r.records * sizeof(gfx::TexSetTexture));
+    c.bytes.assign(payload + head, payload + bytes);
+    setContentBytes += c.bytes.size();
+    setContents.emplace(hash, std::move(c));
+}
+
+// Set ids unused for a minute go (every slot upload is a new id), and beyond a budget the contents no id names.
+// A set used again after that is a miss: its textures go by graphics-memory address.
+void GsFrontend::pruneSets() {
+    for (auto it = setIds.begin(); it != setIds.end();) it = it->second.lastUsed + 3600 < frameCount ? setIds.erase(it) : std::next(it);
+    constexpr uint64_t kBudget = 512ull << 20;
+    if (setContentBytes <= kBudget) return;
+    std::unordered_set<uint64_t> named;
+    for (const auto& [id, s] : setIds) named.insert(s.hash);
+    for (auto it = setContents.begin(); it != setContents.end();) {
+        if (named.count(it->first)) {
+            ++it;
+            continue;
+        }
+        setContentBytes -= it->second.bytes.size();
+        if (assetLoaded == it->first) assetLoaded = 0;
+        it = setContents.erase(it);
+    }
+}
+
+void GsFrontend::exportSets(const std::function<void(const gfx::TexSetRecord&, const std::vector<gfx::TexSetUpload>&,
+                                                     const std::vector<gfx::TexSetTexture>&, const std::vector<uint8_t>&)>& out) const {
+    // each content's bytes once (thousands of ids share contents: every slot upload is a new id), ids used lately only
+    std::unordered_set<uint64_t> exported;
+    for (const auto& [id, s] : setIds) {
+        if (s.lastUsed + 600 < frameCount) continue;
+        auto c = setContents.find(s.hash);
+        if (c == setContents.end()) continue;
+        const bool first = exported.insert(s.hash).second;
+        gfx::TexSetRecord r{};
+        r.id = id;
+        r.hashLow = static_cast<uint32_t>(s.hash);
+        r.hashHigh = static_cast<uint32_t>(s.hash >> 32);
+        r.uploads = static_cast<uint16_t>(c->second.uploads.size());
+        r.records = static_cast<uint16_t>(c->second.textures.size());
+        r.sent = first ? 1u : 0u;
+        static const std::vector<uint8_t> none;
+        out(r, c->second.uploads, c->second.textures, first ? c->second.bytes : none);
+    }
+}
+
+// A texture of a native set: decoded once per content from the set's own uploads (the PS2's texture format read
+// as an asset: GT4 keeps 8- and 4-bit textures as 32-bit blocks), then a texture like any other. False when the set
+// or its content is unknown (the caller goes on by graphics-memory address).
+bool GsFrontend::setTexture(const DrawState& s, TextureSource& src) {
+    auto id = setIds.find(s.c.texture.set);
+    if (id == setIds.end()) return false;
+    const uint64_t hash = id->second.hash;
+    auto content = setContents.find(hash);
+    if (content == setContents.end() || s.c.texture.record >= content->second.textures.size()) return false;
+    id->second.lastUsed = frameCount;
+    const SetContent& sc = content->second;
+    const gfx::TexSetTexture& rec = sc.textures[s.c.texture.record];
+    gfx::Texture tx;
+    gfx::setTexture(tx, rec.tex0);
+    const GsMemory::Tex0 t = GsMemory::Tex0::of(tx);
+    gfx::Context rc;
+    gfx::setContextGroup(rc, gfx::kFilter, rec.tex1);
+    gfx::setContextGroup(rc, gfx::kMip1, rec.mip1);
+    gfx::setContextGroup(rc, gfx::kMip2, rec.mip2);
+    const gfx::Sampler& sm = rc.sampler;
+    const bool indexed = t.psm == PSMT8 || t.psm == PSMT4 || t.psm == PSMT8H || t.psm == PSMT4HL || t.psm == PSMT4HH;
+    const bool texaUsed = t.psm == PSMCT24 || t.psm == PSMCT16 || t.psm == PSMCT16S || (indexed && t.cpsm != PSMCT32);
+    const Texa texa{s.texAlpha0, s.texAlpha1, s.texBlackTransparent != 0};
+    uint64_t key = mix(mix(mix(0x5E7u, hash), s.c.texture.record), texaUsed ? (uint64_t(texa.ta0) | uint64_t(texa.ta1) << 8 | uint64_t(texa.aem) << 16) : 0);
+    // its mipmap levels, as the record has them (textureFor's rules)
+    const uint32_t w = 1u << std::min<uint32_t>(t.tw, 10), h = 1u << std::min<uint32_t>(t.th, 10);
+    struct Level {
+        uint32_t tbp, tbw, w, h;
+    };
+    std::array<Level, 7> levels{};
+    levels[0] = {t.tbp, t.tbw, w, h};
+    uint32_t levelCount = 1;
+    bool mipLevels = sm.mipAuto;
+    for (uint32_t k = 0; k < 6; ++k) mipLevels = mipLevels || sm.mipBase[k] || sm.mipWidth[k];
+    if (mipLevels && sm.minFilter >= 2) {
+        for (uint32_t i = 1; i <= std::min<uint32_t>(sm.mipMax, 6); ++i) {
+            const Level& prev = levels[i - 1];
+            if (prev.w == 1 && prev.h == 1) break;
+            Level& l = levels[i];
+            l.w = std::max<uint32_t>(prev.w / 2, 1);
+            l.h = std::max<uint32_t>(prev.h / 2, 1);
+            if (sm.mipAuto && i <= 3) {
+                l.tbp = prev.tbp + prev.w * prev.h * psmBits(t.psm) / 8 / 256;
+                l.tbw = std::max<uint32_t>(prev.tbw / 2, 1);
+            } else {
+                l.tbp = sm.mipBase[i - 1];
+                l.tbw = sm.mipWidth[i - 1];
+            }
+            levelCount = i + 1;
+        }
+    }
+    key = mix(key, levelCount);
+    Decoded& d = decoded[key];
+    d.lastUsed = frameCount;
+    auto loadAsset = [&] {
+        if (assetLoaded == hash) return;
+        if (!assetMemory) assetMemory = std::make_unique<GsMemory>();
+        size_t at = 0;
+        for (const gfx::TexSetUpload& u : sc.uploads) {
+            GsMemory::Transfer tr;
+            tr.dbp = u.destination & 0x3FFF;
+            tr.dbw = (u.destination >> 16) & 0x3F;
+            tr.dpsm = (u.destination >> 24) & 0x3F;
+            tr.rrw = u.w;
+            tr.rrh = u.h;
+            const size_t n = std::min<size_t>(size_t(u.qwords) * 16, sc.bytes.size() - std::min(at, sc.bytes.size()));
+            assetMemory->beginWrite(tr);
+            if (n) assetMemory->write(sc.bytes.data() + at, n);
+            at += size_t(u.qwords) * 16;
+        }
+        assetLoaded = hash;
+    };
+    // Its palette, loaded as the bind loads it (0049CC48): a palette at a CSA other than 0 goes in as a whole 8-bit
+    // one (format 0x13, CSA 0), and the texture picks its 16 entries with CSA.
+    auto loadPalette = [&] {
+        GsMemory::Tex0 c = t;
+        c.cld = 1;
+        if (c.csa) {
+            c.psm = PSMT8;
+            c.csa = 0;
+        }
+        assetMemory->tex0Written(c);
+    };
+    // The texture pack's image for it (named as PCSX2 names the texture), once; until loaded, the decoded texture.
+    if (replacementsOn) {
+        if (!d.named) {
+            loadAsset();
+            if (indexed) loadPalette();
+            MipAddress mips[6];
+            for (uint32_t i = 1; i < levelCount; ++i) mips[i - 1] = {levels[i].tbp, levels[i].tbw};
+            GT4_CPU_SCOPE("front end: texture pack naming");
+            d.found = findTextureName(*assetMemory, t, texa, sm, mips, levelCount - 1, *texturePack, d.name, d.origin);
+            d.named = true;
+            ++stats.named;
+            stats.found += d.found;
+        }
+        if (d.found && !d.replacedId) {
+            const uint64_t loads = texturePack->loadedSerial();
+            if (loads != d.packLoads) {
+                d.packLoads = loads;
+                if (auto image = texturePack->get(d.name)) d.replacedId = replacementTexture(d.name, *image);
+            }
+        }
+        if (d.replacedId) {
+            auto kept = replacementTextures.find(d.name);
+            if (kept != replacementTextures.end() && kept->second.id == d.replacedId) {
+                kept->second.lastUsed = frameCount;
+                src.kind = TextureSource::Kind::Memory;
+                src.id = d.replacedId;
+                src.version = 1;
+                src.regionX = static_cast<uint16_t>(d.origin[0]);
+                src.regionY = static_cast<uint16_t>(d.origin[1]);
+                src.regionWidth = static_cast<uint16_t>(d.name.regionWidth);
+                src.regionHeight = static_cast<uint16_t>(d.name.regionHeight);
+                ++stats.setTextures;
+                return true;
+            }
+            d.replacedId = 0;
+            d.packLoads = ~0ull;
+        }
+    }
+    if (!d.id) {
+        loadAsset();
+        if (indexed) loadPalette();
+        d.id = nextTexture++;
+        d.texels = 0;
+        TextureImage image;
+        image.id = d.id;
+        image.version = 1;
+        image.width = w;
+        image.height = h;
+        image.levels = levelCount;
+        size_t texels = 0;
+        for (uint32_t i = 0; i < levelCount; ++i) texels += size_t(levels[i].w) * levels[i].h;
+        image.pixels.resize(texels);
+        size_t at = 0;
+        for (uint32_t i = 0; i < levelCount; ++i) {
+            GsMemory::Tex0 lt = t;
+            lt.tbp = levels[i].tbp;
+            lt.tbw = levels[i].tbw;
+            assetMemory->decode(lt, texa, 0, 0, levels[i].w, levels[i].h, image.pixels.data() + at);
+            at += size_t(levels[i].w) * levels[i].h;
+        }
+        d.texels = texels;
+        cachedTexels += texels;
+        frame.textures.push_back(std::move(image));
+        ++stats.setDecodes;
+    }
+    src.kind = TextureSource::Kind::Memory;
+    src.id = d.id;
+    src.version = 1;
+    ++stats.setTextures;
+    return true;
+}
+
 TextureSource GsFrontend::textureFor(const DrawState& s) {
     GT4_CPU_SCOPE("front end: texture lookup");
+    // A native set's texture (docs/NATIVE_V2.md); GT4_NATIVE_TEXTURES=0 reads it from graphics memory as before.
+    static const bool nativeTextures = [] { const char* e = std::getenv("GT4_NATIVE_TEXTURES"); return !(e && *e == '0'); }();
+    if (s.c.texture.set && nativeTextures) {
+        TextureSource src;
+        if (setTexture(s, src)) return src;
+        ++stats.setMisses;
+    }
+    ++stats.byAddress;
     const GsMemory::Tex0 t = GsMemory::Tex0::of(s.c.texture);
     const uint32_t w = 1u << std::min<uint32_t>(t.tw, 10), h = 1u << std::min<uint32_t>(t.th, 10);
     uint32_t pw, ph;
@@ -1338,6 +1560,7 @@ uint32_t GsFrontend::replacementTexture(const TextureName& name, const Replaceme
 
 void GsFrontend::resetTextures() {
     lastTexture.valid = false;
+    assetLoaded = 0;
     replacementTextures.clear();
     textureCache.clear();
     decoded.clear();
@@ -1381,6 +1604,7 @@ void GsFrontend::vsync(uint64_t vblank, FrameList& out) {
                 ++it;
             }
         }
+        pruneSets();
         if (cachedTexels > kBudget) {
             std::vector<std::pair<uint64_t, uint64_t>> byAge;   // last use, content key
             for (const auto& [key, d] : decoded) byAge.emplace_back(d.lastUsed, key);

@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <vector>
 
 using namespace gt4::rt;
@@ -102,6 +103,22 @@ gfx::UploadRecord upload_record(uint32_t destination, uint32_t x, uint32_t y, ui
 
 void append_upload(uint32_t context, const gfx::UploadRecord &u) { append(context, gfx::kUpload, &u, sizeof u); }
 
+// Native textures (docs/NATIVE_V2.md): each texture set given a slot (00499728 -> 00499508) gets an id, sent with
+// it as a set record; its texture records (40 bytes each, at set + 0x18) are known by address, so that the bind of
+// one (0049CC48) names (set, record) in the drawing state.
+struct BoundSet {
+    uint32_t id = 0, records = 0, count = 0;
+};
+std::map<uint32_t, BoundSet> g_sets;   // by the address of the records
+uint32_t g_next_set = 0;
+// The texture 0049CC48 bound last: its set and record, and the TEX0 it wrote (the state flush names it only while
+// the shadow still holds that value: anything else that sets TEX0 is a texture by graphics-memory address).
+struct BoundTexture {
+    uint32_t set = 0;
+    uint16_t record = 0;
+    uint64_t tex0 = 0;
+} g_bound;
+
 gfx::StateRecord empty_state() {
     gfx::StateRecord r;
     std::memset(&r, 0, sizeof r);
@@ -130,6 +147,10 @@ bool take_state(uint32_t context, gfx::StateRecord &r) {
             const uint64_t value = guest_ref<uint64_t>(context + kContextShadow + 8 * g);
             if (g == gfx::kPalette) gfx::setPalette(r.palette, value);   // TEX2, apart from TEX0
             else gfx::setContextGroup(r.context, g, value);
+            if (g == gfx::kTexture && g_bound.set && value == g_bound.tex0) {
+                r.context.texture.set = g_bound.set;
+                r.context.texture.record = g_bound.record;
+            }
         }
     return true;
 }
@@ -571,6 +592,34 @@ void gt4_replace_func_0049FE28(void) {
 void gt4_replace_func_00499508(uint32_t set) {
     const uint32_t count = guest_ref<uint16_t>(set + 0x16);
     const uint32_t records = guest_ref<uint32_t>(set + 0x1C);
+    // The set as a native resource: its uploads and texture records, under a new id (the walker hashes the bytes).
+    // A texture bound before names nothing from here: the slot's memory changes.
+    g_bound = BoundTexture{};
+    {
+        const uint32_t textures = guest_ref<uint16_t>(set + 0x14), table = guest_ref<uint32_t>(set + 0x18);
+        std::vector<uint8_t> body;
+        gfx::TexSetRecord r{};
+        r.id = ++g_next_set ? g_next_set : ++g_next_set;
+        for (uint32_t i = 0; i < count; ++i) {
+            const uint32_t rec = records + 12 * i;
+            gfx::TexSetUpload u{};
+            u.destination = guest_ref<uint32_t>(rec + 4);
+            u.w = guest_ref<uint16_t>(rec + 8);
+            u.h = guest_ref<uint16_t>(rec + 10);
+            u.source = guest_ref<uint32_t>(rec) & 0x0FFFFFFF;
+            u.qwords = transfer_qwords(u.destination >> 24, u.w, u.h);
+            if (!u.qwords) continue;
+            ++r.uploads;
+            const auto *b = reinterpret_cast<const uint8_t *>(&u);
+            body.insert(body.end(), b, b + sizeof u);
+        }
+        r.records = static_cast<uint16_t>(textures);
+        const auto *t = static_cast<const uint8_t *>(guest_ptr(table));
+        if (textures && table) body.insert(body.end(), t, t + textures * sizeof(gfx::TexSetTexture));
+        else r.records = 0;
+        append(kContext, gfx::kTexSet, &r, sizeof r, body.data(), static_cast<uint32_t>(body.size()));
+        if (table) g_sets[table] = BoundSet{r.id, table, r.records};
+    }
     for (uint32_t i = 0; i < count; ++i) {
         const uint32_t rec = records + 12 * i;
         const uint32_t destination = guest_ref<uint32_t>(rec + 4);
@@ -579,6 +628,67 @@ void gt4_replace_func_00499508(uint32_t set) {
         if (!qwords) continue;
         guest_ref<int32_t>(kContext + 0x1030) += static_cast<int32_t>(qwords);   // the frame's upload total
         append_upload(kContext, upload_record(destination, 0, 0, w, h, guest_ref<uint32_t>(rec), qwords));
+    }
+}
+
+// 0049CC48(record): binds a texture record of a set (40 bytes: TEX0, TEX1, MIPTBP1, MIPTBP2, CLAMP) into the drawing
+// state's shadow: TEX0 (bits 61-63, the palette load, left out of the shadow's own copy; with a load, TEX2 too, a
+// CSA forced to 0 into a 0x13 format...), TEX1 with the LOD step of +0x44 added to K, the mip addresses when the
+// filter uses them, CLAMP; the texture override (D_00624CC0: masks of TEX0, TEX1, CLAMP fields kept from the
+// shadow) applies first. Natively it also names the texture as (set, record) for the flush.
+void gt4_replace_func_0049CC48(uint32_t input) {
+    const uint32_t s = kContext;
+    uint64_t a = guest_ref<uint64_t>(input), b = guest_ref<uint64_t>(input + 8), c = guest_ref<uint64_t>(input + 32);
+    uint64_t flags = guest_ref<uint64_t>(s + 0x1D8);
+    const bool overridden = guest_ref<uint8_t>(0x00624CC0 + 28) != 0;
+    if (overridden) {
+        const uint64_t ma = guest_ref<uint64_t>(0x00624CC0), mb = guest_ref<uint64_t>(0x00624CC0 + 8), mc = guest_ref<uint64_t>(0x00624CC0 + 16);
+        a = (a & ~ma) | (guest_ref<uint64_t>(s + 0x1C0) & ma);
+        b = (b & ~mb) | (guest_ref<uint64_t>(s + 0x1B8) & mb);
+        c = (c & ~mc) | (guest_ref<uint64_t>(s + 0x1A8) & mc);
+    }
+    guest_ref<uint64_t>(s + 0x1A8) = c;
+    flags |= 0x06800680;
+    guest_ref<uint64_t>(s + 0x1B8) = b;
+    const uint64_t tex0 = a & (~0ull >> 3);
+    guest_ref<uint64_t>(s + 0x1C0) = tex0;
+    if (a >> 61) {
+        if ((a >> 56) & 0x1F) {
+            a &= ~0x1F00000003F00000ull;
+            a |= 0x01300000;
+        }
+        guest_ref<uint64_t>(s + 0x1B0) = a;
+        flags |= 0x01000100;
+    }
+    const int32_t mode = static_cast<int32_t>(b & 0x1C);
+    if (mode != 0) {
+        int32_t x = static_cast<int32_t>((b >> 32) & 0xFFF);
+        const int32_t shift = static_cast<int32_t>((b >> 19) & 3);
+        x = static_cast<int16_t>(x * 16);
+        x += guest_ref<int32_t>(s + 0x44) << shift;
+        uint64_t &tex1 = guest_ref<uint64_t>(s + 0x1B8);
+        tex1 = (tex1 & ~(0xFFFull << 32)) | (static_cast<uint64_t>(static_cast<uint32_t>(x >> 4) & 0xFFF) << 32);
+        flags |= 0x08000800;
+        guest_ref<uint64_t>(s + 0x1C8) = guest_ref<uint64_t>(input + 16);
+        if (static_cast<uint32_t>(mode) >= 13u) {
+            flags |= 0x10001000;
+            guest_ref<uint64_t>(s + 0x1D0) = guest_ref<uint64_t>(input + 24);
+        }
+    }
+    guest_ref<uint64_t>(s + 0x1D8) = flags;
+    // which set's texture this is: the set whose records hold `input` (an override takes it from the native path)
+    g_bound = BoundTexture{};
+    if (!overridden) {
+        auto it = g_sets.upper_bound(input);
+        if (it != g_sets.begin()) {
+            --it;
+            const BoundSet &set = it->second;
+            if (input >= set.records && input < set.records + set.count * 40 && (input - set.records) % 40 == 0) {
+                g_bound.set = set.id;
+                g_bound.record = static_cast<uint16_t>((input - set.records) / 40);
+                g_bound.tex0 = tex0;
+            }
+        }
     }
 }
 

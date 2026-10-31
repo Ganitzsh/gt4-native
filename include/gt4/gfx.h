@@ -49,6 +49,10 @@ struct Texture {
     uint8_t clutOffset = 0;       // in 16-entry units
     uint8_t clutLoad = 0;         // when this texture is set: 0 keep the palette, 1 load, 2/3 load and remember the base,
                                   // 4/5 load if the base differs from the remembered one
+    // Native (docs/NATIVE_V2.md): a texture of a texture set (TexSetRecord): the set's id and the record's index;
+    // set 0: the texture is named by its graphics-memory fields above.
+    uint16_t record = 0;
+    uint32_t set = 0;
     bool operator==(const Texture&) const = default;
 };
 
@@ -139,6 +143,8 @@ inline void setTexture(Texture& t, uint64_t v) {
     t.clutStorage = static_cast<uint8_t>((v >> 55) & 1);
     t.clutOffset = static_cast<uint8_t>((v >> 56) & 0x1F);
     t.clutLoad = static_cast<uint8_t>((v >> 61) & 7);
+    t.record = 0;   // a texture by its graphics-memory fields (the bind of a set's record names it after)
+    t.set = 0;
 }
 
 // TEX2: the format and palette fields only.
@@ -149,6 +155,8 @@ inline void setPalette(Texture& t, uint64_t v) {
     t.clutStorage = static_cast<uint8_t>((v >> 55) & 1);
     t.clutOffset = static_cast<uint8_t>((v >> 56) & 0x1F);
     t.clutLoad = static_cast<uint8_t>((v >> 61) & 7);
+    t.record = 0;   // a texture by its graphics-memory fields (the bind of a set's record names it after)
+    t.set = 0;
 }
 
 // Sets one group of `c` from its register value; false for a group this does not know.
@@ -289,6 +297,7 @@ enum RecordType : uint32_t {
     kBatchWrite = 6,   // BatchWrite, then its qwords
     kBatchModel = 7,   // BatchModel
     kBatchRun = 8,     // BatchRun
+    kTexSet = 9,       // TexSetRecord, its uploads, its texture records (docs/NATIVE_V2.md)
 };
 
 struct Header {
@@ -307,8 +316,8 @@ struct StateRecord {
     Texture palette;          // the palette group's fields (TEX2: format and palette), apart from context.texture (TEX0)
 };
 // One layout for the 32-bit runtime and the 64-bit host.
-static_assert(sizeof(Texture) == 14 && sizeof(Context) == 88 && sizeof(Shared) == 32);
-static_assert(sizeof(StateRecord) == 144 && offsetof(StateRecord, context) == 40 && offsetof(StateRecord, palette) == 128);
+static_assert(sizeof(Texture) == 20 && sizeof(Context) == 96 && sizeof(Shared) == 32);
+static_assert(sizeof(StateRecord) == 160 && offsetof(StateRecord, context) == 40 && offsetof(StateRecord, palette) == 136);
 
 // Copies one group's fields.
 inline void copySharedGroup(Shared& to, const Shared& from, uint32_t group) {
@@ -400,7 +409,7 @@ inline void copyContextGroup(Context& to, const Context& from, const Texture& pa
         to.sampler.lodL = from.sampler.lodL;
         to.sampler.lodK = from.sampler.lodK;
         break;
-    case kTexture: to.texture = from.texture; break;
+    case kTexture: to.texture = from.texture; break;   // (with its native set and record)
     case kMip1: case kMip2:
         for (uint32_t k = 0; k < 3; ++k) {
             const uint32_t level = (group == kMip1 ? 0 : 3) + k;
@@ -473,6 +482,32 @@ struct BatchRun {
     uint32_t entry;
     uint32_t itop;
 };
+
+// A texture set the game bound for drawing (00499728 gave it a slot and uploaded it): `id` names it in the drawing
+// state (Texture::set) from here on, until a set record with the same id. Its `uploads` TexSetUpload and `records`
+// TexSetTexture follow. The runtime's frame walker fills in `hash` (the content of the uploads' bytes when the frame
+// is sent) and `sent`: 1 when the bytes follow as GT4_REC_GFX_DATA (each upload's, in order), 0 when the host has
+// this content already.
+struct TexSetRecord {
+    uint32_t id;
+    uint32_t hashLow, hashHigh;
+    uint16_t uploads, records;
+    uint32_t sent;
+};
+static_assert(sizeof(TexSetRecord) == 20);
+// One of its uploads: as an UploadRecord without the rectangle's corner (always 0, 0).
+struct TexSetUpload {
+    uint32_t destination;   // base (blocks) | width (64-pixel units) << 16 | format << 24, at the set's slot
+    uint16_t w, h;
+    uint32_t source;        // the pixels in game memory
+    uint32_t qwords;
+};
+static_assert(sizeof(TexSetUpload) == 16);
+// One of its textures: the GS register values GT4 keeps for it (TEX0, TEX1, MIPTBP1, MIPTBP2, CLAMP), at the set's slot.
+struct TexSetTexture {
+    uint64_t tex0, tex1, mip1, mip2, clamp;
+};
+static_assert(sizeof(TexSetTexture) == 40);
 
 // A vertex: position in 1/16 pixel in the drawing context's coordinates (its origin, at 2048 pixels on
 // GT4's screens, included), depth, colour (R in the low byte, alpha 0x80 = 1), texture coordinates as S, T,

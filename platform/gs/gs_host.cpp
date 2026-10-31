@@ -52,6 +52,7 @@ public:
     void upload(const gfx::UploadRecord& u, const uint8_t* data, size_t bytes) override { native->upload(u, data, bytes); }
     void draw(const gfx::DrawRecord& d, const gfx::Vertex* vertices) override { native->draw(d, vertices); }
     void read(const gfx::ReadRecord& r) override { native->read(r); }
+    void texSet(const uint8_t* payload, size_t bytes) override { native->texSet(payload, bytes); }
     void primitives(const ps2::GsPrimitives& p) override {
         GT4_CPU_SCOPE("front end: the renderers' primitives");
         if (p.setPrim) native->setPrim(p.prim);
@@ -262,6 +263,7 @@ public:
         put(Op::Upload, 0, 0, &u, sizeof u, data, bytes);
     }
     void read(const gfx::ReadRecord& r) override { put(Op::Read, 0, 0, &r, sizeof r); }
+    void texSet(const uint8_t* payload, size_t bytes) override { put(Op::TexSet, 0, 0, payload, bytes); }
     void draw(const gfx::DrawRecord& d, const gfx::Vertex* vertices) override {
         put(Op::Draw, 0, 0, &d, sizeof d, vertices, size_t(d.count) * sizeof(gfx::Vertex));
     }
@@ -289,7 +291,7 @@ public:
     }
 
 private:
-    enum class Op : uint32_t { Gif, Primitives, Display, State, Upload, Read, Draw, Vsync };
+    enum class Op : uint32_t { Gif, Primitives, Display, State, Upload, Read, Draw, Vsync, TexSet };
     struct Entry {
         Op op;
         uint32_t a, b;
@@ -369,6 +371,7 @@ private:
             case Op::Read: inner.read(*reinterpret_cast<const gfx::ReadRecord*>(first)); break;
             case Op::Draw: inner.draw(*reinterpret_cast<const gfx::DrawRecord*>(first), reinterpret_cast<const gfx::Vertex*>(second)); break;
             case Op::Vsync: inner.vsync(e.a, e.b); break;
+            case Op::TexSet: inner.texSet(first, e.first); break;
             }
         }
     }
@@ -530,9 +533,35 @@ struct GsHost::Impl {
             if (recorder->vsyncs >= recorder->from && recorder->vsyncs < recorder->from + recorder->count) {
                 if (!recorder->started && recorder->from) {   // mid-run: the state the replay starts from
                     std::vector<uint8_t> vram(gsn::GsMemory::kBytes);
+                    if (frontThread) frontThread->drain();   // the front end's thread idle from here
                     target->readVram(vram.data());
                     const std::vector<uint8_t> state = stream->saveState(vram.data());
                     recorder->out->write(GT4_REC_STATE, state.data(), static_cast<uint32_t>(state.size()));
+                    // the native texture sets bound before (docs/NATIVE_V2.md): each as a set record with its bytes
+                    target->frontend().exportSets([&](const gfx::TexSetRecord& r, const std::vector<gfx::TexSetUpload>& uploads,
+                                                      const std::vector<gfx::TexSetTexture>& textures, const std::vector<uint8_t>& bytes) {
+                        size_t at = 0;
+                        for (const gfx::TexSetUpload& u : uploads) {
+                            if (!r.sent) break;
+                            const uint32_t n = u.qwords * 16;
+                            std::vector<uint8_t> data(8 + n, 0);
+                            const uint32_t head[2] = {u.source, n};
+                            std::memcpy(data.data(), head, 8);
+                            if (at < bytes.size()) std::memcpy(data.data() + 8, bytes.data() + at, std::min<size_t>(n, bytes.size() - at));
+                            at += n;
+                            recorder->out->write(GT4_REC_GFX_DATA, data.data(), static_cast<uint32_t>(data.size()));
+                        }
+                        const uint32_t payload = static_cast<uint32_t>(sizeof r + uploads.size() * sizeof(gfx::TexSetUpload) +
+                                                                       textures.size() * sizeof(gfx::TexSetTexture));
+                        std::vector<uint8_t> block(gfx::recordQwords(payload) * 16, 0);
+                        const gfx::Header hd = gfx::header(gfx::kTexSet, payload);
+                        std::memcpy(block.data(), &hd, sizeof hd);
+                        std::memcpy(block.data() + sizeof hd, &r, sizeof r);
+                        std::memcpy(block.data() + sizeof hd + sizeof r, uploads.data(), uploads.size() * sizeof(gfx::TexSetUpload));
+                        std::memcpy(block.data() + sizeof hd + sizeof r + uploads.size() * sizeof(gfx::TexSetUpload), textures.data(),
+                                    textures.size() * sizeof(gfx::TexSetTexture));
+                        recorder->out->write(GT4_REC_GFX, block.data(), static_cast<uint32_t>(block.size()));
+                    });
                 }
                 recorder->started = true;
                 recorder->out->write(header.type, payload, header.size);
@@ -824,6 +853,11 @@ std::string GsHost::summary() const {
     if (h.target && h.target->frontend().stats.named) {
         const auto& s = h.target->frontend().stats;
         out << "; texture pack: " << s.named << " textures looked up, " << s.found << " found, " << s.replaced << " drawn replaced";
+    }
+    if (h.target && (h.target->frontend().stats.setTextures || h.target->frontend().stats.setMisses)) {
+        const auto& s = h.target->frontend().stats;
+        out << "; native textures: " << s.setTextures << " lookups by set, " << s.setMisses << " sets unknown, " << s.setDecodes << " decoded, "
+            << s.byAddress << " lookups by address (" << s.targetReads << " of targets, " << s.reinterpreted << " reinterpreted)";
     }
     if (h.target && (h.target->gpuReads || h.target->staleReads))
         out << "; " << h.target->gpuReads << " reads of drawn pixels from the GPU, " << h.target->staleReads << " from GS memory";
