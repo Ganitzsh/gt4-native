@@ -38,4 +38,6 @@ is one of:
 
 Other games' saves on the card are left. A save of the same name already in the folder is kept beside the new
 one, renamed `NAME.before-import-YYYYMMDD-HHMMSS`. `platform/saves/save_import.cpp`; checked by
-`tests/save_import.cpp` on card images, a `.psu` and a folder card built by the test.
+`tests/save_import.cpp` on card images, a `.psu` and a folder card built by the test, and on NetherSX2 (Android
+PCSX2) `.ps2` cards holding fourteen games' saves (2026-10-31: GT4's came out and loaded). A directory's entry
+count is the length in its parent's entry for it; a folder's own "." entry holds 0 on real cards.

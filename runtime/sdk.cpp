@@ -175,6 +175,15 @@ extern "C" long long gt4_money_floor() {
     return floor;
 }
 
+// For game_src/func_0042F4F0.c (testing): GT4_DAYS=N, the least days elapsed in GT mode; -1 when not set.
+extern "C" long gt4_days_floor() {
+    static const long floor = [] {
+        const char *e = std::getenv("GT4_DAYS");
+        return e && *e ? std::strtol(e, nullptr, 10) : -1l;
+    }();
+    return floor;
+}
+
 // The host's gameplay options (gameplay.* of its settings), sent at start and whenever they change
 // (GT4_REC_HOST_CMD 4). 0: gameplay.ai_catchup (game_src/func_00365790.cpp), 0 original, 1 reduced, 2 off;
 // GT4_AI_CATCHUP=original|reduced|off fixes it (headless tests).

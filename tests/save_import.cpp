@@ -72,11 +72,11 @@ std::vector<unsigned char> card(bool ecc, const std::vector<unsigned char>& file
     write(0, entry(0x8427, 0, 0, ".."), 512);
     write(1, entry(0x8427, 3, 2, "BASCUS-97328GAMEDATA"), 0);
     write(1, entry(0x8427, 2, 6, "BASLUS-00000OTHER"), 512);
-    write(2, entry(0x8427, 3, 2, "."), 0);
+    write(2, entry(0x8427, 0, 2, "."), 0);  // as on real cards: a folder's count is in its parent's entry
     write(2, entry(0x8427, 0, 0, ".."), 512);
     write(3, entry(0x8497, static_cast<uint32_t>(file.size()), 4, "BASCUS-97328GAMEDATA"), 0);
     std::memcpy(plain.data() + at(alloc + 4), file.data(), file.size());
-    write(6, entry(0x8427, 2, 6, "."), 0);
+    write(6, entry(0x8427, 0, 6, "."), 0);
     write(6, entry(0x8427, 0, 0, ".."), 512);
     std::vector<unsigned char> out;
     for (size_t p = 0; p < plain.size() / page; ++p) {
@@ -153,6 +153,9 @@ int main() {
     {
         writeFile(dir / "junk.ps2", payload(4096, 9));
         expect(!gt4::saves::importSave(dir / "junk.ps2", dir / "saves_junk").ok, "a file that is no card refused");
+        writeFile(dir / "blank.ps2", std::vector<unsigned char>(8192, 0xFF));
+        const gt4::saves::ImportResult blank = gt4::saves::importSave(dir / "blank.ps2", dir / "saves_blank");
+        expect(!blank.ok && blank.message.find("unformatted") != std::string::npos, "an unformatted card named as such");
     }
 
     fs::remove_all(dir, ec);

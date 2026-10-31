@@ -51,7 +51,9 @@ public:
     bool open(std::vector<unsigned char> image, std::string& error) {
         data = std::move(image);
         if (data.size() < 0x154 || std::memcmp(data.data(), "Sony PS2 Memory Card Format ", 28) != 0) {
-            error = "not a PS2 memory card image (no superblock)";
+            const bool blank = std::all_of(data.begin(), data.begin() + static_cast<std::ptrdiff_t>(std::min<size_t>(data.size(), 0x2000)),
+                                           [](unsigned char b) { return b == 0xFF; });
+            error = blank && !data.empty() ? "an unformatted memory card (no saves)" : "not a PS2 memory card image (no superblock)";
             return false;
         }
         const unsigned char* s = data.data();
@@ -74,8 +76,9 @@ public:
     // The saves on the card: its root directory's folders (only GT4's, when `onlyOurs`).
     std::vector<SaveEntry> saves(bool onlyOurs, std::string& error) {
         std::vector<SaveEntry> out;
-        std::vector<unsigned char> root;
-        if (!readDirectory(rootCluster, root, error)) return out;
+        std::vector<unsigned char> root, first;
+        if (!readChain(rootCluster, 512, first, error)) return out;
+        if (!readDirectory(rootCluster, u32(first.data() + 4), root, error)) return out;
         for (size_t at = 0; at + 512 <= root.size(); at += 512) {
             const unsigned char* e = root.data() + at;
             const uint16_t mode = u16(e);
@@ -84,7 +87,7 @@ public:
             SaveEntry save;
             save.folder = name;
             std::vector<unsigned char> dir;
-            if (!readDirectory(u32(e + 0x10), dir, error)) return {};
+            if (!readDirectory(u32(e + 0x10), u32(e + 4), dir, error)) return {};
             for (size_t k = 0; k + 512 <= dir.size(); k += 512) {
                 const unsigned char* f = dir.data() + k;
                 const uint16_t fm = u16(f);
@@ -152,11 +155,9 @@ private:
         return true;
     }
 
-    // A directory's entries (512 bytes each); its first entry, ".", holds their count.
-    bool readDirectory(uint32_t start, std::vector<unsigned char>& out, std::string& error) const {
-        std::vector<unsigned char> first;
-        if (!readChain(start, 512, first, error)) return false;
-        const uint32_t count = u32(first.data() + 4);
+    // A directory's `count` entries (512 bytes each). The count is the length in the directory's entry in its
+    // parent (the root's in its own "." entry); a folder's "." holds 0 on real cards.
+    bool readDirectory(uint32_t start, uint32_t count, std::vector<unsigned char>& out, std::string& error) const {
         if (count == 0 || count > 4096) {
             error = "a damaged directory on the card";
             return false;
