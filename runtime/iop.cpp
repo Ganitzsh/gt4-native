@@ -36,12 +36,26 @@ constexpr uint32_t kLayer1Start = 1317040;  // absolute LBA of layer 1 (the imag
 bool iso_read(uint64_t offset, void *dst, uint32_t n) {
     std::lock_guard<std::mutex> lock(g_iso_mutex);
     if (g_iso == INVALID_HANDLE_VALUE) return false;
-    OVERLAPPED ov{};
-    ov.Offset = static_cast<DWORD>(offset);
-    ov.OffsetHigh = static_cast<DWORD>(offset >> 32);
-    DWORD got = 0;
-    if (!ReadFile(g_iso, dst, n, &got, &ov)) got = 0;
-    if (got < n) std::memset(static_cast<char *>(dst) + got, 0, n - got);
+    // Until all of it is read: under Wine (Proton) a read can stop early, as the host's read() may (it did at 64 KB
+    // on a network drive)
+    char *out = static_cast<char *>(dst);
+    uint32_t got = 0;
+    while (got < n) {
+        OVERLAPPED ov{};
+        ov.Offset = static_cast<DWORD>(offset + got);
+        ov.OffsetHigh = static_cast<DWORD>((offset + got) >> 32);
+        DWORD part = 0;
+        if (!ReadFile(g_iso, out + got, n - got, &part, &ov)) {
+            static int reported = 0;
+            if (reported++ < 8)
+                log_warn("disc: reading %u bytes at %llx failed (Windows error %lu)", n - got,
+                         static_cast<unsigned long long>(offset + got), GetLastError());
+            break;
+        }
+        if (!part) break;   // the end of the image
+        got += part;
+    }
+    if (got < n) std::memset(out + got, 0, n - got);
     return got > 0;
 }
 

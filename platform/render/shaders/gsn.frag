@@ -15,6 +15,12 @@ layout(location = 1) noperspective in vec3 inStq;
 layout(location = 2) noperspective in vec2 inUv;
 layout(location = 3) noperspective in float inFog;
 layout(location = 4) flat in vec4 inBounds;   // a sprite's texture rectangle; min > max for other primitives
+// 3D draws: colour, STQ and fog times w, perspective-correct, and w (gsn.vert)
+layout(location = 5) in vec4 inColourW;
+layout(location = 6) in vec3 inStqW;
+layout(location = 7) in float inFogW;
+layout(location = 8) in float inW;
+layout(location = 9) flat in uint inHomogeneous;
 
 layout(location = 0, index = 0) out vec4 outColour;
 layout(location = 0, index = 1) out vec4 outFactor;
@@ -194,10 +200,14 @@ vec3 atGsPoint(vec3 value) {
 }
 
 void main() {
-    const vec4 cv = floor(inColour * 255.0 + 0.5);
+    const bool homogeneous = inHomogeneous != 0u;
+    const float r = 1.0 / inW;
+    const vec4 colour = homogeneous ? inColourW * r : inColour;
+    const vec3 stqIn = homogeneous ? inStqW * r : inStq;
+    const vec4 cv = floor(colour * 255.0 + 0.5);
     vec4 c = cv;
     if ((draw.flags & kTextured) != 0u) {
-        const vec3 stq = atGsPoint(inStq);
+        const vec3 stq = atGsPoint(stqIn);
         pixelQ = (draw.flags & kUv) != 0u ? 1.0 : stq.z;
         const vec2 uv = atGsPoint(vec3(inUv, 0.0)).xy;
         const vec2 coordinate = (draw.flags & kUv) != 0u ? uv / draw.textureSize : stq.xy / stq.z;
@@ -226,7 +236,7 @@ void main() {
     }
     if ((draw.flags & kFog) != 0u) {
         const vec3 fog = vec3(draw.fogColour & 0xFFu, (draw.fogColour >> 8) & 0xFFu, (draw.fogColour >> 16) & 0xFFu);
-        const float f = inFog;
+        const float f = homogeneous ? inFogW * r : inFog;
         c.rgb = floor((f * c.rgb + (255.0 - f) * fog) / 256.0);
     }
     // The alpha test; AFAIL's pass of the failing pixels has it inverted (gsn_scene.cpp sets its masks).

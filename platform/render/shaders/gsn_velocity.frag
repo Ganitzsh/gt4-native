@@ -4,10 +4,12 @@
 #extension GL_GOOGLE_include_directive : require
 #include "gsn_common.glsl"
 
-layout(location = 0) noperspective in vec3 inMotion;
+layout(location = 0) in vec3 inMotionW;   // times w, perspective-correct (gsn_velocity.vert)
+layout(location = 1) in float inW;
 layout(location = 0) out vec2 outVelocity;
 
 void main() {
+    const vec3 inMotion = inMotionW / inW;
     if (inMotion.z <= 1e-12) {
         outVelocity = vec2(0.0);
         return;

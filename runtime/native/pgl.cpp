@@ -823,16 +823,24 @@ void gt4_replace_func_00499640(uint32_t set) {
 // were 640 KiB each in the image (D_006DEB00). Records take more room than the packets they replace (a state
 // record holds every group's fields; a 2D vertex is 32 bytes), so natively each is 4 MiB, outside the 32 MB of
 // game memory but below 0x10000000: the library keeps their addresses masked to 28 bits in its DMA tags.
-void gt4_replace_func_00105FD8(uint32_t self) {
-    constexpr uint32_t kSize = 4u << 20;
-    static uint32_t base = [] {
+// Taken at start (guest_memory_init), before the link's view and the thread stacks fill the low addresses (under
+// Wine the link's 128 MB land at 0x07B40000).
+constexpr uint32_t kFrameBufferSize = 4u << 20;
+extern "C" uint32_t gt4_pgl_frame_buffers() {
+    static const uint32_t base = [] {
         for (uint32_t at = 0x04000000; at < 0x0F000000; at += 0x01000000)
-            if (void *p = VirtualAlloc(reinterpret_cast<void *>(static_cast<uintptr_t>(at)), 2 * kSize, MEM_RESERVE | MEM_COMMIT,
-                                       PAGE_READWRITE))
+            if (void *p = VirtualAlloc(reinterpret_cast<void *>(static_cast<uintptr_t>(at)), 2 * kFrameBufferSize,
+                                       MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE))
                 return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(p));
         log_warn("pgl: no room below 0x10000000 for the frame buffers; the image's 640 KiB ones are used");
         return 0u;
     }();
+    return base;
+}
+
+void gt4_replace_func_00105FD8(uint32_t self) {
+    constexpr uint32_t kSize = kFrameBufferSize;
+    const uint32_t base = gt4_pgl_frame_buffers();
     const uint32_t size = base ? kSize : 0xA0000;
     const uint32_t first = base ? base : 0x006DEB00;
     guest_ref<uint32_t>(self) = first;

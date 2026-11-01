@@ -10,11 +10,14 @@ layout(location = 1) in uint inZ;
 layout(location = 7) in vec3 inMotion;   // the previous window position, homogeneous over this frame's w
 layout(location = 8) in float inW;       // gsn.vert's
 
-layout(location = 0) noperspective out vec3 outMotion;
+// perspective-correct times w, with w (as gsn.vert's 3D values: the same where the GPU clips)
+layout(location = 0) out vec3 outMotionW;
+layout(location = 1) out float outW;
 
 invariant gl_Position;
 
 void main() {
     gl_Position = gsnPosition(inPosition, inZ, inW);
-    outMotion = inMotion;
+    outMotionW = inMotion * gl_Position.w;
+    outW = gl_Position.w;
 }

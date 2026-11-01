@@ -18,6 +18,7 @@
 #include "test_scene.h"
 
 #include <algorithm>
+#include <cctype>
 #include <charconv>
 #include <chrono>
 #include <cmath>
@@ -1014,9 +1015,46 @@ int run(const Options& options) {
 
 }  // namespace
 
+// A packaged game (tools/package_game.py): started with no mode, the host runs gt4_game.exe from its own folder on
+// game/CORE.GT4.elf and the disc image beside it, with its settings, saves and the game's log there too, so the
+// folder can be copied anywhere (another PC, a Steam Deck or an ARM handheld under Proton). --headless --frames N
+// checks a package without a window.
+void usePackagedGame(Options& o) {
+    if (!o.game.empty() || !o.replay.empty() || o.probe || o.smoke || o.listGpus || o.listDisplays || o.listOptions ||
+        !o.sessionDirectory.empty() || !o.importSave.empty())
+        return;
+    const char* basePath = SDL_GetBasePath();
+    if (!basePath) return;
+    namespace fs = std::filesystem;
+    const auto utf8 = [](const fs::path& p) { const std::u8string s = p.u8string(); return std::string(s.begin(), s.end()); };
+    const std::string baseText = basePath;
+    const fs::path base(std::u8string(baseText.begin(), baseText.end()));
+    const fs::path game = base / "gt4_game.exe", elf = base / "game" / "CORE.GT4.elf";
+    std::error_code error;
+    if (!fs::is_regular_file(game, error) || !fs::is_regular_file(elf, error)) return;
+    o.game = utf8(game);
+    std::vector<std::string> args{"--elf", utf8(elf), "--log", utf8(base / "game.log")};
+    for (const auto& entry : fs::directory_iterator(base / "game", error)) {
+        std::string extension = utf8(entry.path().extension());
+        std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return std::tolower(c); });
+        if (extension == ".iso") {
+            args.insert(args.end(), {"--iso", utf8(entry.path())});
+            break;
+        }
+    }
+    o.gameArgs.insert(o.gameArgs.begin(), args.begin(), args.end());
+    if (o.saves.empty()) {
+        fs::create_directories(base / "saves", error);
+        o.saves = utf8(base / "saves");
+    }
+    if (o.settingsPath.empty()) o.settingsPath = utf8(base / "settings.ini");
+}
+
 int main(int argc, char** argv) {
     try {
-        return run(parse(argc, argv));
+        Options options = parse(argc, argv);
+        usePackagedGame(options);
+        return run(options);
     } catch (const std::invalid_argument& error) {
         std::fprintf(stderr, "%s\n", error.what());
         return 2;

@@ -14,13 +14,21 @@ layout(location = 5) in uint inFog;
 layout(location = 6) in vec4 inBounds;   // a sprite's texture rectangle (min U, min V, max U, max V)
 layout(location = 8) in float inW;       // 3D: the position is homogeneous (times w, Z's float bits); 0: not
 
-// The GS interpolates linearly across the screen (its STQ carry the perspective): so do these, also where the
-// GPU clips a homogeneous triangle.
+// The GS interpolates linearly across the screen (its STQ carry the perspective): so do these.
 layout(location = 0) noperspective out vec4 outColour;
 layout(location = 1) noperspective out vec3 outStq;
 layout(location = 2) noperspective out vec2 outUv;
 layout(location = 3) noperspective out float outFog;
 layout(location = 4) flat out vec4 outBounds;
+// 3D (homogeneous) draws: the same values, perspective-correct times w, with w (gsn.frag divides: sum l_i a_i w_i / w_i
+// over sum l_i w_i / w_i, the screen-linear value). Where the GPU clips a triangle crossing w = 0 (behind the
+// camera), drivers differ on noperspective attributes (lavapipe stretched them across the screen); every one
+// clips these alike.
+layout(location = 5) out vec4 outColourW;
+layout(location = 6) out vec3 outStqW;
+layout(location = 7) out float outFogW;
+layout(location = 8) out float outW;
+layout(location = 9) flat out uint outHomogeneous;
 
 // gsn_velocity.vert draws the scene's 3D again with the same position to the bit (its depth test EQUAL).
 invariant gl_Position;
@@ -32,6 +40,12 @@ void main() {
     outUv = inUv;
     outFog = float(inFog);
     outBounds = inBounds;
+    const float w = gl_Position.w;
+    outColourW = inColour * w;
+    outStqW = inStq * w;
+    outFogW = float(inFog) * w;
+    outW = w;
+    outHomogeneous = inW != 0.0 ? 1u : 0u;
     // GS points cover one GS pixel: scale x scale render pixels (point lists must write the size; undefined
     // otherwise, which lost the device in GT mode's map).
     gl_PointSize = max(draw.scale.x, draw.scale.y);

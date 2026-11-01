@@ -124,6 +124,28 @@ section becomes private to the main view, so afterwards the mirrors at 0x2000000
 rest of the run is not reliable. The variable unset, nothing changes. The measurements of 2026-10-30 and what they
 mean for a native renderer interface: docs/GRAPHICS_API_PLAN.md.
 
+## A packaged game, and Proton
+
+`py tools/package_game.py --decomp ..\gt4-decomp [--save CARD.ps2] [--profile handheld] [--textures DIR]` writes
+`build/package/GT4-Native.zip`: both executables, the host's C++ runtime DLLs, `game/` (CORE.GT4.elf and the disc
+image), `saves/` (imported from a PS2 memory card image with `--save`), `settings.ini` (the `handheld` profile: the
+low preset, borderless, 16:9) and a README; `--textures` also writes a texture pack's archive to extract over it.
+These archives hold the user's own game data: they are for the user's devices, never to distribute. `gt4_host.exe`
+started with no mode (or with only `--headless --frames N`, to check a package) finds the game, the disc image, the
+settings and the save folder beside itself, and writes the game's log there (`game.log`).
+
+The same executables run on Linux under Proton (and on an ARM handheld, Proton with FEX). Three things Wine does
+differently, handled since 2026-11-01 (checked with a WoW64 Wine 11.21 and lavapipe):
+- A second view of the executable's image goes where the image's base says, whatever address is asked for: the RAM
+  mirrors are mapped with NtMapViewOfSectionEx and an address range (`runtime/guest.cpp`). The shared section is
+  shared between the views, as on Windows.
+- A disc read can return less than asked for (the host's read() stopped at 64 KB on a network drive):
+  `iso_read` reads on until it has all of it.
+- The link's 128 MB view lands at 0x07B40000, where the frame packet buffers go: they are taken at start now.
+Drivers differ on noperspective attributes where the GPU clips a triangle crossing w = 0 (lavapipe stretched them
+across the screen): 3D draws pass theirs perspective-correct times w with w, and gsn.frag divides, the same
+screen-linear values (on an RTX: 94-98% of the pixels identical to before, 99.95% within 4).
+
 ## Status
 
 See PORT_TRACKER in gt4-decomp and the log below.
