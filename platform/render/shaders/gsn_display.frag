@@ -2,11 +2,16 @@
 // The native renderer's displayed buffer as the scene: the part of the target the display circuit reads
 // (DISPFB / DISPLAY), stretched over the render area. Targets hold the GS's display-encoded colour / 255; as
 // for the GS back end's frame (an sRGB texture), it is decoded to linear for the pipeline, so the
-// "original"-like settings give the 8-bit values back. No motion vectors yet.
+// "original"-like settings give the 8-bit values back. No motion vectors yet. In field mode the field shown
+// before is mixed in (`blend`), so the two fields of an interlaced screen do not bob (gsn_scene.cpp).
 layout(set = 0, binding = 0) uniform sampler2D frame;
+layout(set = 0, binding = 1) uniform sampler2D otherField;
 layout(push_constant) uniform Display {
     vec2 offset;   // the displayed rectangle in the target, normalised
     vec2 size;
+    vec2 otherOffset;   // ... and in the other field's target
+    vec2 otherSize;
+    float blend;   // how much of the other field
 } display;
 layout(location = 0) in vec2 inUv;
 layout(location = 0) out vec4 outColor;
@@ -17,7 +22,11 @@ vec3 linearFromSrgb(vec3 c) {
 }
 
 void main() {
-    const vec3 c = clamp(textureLod(frame, display.offset + inUv * display.size, 0.0).rgb, 0.0, 1.0);
+    vec3 c = clamp(textureLod(frame, display.offset + inUv * display.size, 0.0).rgb, 0.0, 1.0);
+    if (display.blend > 0.0) {
+        const vec3 o = clamp(textureLod(otherField, display.otherOffset + inUv * display.otherSize, 0.0).rgb, 0.0, 1.0);
+        c = mix(c, o, display.blend);
+    }
     outColor = vec4(linearFromSrgb(c), 1.0);
     outVelocity = vec2(0.0);
 }

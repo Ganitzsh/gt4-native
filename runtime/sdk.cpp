@@ -92,6 +92,21 @@ extern "C" int gt4_replace_write(int fd, const char *buf, int n) {
     return n;
 }
 
+// 005DB110: the game's debug printf (a no-op in retail: script engine and loader messages, such as a module a script
+// requires that is not found). Logged, the first 2000 lines, as "game:".
+extern "C" void gt4_replace_func_005DB110(const char *fmt, ...) {
+    static volatile LONG count = 0;
+    if (!fmt || InterlockedIncrement(&count) > 2000) return;
+    char text[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(text, sizeof text, fmt, ap);
+    va_end(ap);
+    size_t n = strlen(text);
+    while (n && (text[n - 1] == '\n' || text[n - 1] == '\r')) text[--n] = 0;
+    if (n) gt4::rt::log_info("game: %s", text);
+}
+
 // Debugging aid for game-side code (game_src checks): printf-style text into the run log.
 extern "C" void gt4_logf(const char *fmt, ...) {
     char text[512];

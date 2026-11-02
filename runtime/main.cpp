@@ -24,6 +24,8 @@ namespace gt4::rt {
 
 RuntimeConfig g_config;
 
+void heap_log_start();   // heap_log.cpp
+
 namespace {
 
 constexpr uint32_t kGameMain = 0x00107F08;
@@ -52,6 +54,7 @@ DWORD WINAPI game_thread(void *) {
     kernel_install_syscalls();
     services_init();
     kernel_start_interrupts();
+    heap_log_start();   // GT4_HEAP_LOG (heap_log.cpp)
     if (g_self_test) return static_cast<DWORD>(kernel_self_test());
     static char arg0[] = "cdrom0:\\CORE.GT4;1";
     static char *argv[] = {arg0, nullptr};

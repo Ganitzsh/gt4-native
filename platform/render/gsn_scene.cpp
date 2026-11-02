@@ -269,6 +269,10 @@ struct GsnScene::Impl {
     VkSampler mipSamplers[4] = {};   // [repeat U * 2 + repeat V]: mipmapped textures, trilinear, anisotropic
     uint32_t displayTarget = 0;
     float displayRect[4] = {0, 0, 1, 1};
+    // Field mode: the field shown before (its buffer and its rectangle's top) and how much of it the display mixes in.
+    uint32_t lastFieldTarget = 0, lastFieldY = 0, blendTarget = 0;
+    float otherFieldRect[4] = {0, 0, 1, 1};
+    float fieldBlend = 0.0f;
     bool warnedBlend = false;
 
     Impl(const vk::Device& d, VkCommandPool p) : device(d), pool(p) {
@@ -1715,6 +1719,25 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         displayRect[2] = (w ? w : 640) / tw;
         displayRect[3] = (h ? h : 448) / th;
         vk::toSampled(b, shown->second.image, vk::kFragment);
+        // Field mode (the logo, the menus): the game draws each field into its own buffer, offset for a TV that
+        // shows the two half a line apart, and the offsets differ from screen to screen. Shown one at a time over
+        // the whole height the picture bobs; shown blended with the other field (the buffer shown before, whole at
+        // the end of a list) it holds still. GT4_FIELD_BLEND=0: each field alone.
+        static const bool blendFields = [] { const char* e = std::getenv("GT4_FIELD_BLEND"); return !e || std::strcmp(e, "0"); }();
+        const bool fields = frame.display.record.interlaced && frame.display.record.fieldMode;
+        fieldBlend = 0.0f;
+        auto other = targets.find(lastFieldTarget);
+        if (blendFields && fields && lastFieldTarget && lastFieldTarget != displayTarget && other != targets.end() &&
+            other->second.image.extent.width == shown->second.image.extent.width &&
+            other->second.image.extent.height == shown->second.image.extent.height) {
+            std::copy(displayRect, displayRect + 4, otherFieldRect);
+            otherFieldRect[1] = lastFieldY / th;
+            fieldBlend = 0.5f;
+            blendTarget = lastFieldTarget;
+            vk::toSampled(b, other->second.image, vk::kFragment);
+        }
+        lastFieldTarget = fields ? displayTarget : 0;
+        lastFieldY = dby;
         b.flush(command);
     }
 }
@@ -1818,8 +1841,8 @@ void GsnScene::prepare(const SceneFormats& formats) {
     desc.colors = {formats.color, formats.velocity};
     desc.depth = formats.depth;
     desc.samples = formats.samples;
-    desc.types = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER};
-    desc.pushSize = 16;
+    desc.types = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER};
+    desc.pushSize = 48;
     desc.name = "gsn display";
     s.display = vk::createGraphics(s.device, desc);
     vk::GraphicsDesc stencil;
@@ -2120,8 +2143,14 @@ void GsnScene::recordMain(VkCommandBuffer command, const SceneView& view) {
     vkCmdSetViewport(command, 0, 1, &viewport);
     vkCmdSetScissor(command, 0, 1, &scissor);
     vk::bind(command, s.display);
-    vk::Descriptors().sampled(0, shown->second.image.view, s.samplers[2]).push(command, s.display);
-    vk::pushConstants(command, s.display, s.displayRect, 16);
+    auto other = s.fieldBlend > 0.0f ? s.targets.find(s.blendTarget) : s.targets.end();
+    const VkImageView otherView = other != s.targets.end() ? other->second.image.view : shown->second.image.view;
+    vk::Descriptors().sampled(0, shown->second.image.view, s.samplers[2]).sampled(1, otherView, s.samplers[2]).push(command, s.display);
+    float constants[12] = {};
+    std::copy(s.displayRect, s.displayRect + 4, constants);
+    std::copy(s.otherFieldRect, s.otherFieldRect + 4, constants + 4);
+    constants[8] = other != s.targets.end() ? s.fieldBlend : 0.0f;
+    vk::pushConstants(command, s.display, constants, sizeof constants);
     vkCmdDraw(command, 3, 1, 0, 0);
 }
 

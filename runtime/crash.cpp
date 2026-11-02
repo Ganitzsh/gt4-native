@@ -7,6 +7,7 @@
 #include <windows.h>
 #include <tlhelp32.h>
 
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -21,6 +22,48 @@ namespace {
 const char *unresolved_name(uintptr_t a) {
     if (a < gt4_unresolved_base || a >= gt4_unresolved_base + 16 * gt4_unresolved_count) return nullptr;
     return gt4_unresolved_names[(a - gt4_unresolved_base) / 16];
+}
+
+// The crash report is gathered here, then logged line by line: a packaged game's stderr goes nowhere one can read
+// (Proton), its log is game.log.
+char g_report[16384];
+size_t g_report_len = 0;
+
+void say(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+void say(const char *fmt, ...) {
+    if (g_report_len >= sizeof g_report - 1) return;
+    va_list ap;
+    va_start(ap, fmt);
+    const int n = vsnprintf(g_report + g_report_len, sizeof g_report - g_report_len, fmt, ap);
+    va_end(ap);
+    if (n > 0) g_report_len = g_report_len + n < sizeof g_report ? g_report_len + n : sizeof g_report - 1;
+}
+
+// The 32 bytes at `a` as words and text, then (to `depth` 2) the blocks its first four words point at.
+void dump_pointee(uint32_t a, int depth) {
+    MEMORY_BASIC_INFORMATION mi;
+    const auto *q = reinterpret_cast<const uint8_t *>(static_cast<uintptr_t>(a));
+    if (a < 0x10000 || !VirtualQuery(q, &mi, sizeof mi) || mi.State != MEM_COMMIT || (mi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) ||
+        reinterpret_cast<uintptr_t>(q + 32) > reinterpret_cast<uintptr_t>(mi.BaseAddress) + mi.RegionSize)
+        return;
+    char text[33];
+    for (int t = 0; t < 32; ++t) text[t] = q[t] >= 0x20 && q[t] < 0x7F ? static_cast<char>(q[t]) : '.';
+    text[32] = 0;
+    const auto *w = reinterpret_cast<const uint32_t *>(q);
+    say("  %*s%08x: %08x %08x %08x %08x %08x %08x %08x %08x  %s\n", 2 * depth, "", a, w[0], w[1], w[2], w[3], w[4], w[5],
+        w[6], w[7], text);
+    if (depth < 2)
+        for (int k = 0; k < 4; ++k) dump_pointee(w[k], depth + 1);
+}
+
+void emit_report() {
+    for (char *line = g_report; *line;) {
+        char *end = strchr(line, '\n');
+        if (end) *end = 0;
+        gt4::rt::log_error("%s", line);
+        if (!end) break;
+        line = end + 1;
+    }
 }
 
 void describe(uintptr_t pc, char *out, size_t n) {
@@ -76,31 +119,39 @@ LONG WINAPI on_crash(EXCEPTION_POINTERS *ep) {
     if (InterlockedExchange(&once, 1)) return EXCEPTION_CONTINUE_SEARCH;
     const CONTEXT *c = ep->ContextRecord;
     describe(c->Eip, where, sizeof where);
-    fprintf(stderr, "CRASH: exception %08lx at %s", code, where);
+    say("CRASH: exception %08lx at %s", code, where);
     if (code == EXCEPTION_ACCESS_VIOLATION) {
         const uintptr_t fault = ep->ExceptionRecord->ExceptionInformation[1];
-        fprintf(stderr, ", %s address %08lx", ep->ExceptionRecord->ExceptionInformation[0] ? "writing" : "reading",
+        say(", %s address %08lx", ep->ExceptionRecord->ExceptionInformation[0] ? "writing" : "reading",
                 static_cast<unsigned long>(fault));
-        if (const char *u = unresolved_name(fault)) fprintf(stderr, " = UNRESOLVED data symbol %s", u);
+        if (const char *u = unresolved_name(fault)) say(" = UNRESOLVED data symbol %s", u);
     }
-    fprintf(stderr, "\n  eax %08lx ebx %08lx ecx %08lx edx %08lx esi %08lx edi %08lx ebp %08lx esp %08lx\n", c->Eax,
+    say("\n  eax %08lx ebx %08lx ecx %08lx edx %08lx esi %08lx edi %08lx ebp %08lx esp %08lx\n", c->Eax,
             c->Ebx, c->Ecx, c->Edx, c->Esi, c->Edi, c->Ebp, c->Esp);
+    // what the registers point at (a string being worked on shows as text)
+    {
+        const DWORD regs[6] = {c->Eax, c->Ebx, c->Ecx, c->Edx, c->Esi, c->Edi};
+        for (const DWORD r : regs) dump_pointee(r, 2);
+    }
     // the crashing function's arguments ([ebp+8]...: gcc 2.9 keeps frame pointers) and what they point at
     {
         MEMORY_BASIC_INFORMATION mi;
         const auto *bp = reinterpret_cast<const uint32_t *>(c->Ebp);
         if (VirtualQuery(bp, &mi, sizeof mi) && mi.State == MEM_COMMIT) {
-            fprintf(stderr, "  args:");
-            for (int i = 0; i < 5; ++i) fprintf(stderr, " %08x", bp[2 + i]);
-            fprintf(stderr, "\n");
+            say("  args:");
+            for (int i = 0; i < 5; ++i) say(" %08x", bp[2 + i]);
+            say("\n");
             for (int i = 0; i < 5; ++i) {
                 const auto *p = reinterpret_cast<const uint32_t *>(static_cast<uintptr_t>(bp[2 + i]));
                 if (bp[2 + i] < 0x10000 || !VirtualQuery(p, &mi, sizeof mi) || mi.State != MEM_COMMIT ||
                     (mi.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
                     continue;
-                fprintf(stderr, "  *arg%d:", i);
-                for (int k = 0; k < 12; ++k) fprintf(stderr, " %08x", p[k]);
-                fprintf(stderr, "\n");
+                say("  *arg%d:", i);
+                for (int k = 0; k < 12; ++k) say(" %08x", p[k]);
+                say("\n");
+                // and two levels further: the blocks its first words point at, with their text (a script
+                // value's string, an object's name)
+                for (int k = 0; k < 4; ++k) dump_pointee(p[k], 1);
             }
         }
     }
@@ -111,9 +162,9 @@ LONG WINAPI on_crash(EXCEPTION_POINTERS *ep) {
         if (VirtualQuery(sp - 8, &mi, sizeof mi) && mi.State == MEM_COMMIT &&
             reinterpret_cast<uintptr_t>(sp + 24) <= reinterpret_cast<uintptr_t>(mi.BaseAddress) + mi.RegionSize) {
             for (int row = -8; row < 24; row += 8) {
-                fprintf(stderr, "  esp%+04x:", row * 4);
-                for (int k = 0; k < 8; ++k) fprintf(stderr, " %08x", sp[row + k]);
-                fprintf(stderr, "\n");
+                say("  esp%+04x:", row * 4);
+                for (int k = 0; k < 8; ++k) say(" %08x", sp[row + k]);
+                say("\n");
             }
         }
     }
@@ -130,7 +181,7 @@ LONG WINAPI on_crash(EXCEPTION_POINTERS *ep) {
             const uint32_t ret = f[1];
             uint32_t g = 0;
             const char *name = gt4::rt::native_name_for(ret, &g);
-            fprintf(stderr, "  frame %2d: ebp %08x ret %08x in %s (PS2 %08x) args %08x %08x %08x %08x\n", depth, bp, ret,
+            say("  frame %2d: ebp %08x ret %08x in %s (PS2 %08x) args %08x %08x %08x %08x\n", depth, bp, ret,
                     name, g, f[2], f[3], f[4], f[5]);
             if (f[0] <= bp) break;  // frames go up the stack
             bp = f[0];
@@ -147,7 +198,7 @@ LONG WINAPI on_crash(EXCEPTION_POINTERS *ep) {
             uint32_t g = 0;
             const char *name = gt4::rt::native_name_for(v, &g);
             if (*name) {
-                fprintf(stderr, "  [esp+%04x] %08x in %s (PS2 %08x)\n", i * 4, v, name, g);
+                say("  [esp+%04x] %08x in %s (PS2 %08x)\n", i * 4, v, name, g);
                 ++shown;
             }
         }
@@ -161,15 +212,16 @@ LONG WINAPI on_crash(EXCEPTION_POINTERS *ep) {
             unsigned long len = 64;
             if (*end == ':') len = strtoul(end + 1, &end, 0);
             for (unsigned long off = 0; off < len; off += 16) {
-                fprintf(stderr, "  %08lx:", addr + off);
+                say("  %08lx:", addr + off);
                 for (unsigned long k = 0; k < 16 && off + k < len; k += 4)
-                    fprintf(stderr, " %08x", *reinterpret_cast<const unsigned *>(addr + off + k));
-                fprintf(stderr, "\n");
+                    say(" %08x", *reinterpret_cast<const unsigned *>(addr + off + k));
+                say("\n");
             }
             p = *end == ',' ? end + 1 : end;
             if (end == p && *p) break;
         }
     }
+    emit_report();
     // GT4_SYMDUMP: the script engine's symbol table (MADHOC::SymbolMap, a map<String, int> at
     // 0x0061A100 + 0x30), as "id name" lines, to name the symbol IDs a script lookup used
     if (getenv("GT4_SYMDUMP")) {
