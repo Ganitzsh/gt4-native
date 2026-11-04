@@ -15,8 +15,8 @@ GT4 keeps its textures in texture sets (the objects 00499728 binds; layout from 
 
 | Offset | What |
 |---|---|
-| +0x10 | its position in GS memory (the slot cache's, in 64-block units) |
-| +0x12 | its size there (the same units) |
+| +0x10 | its position in GS memory (the slot cache's, in blocks; slots are whole pages) |
+| +0x12 | its size there (blocks) |
 | +0x14 | the number of texture records |
 | +0x16 | the number of uploads |
 | +0x18 | the texture records, 40 bytes each: TEX0, TEX1, MIPTBP1, MIPTBP2, CLAMP (GS register values at the set's position) |

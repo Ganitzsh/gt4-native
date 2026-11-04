@@ -904,7 +904,7 @@ void GsFrontend::exportSets(const std::function<void(const gfx::TexSetRecord&, c
         r.hashLow = static_cast<uint32_t>(slot.hash);
         r.hashHigh = static_cast<uint32_t>(slot.hash >> 32);
         r.uploads = static_cast<uint16_t>(c->second.uploads.size());
-        r.size = static_cast<uint16_t>((slot.hi - slot.lo) >> 6);
+        r.size = static_cast<uint16_t>(slot.hi - slot.lo);
         r.sent = exported.insert(slot.hash).second ? 1u : 0u;
         std::vector<gfx::TexSetUpload> uploads = c->second.uploads;
         for (gfx::TexSetUpload& u : uploads)
@@ -941,7 +941,7 @@ void GsFrontend::materializePage(uint32_t page) {
     auto content = setContents.find(sp.hash);
     if (content == setContents.end()) return;
     GT4_CPU_SCOPE("front end: set pages into memory");
-    // (slots are 64-block aligned: a page of the slot is a page of the content where it was first sent)
+    // (slots are whole pages, 004AAA20: a page of the slot is a page of the content where it was first sent)
     const uint32_t from = (page - (sp.lo - content->second.base) / 32) & 511;
     // the content's pages, kept (the slot cache brings the same sets back every frame, elsewhere)
     const uint64_t key = mix(sp.hash, from);

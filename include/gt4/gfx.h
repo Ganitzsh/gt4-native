@@ -519,7 +519,7 @@ struct BatchRun {
 };
 
 // A texture set the game uploaded into a slot of graphics memory (00499728 -> 00499508): `id` names it in the
-// drawing state (Texture::set) for textures inside its slot, `size` (64-block units) long from its lowest upload.
+// drawing state (Texture::set) for textures inside its slot, `size` blocks long from its lowest upload.
 // Its `uploads` TexSetUpload follow. The runtime's frame walker fills in `hash` (the content of the uploads' bytes and
 // layout when the frame is sent) and `sent`: 1 when the bytes follow as GT4_REC_GFX_DATA (each upload's, in order),
 // 0 when the host has this content already (SetSlots: both ends keep the same contents).
@@ -631,12 +631,13 @@ public:
         return nullptr;
     }
     const std::vector<Slot>& all() const { return slots; }
-    // A set's slot from its record: its lowest upload base, `size` long.
+    // A set's slot from its record: its lowest upload base, `size` blocks long (the set's +0x12: blocks, as 00498828
+    // adds its +0x10 to the TBP fields; read as 64-block units it reached 64 times as far, over the next slots' sets).
     static Slot of(const TexSetRecord& r, const TexSetUpload* uploads) {
         uint32_t lo = ~0u;
         for (uint32_t k = 0; k < r.uploads; ++k) lo = std::min(lo, uploads[k].destination & 0x3FFF);
         if (lo == ~0u) lo = 0;
-        return {r.id, lo, lo + (static_cast<uint32_t>(r.size) << 6), (uint64_t(r.hashHigh) << 32) | r.hashLow};
+        return {r.id, lo, lo + static_cast<uint32_t>(r.size), (uint64_t(r.hashHigh) << 32) | r.hashLow};
     }
 
 private:

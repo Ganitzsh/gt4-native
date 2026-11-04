@@ -673,7 +673,7 @@ void gt4_replace_func_00499508(uint32_t set) {
             append_upload(kContext, upload_record(u.destination, 0, 0, u.w, u.h, u.source, u.qwords));
         }
     if (lo != ~0u) {
-        const uint32_t hi = lo + (static_cast<uint32_t>(r.size) << 6);
+        const uint32_t hi = lo + static_cast<uint32_t>(r.size);   // (blocks: gfx::SetSlots::of)
         end_residents(lo, hi);
         g_resident.insert(g_resident.begin(), Resident{r.id, lo, hi});
     }
