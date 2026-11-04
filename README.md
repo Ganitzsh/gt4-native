@@ -17,11 +17,14 @@ see [Credits](#credits).
 ## What you need
 
 - **Gran Turismo 4, NTSC-U (USA), version 1.01**, serial SCUS-97328, dumped from your own disc to an `.iso`
-  ([Redump](http://redump.org/disc/955) CRC32 `d1d25931`). Other regions and versions are not supported.
+  ([Redump](http://redump.org/disc/955) CRC32 `d1d25931`). The port places the game's code at that release's
+  addresses, so other regions (PAL, Japan) and versions cannot work. It tells you if your image is a different one.
 - **Windows 10 or 11, 64-bit**, or **Linux with Steam and Proton**.
-- **A GPU with Vulkan 1.3.**
-- **Python 3**, once, to make `CORE.GT4.elf` from the disc (below). Nothing else to install.
-- A gamepad with the PS2's layout (Xbox, PlayStation, Steam Deck controls), or a keyboard.
+- **A GPU with a Vulkan 1.3 driver** (with dynamic rendering, synchronization2 and push descriptors: any current AMD,
+  NVIDIA or Intel driver). `gt4_host.exe --list-gpus` tells you whether yours qualifies.
+- A gamepad (Xbox or PlayStation layout, Steam Deck controls), or a keyboard.
+
+Nothing to install: the Visual C++ runtime comes in the folder.
 
 ## Install
 
@@ -29,33 +32,40 @@ see [Credits](#credits).
    extract it anywhere. You get a `GT4-Native-<version>` folder with `gt4_host.exe`, `gt4_game.exe`, an empty
    `game/` and an empty `saves/`.
 2. Put your disc image in `game/`, for example `game/Gran Turismo 4 (USA) (v1.01).iso`.
-3. Make `game/CORE.GT4.elf` from it. The game's executable is on the disc compressed; gt4-decomp's two scripts (Python
-   standard library only) unpack it:
+3. Start `gt4_host.exe`. On the first start it reads the game's executable from the disc image, checks it is the
+   USA 1.01 release, and writes `game/CORE.GT4.elf` beside it (about a second). With no image, or another release,
+   a message says what to do.
 
-   ```sh
-   git clone https://github.com/gustavocanepa/gt4-decomp
-   python gt4-decomp/tools/iso_extract.py "GT4-Native-0.1.0/game/Gran Turismo 4 (USA) (v1.01).iso" CORE.GT4 -o gt4-files
-   python gt4-decomp/tools/core2elf.py gt4-files/CORE.GT4 GT4-Native-0.1.0/game/CORE.GT4.elf
-   ```
+The host finds the game, `settings.ini` and `saves/` beside itself, and writes `game.log` and `host.log` there. The
+folder can be copied anywhere: another PC, an SD card, a handheld.
 
-   The result's SHA-1 should be `eb6e17112038bbeab63b09d445112adcd957c900`. If it differs, the disc image is not
-   the USA 1.01 one.
-4. Start `gt4_host.exe`. It finds the game, the disc image, `settings.ini` and `saves/` beside itself, and writes
-   `game.log` and `host.log` there.
+## Controls
 
-The folder can be copied anywhere: another PC, an SD card, a handheld.
+| PS2 pad | Gamepad | Keyboard |
+|---|---|---|
+| Directional buttons | D-pad | Arrow keys |
+| Cross / Circle / Square / Triangle | South / East / West / North | X / C / Z / V |
+| L1 / R1 | Shoulder buttons | Q / E |
+| L2 / R2 (analogue) | Triggers | 1 / 3 |
+| L3 / R3 | Stick clicks | |
+| Left stick | Left stick | I / J / K / L |
+| Right stick | Right stick | |
+| Start / Select | Start / Back | Enter / Backspace or Right Shift |
+| Settings menu | Select + Start, or Guide | Escape |
+| Fullscreen | | F11 or Alt+Enter |
 
 ### Linux, Steam Deck and ARM handhelds
 
 The same Windows executables run under Proton:
 
-1. Do steps 1 to 3 above (on any computer), then copy the folder to the device.
-2. Steam (desktop mode) > Games > Add a Non-Steam Game > Browse: `gt4_host.exe`.
-3. The new entry's Properties > Compatibility: force Proton Experimental, or the newest Proton listed.
-4. Start it from game mode.
+1. Extract the zip on the device and put your disc image in `game/`.
+2. On a handheld, replace `settings.ini` with `settings-handheld.ini` (rename it to `settings.ini`) before the first
+   start: the low preset, borderless, 16:9, and no frame interpolation, so it runs at the game's 60 frames a second.
+3. Steam (desktop mode) > Games > Add a Non-Steam Game > Browse: `gt4_host.exe`.
+4. The new entry's Properties > Compatibility: force Proton Experimental, or the newest Proton listed.
+5. Start it from game mode.
 
-On a handheld, use the handheld settings: copy `settings-handheld.ini` over `settings.ini` before the first start.
-It renders below the screen's resolution with FSR 1, borderless, at 16:9, and keeps the frame rate at the game's 60.
+The host is a 64-bit and the game a 32-bit Windows program; on an ARM handheld, Proton runs both through FEX.
 
 ## Settings menu
 
@@ -97,8 +107,10 @@ garage). They are the game's own files, so they move between this port, a PS2 an
 To bring a save from PCSX2, NetherSX2, AetherSX2 or a PS2 memory card dump, run once from the GT4-Native folder:
 
 ```sh
-gt4_host.exe --import-save "path/to/Mcd001.ps2" --saves saves
+gt4_host.exe --import-save "path/to/Mcd001.ps2"
 ```
+
+The saves go into the folder's `saves/`.
 
 `PATH` can be:
 - a memory card image: PCSX2's `.ps2`, or a raw dump (`.bin`, `.mcd`);
@@ -148,7 +160,9 @@ from the GT4-Native folder.
 ## Versions
 
 Releases follow [semantic versioning](https://semver.org) and are tagged `vMAJOR.MINOR.PATCH` (first: `v0.1.0`).
-What changed in each: [CHANGELOG.md](CHANGELOG.md).
+What changed in each: [CHANGELOG.md](CHANGELOG.md). Each release has a `BUILD-INFO.txt` with the commits it was built
+from and the programs' SHA-256, and a `game-sources` zip with the exact gt4-decomp sources `gt4_game.exe` was
+compiled from.
 
 ## Building from source
 
