@@ -80,6 +80,7 @@ struct Settings {
     // [effects]
     EffectQuality shadows = EffectQuality::High;
     EffectQuality reflections = EffectQuality::High;
+    bool roadReflections = false;     // screen-space reflections on the road: GT4's dry courses have none
     EffectQuality bloom = EffectQuality::High;
     EffectQuality dof = EffectQuality::Off;
     EffectQuality motionBlur = EffectQuality::Off;

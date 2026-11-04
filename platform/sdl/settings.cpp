@@ -249,6 +249,9 @@ const std::vector<Option>& options() {
         o.push_back(enumOption("effects.reflections", &Settings::reflections, kEffects,
             "Environment reflections on cars: original = one sharp environment map; low..ultra = cube map of "
             "64..512 px prefiltered for roughness (GGX); off = a dimmed sharp map only."));
+        o.push_back(boolOption("effects.road_reflections", &Settings::roadReflections,
+            "Screen-space reflections on the road and other grey surfaces facing up, at effects.reflections' "
+            "level. Off by default: GT4's courses are dry and the game draws none there."));
         o.push_back(enumOption("effects.bloom", &Settings::bloom, kEffects,
             "Bloom/glare: original = the PS2-style glare (bright pass over 3 levels, added); low..ultra = physically "
             "based bloom (energy-conserving mip chain, no threshold) over 4..8 levels."));

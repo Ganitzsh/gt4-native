@@ -843,7 +843,7 @@ struct Renderer::Impl {
                 }
             };
             gt4::SceneEffects fx;
-            if (const int q = level(settings.reflections)) {
+            if (const int q = settings.roadReflections ? level(settings.reflections) : 0) {
                 fx.reflections = 0.4f + 0.15f * float(q);
                 fx.reflectionSteps = 12u + 8u * static_cast<uint32_t>(q);
             }

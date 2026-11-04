@@ -73,7 +73,8 @@ another; docs/LIGHTING.md). Modern engines put their scene effects there, and so
   starts again; histories not used for 10 seconds go).
 - **The other effects** (`effects.*` settings; each a compute pass over the scene's area, in this order after
   the lighting, with the view space rebuilt from GT4's Z, `gsn_view.glsl`):
-  - *Reflections* (`effects.reflections`, `gsn_ssr.comp`): screen-space reflections, before the resolve.
+  - *Reflections* (`effects.road_reflections`, off by default, at `effects.reflections`' level; `gsn_ssr.comp`):
+    screen-space reflections, before the resolve. GT4's courses are dry: on, the road looks wet.
     Surfaces facing up and grey (asphalt, concrete, paint) reflect what the scene shows above them with
     Schlick's Fresnel term (F0 0.04: the road ahead at grazing angles, the cars on it); the ray is marched in
     screen space from 2.5 pixels out (its own pixel would hit itself), 1/z interpolated, refined by bisection,
