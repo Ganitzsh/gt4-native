@@ -32,6 +32,10 @@
 #include <thread>
 #include <vector>
 
+#ifdef _WIN32
+#include <io.h>
+#endif
+
 namespace {
 
 constexpr double kTickSeconds = 1.0 / 60.0;   // the game's simulation rate (docs/PLATFORM.md)
@@ -700,6 +704,13 @@ int run(const Options& options) {
     Uint64 nextFrame = SDL_GetTicksNS();
     float keyboardStick = 0.0f;
     bool keyboardAction = false;
+    struct Perf {
+        Uint64 at;
+        uint32_t frames;
+        uint64_t vblanks;
+        double host, game, gpu;
+    } perf{};
+    double perfGpu = 0.0;   // GPU milliseconds of the frames presented so far
     while (running) {
         for (; nextScriptedKey < scriptedKeys.size() && scriptedKeys[nextScriptedKey].frame <= frames; ++nextScriptedKey) {
             SDL_Event key{};
@@ -802,6 +813,13 @@ int run(const Options& options) {
             activeGpu = settings.gpu;
             if (gs) renderer->useGameFrame(true);
         }
+        // Presenting only the game's frames (no frame interpolation, no frame-rate cap, the menu closed): the loop
+        // waits for the next one rather than presenting the same picture again at the display's refresh rate (on a
+        // 120 Hz handheld, twice the work for nothing). GT4_PRESENT_EVERY_REFRESH=1: every refresh, as before.
+        static const bool everyRefresh = [] { const char* e = std::getenv("GT4_PRESENT_EVERY_REFRESH"); return e && std::strcmp(e, "0"); }();
+        const bool followGame = gs && gs->live() && windowed && !lockstep && !everyRefresh && !settings.frameInterpolation &&
+                                settings.fpsLimit == 0 && !menu.isOpen();
+        const bool freshFrame = !followGame || gs->waitNativeFrames(30);
         // The game's frames: in lockstep replay one VBlank per rendered frame; otherwise the newest one.
         if (gs) {
             if (lockstep) gs->advance();
@@ -921,6 +939,29 @@ int run(const Options& options) {
             continue;
         }
 
+        // Every 10 s with a live game (host.log in a package): the presentation and game rates and what a frame
+        // costs, CPU (host and game processes, every thread) and GPU.
+        if (gs && gs->live()) {
+            const Uint64 ticks = SDL_GetTicks();
+            if (!perf.at) {
+                perf = {ticks + 10000, frames, gs->vblanks(), gt4::gs::processCpuMilliseconds(), gs->gameCpuSeconds() * 1000.0, perfGpu};
+            } else if (ticks >= perf.at) {
+                const double seconds = (ticks - perf.at + 10000) / 1000.0;
+                const uint32_t shown = frames - perf.frames;
+                const uint64_t game = gs->vblanks() - perf.vblanks;
+                const double host = gt4::gs::processCpuMilliseconds(), gameCpu = gs->gameCpuSeconds() * 1000.0;
+                std::printf("perf: %.1f presented/s, %.1f game frames/s; CPU host %.2f ms/presented (%.0f%% of a core), "
+                            "game %.2f ms/game frame (%.0f%% of a core); GPU %.2f ms/presented%s\n",
+                            shown / seconds, game / seconds, shown ? (host - perf.host) / shown : 0.0,
+                            (host - perf.host) / (seconds * 10.0), game ? (gameCpu - perf.game) / double(game) : 0.0,
+                            (gameCpu - perf.game) / (seconds * 10.0), shown ? (perfGpu - perf.gpu) / shown : 0.0,
+                            followGame ? "; presenting the game's frames" : "");
+                std::fflush(stdout);
+                perf = {ticks + 10000, frames, gs->vblanks(), host, gameCpu, perfGpu};
+            }
+        }
+        if (!freshFrame) continue;   // nothing new from the game: no frame to present
+
         // The simulation clock: fixed 60 Hz ticks. Rendering only observes the result and interpolates.
         const Uint64 now = SDL_GetPerformanceCounter();
         const double elapsed = static_cast<double>(now - previous) / frequency;
@@ -963,6 +1004,7 @@ int run(const Options& options) {
         }
         if (presented) {
             ++frames;
+            perfGpu += renderer->gpuMilliseconds();
             if (session)
                 session->frame(frames, static_cast<double>(SDL_GetPerformanceCounter() - frameStarted) * 1000.0 / frequency,
                                renderer->gpuMilliseconds(), renderer->drawableExtent().width, renderer->drawableExtent().height);
@@ -1048,6 +1090,16 @@ void usePackagedGame(Options& o) {
         o.saves = utf8(base / "saves");
     }
     if (o.settingsPath.empty()) o.settingsPath = utf8(base / "settings.ini");
+    // What the host prints (its start, the performance lines, errors) to host.log beside it: a handheld under
+    // Proton shows no console.
+#ifdef _WIN32
+    const fs::path hostLog = base / "host.log";
+    if (_wfreopen(hostLog.c_str(), L"w", stdout)) {
+        _dup2(_fileno(stdout), _fileno(stderr));   // one file position for both
+        std::setvbuf(stdout, nullptr, _IONBF, 0);
+        std::setvbuf(stderr, nullptr, _IONBF, 0);
+    }
+#endif
 }
 
 int main(int argc, char** argv) {

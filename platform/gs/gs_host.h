@@ -36,6 +36,9 @@ public:
     // The frame lists made since the last call, in the game's order (moved into `lists`); false if none.
     // The renderer draws every one of them (their draws make what later frames and reads see).
     bool takeNativeFrames(std::vector<gsn::FrameList>& lists);
+    // Waits up to `ms` milliseconds for a displayed frame list or a read request since the last call; true if
+    // one came (the render thread presents only the game's frames: nothing to draw in between).
+    bool waitNativeFrames(int ms);
     // A GS -> host read of drawn pixels the game waits for (live games): the render thread takes it after
     // the frame lists (takeNativeFrames, which then include the list cut at the read), draws them, reads the
     // rectangle back and answers with completeRead (ok = false: the game gets the memory model's bytes).
@@ -54,6 +57,7 @@ public:
     uint64_t vblanks() const;   // VBlanks received from the game or the capture (the game's clock)
     bool finished() const;      // the game exited, or the replay reached its end (without loop)
     int gameExitCode() const;   // the game's exit code once it has exited (0 otherwise)
+    double gameCpuSeconds() const;   // the game process's CPU time so far, every thread (0 without a live game)
     std::string status() const;     // one line for the overlay
     std::string summary() const;    // statistics for the log at exit
 
@@ -65,5 +69,7 @@ private:
 
 // The calling thread's CPU time so far (user and kernel), milliseconds; 0 where not known.
 double threadCpuMilliseconds();
+// This process's CPU time so far (every thread), milliseconds; 0 where not known.
+double processCpuMilliseconds();
 
 }  // namespace gt4::gs

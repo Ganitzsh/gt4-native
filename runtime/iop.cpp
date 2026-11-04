@@ -217,7 +217,8 @@ void strp(uint32_t fno, uint8_t *send, uint32_t, uint8_t *recv, uint32_t rsize) 
 void pbgm(uint32_t fno, uint8_t *send, uint32_t, uint8_t *recv, uint32_t rsize) {
     if (recv && rsize) std::memset(recv, 0, rsize);
     const int32_t arg = send ? static_cast<int32_t>(rd32(send)) : 0;
-    if (fno != 8) log_info("PBGM %u (%d)", fno, arg);
+    // (init, play and stop; the volume and fade calls come every frame)
+    if (fno <= 2) log_info("PBGM %u (%d)", fno, arg);
     switch (fno) {
     case 0:
         if (recv) wr32(recv, 0x107);

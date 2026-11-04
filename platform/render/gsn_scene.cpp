@@ -2046,7 +2046,6 @@ void GsnScene::recordPrepass(VkCommandBuffer command, const SceneView& view) {
     if (t <= s.modelT + 1e-3f) return;   // nothing moved since
     s.modelTPrevious = s.modelT;
     s.modelT = t;
-    { static int n = 0; if (n++ % 50 == 0) std::fprintf(stderr, "again: t %.3f previous %.3f models %zu\n", t, s.modelTPrevious, s.frame.models.size()); }
     vk::beginLabel(command, "gsn frame again");
     s.execute(command, view.slot);
     if (auto it = s.targets.find(s.displayTarget); it != s.targets.end() && it->second.image.valid() && !it->second.depth) {

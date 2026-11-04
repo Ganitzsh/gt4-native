@@ -448,13 +448,20 @@ struct GsHost::Impl {
             queued.erase(queued.begin());
         }
     }
+    // Displayed lists and read requests so far, and as many as waitNativeFrames has seen (under frameMutex).
+    std::condition_variable frameReady;
+    uint64_t arrivals = 0, arrivalsSeen = 0;
     void publishNative(gsn::FrameList& list) {
         const bool displayed = list.displayed;
         {
             std::lock_guard<std::mutex> lock(frameMutex);
             queue(list);
+            if (displayed) ++arrivals;
         }
-        if (displayed) ++vsyncs;
+        if (displayed) {
+            ++vsyncs;
+            frameReady.notify_all();
+        }
     }
 
     // GS -> host reads of drawn pixels, from the worker to the render thread (takeReadRequest/completeRead).
@@ -472,6 +479,11 @@ struct GsHost::Impl {
         std::unique_lock<std::mutex> lock(readMutex);
         readRequest = request;
         const uint64_t id = ++readAsked;
+        {
+            std::lock_guard<std::mutex> frames(frameMutex);
+            ++arrivals;
+        }
+        frameReady.notify_all();
         // The game waits up to 2 s for its pixels; the render thread takes the request within a frame.
         if (!readDone.wait_for(lock, std::chrono::milliseconds(1500), [&] { return readAnswered == id || stop; })) return false;
         if (readAnswered != id || !readOk) return false;
@@ -792,6 +804,16 @@ bool GsHost::takeNativeFrames(std::vector<gsn::FrameList>& lists) {
     return true;
 }
 
+bool GsHost::waitNativeFrames(int ms) {
+    std::unique_lock<std::mutex> lock(impl->frameMutex);
+    const bool came = impl->frameReady.wait_for(lock, std::chrono::milliseconds(ms),
+                                                [&] { return impl->arrivals != impl->arrivalsSeen; });
+    impl->arrivalsSeen = impl->arrivals;
+    return came;
+}
+
+double GsHost::gameCpuSeconds() const { return impl->link ? impl->link->processSeconds() : 0.0; }
+
 bool GsHost::takeReadRequest(gsn::ReadRequest& request) {
     std::lock_guard<std::mutex> lock(impl->readMutex);
     if (impl->readTaken == impl->readAsked) return false;
@@ -856,6 +878,17 @@ double threadCpuMilliseconds() {
 #ifdef _WIN32
     FILETIME created, exited, kernel, user;
     if (!GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user)) return 0.0;
+    auto ms = [](const FILETIME& t) { return double((uint64_t(t.dwHighDateTime) << 32) | t.dwLowDateTime) * 1e-4; };
+    return ms(kernel) + ms(user);
+#else
+    return 0.0;
+#endif
+}
+
+double processCpuMilliseconds() {
+#ifdef _WIN32
+    FILETIME created, exited, kernel, user;
+    if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) return 0.0;
     auto ms = [](const FILETIME& t) { return double((uint64_t(t.dwHighDateTime) << 32) | t.dwLowDateTime) * 1e-4; };
     return ms(kernel) + ms(user);
 #else

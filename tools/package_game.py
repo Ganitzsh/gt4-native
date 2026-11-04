@@ -30,7 +30,8 @@ GAME = os.path.join(ROOT, "build", "game", "gt4_game.exe")
 NAME = "GT4-Native"
 
 # A handheld's settings: the low preset (render below the screen's resolution, FSR 1 up), borderless (gamescope
-# shows it full screen), the 16:9 game. Everything else at the host's defaults.
+# shows it full screen), each game frame presented once (no frame interpolation: half the work on a 120 Hz screen),
+# the 16:9 game. Everything else at the host's defaults.
 PROFILES = {
     "desktop": "",
     "handheld": "[graphics]\npreset = low\n\n[display]\nmode = borderless\n\n[aspect]\nratio = 16:9\n",
