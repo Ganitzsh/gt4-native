@@ -36,7 +36,15 @@ NARROW = {"int", "s32", "u32", "unsigned", "signed", "short", "s16", "u16", "cha
           "size_t", "uint32_t", "int32_t", "uint16_t", "int16_t", "uint8_t", "int8_t", "u_int", "uint", "BOOL",
           "enum", "M2C_UNK", "M2C_UNK8", "M2C_UNK16", "M2C_UNK32"}   # m2c's unknown types are int-sized typedefs
 KEYWORDS = {"return", "if", "else", "case", "do", "while", "for", "switch", "goto", "sizeof", "new", "delete"}
-NAME = re.compile(r"\bfunc_([0-9A-Fa-f]{8})\s*\(")
+NAME = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
+# Named functions (Pitmen__isValid, RaceOnboardSpeedmeter__setSpeedScale): their addresses from the decomp's
+# config/symbol_addrs.txt (main fills it). func_ADDR names carry their address themselves.
+FUNC_NAMES = {}
+
+
+def address_of(name):
+    m = re.fullmatch(r"func_([0-9A-Fa-f]{8})", name)
+    return m.group(1).upper() if m else FUNC_NAMES.get(name)
 
 
 def strip_comments(text):
@@ -113,9 +121,12 @@ def in_class(text, pos):
 
 
 def scan(path, text):
-    """[(addr, kinds, is_definition, line)]"""
+    """[(addr, kinds, is_definition, line, used, ret, name)]"""
     found = []
     for m in NAME.finditer(text):
+        addr = address_of(m.group(1))
+        if not addr:
+            continue
         start = m.end()
         depth, i = 1, start
         while i < len(text) and depth:
@@ -184,7 +195,7 @@ def scan(path, text):
                 used.append(bool(name) and re.search(r"\b" + re.escape(name) + r"\b", body) is not None)
         if used is not None and ret == "s":
             used = [True] + used
-        found.append((m.group(1).upper(), kinds, tail == "{", text.count("\n", 0, m.start()) + 1, used, ret))
+        found.append((addr, kinds, tail == "{", text.count("\n", 0, m.start()) + 1, used, ret, m.group(1)))
     return found
 
 
@@ -267,6 +278,8 @@ def main():
         mm = re.match(r"\s*(\w+)\s*=\s*0x([0-9A-Fa-f]+)\s*;", line)
         if mm:
             named[mm.group(1)] = "%08X" % int(mm.group(2), 16)
+            if "type:func" in line and not mm.group(1).startswith("func_"):
+                FUNC_NAMES[mm.group(1)] = named[mm.group(1)]
     for path, role in files.items():
         base = os.path.basename(path)
         own = re.search(r"func_([0-9A-Fa-f]{8})|^([0-9a-f]{8})_", base)
@@ -277,7 +290,7 @@ def main():
             text = strip_comments(open(path, encoding="utf-8", errors="replace").read())
         except OSError:
             continue
-        for addr, kinds, is_def, line, used, ret in scan(path, text):
+        for addr, kinds, is_def, line, used, ret, name in scan(path, text):
             if is_def:
                 if addr != own_addr:
                     continue   # a neighbour copied so the file compiles alone; its own file defines it
@@ -286,7 +299,7 @@ def main():
                     definitions[addr] = (rank[role], kinds, path, line, used, ret)
             elif kinds is not None:
                 # only declarations the file calls (not ones whose address alone is taken)
-                calls = len(re.findall(r"\bfunc_" + addr + r"\s*\(", text, re.I))
+                calls = len(re.findall(r"\b" + re.escape(name) + r"\s*\(", text))
                 if calls > 1:
                     declarations[addr].append((kinds, path, line, ret))
         for addr, kinds, line, name in scan_labelled(text):

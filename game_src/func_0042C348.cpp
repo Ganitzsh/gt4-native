@@ -4,11 +4,13 @@ struct Elem {
     short *tbl; float f4; float f8; float fC; unsigned short n; unsigned char flag;
 };
 struct Obj { char pad[8]; char *base; };
-extern "C" Elem *func_0042A3D8(void *) throw();
+extern "C" Elem *func_0042A3D8(void *, float) throw();   /* GT4_Motion::PlayList::getElement(time) */
 extern "C" int func_0042B440(Obj *, int, float, int, float, float, int) throw();
 inline int clamp(int x, int lo, int hi) { if (x < lo) return lo; if (x > hi) return hi; return x; }
 extern "C" int func_0042C348(Obj *o, int idx, int x, float t, float fr) {
-    Elem *e = func_0042A3D8(o->base + (idx << 5));
+    /* the element at time t: on the EE the callee found t in $f12 (this function's first float), so the draft
+       could leave it out; natively it must be passed */
+    Elem *e = func_0042A3D8(o->base + (idx << 5), t);
     float f2 = e->f4;
     if (e->flag) {
         t = (f2 + (f2 + e->fC)) - t;
