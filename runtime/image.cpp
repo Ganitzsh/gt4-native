@@ -51,6 +51,10 @@ const uint32_t kEeMaxFloats[] = {
     0x006A1628, 0x006A162C, 0x006A1630, 0x006A2364, 0x006A28A0, 0x006A2918, 0x006A29D4, 0x006A3620,
     0x006A396C, 0x006A39F4, 0x006A39F8, 0x006AB060, 0x006AB064, 0x006AF790, 0x006AFC04, 0x006AFC08,
     0x006CC938, 0x006CC93C,
+    // The last thresholds of the race meters' scale tables ({top value, scale, face} each, read by index, not
+    // lwc1): the speedometer in mph (006A3C50) and km/h (006A3C88), the tachometer (006A3D30). As NaNs, a car
+    // whose top speed or rev limit needs the last scale matched none: no dial face, a needle range of 0..0.
+    0x006A3C68, 0x006A3CAC, 0x006A3DB8,
 };
 
 void patch_ee_float_constants() {
