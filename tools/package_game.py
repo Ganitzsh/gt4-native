@@ -24,6 +24,7 @@ writes OUT/GT4-Native-VERSION-windows-x64.zip:
     GT4-Native-VERSION/gt4_host.exe, gt4_game.exe, msvcp140.dll, vcruntime140*.dll
     GT4-Native-VERSION/settings.ini, settings-handheld.ini   the desktop and handheld profiles
     GT4-Native-VERSION/README.txt, LICENSE, THIRD_PARTY_NOTICES.md, CREDITS.md, BUILD-INFO.txt
+    GT4-Native-VERSION/textures/SCUS-97328/HOW-TO.txt     where an HD texture pack goes
     GT4-Native-VERSION/game/PUT-YOUR-GAME-HERE.txt           the player's disc image goes here; gt4_host.exe makes
                                                              game/CORE.GT4.elf from it on the first start
     GT4-Native-VERSION/saves/                                empty
@@ -79,52 +80,24 @@ the settings menu's texture options switch it on and off.
 RELEASE_README = """GT4 Native {version}
 ==============
 
-A native Windows port of Gran Turismo 4 (USA), built from the gt4-decomp matching decompilation. This package
-contains no game data: you need your own copy of the game.
+Gran Turismo 4 running as a native PC program, from your own copy of the game. This package contains no game
+data. Full instructions, controls, settings and known issues: https://github.com/Ganitzsh/gt4-native
 
-What you need
--------------
-- An image of your own Gran Turismo 4 disc: USA release SCUS-97328, version 1.01, as a plain .iso file (made from
-  the DVD with a disc imaging tool). Other releases (PAL, Japan, other versions) are not supported.
-- Windows 10 or 11, 64-bit, or Linux with Proton (Steam Deck and other SteamOS-like handhelds).
-- A GPU with Vulkan 1.3 and an up-to-date driver.
+1. Put an image of your own Gran Turismo 4 disc (USA, SCUS-97328, version 1.01) as an .iso file in the game folder.
+2. Start gt4_host.exe. The first start makes game\\CORE.GT4.elf from the image (about a second).
+3. Settings menu: Escape, or Select+Start on the pad.
 
-First start
------------
-1. Put your disc image (.iso) in the game folder of this package.
-2. Start gt4_host.exe. The first start reads the game's executable from the image (it checks that it is the
-   supported release) and writes game\\CORE.GT4.elf beside it, in about a second.
-Saves go to the saves folder, the settings to settings.ini, the logs to host.log and game.log, all in this folder.
+Handheld (Steam Deck, ARM handhelds under Proton): rename settings-handheld.ini to settings.ini first.
+PS2 saves: gt4_host.exe --import-save "path\\to\\Mcd001.ps2" copies them into the saves folder.
+HD texture packs go in textures\\SCUS-97328.
+Problems: report them with host.log and game.log from this folder.
 
-PS2 saves: gt4_host.exe --import-save PATH copies the GT4 saves of a PS2 memory card image (.ps2, a folder card or
-a .psu export) into the saves folder.
+Not affiliated with or endorsed by Sony Interactive Entertainment or Polyphony Digital. Gran Turismo is a trademark
+of Sony Interactive Entertainment. Licence: LICENSE (GPL-3.0); third-party notices: THIRD_PARTY_NOTICES.md.
+"""
 
-Controls
---------
-Gamepad (Xbox or PlayStation layout): as on the PS2 pad. Triggers are L2/R2 (analogue).
-Keyboard:
-  Arrow keys        directional buttons      X / C / Z / V     Cross / Circle / Square / Triangle
-  I J K L           left stick               Q / E             L1 / R1
-  1 / 3             L2 / R2                  Enter             Start
-  Backspace         Select
-Settings menu: Escape on the keyboard, Select+Start or the Guide button on a gamepad. F11 or Alt+Enter: full screen.
-
-Handheld (Steam Deck, Armada and other SteamOS-like systems)
-------------------------------------------------------------
-1. Extract this folder anywhere and put your disc image in game as above.
-2. Replace settings.ini with settings-handheld.ini (rename it to settings.ini): low preset, borderless, no frame
-   interpolation.
-3. Steam (desktop mode) > Games > Add a Non-Steam Game > Browse: gt4_host.exe.
-4. Its Properties > Compatibility: force Proton Experimental (or the newest Proton listed). Start it from game mode.
-The host is a 64-bit and the game a 32-bit Windows program; on an ARM handheld, Proton runs both through FEX.
-
-When something goes wrong
--------------------------
-host.log and game.log in this folder say what happened; include them in a report. Under Proton, add
-PROTON_LOG=1 %command% to the launch options for Proton's own log.
-
-Gran Turismo is a trademark of Sony Interactive Entertainment. This project is not affiliated with or endorsed by
-Sony Interactive Entertainment or Polyphony Digital. Licence: LICENSE (GPL-3.0) and THIRD_PARTY_NOTICES.md.
+TEXTURES_NOTE = """Put an HD texture pack for Gran Turismo 4 (USA, SCUS-97328) here: its PNG files, in any subfolders, as PCSX2
+keeps them. Switch it on and off with HD textures in the settings menu (GRAPHICS).
 """
 
 GAME_FOLDER_NOTE = """Put an image of your own Gran Turismo 4 disc here, as a .iso file:
@@ -169,32 +142,35 @@ def original_blocks(exe, elf, block=4096, step=65536):
 def release(a):
     import hashlib
     name = f"{NAME}-{a.release}"
-    for f in (HOST, GAME):
+    root = a.build_root or ROOT
+    host, game = (os.path.join(root, os.path.relpath(f, ROOT)) for f in (HOST, GAME))
+    for f in (host, game):
         if not os.path.isfile(f):
             raise SystemExit(f"missing {f}")
-    info = [f"GT4 Native {a.release}", f"gt4-native commit: {git_head(ROOT)}"]
+    info = [f"GT4 Native {a.release}", f"gt4-native commit: {git_head(root)}"]
     if a.decomp:
         info.append(f"gt4-decomp commit (the game's sources): {git_head(a.decomp)}")
         elf = os.path.join(a.decomp, "orig", "SCUS-97328", "CORE.GT4.elf")
-        for exe in (HOST, GAME):
+        for exe in (host, game):
             hits = original_blocks(exe, elf)
             if hits:
                 raise SystemExit(f"{exe} holds {len(hits)} blocks of the original executable, e.g. address "
                                  f"{hits[0][0]:08X} at offset {hits[0][1]:#x}: not releasable")
         print("no block of the original executable in either program")
-    for f in (HOST, GAME):
+    for f in (host, game):
         info.append(f"{os.path.basename(f)} SHA-256: {hashlib.sha256(open(f, 'rb').read()).hexdigest()}")
 
     os.makedirs(a.out, exist_ok=True)
     archive = os.path.join(a.out, f"{name}-windows-x64.zip")
-    files = [(f, os.path.basename(f)) for f in [HOST, GAME] + vc_runtime()]
-    files += [(os.path.join(ROOT, d), d) for d in RELEASE_DOCS if os.path.isfile(os.path.join(ROOT, d))]
+    files = [(f, os.path.basename(f)) for f in [host, game] + vc_runtime()]
+    files += [(os.path.join(root, d), d) for d in RELEASE_DOCS if os.path.isfile(os.path.join(root, d))]
     texts = {
         "settings.ini": ("version = 1\n\n" + PROFILES["desktop"], "\n"),
         "settings-handheld.ini": ("version = 1\n\n" + PROFILES["handheld"], "\n"),
         "README.txt": (RELEASE_README.format(version=a.release), "\r\n"),
         "BUILD-INFO.txt": ("\n".join(info) + "\n", "\r\n"),
         "game/PUT-YOUR-GAME-HERE.txt": (GAME_FOLDER_NOTE, "\r\n"),
+        "textures/SCUS-97328/HOW-TO.txt": (TEXTURES_NOTE, "\r\n"),
     }
     print(f"writing {archive}")
     with zipfile.ZipFile(archive + ".part", "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
@@ -252,6 +228,8 @@ def add_tree(z, folder, prefix):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--release", metavar="VERSION", help="a public release archive, without any game data")
+    ap.add_argument("--build-root", help="with --release: the checkout whose build/ holds the programs and whose "
+                    "commit BUILD-INFO names (default: this one)")
     ap.add_argument("--decomp", help="gt4-decomp checkout (orig/SCUS-97328: CORE.GT4.elf, the .iso)")
     ap.add_argument("--save", help="a PS2 memory card image (or folder card, .psu) to take the saves from")
     ap.add_argument("--profile", choices=sorted(PROFILES), default="desktop")
