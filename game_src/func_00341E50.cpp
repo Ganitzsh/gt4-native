@@ -15,7 +15,10 @@ extern Global D_0061850C;
 #define F(p,o) (*(float *)((char *)(p)+(o)))
 typedef char *(*Get)(char *,int);
 typedef void (*Act)(char *,float);
-typedef void (*Render)(char *,void *,int,int,float,int);
+/* render_cars (slot 0x380, 00340950): (buffer, mode, effects, car index, time). The matched source's
+   (int, int, float, int) is the same call on the EE (floats in their own registers) but not natively: the car index
+   took the float's 0 (only car 0 drawn: no opponents in the mirror) and the time the -1. */
+typedef void (*Render)(char *,void *,int,int,int,float);
 extern "C" {
 void func_00105280(void *,int);
 int func_001052E0(void *,int,int,int);
@@ -108,7 +111,7 @@ extern "C" void RacePS2Base__render_back_mirror(char *self,void *out,int flag) {
  func_004A1638(5);
  V *er=(V *)(P(self,0x64)+0x380);
  /* the cars: at the detail level the mirror forces (2), or chosen by distance as in the main view (-1) */
- ((Render)er->fn)(self+er->d,&aux,high?-1:2,0,0.0f,-1);
+ ((Render)er->fn)(self+er->d,&aux,high?-1:2,0,-1,0.0f);
  func_004AB040(5);func_004AB040(4);func_004AB040(6);
  int width=b.v[6];
  int height=func_001058A0(&b)-1;
