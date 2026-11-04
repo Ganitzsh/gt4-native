@@ -10,9 +10,23 @@ FEX).
 > **Version 0.1.0, early.** The game boots, the menus, GT mode and races work, and saves load and save. Expect bugs:
 > see [Known issues](#known-issues). Nothing from the game is included: you need your own disc.
 
+![A B-spec race at High-Speed Ring](docs/media/race-loop.webp)
+
 Maintained by [Julien Ganichot](https://github.com/Ganitzsh). Based on Gustavo Canepa's
 [gt4-native](https://github.com/gustavocanepa/gt4-native) and [gt4-decomp](https://github.com/gustavocanepa/gt4-decomp):
 see [Credits](#credits).
+
+## Screenshots
+
+Captured at 1920x1080 on the Ultra preset. A 44-second race video (1080p60, with sound) is attached to the
+[0.1.0 release](https://github.com/Ganitzsh/gt4-native/releases/tag/v0.1.0).
+
+| | |
+|---|---|
+| ![Three-car battle at High-Speed Ring](docs/media/race-high-speed-ring-day.png) | ![Clubman Stage Route 5 at night](docs/media/race-clubman-route-5-night.png) |
+| ![GT mode world map](docs/media/gt-mode-map.png) | ![Aston Martin DB7 Vantage at the dealer](docs/media/dealer-aston-martin.png) |
+| ![Race entry for the Sunday Cup](docs/media/race-entry-sunday-cup.png) | ![Replay camera](docs/media/replay-camera.png) |
+| ![The settings menu over a race](docs/media/settings-menu-over-race.png) | |
 
 ## What you need
 
@@ -152,6 +166,10 @@ frames first. Other places the port looks, and how matching works: [docs/TEXTURE
 - Car reflections show on the road in dry weather.
 - Car wheels are sometimes drawn transparent, and the car pictures on the results screen have missing pixels.
 - Frame drops with far cameras: rolling starts, replays, and looking back.
+- The speedometer's scale and needle can be blank (the digital speed shows). Fixed on main for the next release.
+- After a race, some text can show wrong letters (an `E` drawn as `ä`), and car names can be missing on a results
+  screen.
+- Magenta specks in car reflections, and car paint looks wrong in replays.
 - Trading cars needs a second memory card and is not available.
 
 Report problems on the [issue tracker](https://github.com/Ganitzsh/gt4-native/issues) with `game.log` and `host.log`
