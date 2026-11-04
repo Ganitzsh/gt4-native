@@ -15,6 +15,21 @@ Writes OUT/GT4-Native.zip:
     GT4-Native/README.txt
 and with --textures DIR (a texture pack, as textures/SCUS-97328 holds it) OUT/GT4-Native-HD-Textures.zip, to be
 extracted over the same folder. The game data stays the user's: never distribute these archives.
+
+A public release holds no game data at all:
+
+    py tools/package_game.py --release 0.1.0 [--decomp C:\\path\\to\\gt4-decomp] [--out build/package]
+
+writes OUT/GT4-Native-VERSION-windows-x64.zip:
+    GT4-Native-VERSION/gt4_host.exe, gt4_game.exe, msvcp140.dll, vcruntime140*.dll
+    GT4-Native-VERSION/settings.ini, settings-handheld.ini   the desktop and handheld profiles
+    GT4-Native-VERSION/README.txt, LICENSE, THIRD_PARTY_NOTICES.md, CREDITS.md, BUILD-INFO.txt
+    GT4-Native-VERSION/game/PUT-YOUR-GAME-HERE.txt           the player's disc image goes here; gt4_host.exe makes
+                                                             game/CORE.GT4.elf from it on the first start
+    GT4-Native-VERSION/saves/                                empty
+BUILD-INFO.txt names this repository's commit and, with --decomp, the decomp's (the game is compiled from its
+sources) and the executables' SHA-256. With --decomp the executables are also checked for blocks of the original
+executable (orig/SCUS-97328/CORE.GT4.elf): a release must not carry any.
 """
 import argparse
 import glob
@@ -34,7 +49,8 @@ NAME = "GT4-Native"
 # the 16:9 game. Everything else at the host's defaults.
 PROFILES = {
     "desktop": "",
-    "handheld": "[graphics]\npreset = low\n\n[display]\nmode = borderless\n\n[aspect]\nratio = 16:9\n",
+    "handheld": "[graphics]\npreset = low\n\n[display]\nmode = borderless\nframe_interpolation = off\n\n"
+                "[aspect]\nratio = 16:9\n",
 }
 
 README = """Gran Turismo 4, native
@@ -58,6 +74,146 @@ say what went wrong if it does not start.
 HD textures: extract GT4-Native-HD-Textures.zip into this folder (it adds textures/SCUS-97328/...);
 the settings menu's texture options switch it on and off.
 """
+
+
+RELEASE_README = """GT4 Native {version}
+==============
+
+A native Windows port of Gran Turismo 4 (USA), built from the gt4-decomp matching decompilation. This package
+contains no game data: you need your own copy of the game.
+
+What you need
+-------------
+- An image of your own Gran Turismo 4 disc: USA release SCUS-97328, version 1.01, as a plain .iso file (made from
+  the DVD with a disc imaging tool). Other releases (PAL, Japan, other versions) are not supported.
+- Windows 10 or 11, 64-bit, or Linux with Proton (Steam Deck and other SteamOS-like handhelds).
+- A GPU with Vulkan 1.3 and an up-to-date driver.
+
+First start
+-----------
+1. Put your disc image (.iso) in the game folder of this package.
+2. Start gt4_host.exe. The first start reads the game's executable from the image (it checks that it is the
+   supported release) and writes game\\CORE.GT4.elf beside it, in about a second.
+Saves go to the saves folder, the settings to settings.ini, the logs to host.log and game.log, all in this folder.
+
+PS2 saves: gt4_host.exe --import-save PATH copies the GT4 saves of a PS2 memory card image (.ps2, a folder card or
+a .psu export) into the saves folder.
+
+Controls
+--------
+Gamepad (Xbox or PlayStation layout): as on the PS2 pad. Triggers are L2/R2 (analogue).
+Keyboard:
+  Arrow keys        directional buttons      X / C / Z / V     Cross / Circle / Square / Triangle
+  I J K L           left stick               Q / E             L1 / R1
+  1 / 3             L2 / R2                  Enter             Start
+  Backspace         Select
+Settings menu: Escape on the keyboard, Select+Start or the Guide button on a gamepad. F11 or Alt+Enter: full screen.
+
+Handheld (Steam Deck, Armada and other SteamOS-like systems)
+------------------------------------------------------------
+1. Extract this folder anywhere and put your disc image in game as above.
+2. Replace settings.ini with settings-handheld.ini (rename it to settings.ini): low preset, borderless, no frame
+   interpolation.
+3. Steam (desktop mode) > Games > Add a Non-Steam Game > Browse: gt4_host.exe.
+4. Its Properties > Compatibility: force Proton Experimental (or the newest Proton listed). Start it from game mode.
+The host is a 64-bit and the game a 32-bit Windows program; on an ARM handheld, Proton runs both through FEX.
+
+When something goes wrong
+-------------------------
+host.log and game.log in this folder say what happened; include them in a report. Under Proton, add
+PROTON_LOG=1 %command% to the launch options for Proton's own log.
+
+Gran Turismo is a trademark of Sony Interactive Entertainment. This project is not affiliated with or endorsed by
+Sony Interactive Entertainment or Polyphony Digital. Licence: LICENSE (GPL-3.0) and THIRD_PARTY_NOTICES.md.
+"""
+
+GAME_FOLDER_NOTE = """Put an image of your own Gran Turismo 4 disc here, as a .iso file:
+USA release SCUS-97328, version 1.01 (other releases are not supported).
+
+On the first start gt4_host.exe makes CORE.GT4.elf here from it.
+"""
+
+# What a release archive may contain beside the programs: anything else (a disc image, an executable taken from the
+# game, a save) stops the packaging.
+RELEASE_DOCS = ("LICENSE", "THIRD_PARTY_NOTICES.md", "CREDITS.md")
+
+
+def git_head(folder):
+    r = subprocess.run(["git", "-C", folder, "rev-parse", "HEAD"], capture_output=True, text=True)
+    dirty = subprocess.run(["git", "-C", folder, "status", "--porcelain", "--untracked-files=no"],
+                           capture_output=True, text=True).stdout.strip()
+    return r.stdout.strip() + (" (with uncommitted changes)" if dirty else "")
+
+
+def original_blocks(exe, elf, block=4096, step=65536):
+    """Blocks of the original executable's segments found in exe: [(address, exe offset)]. The game's compiled
+    constants are small; a whole 4 KB block of the original image means its bytes were carried over."""
+    import struct
+    raw = open(elf, "rb").read()
+    data = open(exe, "rb").read()
+    phoff, = struct.unpack_from("<I", raw, 28)
+    count, = struct.unpack_from("<H", raw, 44)
+    found = []
+    for i in range(count):
+        _, off, vaddr, _, filesz, *_ = struct.unpack_from("<8I", raw, phoff + 32 * i)
+        for pos in range(0, filesz - block, step):
+            chunk = raw[off + pos:off + pos + block]
+            if chunk.count(chunk[:1]) == block:   # a run of one byte value (zero fill) proves nothing
+                continue
+            at = data.find(chunk)
+            if at >= 0:
+                found.append((vaddr + pos, at))
+    return found
+
+
+def release(a):
+    import hashlib
+    name = f"{NAME}-{a.release}"
+    for f in (HOST, GAME):
+        if not os.path.isfile(f):
+            raise SystemExit(f"missing {f}")
+    info = [f"GT4 Native {a.release}", f"gt4-native commit: {git_head(ROOT)}"]
+    if a.decomp:
+        info.append(f"gt4-decomp commit (the game's sources): {git_head(a.decomp)}")
+        elf = os.path.join(a.decomp, "orig", "SCUS-97328", "CORE.GT4.elf")
+        for exe in (HOST, GAME):
+            hits = original_blocks(exe, elf)
+            if hits:
+                raise SystemExit(f"{exe} holds {len(hits)} blocks of the original executable, e.g. address "
+                                 f"{hits[0][0]:08X} at offset {hits[0][1]:#x}: not releasable")
+        print("no block of the original executable in either program")
+    for f in (HOST, GAME):
+        info.append(f"{os.path.basename(f)} SHA-256: {hashlib.sha256(open(f, 'rb').read()).hexdigest()}")
+
+    os.makedirs(a.out, exist_ok=True)
+    archive = os.path.join(a.out, f"{name}-windows-x64.zip")
+    files = [(f, os.path.basename(f)) for f in [HOST, GAME] + vc_runtime()]
+    files += [(os.path.join(ROOT, d), d) for d in RELEASE_DOCS if os.path.isfile(os.path.join(ROOT, d))]
+    texts = {
+        "settings.ini": ("version = 1\n\n" + PROFILES["desktop"], "\n"),
+        "settings-handheld.ini": ("version = 1\n\n" + PROFILES["handheld"], "\n"),
+        "README.txt": (RELEASE_README.format(version=a.release), "\r\n"),
+        "BUILD-INFO.txt": ("\n".join(info) + "\n", "\r\n"),
+        "game/PUT-YOUR-GAME-HERE.txt": (GAME_FOLDER_NOTE, "\r\n"),
+    }
+    print(f"writing {archive}")
+    with zipfile.ZipFile(archive + ".part", "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+        for path, arc in files:
+            z.write(path, f"{name}/{arc}")
+        for arc, (text, newline) in texts.items():
+            z.writestr(f"{name}/{arc}", text.replace("\n", newline))
+        z.writestr(f"{name}/saves/", "")
+        names = z.namelist()
+    allowed = {f"{name}/{arc}" for _, arc in files} | {f"{name}/{arc}" for arc in texts} | {f"{name}/saves/"}
+    if set(names) != allowed or any(n.lower().endswith((".iso", ".elf", ".ps2", ".psu", ".bin", ".gt4")) for n in names):
+        os.remove(archive + ".part")
+        raise SystemExit(f"unexpected entries: {sorted(set(names) - allowed)}")
+    os.replace(archive + ".part", archive)
+    digest = hashlib.sha256(open(archive, "rb").read()).hexdigest()
+    with open(archive + ".sha256", "w", newline="\n") as f:
+        f.write(f"{digest}  {os.path.basename(archive)}\n")
+    print("\n".join(info))
+    print(f"{archive}: {os.path.getsize(archive) / 2**20:.1f} MiB, SHA-256 {digest}")
 
 
 def vc_runtime():
@@ -95,14 +251,19 @@ def add_tree(z, folder, prefix):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--decomp", required=True, help="gt4-decomp checkout (orig/SCUS-97328: CORE.GT4.elf, the .iso)")
+    ap.add_argument("--release", metavar="VERSION", help="a public release archive, without any game data")
+    ap.add_argument("--decomp", help="gt4-decomp checkout (orig/SCUS-97328: CORE.GT4.elf, the .iso)")
     ap.add_argument("--save", help="a PS2 memory card image (or folder card, .psu) to take the saves from")
     ap.add_argument("--profile", choices=sorted(PROFILES), default="desktop")
     ap.add_argument("--textures", help="a texture pack folder (textures/SCUS-97328) for the HD textures archive")
     ap.add_argument("--out", default=os.path.join(ROOT, "build", "package"))
     a = ap.parse_args()
+    if a.release:
+        return release(a)
+    if not a.decomp:
+        ap.error("--decomp is required (except with --release)")
 
-    orig = os.path.join(a.decomp, "orig", "SCUS-97328")
+    orig =os.path.join(a.decomp, "orig", "SCUS-97328")
     elf = os.path.join(orig, "CORE.GT4.elf")
     isos = sorted(glob.glob(os.path.join(orig, "*.iso")))
     for f in (HOST, GAME, elf):
