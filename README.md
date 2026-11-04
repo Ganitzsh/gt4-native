@@ -25,8 +25,7 @@ Captured at 1920x1080 on the Ultra preset. A 44-second race video (1080p60, with
 |---|---|
 | ![Three-car battle at High-Speed Ring](docs/media/race-high-speed-ring-day.png) | ![Clubman Stage Route 5 at night](docs/media/race-clubman-route-5-night.png) |
 | ![GT mode world map](docs/media/gt-mode-map.png) | ![Aston Martin DB7 Vantage at the dealer](docs/media/dealer-aston-martin.png) |
-| ![Race entry for the Sunday Cup](docs/media/race-entry-sunday-cup.png) | ![Replay camera](docs/media/replay-camera.png) |
-| ![The settings menu over a race](docs/media/settings-menu-over-race.png) | |
+| ![Race entry for the Sunday Cup](docs/media/race-entry-sunday-cup.png) | ![The settings menu over a race](docs/media/settings-menu-over-race.png) |
 
 ## What you need
 
