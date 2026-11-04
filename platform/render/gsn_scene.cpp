@@ -217,6 +217,7 @@ struct GsnScene::Impl {
         std::map<std::string, double> milliseconds;
         std::map<std::string, uint64_t> counts;
         uint64_t frames = 0;
+        std::chrono::steady_clock::time_point since = std::chrono::steady_clock::now();
     } profile;
     void tally(const char* what, uint64_t n = 1) {
         if (profile.on) profile.counts[what] += n;
@@ -244,6 +245,16 @@ struct GsnScene::Impl {
                 ++profile.frames;
             }
             l.clear();
+            // Every 10 s: the frames since the last report, then counted afresh (a run's slow stretch on its own,
+            // beside the host's perf lines).
+            const auto now = std::chrono::steady_clock::now();
+            if (now - profile.since >= std::chrono::seconds(10)) {
+                printProfile();
+                profile.milliseconds.clear();
+                profile.counts.clear();
+                profile.frames = 0;
+                profile.since = now;
+            }
         }
         vkCmdResetQueryPool(command, profile.pool, slot * Profile::kPerSlot, Profile::kPerSlot);
         vkCmdWriteTimestamp2(command, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, profile.pool, slot * Profile::kPerSlot);
@@ -257,7 +268,8 @@ struct GsnScene::Impl {
         std::vector<std::pair<double, std::string>> rows;
         for (const auto& [label, ms] : profile.milliseconds) rows.emplace_back(ms / f, label);
         std::sort(rows.rbegin(), rows.rend());
-        for (const auto& [ms, label] : rows) std::printf("  %-28s %7.3f ms\n", label.c_str(), ms);
+        for (size_t k = 0; k < rows.size() && k < 16; ++k)   // the dearest 16
+            std::printf("  %-28s %7.3f ms\n", rows[k].second.c_str(), rows[k].first);
         std::printf("  per frame:");
         for (const auto& [what, n] : profile.counts) std::printf(" %s %.1f,", what.c_str(), double(n) / f);
         std::printf("\n");

@@ -91,7 +91,9 @@ typedef struct Gt4LinkHeader {
     volatile uint32_t game_pid, host_pid;
     volatile uint32_t game_state; /* 0 starting, 1 running, 2 exited */
     volatile uint32_t frame;      /* VBlanks the game has sent */
-    uint8_t pad[16];
+    volatile uint32_t game_cpu_ms; /* the game process's CPU time, every thread (it writes it: Wine's
+                                      GetProcessTimes on another process gives the caller's own) */
+    uint8_t pad[12];
     Gt4LinkRing g2h, h2g;
 } Gt4LinkHeader;
 

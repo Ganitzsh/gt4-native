@@ -168,6 +168,18 @@ void link_send(uint32_t type, const void *payload, uint32_t size, const void *ex
 void link_poll() {
     if (!g_hdr) return;
     std::lock_guard<std::recursive_mutex> poll_lock(g_poll_mutex);
+    // the game's CPU time for the host's perf lines, every 100 ms at most (Wine's GetProcessTimes on another
+    // process gives the caller's own, so the host cannot read it)
+    static DWORD cpu_at = 0;
+    if (const DWORD now = GetTickCount(); now - cpu_at >= 100) {
+        cpu_at = now;
+        FILETIME created, exited, kernel, user;
+        if (GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) {
+            const uint64_t t = ((uint64_t(kernel.dwHighDateTime) << 32) | kernel.dwLowDateTime) +
+                               ((uint64_t(user.dwHighDateTime) << 32) | user.dwLowDateTime);
+            g_hdr->game_cpu_ms = static_cast<uint32_t>(t / 10000);
+        }
+    }
     const uint32_t ring = g_hdr->h2g_size;
     uint64_t tail = g_hdr->h2g.tail;
     const uint64_t head = g_hdr->h2g.head;

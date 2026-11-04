@@ -239,6 +239,8 @@ bool GameLink::write(uint32_t type, const void* payload, uint32_t payloadSize) {
 const std::string& GameLink::name() const { return impl->name; }
 bool GameLink::running() const { return impl->running; }
 double GameLink::processSeconds() const {
+    // what the game reports of itself (a game that predates that: the process's times read from here)
+    if (impl->header && impl->header->game_cpu_ms) return impl->header->game_cpu_ms / 1000.0;
     FILETIME created, exited, kernel, user;
     if (!impl->process || !GetProcessTimes(impl->process, &created, &exited, &kernel, &user)) return 0.0;
     auto seconds = [](const FILETIME& t) { return double((uint64_t(t.dwHighDateTime) << 32) | t.dwLowDateTime) * 1e-7; };
