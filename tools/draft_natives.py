@@ -82,6 +82,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--decomp", required=True)
     ap.add_argument("--game", default=os.path.join(ROOT, "build", "game"))
+    ap.add_argument("--stage-suffix", default="", help="stage in <decomp>/build/native_drafts<SUFFIX> and native_curated<SUFFIX>, so a second checkout's build (a release worktree) leaves the other's staging alone")
     a = ap.parse_args()
     gen = os.path.join(a.game, "gen")
     image = re.findall(r"\{0x([0-9A-F]{8}),\d+\}", open(os.path.join(gen, "guest_functions.c")).read())
@@ -106,12 +107,13 @@ def main():
             m = re.fullmatch(r"func_([0-9A-Fa-f]{8})\.(c|cpp)", n)
             if m:
                 curated[m.group(1).lower()] = os.path.join(gs, n)
-    stage = os.path.join(a.decomp, "build", "native_drafts")
-    for d in (stage, os.path.join(a.decomp, "build", "native_curated")):
+    drafts_dir, curated_dir = "native_drafts" + a.stage_suffix, "native_curated" + a.stage_suffix
+    stage = os.path.join(a.decomp, "build", drafts_dir)
+    for d in (stage, os.path.join(a.decomp, "build", curated_dir)):
         if os.path.isdir(d):
             shutil.rmtree(d)
         os.makedirs(d)
-    for d in ("native_drafts", "native_curated"):
+    for d in (drafts_dir, curated_dir):
         old = os.path.join(a.game, "obj", "build", d)
         if os.path.isdir(old):
             shutil.rmtree(old)
@@ -119,11 +121,11 @@ def main():
     # tools/game_link.py lets them replace any other object defining the function (native-only
     # corrections of matched sources, docs/NATIVE_GAME.md).
     if curated:
-        cstage = os.path.join(a.decomp, "build", "native_curated")
+        cstage = os.path.join(a.decomp, "build", curated_dir)
         crels = []
         for addr, path in sorted(curated.items()):
             shutil.copy(path, os.path.join(cstage, os.path.basename(path)))
-            crels.append(f"build/native_curated/{os.path.basename(path)}")
+            crels.append(f"build/{curated_dir}/{os.path.basename(path)}")
         lst = os.path.join(a.game, "curated_list.txt")
         with open(lst, "w") as f:
             f.write("\n".join(crels) + "\n")
@@ -162,7 +164,7 @@ def main():
             name = f"func_{addr.upper()}{ext}"
             with open(os.path.join(stage, name), "w", encoding="utf-8", newline="\n") as f:
                 f.write(text)
-            rels.append(f"build/native_drafts/{name}")
+            rels.append(f"build/{drafts_dir}/{name}")
             chosen[addr] = (os.path.relpath(path, a.decomp if path.startswith(a.decomp) else ROOT), kind, diff, rels[-1])
         if not rels:
             break

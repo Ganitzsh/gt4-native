@@ -231,6 +231,7 @@ target_compile_features(gt4_saves PUBLIC cxx_std_20)
 
 add_executable(gt4_host
     platform/sdl/main.cpp
+    platform/sdl/disc_setup.cpp
     platform/sdl/renderer.cpp
     platform/sdl/session.cpp
     platform/sdl/settings.cpp

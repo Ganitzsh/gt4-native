@@ -12,6 +12,8 @@ Proton (Steam Deck, ARM handhelds with FEX).
   upscalers, anti-aliasing, frame rate limit, frame interpolation, aspect ratio.
 - Saves as plain folders, with import from PCSX2 and PS2 memory card images (`--import-save`).
 - Packaged folder that runs from anywhere, with `game.log` and `host.log` beside it.
+- First start makes `game/CORE.GT4.elf` from your disc image and refuses other releases than USA 1.01.
+- `--import-save` in a packaged folder writes to its `saves/`.
 - Fixed: crash or freeze when resuming a championship race.
 - Fixed: the Polyphony Digital logo and the GT mode menus shook (interlaced fields are now blended).
 - Fixed: opponents were missing from the rear-view mirror.

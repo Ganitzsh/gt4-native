@@ -7,6 +7,7 @@
 #include <SDL3/SDL_main.h>
 #include <SDL3/SDL_vulkan.h>
 
+#include "disc_setup.h"
 #include "display.h"
 #include "gs_host.h"
 #include "ps2_pad.h"
@@ -1063,7 +1064,7 @@ int run(const Options& options) {
 // checks a package without a window.
 void usePackagedGame(Options& o) {
     if (!o.game.empty() || !o.replay.empty() || o.probe || o.smoke || o.listGpus || o.listDisplays || o.listOptions ||
-        !o.sessionDirectory.empty() || !o.importSave.empty())
+        !o.sessionDirectory.empty())
         return;
     const char* basePath = SDL_GetBasePath();
     if (!basePath) return;
@@ -1073,17 +1074,36 @@ void usePackagedGame(Options& o) {
     const fs::path base(std::u8string(baseText.begin(), baseText.end()));
     const fs::path game = base / "gt4_game.exe", elf = base / "game" / "CORE.GT4.elf";
     std::error_code error;
-    if (!fs::is_regular_file(game, error) || !fs::is_regular_file(elf, error)) return;
-    o.game = utf8(game);
-    std::vector<std::string> args{"--elf", utf8(elf), "--log", utf8(base / "game.log")};
+    if (!fs::is_regular_file(game, error)) return;
+    if (!o.importSave.empty()) {   // in a package, a PS2 save goes into the package's own save folder
+        if (o.saves.empty()) o.saves = utf8(base / "saves");
+        return;
+    }
+    fs::path iso;
     for (const auto& entry : fs::directory_iterator(base / "game", error)) {
         std::string extension = utf8(entry.path().extension());
         std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return std::tolower(c); });
         if (extension == ".iso") {
-            args.insert(args.end(), {"--iso", utf8(entry.path())});
+            iso = entry.path();
             break;
         }
     }
+    // A release package comes without game data: the player puts their own disc image in game/, and the executable the
+    // game loads is made from it on the first start.
+    if (!fs::is_regular_file(elf, error)) {
+        const std::string problem = iso.empty()
+            ? "No disc image found. Put an image of your own Gran Turismo 4 disc (USA, SCUS-97328, version 1.01) as an "
+              ".iso file in the folder\n\n" + utf8(base / "game") + "\n\nand start gt4_host.exe again."
+            : makeCoreElf(iso, elf);
+        if (!problem.empty()) {
+            if (!o.headless) SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "GT4 Native", problem.c_str(), nullptr);
+            throw std::runtime_error(problem);
+        }
+        std::printf("made %s from %s\n", utf8(elf).c_str(), utf8(iso.filename()).c_str());
+    }
+    o.game = utf8(game);
+    std::vector<std::string> args{"--elf", utf8(elf), "--log", utf8(base / "game.log")};
+    if (!iso.empty()) args.insert(args.end(), {"--iso", utf8(iso)});
     o.gameArgs.insert(o.gameArgs.begin(), args.begin(), args.end());
     if (o.saves.empty()) {
         fs::create_directories(base / "saves", error);
