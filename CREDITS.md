@@ -1,7 +1,11 @@
 # Credits
 
-## Project founder and maintainer
-- Gustavo Canepa — gt4-decomp initiative and GT4 Native project.
+## Maintainer
+- Julien Ganichot ([Ganitzsh](https://github.com/Ganitzsh)): this fork and its playable build.
+
+## Project founder
+- Gustavo Canepa ([gustavocanepa](https://github.com/gustavocanepa)): the gt4-decomp initiative and the original
+  [GT4 Native](https://github.com/gustavocanepa/gt4-native) project, which this repository is a fork of.
 
 ## Upstream and contributors
 - [gt4-decomp](https://github.com/gustavocanepa/gt4-decomp) and its [contributors](https://github.com/gustavocanepa/gt4-decomp/graphs/contributors).
