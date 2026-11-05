@@ -89,7 +89,11 @@ scene spends its time; `GT4_RECORD` / `GT4_RECORD_ROOT` record calls of game fun
 replay on the original MIPS code; `GT4_SNAPSHOT` writes the guest RAM at given VBlanks; with
 `game_link.py --eeorig`, `GT4_ORIG=ADDR,...` or `GT4_ORIG=all` runs the original code in the game.
 The game's x87 unit runs at single precision and rounds toward zero, as the EE's FPU does (`GT4_FPU_RC=nearest`
-and `GT4_FPU_PC=d|e` for comparison).
+and `GT4_FPU_PC=d|e` for comparison). Except for division: the EE divides to nearest (PCSX2's default division
+rounding), the x87 here toward zero, one ulp lower. That lost one from every colour byte 1..254 through a colour
+object (k / 255.0f, then * 255 toward zero) and the race lists' colour chips with it (their flag byte became 0):
+game_src/func_00202C60.cpp and func_00203208.cpp take k / 255 from a table of the EE's results. Other divisions still
+chop.
 `GT4_POKE=VBLANK:ADDR=WORD,...[;VBLANK:...]` writes guest words when a VBlank is reached (ADDR can be `*WORD±OFF`:
 relative to the first guest word holding WORD, e.g. an object's vtable pointer), to put the game into a case under
 test. `GT4_AI_CATCHUP=original|reduced|off` fixes the host's `gameplay.ai_catchup` option (the AI catch-up, GT4's
