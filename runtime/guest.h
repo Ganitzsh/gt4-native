@@ -20,6 +20,12 @@ constexpr uint32_t kUncachedAccelMirror = 0x30000000;
 constexpr uint32_t kScratchpad = 0x70000000;
 constexpr uint32_t kScratchpadSize = 0x4000;
 
+// Whether `n` bytes at host address `at` lie whole in the guest's RAM section (mapped and readable throughout), the
+// end worked out without overflow: a range that starts inside and runs past the end is not.
+constexpr bool in_guest_ram(uintptr_t at, size_t n) {
+    return at >= kGuestSectionStart && at <= kRamSize && n <= kRamSize - at;
+}
+
 struct HwBlock {
     uint32_t base, size;
     const char *name;

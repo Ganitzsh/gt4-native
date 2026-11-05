@@ -49,7 +49,7 @@ uint8_t *ptr(uint32_t addr) {
 std::vector<uint8_t> read_mapped(const uint8_t *p, size_t bytes) {
     std::vector<uint8_t> out(bytes, 0);
     const uintptr_t a = reinterpret_cast<uintptr_t>(p);
-    if (a >= kGuestSectionStart && a + bytes <= kRamSize) {
+    if (in_guest_ram(a, bytes)) {
         std::memcpy(out.data(), p, bytes);
         return out;
     }
@@ -68,7 +68,7 @@ std::vector<uint8_t> read_mapped(const uint8_t *p, size_t bytes) {
 // `p` itself when all `bytes` lie in the guest's memory (read in place), else null (read_mapped's checks).
 const uint8_t *in_guest(const uint8_t *p, size_t bytes) {
     const uintptr_t a = reinterpret_cast<uintptr_t>(p);
-    return a >= kGuestSectionStart && a + bytes <= kRamSize ? p : nullptr;
+    return in_guest_ram(a, bytes) ? p : nullptr;
 }
 
 // A content's identity for the host (game side only: the host keys on it and never works it out): four 32-bit lanes

@@ -381,7 +381,12 @@ void gt4_gfx_batch_unpack(uint32_t context, uint32_t qword, uint32_t format, int
     // when the count is rounded up; on the PS2 other memory followed): zeros past it.
     static thread_local std::vector<uint8_t> bytes;
     bytes.assign(size_t(words) * 4, 0);
-    if (data && words) {
+    const uintptr_t at = reinterpret_cast<uintptr_t>(data);
+    if (data && words && in_guest_ram(at, bytes.size())) {
+        // (game memory, mapped whole: read at once. Asking the system for every unpack's source was a system
+        // call each, thousands a frame: 70% of the game's main thread in kernel time on a cheap race frame.)
+        std::memcpy(bytes.data(), data, bytes.size());
+    } else if (data && words) {
         const uint8_t *src = static_cast<const uint8_t *>(data);
         size_t done = 0;
         while (done < bytes.size()) {
