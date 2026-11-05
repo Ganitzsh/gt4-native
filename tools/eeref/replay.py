@@ -31,14 +31,48 @@ def drafts(game):
     return out
 
 
+NAMES_BY_ADDR = {}
+
+
+def load_names(decomp):
+    """The symbol table's function names (MGame__isNeedSave = 0x00166918), for abi_lint (a definition named so is
+    bound to its address) and for finding the source."""
+    if NAMES_BY_ADDR:
+        return
+    for line in open(os.path.join(decomp, 'config', 'symbol_addrs.txt'), encoding='utf-8', errors='replace'):
+        m = re.match(r'\s*(\w+)\s*=\s*0x([0-9A-Fa-f]+)\s*;', line)
+        if m and 'type:func' in line and not m.group(1).startswith('func_'):
+            addr = '%08X' % int(m.group(2), 16)
+            abi_lint.FUNC_NAMES[m.group(1)] = addr
+            NAMES_BY_ADDR.setdefault(addr, []).append(m.group(1))
+    # Script callbacks are named from config/adhoc_methods.txt (MGame__isNeedSave), not in the symbol table: the
+    # native link map puts each beside its gt4fn_ADDR alias
+    path = os.path.join(ROOT, 'build', 'game', 'gt4_game.map')
+    if os.path.exists(path):
+        at = {}
+        for line in open(path, encoding='utf-8', errors='replace'):
+            m = re.match(r'\s+0x([0-9a-f]{8})\s+(\w+)\s*$', line)
+            if m:
+                at.setdefault(m.group(1), []).append(m.group(2))
+        for names in at.values():
+            addrs = [n[6:] for n in names if re.fullmatch(r'gt4fn_[0-9A-F]{8}', n)]
+            if len(addrs) == 1:
+                for n in names:
+                    if not n.startswith(('gt4fn_', 'func_', '_')) and n not in abi_lint.FUNC_NAMES:
+                        abi_lint.FUNC_NAMES[n] = addrs[0]
+                        NAMES_BY_ADDR.setdefault(addrs[0], []).append(n)
+
+
 def definition(addr, decomp, draft_paths):
     """(kinds, ret, role) of the definition the native link compiles for addr, or None."""
+    load_names(decomp)
     cands = []
     for ext in ('.c', '.cpp'):
         p = os.path.join(ROOT, 'game_src', 'func_%s%s' % (addr, ext))
         if os.path.exists(p):
             cands.append((p, 'game_src'))
-    out = subprocess.run(['git', '-C', decomp, 'grep', '-l', 'func_%s' % addr, '--', 'src'], capture_output=True,
+    pattern = ['-e', 'func_%s' % addr] + [x for n in NAMES_BY_ADDR.get(addr, []) for x in ('-e', r'\b%s\b' % n)]
+    out = subprocess.run(['git', '-C', decomp, 'grep', '-l', '-E'] + pattern + ['--', 'src'], capture_output=True,
                          text=True).stdout.split()
     cands += [(os.path.join(decomp, p), 'src') for p in out]
     if addr in draft_paths:
