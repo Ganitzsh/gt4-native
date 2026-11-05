@@ -751,8 +751,11 @@ std::unique_ptr<GsHost> GsHost::create(const Options& options, std::string& erro
     Impl* raw = &h;
     // Reads of drawn pixels go to the render thread in a live game; a replay has no game to answer (its
     // reads come from GS memory), and its lockstep would wait on the render thread that waits on it.
+    // GT4_REPLAY_READS=1 (testing, a replay in real time): from the render thread all the same, as a live game's
+    // (GsnScene::read's frame skipping: GT4_READ_SKIP_TEST, GT4_READ_HASH).
+    static const bool replayReads = [] { const char* e = std::getenv("GT4_REPLAY_READS"); return e && *e && *e != '0'; }();
     ReadService reads;
-    if (!options.gamePath.empty())
+    if (!options.gamePath.empty() || (replayReads && !options.lockstep))
         reads = [raw](gsn::FrameList& partial, const gsn::ReadRequest& r, std::vector<uint8_t>& out) { return raw->serveRead(partial, r, out); };
     h.target = std::make_unique<NativeTarget>([raw](gsn::FrameList& list) { raw->publishNative(list); }, reads);
     if (!options.texturePack.empty()) {

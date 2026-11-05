@@ -179,6 +179,10 @@ struct GsnScene::Impl {
     bool held = false;
     uint64_t skipTestCount = 0;
     size_t skipOlderFrames(size_t keepComplete);
+    // GS -> host reads (GsnScene::read): how many, the frames skipped ahead of them, and GT4_READ_SKIP_TEST's frames
+    // held back (the newest lists, drawn only at the next read: a backlog for a lockstep replay's reads).
+    uint64_t reads = 0, readSkips = 0;
+    std::vector<gsn::FrameList> readHeld;
     // Presentation decoupled from the game's 60 Hz (docs/NATIVE_V2.md, step 4): the last list drawn again at each
     // display refresh with its 3D batches' transforms blended from the previous frame's by modelT, the fraction of
     // a game frame since the list came (gsn_models.comp); modelTPrevious: the one shown before (motion vectors).
@@ -352,6 +356,8 @@ struct GsnScene::Impl {
         vkDeviceWaitIdle(device.device);
         printProfile();
         if (framesSkipped) std::printf("Frames skipped behind the game: %llu\n", static_cast<unsigned long long>(framesSkipped));
+        if (readSkips) std::printf("... of them ahead of GS reads: %llu (of %llu reads)\n", static_cast<unsigned long long>(readSkips),
+                                   static_cast<unsigned long long>(reads));
         if (profile.pool) vkDestroyQueryPool(device.device, profile.pool, nullptr);
         for (auto& [id, t] : targets) vk::destroy(device, t.image);
         for (auto& [id, t] : textures) vk::destroy(device, t.image);
@@ -2040,6 +2046,21 @@ void GsnScene::addFrames(std::vector<gsn::FrameList>& lists) {
         if (list.displayed) s.arrival = std::chrono::steady_clock::now();
     for (auto& list : lists) s.pending.push_back(std::move(list));
     lists.clear();
+    // GT4_READ_SKIP_TEST=N (testing, a lockstep replay): the newest N complete frames are held back until the next GS ->
+    // host read, which then finds them waiting ahead of it as a host behind the game would (GsnScene::read). Two runs,
+    // GT4_READ_SKIP=0 and not, with GT4_READ_HASH=1, show whether skipping them changes what the reads return.
+    static const size_t readTest = [] { const char* e = std::getenv("GT4_READ_SKIP_TEST"); return e ? size_t(std::atoi(e)) : size_t(0); }();
+    if (readTest) {
+        for (auto& list : s.pending) s.readHeld.push_back(std::move(list));
+        s.pending.clear();
+        size_t complete = 0;
+        for (const auto& list : s.readHeld) complete += list.displayed ? 1 : 0;
+        size_t release = 0;   // the lists released (drawn at the next present): the oldest, until N complete ones are left
+        for (; release < s.readHeld.size() && complete > readTest; ++release)
+            if (s.readHeld[release].displayed) --complete;
+        for (size_t k = 0; k < release; ++k) s.pending.push_back(std::move(s.readHeld[k]));
+        s.readHeld.erase(s.readHeld.begin(), s.readHeld.begin() + static_cast<std::ptrdiff_t>(release));
+    }
     // Behind: every waiting list is drawn before the next present, so a GPU slower than the game for a frame draws
     // two the next time, then three, up to the 64 below (a picture a second while the game runs at 60: the Odin's
     // replay cameras, then F7's stop). Three complete frames waiting is behind (two happen at 60 Hz, a loop's jitter):
@@ -2330,6 +2351,17 @@ void GsnScene::setInterpolation(bool on) { impl->interpolate = on; }
 bool GsnScene::read(const gsn::ReadRequest& request, std::vector<uint8_t>& out) {
     Impl& s = *impl;
     if (!s.stencilPrep.valid() || !s.blank.valid()) return false;   // not prepared yet (no frame shown)
+    for (auto& list : s.readHeld) s.pending.push_back(std::move(list));   // (GT4_READ_SKIP_TEST)
+    s.readHeld.clear();
+    // The game waits for these pixels: the complete frames ahead of the read's list are skipped by skipOlderFrames'
+    // rule, so a host behind the game answers now instead of after drawing its backlog (the Odin's blurred replay
+    // cameras: reads of 4 to 25 s, then F7's stop). A frame is drawn all the same when a target it writes is not
+    // written again by a later list, the read's own included (what the read returns is then that frame's), or when a
+    // later list reads one of its targets before writing it. GT4_READ_SKIP=0: every list drawn first.
+    static const bool readSkip = [] { const char* e = std::getenv("GT4_READ_SKIP"); return !(e && *e == '0'); }();
+    ++s.reads;
+    const size_t skipped = readSkip ? s.skipOlderFrames(0) : 0;
+    s.readSkips += skipped;
     vkDeviceWaitIdle(s.device.device);   // the frames in flight are done: slot 0's buffers are free
     vk::Uploader up(s.device, s.pool);
     VkCommandBuffer command = up.command();
@@ -2399,6 +2431,15 @@ bool GsnScene::read(const gsn::ReadRequest& request, std::vector<uint8_t>& out) 
             }
         }
     vk::destroy(s.device, pixels);
+    // GT4_READ_HASH=1 (testing): each read's bytes as a hash (FNV-1a), to compare runs.
+    static const bool readHash = [] { const char* e = std::getenv("GT4_READ_HASH"); return e && *e && *e != '0'; }();
+    if (readHash) {
+        uint64_t hash = 1469598103934665603ull;
+        for (uint8_t v : out) hash = (hash ^ v) * 1099511628211ull;
+        std::printf("gsn read %llu: target %u (%u,%u %ux%u psm %u), %zu frames skipped ahead, hash %016llx\n",
+                    static_cast<unsigned long long>(s.reads), request.target, request.x, request.y, request.width, request.height,
+                    request.psm, skipped, static_cast<unsigned long long>(hash));
+    }
     return true;
 }
 
