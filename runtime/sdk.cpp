@@ -194,10 +194,12 @@ extern "C" long long gt4_money_floor() {
 }
 
 // For game_src/func_0042F4F0.c (testing): GT4_DAYS=N, the least days elapsed in GT mode; -1 when not set.
-extern "C" long gt4_days_floor() {
-    static const long floor = [] {
+// An int at both ends: game code's long is 64-bit (EE data model); a 32-bit long here left edx unset, and the game
+// read -1 as a large floor (every native run counted -1 days elapsed, 2026-10-31 to 2026-11-05).
+extern "C" int gt4_days_floor() {
+    static const int floor = [] {
         const char *e = std::getenv("GT4_DAYS");
-        return e && *e ? std::strtol(e, nullptr, 10) : -1l;
+        return e && *e ? static_cast<int>(std::strtol(e, nullptr, 10)) : -1;
     }();
     return floor;
 }

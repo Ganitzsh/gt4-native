@@ -10,10 +10,10 @@ struct func_0042F4F0_arg0 {
     int unkB6C0;
 };
 extern int func_005797A8(int, int, int);
-extern long gt4_days_floor(void); /* runtime/sdk.cpp: GT4_DAYS, or -1 */
+extern int gt4_days_floor(void); /* runtime/sdk.cpp: GT4_DAYS, or -1 (an int at both ends: game code's long is 64-bit) */
 
 int func_0042F4F0(struct func_0042F4F0_arg0 *arg0) {
     const int days = arg0->unkB6C0 - func_005797A8(0x7D5, 4, 2);
-    const long floor = gt4_days_floor();
-    return floor >= 0 && days < floor ? (int)floor : days;
+    const int floor = gt4_days_floor();
+    return floor >= 0 && days < floor ? floor : days;
 }
