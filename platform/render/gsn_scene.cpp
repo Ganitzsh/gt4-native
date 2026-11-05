@@ -18,6 +18,7 @@
 #include <map>
 #include <tuple>
 #include <string>
+#include <thread>
 #include <unordered_map>
 
 namespace gt4 {
@@ -172,6 +173,12 @@ struct GsnScene::Impl {
     // drawn again for their motion vectors (velocityPass) and resolved against the scene's history.
     bool temporal = false;
     uint64_t displayedFrames = 0;   // frames shown so far (the jitter's phase, the histories' age)
+    uint64_t framesSkipped = 0;     // complete frames not drawn, behind the game (addFrames, GT4_FRAME_SKIP)
+    std::chrono::steady_clock::time_point skipUntil{};   // ... skipping until then
+    gsn::FrameList heldBack;                           // GT4_FRAME_SKIP_TEST: the frame held back
+    bool held = false;
+    uint64_t skipTestCount = 0;
+    size_t skipOlderFrames(size_t keepComplete);
     // Presentation decoupled from the game's 60 Hz (docs/NATIVE_V2.md, step 4): the last list drawn again at each
     // display refresh with its 3D batches' transforms blended from the previous frame's by modelT, the fraction of
     // a game frame since the list came (gsn_models.comp); modelTPrevious: the one shown before (motion vectors).
@@ -344,6 +351,7 @@ struct GsnScene::Impl {
     ~Impl() {
         vkDeviceWaitIdle(device.device);
         printProfile();
+        if (framesSkipped) std::printf("Frames skipped behind the game: %llu\n", static_cast<unsigned long long>(framesSkipped));
         if (profile.pool) vkDestroyQueryPool(device.device, profile.pool, nullptr);
         for (auto& [id, t] : targets) vk::destroy(device, t.image);
         for (auto& [id, t] : textures) vk::destroy(device, t.image);
@@ -1925,12 +1933,120 @@ void GsnScene::Impl::writeDump() {
 GsnScene::GsnScene(const vk::Device& device, VkCommandPool pool) : impl(std::make_unique<Impl>(device, pool)) {}
 GsnScene::~GsnScene() = default;
 
+// The oldest waiting frames skipped (their draws dropped, their textures carried into the next list) while more than
+// `keepComplete` complete frames wait, as long as the oldest is a complete frame that is safe to skip:
+// - every target it writes is written again by a later waiting list (a frame buffer, any target at a shown buffer's
+//   address in any format, and a Z buffer count as written again: drawn every other frame and only shown, or cleared
+//   each frame);
+// - no later waiting list reads one of them (a texture, a reinterpretation or its palette, an effect's or a relight's
+//   source) before writing it itself: it would read the skipped frame's pixels. (GT4's race and replay frames,
+//   measured: none does; each frame draws what it samples.)
+// Returns how many were skipped. (A GS -> host read waiting: keepComplete 0, so its list waits only for itself.)
+size_t GsnScene::Impl::skipOlderFrames(size_t keepComplete) {
+    auto writes = [](const gsn::FrameList& l, std::vector<uint32_t>& out) {
+        for (const auto& c : l.commands) {
+            if (c.kind == gsn::FrameList::Command::Kind::Draw || c.kind == gsn::FrameList::Command::Kind::Clear) {
+                if (c.index < l.draws.size()) {
+                    out.push_back(l.draws[c.index].target);
+                    if (l.draws[c.index].depth) out.push_back(l.draws[c.index].depth);
+                }
+            } else if (c.kind == gsn::FrameList::Command::Kind::Effect) {
+                if (c.index < l.effects.size()) out.push_back(l.effects[c.index].destination);
+            } else if (c.kind == gsn::FrameList::Command::Kind::Light) {
+                if (c.index < l.lights.size()) out.push_back(l.lights[c.index].target);
+            }
+        }
+        std::sort(out.begin(), out.end());
+        out.erase(std::unique(out.begin(), out.end()), out.end());
+    };
+    // Whether `l` reads one of `targets` before writing it.
+    auto readsFirst = [](const gsn::FrameList& l, const std::vector<uint32_t>& targets) {
+        std::vector<uint32_t> written;
+        auto stale = [&](uint32_t id) {
+            return id && std::binary_search(targets.begin(), targets.end(), id) &&
+                   std::find(written.begin(), written.end(), id) == written.end();
+        };
+        for (const auto& c : l.commands) {
+            if (c.kind == gsn::FrameList::Command::Kind::Draw || c.kind == gsn::FrameList::Command::Kind::Clear) {
+                if (c.index >= l.draws.size()) continue;
+                const gsn::Draw& d = l.draws[c.index];
+                if (d.texture.kind == gsn::TextureSource::Kind::Target && stale(d.texture.id)) return true;
+                if (d.texture.kind == gsn::TextureSource::Kind::Reinterpreted && d.texture.id < l.reinterpretations.size()) {
+                    const gsn::Reinterpretation& r = l.reinterpretations[d.texture.id];
+                    if (stale(r.target) || stale(r.clutTarget)) return true;
+                }
+                written.push_back(d.target);
+                if (d.depth) written.push_back(d.depth);
+            } else if (c.kind == gsn::FrameList::Command::Kind::Effect && c.index < l.effects.size()) {
+                if (stale(l.effects[c.index].source)) return true;
+                written.push_back(l.effects[c.index].destination);
+            } else if (c.kind == gsn::FrameList::Command::Kind::Light && c.index < l.lights.size()) {
+                if (stale(l.lights[c.index].target) || stale(l.lights[c.index].depth)) return true;
+            }
+        }
+        return false;
+    };
+    size_t complete = 0, skipped = 0;
+    for (const auto& list : pending) complete += list.displayed ? 1 : 0;
+    while (complete > keepComplete && pending.size() > 1 && pending[0].displayed) {
+        std::vector<uint32_t> first, later;
+        writes(pending[0], first);
+        for (size_t i = 1; i < pending.size(); ++i) writes(pending[i], later);
+        std::vector<uint32_t> shownBp;
+        for (const auto& list : pending)
+            for (const gsn::Target& t : list.targets)
+                if (t.id && (t.id == list.display.target1 || t.id == list.display.target2)) shownBp.push_back(t.bp);
+        for (const gsn::Target& t : pending[0].targets)
+            if (t.depth || std::find(shownBp.begin(), shownBp.end(), t.bp) != shownBp.end()) later.push_back(t.id);
+        std::sort(later.begin(), later.end());
+        bool again = true;
+        for (uint32_t t : first) again = again && std::binary_search(later.begin(), later.end(), t);
+        if (!again) break;
+        bool read = false;
+        for (size_t i = 1; i < pending.size() && !read; ++i) read = readsFirst(pending[i], first);
+        if (read) break;
+        gsn::carryOver(pending[0], pending[1]);
+        pending.erase(pending.begin());
+        --complete;
+        ++skipped;
+        ++framesSkipped;
+    }
+    return skipped;
+}
+
 void GsnScene::addFrames(std::vector<gsn::FrameList>& lists) {
     Impl& s = *impl;
     for (const auto& list : lists)
         if (list.displayed) s.arrival = std::chrono::steady_clock::now();
     for (auto& list : lists) s.pending.push_back(std::move(list));
     lists.clear();
+    // Behind: every waiting list is drawn before the next present, so a GPU slower than the game for a frame draws
+    // two the next time, then three, up to the 64 below (a picture a second while the game runs at 60: the Odin's
+    // replay cameras, then F7's stop). Three complete frames waiting is behind (two happen at 60 Hz, a loop's jitter):
+    // for a second from then, while more than one waits, the oldest is skipped (its draws dropped, its textures kept)
+    // when it is a complete frame and every target it writes is written again by a later one: never a read's list,
+    // nor one that draws something drawn once (car pictures, a menu's backdrop). GT4_FRAME_SKIP=0: every list drawn.
+    // (With 18 ms a frame on a desktop, GT4_GPU_THROTTLE_MS=18: 0.8 pictures a second before, 42 with it.)
+    static const bool frameSkip = [] { const char* e = std::getenv("GT4_FRAME_SKIP"); return !(e && *e == '0'); }();
+    // GT4_FRAME_SKIP_TEST=1 (testing, a lockstep replay): every other frame held back and skipped as above, so a grid
+    // against a plain replay shows what a skipped frame costs on screen (the frames drawn should match exactly).
+    static const bool skipTest = [] { const char* e = std::getenv("GT4_FRAME_SKIP_TEST"); return e && *e && *e != '0'; }();
+    if (skipTest) {
+        if (s.held) {
+            s.pending.insert(s.pending.begin(), std::move(s.heldBack));
+            s.held = false;
+            s.skipOlderFrames(1);
+        } else if (s.pending.size() == 1 && s.pending[0].displayed && (s.skipTestCount++ & 1)) {
+            s.heldBack = std::move(s.pending[0]);
+            s.pending.clear();
+            s.held = true;
+        }
+    }
+    size_t waiting = 0;
+    for (const auto& list : s.pending) waiting += list.displayed ? 1 : 0;
+    const auto now = std::chrono::steady_clock::now();
+    if (frameSkip && waiting >= 3) s.skipUntil = now + std::chrono::seconds(1);
+    if (frameSkip && now < s.skipUntil) s.skipOlderFrames(1);
     // Not drawn for long (a minimised window draws nothing): the oldest lists' draws are dropped, their
     // texture uploads kept.
     constexpr size_t kMaxPending = 64;
@@ -2093,6 +2209,10 @@ void GsnScene::Impl::executePending(VkCommandBuffer command, uint32_t slot, VkEx
     vk::beginLabel(command, "gsn frame");
     for (listIndex = 0; listIndex < pending.size(); ++listIndex) {
         std::swap(frame, pending[listIndex]);
+        // GT4_GPU_THROTTLE_MS=N (testing): N ms more for each complete frame drawn, as a GPU that takes that long for
+        // one (the Odin's in a replay's blurred far camera) costs the host for every frame it draws.
+        static const int throttle = [] { const char* e = std::getenv("GT4_GPU_THROTTLE_MS"); return e ? std::atoi(e) : 0; }();
+        if (throttle > 0 && frame.displayed) std::this_thread::sleep_for(std::chrono::milliseconds(throttle));
         {
             std::vector<uint32_t> created;
             for (const gsn::Target& t : frame.targets) {
