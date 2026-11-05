@@ -127,6 +127,8 @@ def scan(path, text):
         addr = address_of(m.group(1))
         if not addr:
             continue
+        if text[:m.start()].rstrip().endswith("~"):
+            continue   # `~func_X()`: the class's destructor, another function than func_X
         start = m.end()
         depth, i = 1, start
         while i < len(text) and depth:
@@ -225,6 +227,15 @@ def scan_labelled(text):
                 kinds = [kind(p) for p in split_params(m.group(2))]
                 if depth > 0:   # inside a class: the object comes first
                     kinds = ["i"] + kinds
+                # A structure returned by value takes a hidden first pointer, before the object (as scan()
+                # counts a definition's): `Node get(const String &) __asm__("func_X")` passes three words.
+                cut = max(text.rfind(c, 0, m.start()) for c in ";{}") + 1
+                head = re.sub(r"\b(?:public|private|protected)\s*:", " ", text[cut:m.start()])
+                words = [w for w in re.findall(r"[A-Za-z_]\w*", head)
+                         if w not in ("extern", "static", "inline", "virtual", "const", "volatile", "struct", "class",
+                                      "union", "enum", "C")]
+                if words and words != ["void"] and "*" not in head and "&" not in head and kind(" ".join(words) + " r") == "?":
+                    kinds = ["i"] + kinds
                 found.append((m.group(3).upper(), kinds, text.count("\n", 0, m.start()) + 1, name))
             k += 1
         if ch == "{":
@@ -284,7 +295,7 @@ def main():
         base = os.path.basename(path)
         own = re.search(r"func_([0-9A-Fa-f]{8})|^([0-9a-f]{8})_", base)
         own_addr = (own.group(1) or own.group(2)).upper() if own else named.get(os.path.splitext(base)[0])
-        if role == "src" and own_addr in overridden:
+        if role in ("src", "draft") and own_addr in overridden:
             continue   # replaced by game_src/
         try:
             text = strip_comments(open(path, encoding="utf-8", errors="replace").read())

@@ -63,10 +63,6 @@ struct String2 {
 };
 
 
-extern "C" void func_0047D280(void *);
-extern "C" char *func_004794D8(void *);
-extern char D_006889C0[];
-extern "C" void func_0047D280(void *);
 extern "C" char *func_004794D8(void *);
 extern char D_006889C0[];
 struct Sub { const char *s; u32 n; };
