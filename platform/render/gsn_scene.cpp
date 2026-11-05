@@ -16,6 +16,7 @@
 #include <cstring>
 #include <deque>
 #include <map>
+#include <tuple>
 #include <string>
 #include <unordered_map>
 
@@ -128,6 +129,17 @@ struct GsnScene::Impl {
     std::unordered_map<uint32_t, GpuTexture> textures;
     // Retired textures, destroyed once the frames that may still sample them are done.
     std::vector<std::pair<uint64_t, vk::Image>> graveyard;
+    // Retired texture images, reused by later textures of the same size and levels once the frames that may still
+    // sample them are done: a race decodes 6 to 12 textures a frame (palettes the game animates), and an image made
+    // and its memory allocated each time took 4 of the render thread's 6.5 ms a frame (0.4 ms an image).
+    std::vector<std::pair<uint64_t, vk::Image>> textureGraveyard;
+    std::map<std::tuple<uint32_t, uint32_t, uint32_t>, std::vector<vk::Image>> texturePool;   // (width, height, levels)
+    size_t pooledTextures = 0;
+    static constexpr size_t kMaxPooledTextures = 256;
+    void retireTexture(vk::Image& image) {
+        if (image.valid()) textureGraveyard.emplace_back(uploads, image);
+        image = vk::Image{};
+    }
     uint64_t uploads = 0;
     vk::Image blank;                     // 1 x 1 for untextured draws
     vk::Image feedback;                  // a copy of a target a draw samples while drawing into it
@@ -334,6 +346,9 @@ struct GsnScene::Impl {
         for (auto& [id, t] : targets) vk::destroy(device, t.image);
         for (auto& [id, t] : textures) vk::destroy(device, t.image);
         for (auto& [when, image] : graveyard) vk::destroy(device, image);
+        for (auto& [when, image] : textureGraveyard) vk::destroy(device, image);
+        for (auto& [key, images] : texturePool)
+            for (vk::Image& image : images) vk::destroy(device, image);
         vk::destroy(device, blank);
         vk::destroy(device, feedback);
         vk::destroy(device, scratchDepth);
@@ -516,11 +531,25 @@ struct GsnScene::Impl {
                 ++it;
             }
         }
+        for (auto it = textureGraveyard.begin(); it != textureGraveyard.end();) {
+            if (it->first + kSlots + 1 > uploads) {
+                ++it;
+                continue;
+            }
+            vk::Image& image = it->second;
+            if (pooledTextures < kMaxPooledTextures) {
+                texturePool[{image.extent.width, image.extent.height, image.mips}].push_back(image);
+                ++pooledTextures;
+            } else {
+                vk::destroy(device, image);
+            }
+            it = textureGraveyard.erase(it);
+        }
     }
 
     void uploadTextures(VkCommandBuffer command, uint32_t slot) {
         if (frame.resetTextures) {
-            for (auto& [id, t] : textures) graveyard.emplace_back(uploads, t.image);
+            for (auto& [id, t] : textures) retireTexture(t.image);
             textures.clear();
         }
         VkDeviceSize bytes = 4;
@@ -532,7 +561,7 @@ struct GsnScene::Impl {
         for (auto& t : frame.textures) {
             GpuTexture& g = textures[t.id];
             if (!g.image.valid() || g.width != t.width || g.height != t.height || g.levels != t.levels) {
-                if (g.image.valid()) retire(g.image);
+                retireTexture(g.image);
                 vk::ImageDesc desc;
                 desc.format = VK_FORMAT_R8G8B8A8_UNORM;
                 desc.extent = {t.width, t.height};
@@ -540,7 +569,14 @@ struct GsnScene::Impl {
                 desc.mips = t.levels > 1 ? t.levels : g.generated;
                 desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
                 desc.name = "gsn texture";
-                g.image = vk::createImage(device, desc);
+                auto pooled = texturePool.find({t.width, t.height, desc.mips});
+                if (pooled != texturePool.end() && !pooled->second.empty()) {
+                    g.image = pooled->second.back();   // (its contents are discarded below)
+                    pooled->second.pop_back();
+                    --pooledTextures;
+                } else {
+                    g.image = vk::createImage(device, desc);
+                }
                 g.width = t.width;
                 g.height = t.height;
                 g.levels = t.levels;
@@ -624,7 +660,7 @@ struct GsnScene::Impl {
         for (const uint32_t id : frame.retiredTextures) {
             auto it = textures.find(id);
             if (it == textures.end()) continue;
-            graveyard.emplace_back(uploads, it->second.image);
+            retireTexture(it->second.image);
             textures.erase(it);
         }
     }
