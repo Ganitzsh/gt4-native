@@ -442,7 +442,7 @@ struct GsHost::Impl {
     static constexpr size_t kMaxQueued = 64;
     void queue(gsn::FrameList& list) {
         queued.push_back(std::move(list));
-        list = gsn::FrameList{};
+        list = gsn::spareFrameList();
         while (queued.size() > kMaxQueued) {
             gsn::carryOver(queued[0], queued[1]);
             queued.erase(queued.begin());

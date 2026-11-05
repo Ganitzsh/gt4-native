@@ -2030,7 +2030,8 @@ void GsnScene::Impl::executePending(VkCommandBuffer command, uint32_t slot, VkEx
             ++it;
         }
     }
-    // The executed lists' buffers go back to the queue's vector for reuse; the last one stays in `frame`.
+    // The executed lists go back to the front end for reuse (gsn::recycleFrameList); the last one stays in `frame`.
+    for (gsn::FrameList& list : pending) gsn::recycleFrameList(std::move(list));
     pending.clear();
     listIndex = 0;
     // The displayed buffer is sampled by recordMain whatever the lists left it as (a read's copy, a draw).

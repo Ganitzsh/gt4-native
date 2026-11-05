@@ -180,6 +180,12 @@ struct ReadRequest {
 // A frame that will not be drawn: its texture uploads and retirements move to the next one, `into`.
 void carryOver(FrameList& dropped, FrameList& into);
 
+// Lists drawn go back for the front end's next frames, emptied with their vectors' capacity: a race frame's lists
+// hold about 10 MB (its 3D batches' words), which a fresh list grew again every frame (allocations, copies and
+// new pages: 3 of the front end's 4 ms a frame in 3D batches).
+void recycleFrameList(FrameList&& list);
+FrameList spareFrameList();
+
 class GsFrontend {
 public:
     // SIGNAL, FINISH and LABEL as packets of any path write them: kind 0 FINISH, 1 SIGNAL, 2 LABEL, with the

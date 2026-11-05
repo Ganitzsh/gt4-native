@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <string>
 
 namespace gt4::gsn {
@@ -64,6 +65,27 @@ void FrameList::clear() {
     targets.clear();
     displayed = false;
     dump = false;
+}
+
+namespace {
+std::mutex spareMutex;
+std::vector<FrameList> spareLists;
+}  // namespace
+
+void recycleFrameList(FrameList&& list) {
+    list.clear();
+    list.display = Display{};
+    list.vblank = 0;
+    std::lock_guard<std::mutex> lock(spareMutex);
+    if (spareLists.size() < 4) spareLists.push_back(std::move(list));
+}
+
+FrameList spareFrameList() {
+    std::lock_guard<std::mutex> lock(spareMutex);
+    if (spareLists.empty()) return FrameList{};
+    FrameList list = std::move(spareLists.back());
+    spareLists.pop_back();
+    return list;
 }
 
 void carryOver(FrameList& dropped, FrameList& into) {
