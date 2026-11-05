@@ -65,6 +65,49 @@ std::vector<uint8_t> read_mapped(const uint8_t *p, size_t bytes) {
     return out;
 }
 
+// `p` itself when all `bytes` lie in the guest's memory (read in place), else null (read_mapped's checks).
+const uint8_t *in_guest(const uint8_t *p, size_t bytes) {
+    const uintptr_t a = reinterpret_cast<uintptr_t>(p);
+    return a >= kGuestSectionStart && a + bytes <= kRamSize ? p : nullptr;
+}
+
+// A content's identity for the host (game side only: the host keys on it and never works it out): four 32-bit lanes
+// of xxHash32's round, independent of each other (one native multiply per word on this 32-bit build; the 64-bit
+// multiply chain before took a 32-bit build three, in series), folded and mixed into 64 bits. The texture sets and
+// model packets of every frame go through it (half the game process's time in a race before, under FEX more).
+uint64_t identity_hash(const uint8_t *p, size_t n, uint64_t seed) {
+    constexpr uint32_t P1 = 2654435761u, P2 = 2246822519u, P3 = 3266489917u, P4 = 668265263u, P5 = 374761393u;
+    auto rotl = [](uint32_t x, int r) { return (x << r) | (x >> (32 - r)); };
+    auto round = [&](uint32_t acc, uint32_t v) { return rotl(acc + v * P2, 13) * P1; };
+    const uint32_t s0 = static_cast<uint32_t>(seed), s1 = static_cast<uint32_t>(seed >> 32);
+    uint32_t a = s0 + P1 + P2, b = s0 + P2, c = s1, d = s1 - P1;
+    size_t i = 0;
+    for (; i + 16 <= n; i += 16) {
+        uint32_t w[4];
+        std::memcpy(w, p + i, 16);
+        a = round(a, w[0]), b = round(b, w[1]), c = round(c, w[2]), d = round(d, w[3]);
+    }
+    uint32_t lo = rotl(a, 1) + rotl(b, 7) + rotl(c, 12) + rotl(d, 18) + static_cast<uint32_t>(n);
+    uint32_t hi = (a ^ rotl(d, 5)) + rotl(b ^ c, 11) * P4 + static_cast<uint32_t>(n) * P5;
+    for (; i + 4 <= n; i += 4) {
+        uint32_t w;
+        std::memcpy(&w, p + i, 4);
+        lo = rotl(lo + w * P3, 17) * P4;
+        hi = rotl(hi ^ (w * P1), 15) * P2;
+    }
+    for (; i < n; ++i) {
+        lo = rotl(lo + p[i] * P5, 11) * P1;
+        hi = rotl(hi ^ (p[i] * P3), 9) * P2;
+    }
+    auto avalanche = [](uint32_t x) {
+        x ^= x >> 15, x *= P2, x ^= x >> 13, x *= P3, x ^= x >> 16;
+        return x;
+    };
+    lo = avalanche(lo);
+    hi = avalanche(hi + lo * P1);
+    return (uint64_t(hi) << 32) | lo;
+}
+
 void send_data(uint32_t source, uint32_t bytes) {
     const uint32_t head[2] = {source, bytes};
     const std::vector<uint8_t> data = read_mapped(ptr(source), bytes);
@@ -94,22 +137,20 @@ void send_tex_set(uint8_t *payload, uint32_t bytes) {
     const uint32_t lo = gfx::SetSlots::of(r, uploads).lo;
     uint64_t hash = 0xCBF29CE484222325ull ^ r.uploads ^ uint64_t(r.size) << 16;
     for (uint32_t k = 0; k < r.uploads; ++k) {
-        data[k] = read_mapped(ptr(uploads[k].source), uploads[k].qwords * 16);
+        // (the bytes read in place where they can be; copied only to be sent)
+        const uint32_t n = uploads[k].qwords * 16;
+        const uint8_t *bytes = in_guest(ptr(uploads[k].source), n);
+        if (!bytes) {
+            data[k] = read_mapped(ptr(uploads[k].source), n);
+            bytes = data[k].data();
+        }
         // (the layout: each upload's place in the slot, its width, format and size)
         const uint64_t layout[2] = {((uploads[k].destination & 0x3FFF) - lo) | (uploads[k].destination & 0xFFFF0000u) |
                                         (uint64_t(uploads[k].w) << 32 | uint64_t(uploads[k].h) << 48),
                                     uploads[k].qwords};
         for (const uint64_t v : layout) hash = (hash ^ v) * 0x100000001B3ull;
-        const uint8_t *b = data[k].data();
-        const size_t n = data[k].size();
-        size_t i = 0;
-        for (; i + 8 <= n; i += 8) {
-            uint64_t w;
-            std::memcpy(&w, b + i, 8);
-            hash = (hash ^ w) * 0x9E3779B97F4A7C15ull;
-            hash ^= hash >> 31;
-        }
-        for (; i < n; ++i) hash = (hash ^ b[i]) * 0x100000001B3ull;
+        hash = (hash ^ identity_hash(bytes, n, hash)) * 0x9E3779B97F4A7C15ull;
+        hash ^= hash >> 31;
     }
     r.hashLow = static_cast<uint32_t>(hash);
     r.hashHigh = static_cast<uint32_t>(hash >> 32);
@@ -120,6 +161,7 @@ void send_tex_set(uint8_t *payload, uint32_t bytes) {
     // each upload's bytes, or a reference to a content the host keeps (gfx::kDataReference)
     for (uint32_t k = 0; k < r.uploads; ++k) {
         const uint32_t n = uploads[k].qwords * 16;
+        if (data[k].empty()) data[k] = read_mapped(ptr(uploads[k].source), n);
         const uint64_t content = gfx::contentHash(data[k].data(), data[k].size());
         if (g_sent_uploads.add(content, [](uint64_t) {})) {
             const uint32_t head[2] = {uploads[k].source, n};
@@ -139,19 +181,6 @@ void send_tex_set(uint8_t *payload, uint32_t bytes) {
 
 // The model packets' contents the host has (docs/NATIVE_V2.md, step 2): their bytes go once.
 gfx::ContentFifo g_sent_models(gfx::kModelsKept);
-
-uint64_t content_hash(const std::vector<uint8_t> &bytes) {
-    uint64_t hash = 0xCBF29CE484222325ull ^ bytes.size();
-    size_t i = 0;
-    for (; i + 8 <= bytes.size(); i += 8) {
-        uint64_t w;
-        std::memcpy(&w, bytes.data() + i, 8);
-        hash = (hash ^ w) * 0x9E3779B97F4A7C15ull;
-        hash ^= hash >> 31;
-    }
-    for (; i < bytes.size(); ++i) hash = (hash ^ bytes[i]) * 0x100000001B3ull;
-    return hash;
-}
 
 // One record block: the bytes its records refer to, the block, then its reads.
 void send_block(uint8_t *block, uint32_t bytes) {
@@ -175,16 +204,22 @@ void send_block(uint8_t *block, uint32_t bytes) {
         } else if (h.type() == gfx::kBatchModel && h.bytes() >= sizeof(gfx::BatchModel)) {
             gfx::BatchModel m;
             std::memcpy(&m, payload, sizeof m);
-            // its bytes once per content
-            const std::vector<uint8_t> data = read_mapped(ptr(m.source), m.qwords * 16);
-            const uint64_t hash = content_hash(data);
+            // its bytes once per content (read in place where they can be)
+            const uint32_t n = m.qwords * 16;
+            std::vector<uint8_t> copy;
+            const uint8_t *bytes = in_guest(ptr(m.source), n);
+            if (!bytes) {
+                copy = read_mapped(ptr(m.source), n);
+                bytes = copy.data();
+            }
+            const uint64_t hash = identity_hash(bytes, n, 0xCBF29CE484222325ull ^ n);
             m.hashLow = static_cast<uint32_t>(hash);
             m.hashHigh = static_cast<uint32_t>(hash >> 32);
             m.sent = g_sent_models.add(hash, [](uint64_t) {}) ? 1u : 0u;
             std::memcpy(block + at + sizeof h, &m, sizeof m);
             if (m.sent) {
-                const uint32_t head[2] = {m.source, m.qwords * 16};
-                link_send(GT4_REC_GFX_DATA, head, sizeof head, data.data(), m.qwords * 16);
+                const uint32_t head[2] = {m.source, n};
+                link_send(GT4_REC_GFX_DATA, head, sizeof head, bytes, n);
             }
         } else if (h.type() == gfx::kTexSet && h.bytes() >= sizeof(gfx::TexSetRecord)) {
             send_tex_set(block + at + sizeof h, h.bytes());
