@@ -52,7 +52,7 @@ constexpr VkFormat kVelocity = VK_FORMAT_R16G16_SFLOAT;
 enum : uint32_t {
     kTextured = 1, kUv = 2, kFog = 4, kBlend = 8, kPabe = 16, kFba = 32, kFromTarget = 64, kTarget24 = 128, kDestAlphaBlend = 256,
     kNearest = 512, kSnap = 1024, kAlphaInvert = 2048, kMipmapped = 4096, kGeneratedMips = 8192, kSnapFiltered = 16384,
-    kReplaced = 32768,
+    kReplaced = 32768, kDateFlips = 65536, kDateKeeps = 131072, kDatm = 262144,
 };
 
 // A fixed-function blend for C = Ad: the coefficients of Cs and Cd as (a * Ad + b), mapped onto factors.
@@ -782,6 +782,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
     struct Recorded {
         int depthTest = -1, compare = -1, stencilTest = -1, reference = -1, depthWrite = -1;
         bool stencilFixed = false;
+        int stencilInvert = -1;   // the stencil inverted where a pixel passes (a DATE pass that flips bit 7)
         VkRect2D scissor{{-1, -1}, {0, 0}};
         VkImageView view = VK_NULL_HANDLE;
         VkSampler sampler = VK_NULL_HANDLE;
@@ -1700,6 +1701,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         recorded.compare = int(ztst);
         recorded.stencilTest = stencilTest;
         recorded.stencilFixed = true;
+        recorded.stencilInvert = 0;
         recorded.reference = int(c.destPass);
         // Scissor, in render pixels.
         const uint32_t x0 = c.scissorX0, x1 = c.scissorX1;
@@ -1721,12 +1723,32 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         struct Pass {
             uint32_t mask;
             bool zwrite, inverted;
-        } passes[2];
+            uint32_t date = 0;   // 0, or kDateFlips / kDateKeeps
+        } passes[4];
         uint32_t passCount = 0;
         if (!ate || atst != 0) passes[passCount++] = {mask, zwrite, false};
         if (ate && atst != 1 && afail != 0) {
             const uint32_t rgb = mask & (VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT);
             passes[passCount++] = afail == 1 ? Pass{mask, false, true} : afail == 2 ? Pass{0, zwrite, true} : Pass{rgb, false, true};
+        }
+        // The destination alpha test of a draw that writes alpha: the GS tests each pixel as the draw's earlier
+        // primitives left it (a reflection pass drawn over a decal's polygon and the body under it lights the pixel
+        // once: the first sets bit 7, the second then fails). The stencil copy is kept in step: the pixels whose
+        // written alpha changes bit 7 draw first and invert the stencil, then the others; each pass's pixels are
+        // chosen in gsn.frag. (Exact unless one draw's overlapping primitives write alpha on both sides of bit 7.)
+        if (stencilTest) {
+            Pass split[4];
+            uint32_t n = 0;
+            for (uint32_t p = 0; p < passCount; ++p) {
+                if (!(passes[p].mask & VK_COLOR_COMPONENT_A_BIT)) {
+                    split[n++] = passes[p];
+                    continue;
+                }
+                split[n] = passes[p], split[n++].date = kDateFlips;
+                split[n] = passes[p], split[n++].date = kDateKeeps;
+            }
+            std::copy(split, split + n, passes);
+            passCount = n;
         }
         for (uint32_t pass = 0; pass < passCount; ++pass) {
             const Pass& ps = passes[pass];
@@ -1745,8 +1767,16 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
                 vkCmdSetDepthWriteEnable(command, ps.zwrite ? VK_TRUE : VK_FALSE);
                 recorded.depthWrite = int(ps.zwrite);
             }
+            const int invert = ps.date == kDateFlips ? 1 : 0;
+            if (stencilTest && recorded.stencilInvert != invert) {
+                vkCmdSetStencilOp(command, VK_STENCIL_FACE_FRONT_AND_BACK, VK_STENCIL_OP_KEEP,
+                                  invert ? VK_STENCIL_OP_INVERT : VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP, VK_COMPARE_OP_EQUAL);
+                vkCmdSetStencilWriteMask(command, VK_STENCIL_FACE_FRONT_AND_BACK, invert ? 1u : 0u);
+                recorded.stencilInvert = invert;
+            }
             DrawConstants pk = k;
             if (ps.inverted) pk.flags |= kAlphaInvert;
+            if (ps.date) pk.flags |= ps.date | (c.destPass ? uint32_t(kDatm) : 0u);
             if (jittered[at]) {
                 pk.jitter[0] = phase[0] / float(sx);
                 pk.jitter[1] = phase[1] / float(sy);

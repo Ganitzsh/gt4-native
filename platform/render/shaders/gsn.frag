@@ -244,6 +244,12 @@ void main() {
 
     float written = c.a;
     if ((draw.flags & kFba) != 0u) written = mod(written, 128.0) + 128.0;
+    // The GS tests each pixel's destination alpha as the draw leaves it: a pixel that sets bit 7 against DATM fails
+    // the test for the primitives of the same draw that follow (the stencil, inverted by this pass, holds that).
+    if ((draw.flags & (kDateFlips | kDateKeeps)) != 0u) {
+        const bool flips = (written >= 128.0) != ((draw.flags & kDatm) != 0u);
+        if (flips != ((draw.flags & kDateFlips) != 0u)) discard;
+    }
     // Source alpha for the blend: As (0x80 = 1.0); FIX likewise.
     const uint A = draw.blend & 3u, B = (draw.blend >> 2) & 3u, C = (draw.blend >> 4) & 3u, D = (draw.blend >> 6) & 3u;
     const float fix = float((draw.blend >> 8) & 0xFFu);
