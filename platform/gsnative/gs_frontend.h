@@ -115,6 +115,12 @@ struct Target {
     bool depth = false;
     uint32_t generation = 0;   // a new buffer in this slot (the id is reused): the back end starts a new image
     uint64_t lastUsed = 0;     // the front end's frame count when last drawn into, sampled or displayed
+    // Drawn at the PS2's resolution: a target the game reads back into EE memory (a narrow 16-bit one: its car
+    // pictures), and what draws into such a target sample, with that source's Z buffer. The game uses those
+    // pixels as data; drawn finer, the car pictures' 1-bit alpha lost parts of the body.
+    bool exact = false;
+    uint32_t lastDepth = 0;    // the Z buffer of its last depth-tested draw
+    uint32_t sources[4] = {};  // targets its draws sampled (the latest four)
 };
 
 struct Display {
@@ -468,6 +474,8 @@ private:
     };
     std::unordered_map<uint32_t, Scene> scenes;
     void sceneRead(uint32_t target);
+    void noteDraw(uint32_t colour, uint32_t depth, const TextureSource& texture);
+    void markExact(uint32_t target);
     uint32_t nextTexture = 1;
     uint64_t frameCount = 0;
 

@@ -47,6 +47,11 @@ bool layout32(uint32_t psm) {
     return psm == PSMCT32 || psm == PSMCT24 || psm == PSMT8H || psm == PSMT4HL || psm == PSMT4HH;
 }
 
+// A narrow 16-bit colour target: GT4's car pictures, which it reads back (Target::exact).
+bool readBackShape(bool depth, uint32_t psm, uint32_t bw) {
+    return !depth && bw * 64 < 512 && (psm == PSMCT16 || psm == PSMCT16S);
+}
+
 }  // namespace
 
 void FrameList::clear() {
@@ -421,7 +426,8 @@ void GsFrontend::readStarted(const GsMemory::Transfer& t) {
             // GT4's reads (the car thumbnails it renders into 16-bit targets and keeps in EE memory) are of
             // one target in its own layout: those pixels come from the GPU. Anything else stays the memory
             // model's (stale where drawn).
-            const Target& o = targets[owner - 1];
+            markExact(owner);   // the game keeps these pixels: from now on drawn at the PS2's resolution
+            Target& o = targets[owner - 1];
             if (oneOwner && !o.depth && o.bp == t.sbp && o.bw == t.sbw && o.psm == t.spsm &&
                 (t.spsm == PSMCT32 || t.spsm == PSMCT24 || t.spsm == PSMCT16 || t.spsm == PSMCT16S)) {
                 gpuRead = {owner, t.ssax, t.ssay, t.rrw, t.rrh, t.spsm};
@@ -686,6 +692,7 @@ void GsFrontend::emit(const Vertex* v, uint32_t n, Topology topology) {
         if (known != scene.viewports.end()) ++known->second;
         else if (scene.viewports.size() < 8) scene.viewports.push_back({rect, 1});
     }
+    noteDraw(colour, depth, texture);
     // Batch with the previous draw when nothing changed.
     if (!frame.commands.empty() && frame.commands.back().kind == FrameList::Command::Kind::Draw) {
         Draw& last = frame.draws[frame.commands.back().index];
@@ -709,6 +716,31 @@ void GsFrontend::emit(const Vertex* v, uint32_t n, Topology topology) {
     frame.commands.push_back({FrameList::Command::Kind::Draw, static_cast<uint32_t>(frame.draws.size())});
     frame.draws.push_back(d);
     ++stats.draws;
+}
+
+// A draw into `colour` (depth-tested against `depth`) sampling `texture`: a target drawn at the PS2's resolution
+// (Target::exact) passes that on to the target it samples and its Z buffer.
+void GsFrontend::noteDraw(uint32_t colour, uint32_t depth, const TextureSource& texture) {
+    if (!colour || colour > targets.size()) return;
+    Target& c = targets[colour - 1];
+    if (depth) c.lastDepth = depth;
+    if (texture.kind != TextureSource::Kind::Target || !texture.id || texture.id == colour || texture.id > targets.size()) return;
+    if (std::find(std::begin(c.sources), std::end(c.sources), texture.id) == std::end(c.sources)) {
+        std::copy_backward(std::begin(c.sources), std::end(c.sources) - 1, std::end(c.sources));
+        c.sources[0] = texture.id;
+    }
+    if (c.exact) markExact(texture.id);
+}
+
+// That target, its Z buffer and what its draws sampled, at the PS2's resolution from now on.
+void GsFrontend::markExact(uint32_t target) {
+    // (narrow ones only: the car pictures' chain is 64 to 128 wide; a screen-sized buffer they read keeps its scale)
+    if (!target || target > targets.size() || targets[target - 1].exact || targets[target - 1].bw * 64 >= 512) return;
+    Target& t = targets[target - 1];
+    t.exact = true;
+    if (t.lastDepth && t.lastDepth <= targets.size() && targets[t.lastDepth - 1].bw * 64 < 512) targets[t.lastDepth - 1].exact = true;
+    const uint32_t sources[4] = {t.sources[0], t.sources[1], t.sources[2], t.sources[3]};
+    for (const uint32_t s : sources) markExact(s);
 }
 
 // A target read as a texture into another: when it holds a 3D scene of the screen's size (64 depth-tested
@@ -751,6 +783,7 @@ uint32_t GsFrontend::targetFor(uint32_t bp, uint32_t psm, bool depth, uint32_t h
         if (depth && (t.psm & 2) != (psm & 2)) continue;
         if (heightNeeded > t.height) t.height = (heightNeeded + 31) & ~31u;
         if (!depth) t.psm = psm;   // CT24 and CT32 share the layout; the last write tells which alpha is valid
+        if (readBackShape(depth, psm, bw) && !t.exact) markExact(t.id);
         t.lastUsed = frameCount;
         return t.id;
     }
@@ -783,6 +816,7 @@ uint32_t GsFrontend::targetFor(uint32_t bp, uint32_t psm, bool depth, uint32_t h
     t.bw = bw;
     t.psm = psm;
     t.depth = depth;
+    t.exact = readBackShape(depth, psm, bw);
     t.height = (std::max<uint32_t>(heightNeeded, 32) + 31) & ~31u;
     if (slot) *slot = t;
     else targets.push_back(t);
@@ -1617,6 +1651,7 @@ void GsFrontend::model(const gfx::ModelJob& in, const uint32_t* words) {
         }
     }
     if (texture.kind == TextureSource::Kind::Target && texture.id != colour) sceneRead(texture.id);
+    noteDraw(colour, depth, texture);
     const bool moving = (in.flags & 4) != 0;
     Draw* batch = nullptr;
     if (!frame.commands.empty() && frame.commands.back().kind == FrameList::Command::Kind::Draw) {

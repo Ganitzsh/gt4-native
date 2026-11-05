@@ -106,6 +106,7 @@ struct GsnScene::Impl {
     // the glare's levels) is a texture other draws read, never shown pixel for pixel: at most 2 render pixels per
     // GS pixel each way (a 128 x 256 environment map was drawn at 2 x 5 at 1080p, 0.44 ms of 4.5).
     std::pair<uint32_t, uint32_t> scaleFor(const gsn::Target& t) const {
+        if (t.exact) return {1u, 1u};   // pixels the game reads back, or what they are drawn from (gsn::Target::exact)
         const uint32_t x = sx, y = verticalScaleFor(t);
         return t.bw * 64 < 512 ? std::make_pair(std::min(x, 2u), std::min(y, 2u)) : std::make_pair(x, y);
     }
