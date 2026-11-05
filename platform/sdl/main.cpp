@@ -710,7 +710,12 @@ int run(const Options& options) {
         uint32_t frames;
         uint64_t vblanks;
         double host, game, gpu;
+        uint64_t drawn, fresh;
+        uint32_t waits, waitMs;
     } perf{};
+    uint64_t newestAdded = 0;   // the VBlank of the newest displayed list given to the renderer (drawn at its next draw)
+    uint64_t freshShown = 0;   // presents that showed a frame the game drew since the one before
+    bool freshPending = false;
     double perfGpu = 0.0;   // GPU milliseconds of the frames presented so far
     while (running) {
         for (; nextScriptedKey < scriptedKeys.size() && scriptedKeys[nextScriptedKey].frame <= frames; ++nextScriptedKey) {
@@ -824,7 +829,13 @@ int run(const Options& options) {
         // The game's frames: in lockstep replay one VBlank per rendered frame; otherwise the newest one.
         if (gs) {
             if (lockstep) gs->advance();
-            if (gs->takeNativeFrames(nativeFrames)) renderer->addNativeFrames(nativeFrames);
+            if (gs->takeNativeFrames(nativeFrames)) {
+                for (const auto& list : nativeFrames) {
+                    freshPending = freshPending || list.displayed;
+                    if (list.displayed) newestAdded = std::max(newestAdded, list.vblank);
+                }
+                renderer->addNativeFrames(nativeFrames);
+            }
             // A read of drawn pixels the game waits for (the car thumbnails it renders and keeps): the lists up
             // to it are drawn now and the pixels read back.
             gt4::gsn::ReadRequest read;
@@ -946,7 +957,10 @@ int run(const Options& options) {
         if (gs && gs->live()) {
             const Uint64 ticks = SDL_GetTicks();
             if (!perf.at) {
-                perf = {ticks + 10000, frames, gs->vblanks(), gt4::gs::processCpuMilliseconds(), gs->gameCpuSeconds() * 1000.0, perfGpu};
+                uint32_t waits, waitMs;
+                gs->hostWaits(waits, waitMs);
+                perf = {ticks + 10000, frames, gs->vblanks(), gt4::gs::processCpuMilliseconds(), gs->gameCpuSeconds() * 1000.0, perfGpu,
+                        gs->drawnFrames(), freshShown, waits, waitMs};
             } else if (ticks >= perf.at) {
                 const double seconds = (ticks - perf.at + 10000) / 1000.0;
                 const uint32_t shown = frames - perf.frames;
@@ -958,8 +972,16 @@ int run(const Options& options) {
                             (host - perf.host) / (seconds * 10.0), game ? (gameCpu - perf.game) / double(game) : 0.0,
                             (gameCpu - perf.game) / (seconds * 10.0), shown ? (perfGpu - perf.gpu) / shown : 0.0,
                             followGame ? "; presenting the game's frames" : "");
+                // "game frames" above are VBlanks (the game's clock, 60 whether it draws or not): what the game drew,
+                // and how many presents showed a frame it drew since the one before (repeats not counted).
+                // ... and the game's last-resort waits for a host too far behind (runtime/link.cpp link_wait_for_host).
+                uint32_t waits, waitMs;
+                gs->hostWaits(waits, waitMs);
+                std::printf("perf: game drew %.1f frames/s, %.1f new frames shown/s; the game waited for the host %u times (%u ms)\n",
+                            (gs->drawnFrames() - perf.drawn) / seconds, (freshShown - perf.fresh) / seconds, waits - perf.waits,
+                            waitMs - perf.waitMs);
                 std::fflush(stdout);
-                perf = {ticks + 10000, frames, gs->vblanks(), host, gameCpu, perfGpu};
+                perf = {ticks + 10000, frames, gs->vblanks(), host, gameCpu, perfGpu, gs->drawnFrames(), freshShown, waits, waitMs};
             }
         }
         if (!freshFrame) continue;   // nothing new from the game: no frame to present
@@ -996,6 +1018,7 @@ int run(const Options& options) {
         bool presented = false;
         try {
             presented = renderer->draw(delta);
+            if (gs) gs->setFrameDrawn(newestAdded);   // every list added was drawn (or skipped) by this draw
         } catch (const PresentationLost& lost) {
             // The window is now on a display this GPU cannot present to: choose a device again.
             std::fprintf(stderr, "%s\n", lost.what());
@@ -1003,6 +1026,10 @@ int run(const Options& options) {
             renderer.reset();
             renderer = makeRenderer("auto");
             continue;
+        }
+        if (presented && freshPending) {
+            ++freshShown;
+            freshPending = false;
         }
         if (presented) {
             ++frames;

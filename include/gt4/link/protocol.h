@@ -90,10 +90,14 @@ typedef struct Gt4LinkHeader {
     uint32_t h2g_offset, h2g_size;
     volatile uint32_t game_pid, host_pid;
     volatile uint32_t game_state; /* 0 starting, 1 running, 2 exited */
-    volatile uint32_t frame;      /* VBlanks the game has sent */
+    volatile uint32_t frame;      /* VBlanks the game has sent (the newest VSYNC record's count) */
     volatile uint32_t game_cpu_ms; /* the game process's CPU time, every thread (it writes it: Wine's
                                       GetProcessTimes on another process gives the caller's own) */
-    uint8_t pad[12];
+    /* The host: the VBlank count of the newest frame its renderer has drawn (or skipped); 0 from a host that does
+     * not say. The game's frame kick waits while it is more than a few VBlanks ahead of it (runtime/link.cpp
+     * link_wait_for_host), counting its waits here. */
+    volatile uint32_t host_frame_drawn;
+    volatile uint32_t game_host_waits, game_host_wait_ms;
     Gt4LinkRing g2h, h2g;
 } Gt4LinkHeader;
 

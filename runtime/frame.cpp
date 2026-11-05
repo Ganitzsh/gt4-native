@@ -311,6 +311,7 @@ extern "C" void gt4_replace_func_004A11F8(uint32_t pair) {
         pair = guest_ref<uint32_t>(kContext + 0x20C);
         if (!pair) return;
     }
+    link_wait_for_host();   // (a host far behind: the game waits, as a PS2 game waits for its GS)
     using Sema = int (*)(int);
     const Sema wait = reinterpret_cast<Sema>(guest_ptr(0x004A0F08)), signal = reinterpret_cast<Sema>(guest_ptr(0x004A0F38));
     wait(1);   // the channels' semaphores

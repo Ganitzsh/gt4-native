@@ -57,6 +57,11 @@ public:
 
     bool live() const;          // linked to a running game
     uint64_t vblanks() const;   // VBlanks received from the game or the capture (the game's clock)
+    uint64_t drawnFrames() const;   // frames the game drew (displayed frame lists), not VBlanks
+    // The newest frame the renderer drew or skipped (its FrameList::vblank), for the game's last-resort wait
+    // (protocol.h host_frame_drawn); and that wait's count and milliseconds so far.
+    void setFrameDrawn(uint64_t vblank);
+    void hostWaits(uint32_t& count, uint32_t& ms) const;
     bool finished() const;      // the game exited, or the replay reached its end (without loop)
     int gameExitCode() const;   // the game's exit code once it has exited (0 otherwise)
     double gameCpuSeconds() const;   // the game process's CPU time so far, every thread (0 without a live game)

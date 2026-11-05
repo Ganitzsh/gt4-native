@@ -49,6 +49,8 @@ public:
     int exitCode() const;                 // valid once !running()
     double processSeconds() const;        // the game process's CPU time so far (user and kernel, every thread)
     uint32_t gameState() const;           // header game_state (0 starting, 1 running, 2 exited)
+    void setHostFrameDrawn(uint32_t vblank);              // header host_frame_drawn
+    void gameHostWaits(uint32_t& count, uint32_t& ms) const;   // header game_host_waits, game_host_wait_ms
     uint64_t bytesReceived() const;
 
     struct Impl;

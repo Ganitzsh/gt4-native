@@ -249,6 +249,13 @@ double GameLink::processSeconds() const {
 
 int GameLink::exitCode() const { return impl->exitCode; }
 uint32_t GameLink::gameState() const { return impl->header->game_state; }
+void GameLink::setHostFrameDrawn(uint32_t vblank) {
+    if (impl->header && vblank) impl->header->host_frame_drawn = vblank;
+}
+void GameLink::gameHostWaits(uint32_t& count, uint32_t& ms) const {
+    count = impl->header ? impl->header->game_host_waits : 0;
+    ms = impl->header ? impl->header->game_host_wait_ms : 0;
+}
 uint64_t GameLink::bytesReceived() const { return impl->received; }
 
 std::unique_ptr<ReplaySource> ReplaySource::open(const std::string& path, std::string& error) {

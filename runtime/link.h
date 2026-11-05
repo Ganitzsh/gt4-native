@@ -28,6 +28,9 @@ void link_poll();
 // GS_IMAGE, copied to dst (qwc x 16 bytes). Without a host, or on timeout, dst is zero-filled and
 // false is returned.
 bool link_read_image(uint32_t qwc, void *dst);
+// The last resort against a host that falls behind: from a game thread at a safe point (no lock held, not in an
+// interrupt), waits while the game is more than a few VBlanks ahead of the newest frame the host drew.
+void link_wait_for_host();
 
 // The host lost a texture content it was counted on to keep (GT4_REC_HOST_CMD 5): runtime/frame.cpp sends every
 // content again.

@@ -799,6 +799,14 @@ std::unique_ptr<GsHost> GsHost::create(const Options& options, std::string& erro
 }
 
 uint64_t GsHost::vblanks() const { return impl->vblankRecords.load(); }
+uint64_t GsHost::drawnFrames() const { return impl->vsyncs.load(); }
+void GsHost::setFrameDrawn(uint64_t vblank) {
+    if (impl->link) impl->link->setHostFrameDrawn(static_cast<uint32_t>(vblank));
+}
+void GsHost::hostWaits(uint32_t& count, uint32_t& ms) const {
+    count = ms = 0;
+    if (impl->link) impl->link->gameHostWaits(count, ms);
+}
 
 bool GsHost::advance() {
     Impl& h = *impl;

@@ -172,6 +172,11 @@ void link_send(uint32_t type, const void *payload, uint32_t size, const void *ex
             }
         }
     }
+    if (type == GT4_REC_VSYNC && size >= 8) {
+        uint32_t count;
+        std::memcpy(&count, static_cast<const uint8_t *>(payload) + 4, 4);
+        g_hdr->frame = count;
+    }
     ring_write(g_g2h, ring, head, &rec, sizeof rec);
     if (size) ring_write(g_g2h, ring, head + sizeof rec, payload, size);
     if (extra_size) ring_write(g_g2h, ring, head + sizeof rec + size, extra, extra_size);
@@ -287,6 +292,28 @@ bool link_read_image(uint32_t qwc, void *dst) {
     else if (took >= 50 && (++slow <= 20 || slow % 100 == 0))
         log_warn("link: a %u-qword GS read took %lu ms (read %u, %u slow so far)", qwc, static_cast<unsigned long>(took), reads, slow);
     return done;
+}
+
+void link_wait_for_host() {
+    // Frame skipping on the host keeps it within a frame or two; this only catches a host that cannot keep up at
+    // all. Not in an interrupt (the kernel lock is held there), and never for long: a host that draws nothing (a
+    // minimised window) is not waited for again until it draws.
+    constexpr uint32_t kAhead = 6;
+    if (!g_hdr || kernel_in_interrupt()) return;
+    static uint32_t stalled_at = 0;   // the host's frame when a whole wait saw it draw nothing
+    const uint32_t drawn = g_hdr->host_frame_drawn;
+    if (!drawn || drawn == stalled_at || g_hdr->frame - drawn <= kAhead) return;
+    const DWORD since = GetTickCount();
+    while (g_hdr->frame - g_hdr->host_frame_drawn > kAhead) {
+        if (GetTickCount() - since >= 250) {
+            if (g_hdr->host_frame_drawn == drawn) stalled_at = drawn;
+            break;
+        }
+        KernelScope ks;   // a safe point: the frame's interrupts are delivered here as it leaves, not by freezing it
+        Sleep(1);
+    }
+    g_hdr->game_host_waits = g_hdr->game_host_waits + 1;
+    g_hdr->game_host_wait_ms = g_hdr->game_host_wait_ms + (GetTickCount() - since);
 }
 
 bool link_pad(int port, uint8_t out[18]) {
