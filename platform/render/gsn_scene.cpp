@@ -20,6 +20,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace gt4 {
 
@@ -183,6 +184,10 @@ struct GsnScene::Impl {
     // GS -> host reads (GsnScene::read): how many, the frames skipped ahead of them, and GT4_READ_SKIP_TEST's frames
     // held back (the newest lists, drawn only at the next read: a backlog for a lockstep replay's reads).
     uint64_t reads = 0, readSkips = 0;
+    // Targets a frame was seen reading before writing them: their content is kept from frame to frame (an environment
+    // map a later frame samples), so a frame that writes one is never skipped as if it were scratch (skipOlderFrames).
+    std::unordered_set<uint32_t> carried;
+    void noteCarried(const gsn::FrameList& list);
     std::vector<gsn::FrameList> readHeld;
     // Presentation decoupled from the game's 60 Hz (docs/NATIVE_V2.md, step 4): the last list drawn again at each
     // display refresh with its 3D batches' transforms blended from the previous frame's by modelT, the fraction of
@@ -1972,9 +1977,36 @@ GsnScene::~GsnScene() = default;
 //   source) before writing it itself: it would read the skipped frame's pixels. (GT4's race and replay frames,
 //   measured: none does; each frame draws what it samples.)
 // A target no later waiting list writes is no obstacle either when it is the frame's own scratch: the frame does not
-// read it before writing it, and no later waiting list reads it at all (a race's small 64-pixel-wide targets, drawn
-// and used by a frame when a car needs them: most of the frames the first rule kept). GT4_SKIP_STRICT=1: not.
+// read it before writing it, no later waiting list reads it, and no frame so far was seen reading it before writing it
+// (`carried`: content kept between frames, which a frame not queued yet may read, as the 256 x 256 environment map
+// does). A race's small 64-pixel-wide targets, drawn by a frame when a car needs them: most of the frames the first
+// rule kept (a replay, every other frame offered: 1026 skipped by it, 1191 with this). GT4_SKIP_STRICT=1: not.
 // Returns how many were skipped. (A GS -> host read waiting: keepComplete 0, so its list waits only for itself.)
+void GsnScene::Impl::noteCarried(const gsn::FrameList& l) {
+    std::vector<uint32_t> written;
+    auto read = [&](uint32_t id) {
+        if (id && std::find(written.begin(), written.end(), id) == written.end()) carried.insert(id);
+    };
+    for (const auto& c : l.commands) {
+        if ((c.kind == gsn::FrameList::Command::Kind::Draw || c.kind == gsn::FrameList::Command::Kind::Clear) && c.index < l.draws.size()) {
+            const gsn::Draw& d = l.draws[c.index];
+            if (d.texture.kind == gsn::TextureSource::Kind::Target) read(d.texture.id);
+            if (d.texture.kind == gsn::TextureSource::Kind::Reinterpreted && d.texture.id < l.reinterpretations.size()) {
+                read(l.reinterpretations[d.texture.id].target);
+                read(l.reinterpretations[d.texture.id].clutTarget);
+            }
+            written.push_back(d.target);
+            if (d.depth) written.push_back(d.depth);
+        } else if (c.kind == gsn::FrameList::Command::Kind::Effect && c.index < l.effects.size()) {
+            read(l.effects[c.index].source);
+            written.push_back(l.effects[c.index].destination);
+        } else if (c.kind == gsn::FrameList::Command::Kind::Light && c.index < l.lights.size()) {
+            read(l.lights[c.index].target);
+            read(l.lights[c.index].depth);
+        }
+    }
+}
+
 size_t GsnScene::Impl::skipOlderFrames(size_t keepComplete) {
     auto writes = [](const gsn::FrameList& l, std::vector<uint32_t>& out) {
         for (const auto& c : l.commands) {
@@ -2054,8 +2086,8 @@ size_t GsnScene::Impl::skipOlderFrames(size_t keepComplete) {
         for (uint32_t t : first) {
             if (!again) break;
             if (std::binary_search(later.begin(), later.end(), t)) continue;
-            // the frame's own scratch: not read before its write here, nor at all by a later waiting list
-            bool scratch = !strict && !readsFirst(pending[0], std::vector<uint32_t>{t});
+            // the frame's own scratch: not read before its write here, never seen carried, read by no later list
+            bool scratch = !strict && !carried.count(t) && !readsFirst(pending[0], std::vector<uint32_t>{t});
             for (size_t i = 1; i < pending.size() && scratch; ++i) scratch = !readsAny(pending[i], t);
             again = scratch;
         }
@@ -2076,7 +2108,10 @@ void GsnScene::addFrames(std::vector<gsn::FrameList>& lists) {
     Impl& s = *impl;
     for (const auto& list : lists)
         if (list.displayed) s.arrival = std::chrono::steady_clock::now();
-    for (auto& list : lists) s.pending.push_back(std::move(list));
+    for (auto& list : lists) {
+        s.noteCarried(list);
+        s.pending.push_back(std::move(list));
+    }
     lists.clear();
     // GT4_READ_SKIP_TEST=N (testing, a lockstep replay): the newest N complete frames are held back until the next GS ->
     // host read, which then finds them waiting ahead of it as a host behind the game would (GsnScene::read). Two runs,
