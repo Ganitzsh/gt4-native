@@ -1011,7 +1011,7 @@ bool Renderers3d::run(const Batch3d& batch, PrimitiveSink& sink, uint32_t& conti
         constants.clamp = r.floats(kConstants + 6);
         constants.guard = r.floats(kConstants + 7);
         // The object, for its previous transform (motion vectors): what its first batch draws (FNV-1a over the
-        // GIF tag, the strips' lengths and the GS state header) and how many setups drew the same before it.
+        // GIF tag, the strips' lengths and the GS state header).
         uint64_t key = 1469598103934665603ull;
         auto mix = [&key](uint32_t w) { key = (key ^ w) * 1099511628211ull; };
         for (const uint32_t w : r.words(kTag)) mix(w);
@@ -1023,8 +1023,29 @@ bool Renderers3d::run(const Batch3d& batch, PrimitiveSink& sink, uint32_t& conti
                 for (const uint32_t w : r.words(kHeader + q)) mix(w);
         std::vector<Constants>& seen = thisFrame[key];
         const auto then = lastFrame.find(key);
-        hasPrevious = then != lastFrame.end() && then->second.size() > seen.size();
-        if (hasPrevious) previous = then->second[seen.size()];
+        // Of the previous frame's drawings of the same, the one whose transform is closest (the Nth copy of a repeated
+        // object is not always the Nth drawn), and none when even that one moved by more than 0.3 of the transform's
+        // size in a frame: the same drawing in another role (a quad of the loading screen, then of the race's sky).
+        // Matched by order, or that far apart, the interpolated object swept across the screen for a frame (a dark
+        // sky, a grey box over it at the race start). Steady motion stays under 0.2 (a race start, B-spec, 1300 frames).
+        hasPrevious = false;
+        if (then != lastFrame.end()) {
+            float size = 0.0f, best = FLT_MAX;
+            for (int k = 0; k < 4; ++k)
+                for (int i = 0; i < 4; ++i) size += std::fabs(constants.matrix[k][i]);
+            for (const Constants& c : then->second) {
+                bool sameView = true;   // the same viewport (not its copy in a reflection map's pass)
+                for (int i = 0; i < 4; ++i)
+                    sameView = sameView && std::fabs(constants.scale[i] - c.scale[i]) <= 0.01f * std::fabs(constants.scale[i]) + 1e-3f &&
+                               std::fabs(constants.offset[i] - c.offset[i]) <= 0.01f * std::fabs(constants.offset[i]) + 1e-3f;
+                if (!sameView) continue;
+                float moved = 0.0f;
+                for (int k = 0; k < 4; ++k)
+                    for (int i = 0; i < 4; ++i) moved += std::fabs(constants.matrix[k][i] - c.matrix[k][i]);
+                if (moved < best) best = moved, previous = c;
+            }
+            hasPrevious = best <= 0.3f * size;
+        }
         seen.push_back(constants);
         ++stats.setups;
         if (hasPrevious) ++stats.matched;

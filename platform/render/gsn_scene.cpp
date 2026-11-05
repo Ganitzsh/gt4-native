@@ -294,6 +294,7 @@ struct GsnScene::Impl {
     VkSampler samplers[4] = {};   // [linear][repeat]
     VkSampler mipSamplers[4] = {};   // [repeat U * 2 + repeat V]: mipmapped textures, trilinear, anisotropic
     uint32_t displayTarget = 0;
+    uint32_t gameShown = 0;   // interpolating: the buffer the display registers showed for the list before
     float displayRect[4] = {0, 0, 1, 1};
     // Field mode: the field shown before (its buffer and its rectangle's top) and how much of it the display mixes in.
     uint32_t lastFieldTarget = 0, lastFieldY = 0, blendTarget = 0;
@@ -1802,12 +1803,15 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
     // The displayed buffer, for recordMain (a list cut for a GS -> host read displays nothing).
     if (!frame.displayed) return;
     ++displayedFrames;
-    displayTarget = frame.display.target2 ? frame.display.target2 : frame.display.target1;
+    const uint32_t shownByGame = frame.display.target2 ? frame.display.target2 : frame.display.target1;
+    const uint32_t shownBefore = displayTarget;
+    displayTarget = shownByGame;
     // Interpolating: the buffer this list draws into, not the one it shows. The game draws into a back buffer while
     // the display shows the front one, which the list before drew: shown now, the back buffer at modelT is the
     // state between the frame on screen (0) and this one (1). (The last target drawn of the shown one's size and
     // format; a single buffer is the shown one.)
     if (interpolate) {
+        bool backBuffer = false;
         const gsn::Target* shownTarget = nullptr;
         for (const gsn::Target& t : frame.targets)
             if (t.id == displayTarget) shownTarget = &t;
@@ -1821,10 +1825,16 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
             if (drawn && !drawn->depth && drawn->bw == shownTarget->bw && drawn->height == shownTarget->height &&
                 (drawn->psm == shownTarget->psm || (drawn->psm <= 1 && shownTarget->psm <= 1))) {   // (CT32 and CT24: one layout)
                 displayTarget = id;
+                backBuffer = true;
                 break;
             }
         }
+        // Nothing drawn and no flip: a game frame taking several VBlanks (the race start: the first race frame drawn
+        // into the back buffer, then three empty lists before the flip) goes on showing the buffer shown before.
+        // Back to the display registers' buffer there, the picture went race, black, black, black, race.
+        if (!backBuffer && shownByGame == gameShown && targets.count(shownBefore)) displayTarget = shownBefore;
     }
+    gameShown = shownByGame;
     auto shown = targets.find(displayTarget);
     if (shown != targets.end()) {
         const gfx::DisplayCircuit& c = frame.display.record.circuit[frame.display.target2 ? 1 : 0];
