@@ -48,7 +48,7 @@ def definition(addr, decomp, draft_paths):
             text = abi_lint.strip_comments(open(path, encoding='utf-8', errors='replace').read())
         except OSError:
             continue
-        for a, kinds, is_def, _line, _used, ret in abi_lint.scan(path, text):
+        for a, kinds, is_def, _line, _used, ret, *_ in abi_lint.scan(path, text):
             if a == addr and is_def and kinds is not None:
                 return kinds, ret, role
     return None

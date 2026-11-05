@@ -47,7 +47,7 @@ struct RecHeader {
     uint32_t ram_pages;  // .post: only the 4 KB pages of RAM that changed, each as its address and contents
 };
 
-constexpr uint32_t kVuMem = 0x11000000, kVuMemSize = 0x5000;  // VU0 micro (4 KB) and data (4 KB at +0x4000)
+constexpr uint32_t kVuMemSize = 0x5000;  // as VU0 micro (16 KB, zeros) and data (4 KB at +0x4000) are laid out
 constexpr uint32_t kPage = 0x1000;
 
 // The shared state in the layout of the VU0 register file the original kept it in (tools/eeref/vu0_state.h; eeref and
@@ -182,7 +182,10 @@ void write_state(const Hook &hook, uint32_t index, uint32_t kind, const uint32_t
         fwrite(pages.data(), 1, pages.size(), f);
     }
     fwrite(guest_ptr(kScratchpad), 1, kScratchpadSize, f);
-    fwrite(guest_ptr(kVuMem), 1, 0x4000, f);                    // VU0 micro memory (unused natively)
+    {   // VU0 micro memory: unused natively, and its hardware block has no memory (guest.h kHwBlocks)
+        static const uint8_t micro[0x4000] = {};
+        fwrite(micro, 1, sizeof micro, f);
+    }
     fwrite(gt4_matrix_stack, 1, sizeof gt4_matrix_stack, f);   // as VU0 data memory
     static_assert(sizeof gt4_matrix_stack == kVuMemSize - 0x4000);
     fwrite(guest_ptr(h.stack_base), 1, h.stack_size, f);
