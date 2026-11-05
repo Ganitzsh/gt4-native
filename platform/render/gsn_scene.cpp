@@ -95,11 +95,12 @@ struct GsnScene::Impl {
     VkExtent2D lastExtent{640, 448};   // the render extent of the last frame (the scale of reads between frames)
     // Render pixels per GS pixel, per axis: the anamorphic 16:9 frame gets more across than down.
     uint32_t scaleSetting = 0, sx = 1, sy = 1;
-    // While the display shows fields (the race: 224 lines a field, sy from them), a target of 384 lines or more
-    // (the 448-line 3D scene, which GT4's post effects take down to the field) gets half the vertical scale,
-    // rounded up: about the output's rows rather than twice them (at 1080p, 2240 rows for 1080 shown).
-    bool fieldMode = false;
-    uint32_t verticalScaleFor(const gsn::Target& t) const { return fieldMode && t.height >= 384 ? (sy + 1) / 2 : sy; }
+    // One vertical scale for every target (sy, from the displayed lines). Until 2026-11-05, while the display showed
+    // fields, a target of 384 lines or more got half of it (for the field races' 448-line scene; races are progressive
+    // since, so only the menus took that path): the menus pass their background through 1A40 and 2300 every frame,
+    // buffers drawn as 224 and as 448 lines, and at mixed scales the loop lost the lower half of the picture (the black
+    // band over the Sunday Cup banner after leaving a race entry, at any preset drawing above the PS2's resolution).
+    uint32_t verticalScaleFor(const gsn::Target&) const { return sy; }
     // A target narrower than the screen (under 512 GS pixels: GT4's environment maps, the car paint's reflection,
     // the glare's levels) is a texture other draws read, never shown pixel for pixel: at most 2 render pixels per
     // GS pixel each way (a 128 x 256 environment map was drawn at 2 x 5 at 1080p, 0.44 ms of 4.5).
@@ -1957,7 +1958,6 @@ void GsnScene::Impl::executePending(VkCommandBuffer command, uint32_t slot, VkEx
     if (shown || scaleSetting) {
         uint32_t shownWidth = 640, shownHeight = 448;
         if (shown) displayedSize(shown->display, shownWidth, shownHeight);
-        if (shown) fieldMode = shownHeight <= 256;
         const uint32_t wantedX = scaleSetting ? scaleSetting
                                               : std::clamp<uint32_t>(static_cast<uint32_t>(std::lround(extent.width / double(shownWidth))), 1, 8);
         const uint32_t wantedY = scaleSetting ? scaleSetting
