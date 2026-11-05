@@ -297,9 +297,12 @@ bool link_read_image(uint32_t qwc, void *dst) {
 void link_wait_for_host() {
     // Frame skipping on the host keeps it within a frame or two; this only catches a host that cannot keep up at
     // all. Not in an interrupt (the kernel lock is held there), and never for long: a host that draws nothing (a
-    // minimised window) is not waited for again until it draws.
-    constexpr uint32_t kAhead = 6;
-    if (!g_hdr || kernel_in_interrupt()) return;
+    // minimised window) is not waited for again until it draws. The way from a VSYNC to the frame drawn (the link,
+    // the stream, the queue, a present) takes 2 to 4 VBlanks, up to 7 with a GPU at 18 ms a frame: 10 is about six
+    // frames past that.
+    constexpr uint32_t kAhead = 10;
+    static const bool on = [] { const char *e = std::getenv("GT4_HOST_WAIT"); return !(e && *e == '0'); }();   // 0: never
+    if (!on || !g_hdr || kernel_in_interrupt()) return;
     static uint32_t stalled_at = 0;   // the host's frame when a whole wait saw it draw nothing
     const uint32_t drawn = g_hdr->host_frame_drawn;
     if (!drawn || drawn == stalled_at || g_hdr->frame - drawn <= kAhead) return;
