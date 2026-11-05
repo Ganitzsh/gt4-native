@@ -47,11 +47,12 @@ NAME = "GT4-Native"
 
 # A handheld's settings: the low preset (render below the screen's resolution, FSR 1 up), borderless (gamescope
 # shows it full screen), each game frame presented once (no frame interpolation: half the work on a 120 Hz screen),
-# the 16:9 game. Everything else at the host's defaults.
+# the 16:9 game. Stated as well, whatever the preset says: no ambient occlusion, FSR 1, the game's own rear-view
+# mirror (the high one draws the course and cars again), whole frames in races. Everything else at the host's defaults.
 PROFILES = {
     "desktop": "",
-    "handheld": "[graphics]\npreset = low\n\n[display]\nmode = borderless\nframe_interpolation = off\n\n"
-                "[aspect]\nratio = 16:9\n",
+    "handheld": "[graphics]\npreset = low\n\n[render]\nupscaler = fsr1\n\n[effects]\nambient_occlusion = off\nmirror = original\n\n"
+                "[display]\nmode = borderless\nframe_interpolation = off\nrace_frames = progressive\n\n[aspect]\nratio = 16:9\n",
 }
 
 README = """Gran Turismo 4, native
