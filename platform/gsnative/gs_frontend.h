@@ -383,7 +383,15 @@ private:
         uint32_t base = 0;   // the slot (blocks) its uploads were sent at
         std::vector<gfx::TexSetUpload> uploads;
         std::vector<uint8_t> bytes;
+        // Each upload's pages (first, last: graphics memory, at `base`) and its bytes hashed, worked out on first use
+        // (setTexture: a texture's image is the uploads over its pages).
+        struct Span {
+            uint32_t first, last;
+            uint64_t hash;
+        };
+        std::vector<Span> spans;
     };
+    static uint64_t imageKey(SetContent& sc, uint32_t firstPage, uint32_t lastPage);
     gfx::SetSlots setSlots;
     // GT4_NATIVE_TEXTURES=0 (checking, with the runtime's GT4_SET_UPLOADS=1): the sets' textures by address; with
     // native textures, those uploads (after their set record: source, base) are left out.

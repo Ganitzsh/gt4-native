@@ -970,6 +970,58 @@ void GsFrontend::exportSets(const std::function<void(const gfx::TexSetRecord&, c
 }
 
 // A set's content into assetMemory at the slot it was first sent at (once while it stays there).
+namespace {
+// Bytes hashed (64-bit words; a set's uploads are whole qwords).
+uint64_t hashBytes(const uint8_t* p, size_t n) {
+    uint64_t h = 0xCBF29CE484222325ull ^ n;
+    size_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+        uint64_t w;
+        std::memcpy(&w, p + i, 8);
+        h = (h ^ w) * 0x100000001B3ull;
+        h ^= h >> 29;
+    }
+    for (; i < n; ++i) h = (h ^ p[i]) * 0x100000001B3ull;
+    return h;
+}
+// The pages a rectangle at block `bp` of a buffer `bw` wide (64-pixel units) in format `psm` covers: first and last,
+// unwrapped (textureFor's walk, as a range).
+void pageRange(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t w, uint32_t h, uint32_t& first, uint32_t& last) {
+    uint32_t pw, ph;
+    pageSize(psm, pw, ph);
+    const uint32_t perRow = std::max<uint32_t>(1, (psm == PSMT8 || psm == PSMT4) ? bw / 2 : bw);
+    const uint32_t rows = std::max<uint32_t>(1, (h + ph - 1) / ph), columns = std::max<uint32_t>(1, std::min<uint32_t>(perRow, (w + pw - 1) / pw));
+    first = bp / 32;
+    last = first + (rows - 1) * perRow + (columns - 1) + (bp % 32 ? 1 : 0);
+}
+}  // namespace
+
+// A texture's image in a set's content: the uploads over its pages (their bytes and where they went). Two sets that
+// differ elsewhere (an animated palette's upload) give the texture the same key, and its decode is kept.
+uint64_t GsFrontend::imageKey(SetContent& sc, uint32_t firstPage, uint32_t lastPage) {
+    if (sc.spans.size() != sc.uploads.size()) {
+        sc.spans.clear();
+        size_t at = 0;
+        for (const gfx::TexSetUpload& u : sc.uploads) {
+            SetContent::Span s{};
+            pageRange(u.destination & 0x3FFF, (u.destination >> 16) & 0x3F, (u.destination >> 24) & 0x3F, u.w, u.h, s.first, s.last);
+            const size_t n = std::min<size_t>(size_t(u.qwords) * 16, sc.bytes.size() - std::min(at, sc.bytes.size()));
+            s.hash = hashBytes(sc.bytes.data() + std::min(at, sc.bytes.size()), n);
+            at += size_t(u.qwords) * 16;
+            sc.spans.push_back(s);
+        }
+    }
+    uint64_t key = 0x1A6Eu;
+    const bool wraps = lastPage > 511;
+    for (size_t k = 0; k < sc.uploads.size(); ++k) {
+        const SetContent::Span& s = sc.spans[k];
+        if (!wraps && s.last <= 511 && (s.last < firstPage || s.first > lastPage)) continue;   // (wrapping: kept)
+        const gfx::TexSetUpload& u = sc.uploads[k];
+        key = mix(mix(key, s.hash), uint64_t(u.destination) | uint64_t(u.w) << 32 | uint64_t(u.h) << 48);
+    }
+    return key;
+}
+
 void GsFrontend::loadSetContent(uint64_t hash, const SetContent& sc) {
     if (assetLoaded == hash) return;
     if (!assetMemory) assetMemory = std::make_unique<GsMemory>();
@@ -1051,7 +1103,7 @@ bool GsFrontend::setTexture(const DrawState& s, TextureSource& src) {
     const uint64_t hash = slot->hash;
     auto content = setContents.find(hash);
     if (content == setContents.end()) return false;
-    const SetContent& sc = content->second;
+    SetContent& sc = content->second;
     // The draw's texture moved from the set's slot to where the content was first sent: the image, the palette and
     // the mip levels (all inside the set).
     const int32_t delta = int32_t(slot->lo) - int32_t(sc.base);
@@ -1063,7 +1115,8 @@ bool GsFrontend::setTexture(const DrawState& s, TextureSource& src) {
     if (!rc.sampler.mipAuto)
         for (uint32_t k = 0; k < 6; ++k)
             if (rc.sampler.mipBase[k]) rc.sampler.mipBase[k] = uint16_t(uint32_t(int32_t(rc.sampler.mipBase[k]) - delta) & 0x3FFF);
-    uint64_t key = mix(mix(mix(0x5E7u, hash), uint64_t(t.tbp) | uint64_t(t.tbw) << 14 | uint64_t(t.psm) << 20 | uint64_t(t.tw) << 26 | uint64_t(t.th) << 30),
+    // (the image: imageKey below, not the whole set's hash)
+    uint64_t key = mix(mix(0x5E7u, uint64_t(t.tbp) | uint64_t(t.tbw) << 14 | uint64_t(t.psm) << 20 | uint64_t(t.tw) << 26 | uint64_t(t.th) << 30),
                        uint64_t(t.cbp) | uint64_t(t.cpsm) << 14 | uint64_t(t.csm) << 18 | uint64_t(t.csa) << 19);
     for (uint32_t k = 0; k < 6; ++k) key = mix(key, uint64_t(rc.sampler.mipBase[k]) | uint64_t(rc.sampler.mipWidth[k]) << 16);
     const gfx::Sampler& sm = rc.sampler;
@@ -1100,6 +1153,16 @@ bool GsFrontend::setTexture(const DrawState& s, TextureSource& src) {
         }
     }
     key = mix(key, levelCount);
+    {
+        uint32_t first = ~0u, last = 0;
+        for (uint32_t i = 0; i < levelCount; ++i) {
+            uint32_t f, l;
+            pageRange(levels[i].tbp, levels[i].tbw, t.psm, levels[i].w, levels[i].h, f, l);
+            first = std::min(first, f);
+            last = std::max(last, l);
+        }
+        key = mix(key, imageKey(sc, first, last));
+    }
     Decoded& d = decoded[key];
     d.lastUsed = frameCount;
     // Its palette: the CLUT buffer as the draw has it.
