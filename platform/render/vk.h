@@ -25,6 +25,7 @@ struct Device {
     VkSampleCountFlags sampleCounts = VK_SAMPLE_COUNT_1_BIT;  // color & depth framebuffer support
     bool anisotropy = false;
     bool dualSourceBlend = false;   // VkPhysicalDeviceFeatures::dualSrcBlend, enabled when supported
+    bool stencilExport = false;     // VK_EXT_shader_stencil_export, enabled when supported (GT4_STENCIL_EXPORT=0: not)
     uint32_t memoryType(uint32_t bits, VkMemoryPropertyFlags flags) const;
     uint32_t maxSamples(uint32_t requested) const;
 };

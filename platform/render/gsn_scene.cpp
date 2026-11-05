@@ -394,14 +394,16 @@ struct GsnScene::Impl {
             if (s) vkDestroySampler(device.device, s, nullptr);
     }
 
-    // Pipelines by blend, colour write mask, depth attachment and topology.
-    vk::Pipeline& pipeline(uint32_t blendKey, uint32_t mask, bool depth, gsn::Topology topology) {
-        const uint32_t key = blendKey | (mask << 16) | (depth ? 1u << 20 : 0) | (static_cast<uint32_t>(topology) << 21);
+    // Pipelines by blend, colour write mask, depth attachment, topology and whether the shader exports the stencil
+    // (alpha bit 7: VK_EXT_shader_stencil_export).
+    vk::Pipeline& pipeline(uint32_t blendKey, uint32_t mask, bool depth, gsn::Topology topology, bool exports = false) {
+        const uint32_t key = blendKey | (mask << 16) | (depth ? 1u << 20 : 0) | (static_cast<uint32_t>(topology) << 21) |
+                             (exports ? 1u << 24 : 0);
         auto it = pipelines.find(key);
         if (it != pipelines.end()) return it->second;
         vk::GraphicsDesc desc;
         desc.vertex = shaders::gsn_vert();
-        desc.fragment = shaders::gsn_frag();
+        desc.fragment = exports ? shaders::gsn_frag_export() : shaders::gsn_frag();
         desc.colors = {kColour};
         desc.depth = depth ? kDepth : VK_FORMAT_UNDEFINED;
         desc.stencil = depth ? kDepth : VK_FORMAT_UNDEFINED;
@@ -768,8 +770,16 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
     vk::Barriers b;
     bool rendering = false;
     uint32_t boundColour = 0, boundDepth = 0;
-    bool stencilFresh = false;   // the bound depth image's stencil holds the bound target's alpha bit 7
-    VkRect2D stencilRegion{};    // ... over this rectangle (render pixels)
+    // The destination alpha test's stencil: stencilDepth's stencil holds stencilColour's alpha bit 7 over stencilRegion
+    // (render pixels) since prepareStencil copied it. Draws keep it so: a DATE draw by its two passes, and with
+    // VK_EXT_shader_stencil_export every draw that writes the target's alpha with stencilDepth bound (its shader
+    // writes each pixel's new bit 7 to the stencil). Only an alpha write it cannot follow makes it stale: the target's
+    // alpha written without stencilDepth or without export, another target's exported into stencilDepth, the scene
+    // stage or an effect writing the target. (Without export, each car part's base draw made the next part's
+    // reflection copy the stencil again: 20 copies, each ending the scene's render pass, in a far replay camera.)
+    bool stencilFresh = false;
+    uint32_t stencilColour = 0, stencilDepth = 0;
+    VkRect2D stencilRegion{};
     VkPipeline boundPipeline = VK_NULL_HANDLE;
     // GT4_GPU_PROFILE=2: a render pass's time under its target's name (block address, size in GS pixels, format).
     auto passLabel = [&](uint32_t id) -> const char* {
@@ -789,9 +799,8 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
     // The draws' state as last set in this render pass: only changes are recorded (a draw's state commands cost the
     // GPU's command processor more than its few vertices). Forgotten when the pass ends or another pass runs.
     struct Recorded {
-        int depthTest = -1, compare = -1, stencilTest = -1, reference = -1, depthWrite = -1;
-        bool stencilFixed = false;
-        int stencilInvert = -1;   // the stencil inverted where a pixel passes (a DATE pass that flips bit 7)
+        int depthTest = -1, compare = -1, reference = -1, depthWrite = -1;
+        int stencilMode = -1;   // 0 off; DATE: 1 test (kept), 2 test and invert where it passes; 3 alpha bit 7 written
         VkRect2D scissor{{-1, -1}, {0, 0}};
         VkImageView view = VK_NULL_HANDLE;
         VkSampler sampler = VK_NULL_HANDLE;
@@ -1429,6 +1438,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
             // The scene stage, in a modern renderer's order: motion vectors, lighting, reflections and fog
             // (before the resolve, which also integrates their noise), the resolve, motion blur, depth of field.
             const gsn::FrameList::Lighting& l = frame.lights[cmd.index];
+            if (l.target == stencilColour) stencilFresh = false;   // (the scene stage may write its alpha)
             end();
             mark(command, "draws");
             tally("scenes");
@@ -1449,7 +1459,10 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
             continue;
         }
         if (cmd.kind == gsn::FrameList::Command::Kind::Effect) {
-            if (cmd.index < frame.effects.size()) grade(cmd.index);
+            if (cmd.index < frame.effects.size()) {
+                if (frame.effects[cmd.index].destination == stencilColour) stencilFresh = false;
+                grade(cmd.index);
+            }
             continue;
         }
         if (cmd.kind != gsn::FrameList::Command::Kind::Draw) continue;
@@ -1615,6 +1628,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
             if (!scratchDepth.valid() || scratchDepth.extent.width < colourTarget.image.extent.width ||
                 scratchDepth.extent.height < colourTarget.image.extent.height) {
                 if (scratchDepth.valid()) retire(scratchDepth);
+                if (stencilDepth == ~0u) stencilFresh = false;   // (a new image)
                 vk::ImageDesc desc;
                 desc.format = kDepth;
                 desc.extent = colourTarget.image.extent;
@@ -1660,7 +1674,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
             const bool inside = mine.offset.x >= stencilRegion.offset.x && mine.offset.y >= stencilRegion.offset.y &&
                                 mine.offset.x + int32_t(mine.extent.width) <= stencilRegion.offset.x + int32_t(stencilRegion.extent.width) &&
                                 mine.offset.y + int32_t(mine.extent.height) <= stencilRegion.offset.y + int32_t(stencilRegion.extent.height);
-            if (!stencilFresh || boundColour != d.target || boundDepth != depthId || !inside) {
+            if (!stencilFresh || stencilColour != d.target || stencilDepth != depthId || !inside) {
                 // This draw's extent and the destination-alpha draws into the target that follow it, joined.
                 VkRect2D region = mine;
                 for (size_t j = at + 1, seen = 0; j < frame.commands.size() && seen < 128; ++j, ++seen) {
@@ -1672,17 +1686,23 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
                 prepareStencil(d.target, depthId, region);
                 stencilRegion = region;
                 stencilFresh = true;
+                stencilColour = d.target;
+                stencilDepth = depthId;
             }
         }
-        if (!date && mask & VK_COLOR_COMPONENT_A_BIT) stencilFresh = false;
         // Keep the bound Z buffer for a draw without depth test on the same target.
         if (!depthId && rendering && boundColour == d.target) depthId = boundDepth;
         if (!rendering || boundColour != d.target || boundDepth != depthId) {
             end();
             begin(d.target, depthId);
-            if (depthId == 0) stencilFresh = false;
         }
         const bool hasDepth = depthId != 0;
+        // Alpha written outside a DATE draw: with a stencil, its shader writes alpha bit 7 there (exports).
+        const bool exports = device.stencilExport && hasDepth && !date && (mask & VK_COLOR_COMPONENT_A_BIT);
+        if (!date && (mask & VK_COLOR_COMPONENT_A_BIT)) {
+            const bool mirrored = exports && d.target == stencilColour && depthId == stencilDepth;
+            if (!mirrored && (d.target == stencilColour || (exports && depthId == stencilDepth))) stencilFresh = false;
+        }
         if (d.depth && !warnedScales) {
             const GpuTarget& z = targets[d.depth];
             if (z.scaleX != sx || z.scaleY != sy) {
@@ -1699,19 +1719,12 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         const int depthTest = hasDepth && zte && d.depth ? 1 : 0, stencilTest = date && hasDepth ? 1 : 0;
         if (recorded.depthTest != depthTest) vkCmdSetDepthTestEnable(command, depthTest ? VK_TRUE : VK_FALSE);
         if (recorded.compare != int(ztst)) vkCmdSetDepthCompareOp(command, zops[ztst]);
-        if (recorded.stencilTest != stencilTest) vkCmdSetStencilTestEnable(command, stencilTest ? VK_TRUE : VK_FALSE);
-        if (!recorded.stencilFixed) {
-            vkCmdSetStencilOp(command, VK_STENCIL_FACE_FRONT_AND_BACK, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP, VK_COMPARE_OP_EQUAL);
-            vkCmdSetStencilCompareMask(command, VK_STENCIL_FACE_FRONT_AND_BACK, 1);
-            vkCmdSetStencilWriteMask(command, VK_STENCIL_FACE_FRONT_AND_BACK, 0);
+        if (stencilTest && recorded.reference != int(c.destPass)) {
+            vkCmdSetStencilReference(command, VK_STENCIL_FACE_FRONT_AND_BACK, c.destPass);
+            recorded.reference = int(c.destPass);
         }
-        if (recorded.reference != int(c.destPass)) vkCmdSetStencilReference(command, VK_STENCIL_FACE_FRONT_AND_BACK, c.destPass);
         recorded.depthTest = depthTest;
         recorded.compare = int(ztst);
-        recorded.stencilTest = stencilTest;
-        recorded.stencilFixed = true;
-        recorded.stencilInvert = 0;
-        recorded.reference = int(c.destPass);
         // Scissor, in render pixels.
         const uint32_t x0 = c.scissorX0, x1 = c.scissorX1;
         const uint32_t y0 = c.scissorY0, y1 = c.scissorY1;
@@ -1762,7 +1775,21 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         for (uint32_t pass = 0; pass < passCount; ++pass) {
             const Pass& ps = passes[pass];
             if (!ps.mask && !ps.zwrite) continue;
-            vk::Pipeline& p = pipeline(blendKey, ps.mask, hasDepth, d.topology);
+            // The stencil: DATE's test (kept, or inverted where the pass's pixels flip bit 7), or alpha bit 7 written.
+            const int stencilMode = stencilTest ? (ps.date == kDateFlips ? 2 : 1)
+                                    : exports && (ps.mask & VK_COLOR_COMPONENT_A_BIT) ? 3 : 0;
+            if (recorded.stencilMode != stencilMode) {
+                vkCmdSetStencilTestEnable(command, stencilMode ? VK_TRUE : VK_FALSE);
+                if (stencilMode) {
+                    vkCmdSetStencilOp(command, VK_STENCIL_FACE_FRONT_AND_BACK, VK_STENCIL_OP_KEEP,
+                                      stencilMode == 2 ? VK_STENCIL_OP_INVERT : stencilMode == 3 ? VK_STENCIL_OP_REPLACE : VK_STENCIL_OP_KEEP,
+                                      VK_STENCIL_OP_KEEP, stencilMode == 3 ? VK_COMPARE_OP_ALWAYS : VK_COMPARE_OP_EQUAL);
+                    vkCmdSetStencilCompareMask(command, VK_STENCIL_FACE_FRONT_AND_BACK, 1);
+                    vkCmdSetStencilWriteMask(command, VK_STENCIL_FACE_FRONT_AND_BACK, stencilMode >= 2 ? 1u : 0u);
+                }
+                recorded.stencilMode = stencilMode;
+            }
+            vk::Pipeline& p = pipeline(blendKey, ps.mask, hasDepth, d.topology, stencilMode == 3);
             if (p.pipeline != boundPipeline) {
                 tally("pipeline binds");
                 vk::bind(command, p);
@@ -1775,13 +1802,6 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
             if (recorded.depthWrite != int(ps.zwrite)) {
                 vkCmdSetDepthWriteEnable(command, ps.zwrite ? VK_TRUE : VK_FALSE);
                 recorded.depthWrite = int(ps.zwrite);
-            }
-            const int invert = ps.date == kDateFlips ? 1 : 0;
-            if (stencilTest && recorded.stencilInvert != invert) {
-                vkCmdSetStencilOp(command, VK_STENCIL_FACE_FRONT_AND_BACK, VK_STENCIL_OP_KEEP,
-                                  invert ? VK_STENCIL_OP_INVERT : VK_STENCIL_OP_KEEP, VK_STENCIL_OP_KEEP, VK_COMPARE_OP_EQUAL);
-                vkCmdSetStencilWriteMask(command, VK_STENCIL_FACE_FRONT_AND_BACK, invert ? 1u : 0u);
-                recorded.stencilInvert = invert;
             }
             DrawConstants pk = k;
             if (ps.inverted) pk.flags |= kAlphaInvert;

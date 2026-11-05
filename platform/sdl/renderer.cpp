@@ -313,6 +313,12 @@ struct Renderer::Impl {
                               chosen.properties.limits.framebufferDepthSampleCounts;
         std::vector<const char*> extensions{VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME};
         if (surface) extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+        // The native renderer's destination alpha test keeps its stencil copy of alpha bit 7 with it (gsn_scene.cpp).
+        static const bool exportOff = [] { const char* e = std::getenv("GT4_STENCIL_EXPORT"); return e && *e == '0'; }();
+        if (!exportOff && hasExtension(device.physical, VK_EXT_SHADER_STENCIL_EXPORT_EXTENSION_NAME)) {
+            extensions.push_back(VK_EXT_SHADER_STENCIL_EXPORT_EXTENSION_NAME);
+            device.stencilExport = true;
+        }
         float priority = 1.0f;
         VkDeviceQueueCreateInfo queue{};
         queue.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;

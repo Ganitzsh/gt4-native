@@ -4,8 +4,12 @@
 // range (0x80 = 1.0, up to ~2.0). The blend ((A - B) * C >> 7) + D is written as Cs * s + Cd * d: the shader
 // outputs Cs * s (source 0) and d (source 1, dual-source blending); with C = Ad the pipeline's fixed
 // factors (DST_ALPHA...) do it. The GS's integer steps (>> 7, >> 8) are floored as it truncates. The
-// destination alpha test is the stencil test (gsn_stencil.frag copies alpha bit 7 into stencil first).
+// destination alpha test is the stencil test (gsn_stencil.frag copies alpha bit 7 into stencil first; with
+// GSN_STENCIL_EXPORT, the variant drawn where alpha is written, each pixel's new bit 7 goes to the stencil too).
 #extension GL_GOOGLE_include_directive : require
+#if defined(GSN_STENCIL_EXPORT)
+#extension GL_ARB_shader_stencil_export : require
+#endif
 #include "gsn_common.glsl"
 
 layout(set = 0, binding = 0) uniform sampler2D source;
@@ -268,4 +272,7 @@ void main() {
     }
     outColour = vec4(c.rgb / 255.0 * s, written / 128.0);
     outFactor = vec4(d, 0.0);
+#if defined(GSN_STENCIL_EXPORT)
+    gl_FragStencilRefARB = written >= 128.0 ? 1 : 0;   // the stencil's copy of alpha bit 7, kept as it is written
+#endif
 }

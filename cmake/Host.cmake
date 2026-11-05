@@ -48,6 +48,7 @@ gt4_shader(gs_frame_frag ${S}/gs_frame.frag frag)
 # The native renderer (docs/NATIVE_RENDERER.md).
 gt4_shader(gsn_vert ${S}/gsn.vert vert)
 gt4_shader(gsn_frag ${S}/gsn.frag frag)
+gt4_shader(gsn_frag_export ${S}/gsn.frag frag DEFINES GSN_STENCIL_EXPORT=1)
 gt4_shader(gsn_display_frag ${S}/gsn_display.frag frag)
 gt4_shader(gsn_stencil_frag ${S}/gsn_stencil.frag frag)
 gt4_shader(gsn_reinterpret_comp ${S}/gsn_reinterpret.comp comp)
