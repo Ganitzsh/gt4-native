@@ -835,6 +835,7 @@ int run(const Options& options) {
                 gs->completeRead(ok, std::move(pixels));
             }
             gs->setHdTextures(settings.hdTextures);
+            gs->sendRequests();
             if (gs->live()) {
                 gs->setPaused(menu.isOpen());
                 gs->setGameOption(0, static_cast<uint32_t>(settings.aiCatchUp));   // runtime.h kOptionAiCatchUp

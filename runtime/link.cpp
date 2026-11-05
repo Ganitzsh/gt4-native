@@ -222,6 +222,7 @@ void link_poll() {
                 ExitProcess(0);
             }
             if (cmd == 2 || cmd == 3) kernel_set_paused(cmd == 2);
+            if (cmd == 5) frame_forget_sent_contents();   // the host lost a texture content (runtime/frame.cpp)
             if (cmd == 4 && n >= 12) {
                 uint32_t id, value;
                 std::memcpy(&id, payload + 4, 4);

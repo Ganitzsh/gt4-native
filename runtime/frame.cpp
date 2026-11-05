@@ -19,7 +19,9 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <unordered_set>
 #include <vector>
@@ -74,6 +76,11 @@ void send_data(uint32_t source, uint32_t bytes) {
 std::unordered_set<uint64_t> g_sent_sets;
 gfx::SetSlots g_set_slots;
 gfx::ContentFifo g_sent_uploads(gfx::kUploadsKept);   // the set uploads' contents the host keeps
+// GT4_VERIFY_UPLOADS=1 (testing): a reference carries the bytes too, and the host stops at the first that differ.
+const bool g_verify_uploads = [] { const char *e = getenv("GT4_VERIFY_UPLOADS"); return e && *e && *e != '0'; }();
+// The host lost a content it was counted on to keep (GT4_REC_HOST_CMD 5): everything goes again in full, after a
+// mark at which both ends forget the uploads (gfx::kDataReference | gfx::kDataKeep).
+std::atomic<bool> g_forget_requested{false};
 
 // A texture set record (gfx::TexSetRecord, in the frame's buffer): its content hashed now, as the frame is sent (the
 // game changes some sets in place: the PS2 uploaded what was there then), and its bytes sent when the host has not
@@ -117,9 +124,15 @@ void send_tex_set(uint8_t *payload, uint32_t bytes) {
         if (g_sent_uploads.add(content, [](uint64_t) {})) {
             const uint32_t head[2] = {uploads[k].source, n};
             link_send(GT4_REC_GFX_DATA, head, sizeof head, data[k].data(), n);
-        } else {
+        } else if (!g_verify_uploads) {
             const uint32_t head[2] = {uploads[k].source, n | gfx::kDataReference};
             link_send(GT4_REC_GFX_DATA, head, sizeof head, &content, sizeof content);
+        } else {
+            std::vector<uint8_t> both(8 + n);
+            std::memcpy(both.data(), &content, 8);
+            std::memcpy(both.data() + 8, data[k].data(), std::min<size_t>(n, data[k].size()));
+            const uint32_t head[2] = {uploads[k].source, n | gfx::kDataReference};
+            link_send(GT4_REC_GFX_DATA, head, sizeof head, both.data(), static_cast<uint32_t>(both.size()));
         }
     }
 }
@@ -142,6 +155,13 @@ uint64_t content_hash(const std::vector<uint8_t> &bytes) {
 
 // One record block: the bytes its records refer to, the block, then its reads.
 void send_block(uint8_t *block, uint32_t bytes) {
+    if (g_forget_requested.exchange(false)) {
+        g_sent_uploads = gfx::ContentFifo(gfx::kUploadsKept);
+        g_sent_sets.clear();
+        const uint32_t head[2] = {0, gfx::kDataReference | gfx::kDataKeep};
+        link_send(GT4_REC_GFX_DATA, head, sizeof head);
+        log_warn("frame: the host asked for every texture content again");
+    }
     std::vector<gfx::ReadRecord> reads;
     for (uint32_t at = 0; at + sizeof(gfx::Header) <= bytes;) {
         gfx::Header h;
@@ -245,6 +265,8 @@ void walk(uint32_t start) {
 }
 
 }  // namespace
+
+void gt4::rt::frame_forget_sent_contents() { g_forget_requested = true; }
 
 // 004A11F8(pair): the frame's kick. `pair` (or the library's current one, +0x20C) holds where the frame's list
 // starts and where its PATH3 list starts. The original started both DMA channels and let their interrupts tell

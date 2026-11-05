@@ -527,6 +527,7 @@ struct GsHost::Impl {
         return r;
     }();
     std::atomic<uint64_t> vblankRecords{0};
+    std::atomic<bool> contentsWanted{false};   // the game to send every texture content again (GT4_REC_HOST_CMD 5)
     // GT4_CPU_FROM=VBLANK or trigger:FILE: the summary's CPU times from that VBlank on (a race, not the boot and the
     // menus before it). The GS thread takes the starting point.
     struct CpuStart {
@@ -550,6 +551,9 @@ struct GsHost::Impl {
         GT4_CPU_SCOPE("GS: dispatch");
         if (header.type == GT4_REC_VSYNC) {
             ++vblankRecords;
+            if (stream->takeContentsLost()) contentsWanted = true;   // (sent by the main thread: sendRequests)
+            static const uint64_t forgetAt = std::getenv("GT4_TEST_FORGET_UPLOADS") ? std::strtoull(std::getenv("GT4_TEST_FORGET_UPLOADS"), nullptr, 10) : 0;
+            if (forgetAt && vblankRecords == forgetAt) stream->forgetUploadsForTest();
             if (cpuStart.armed && !cpuStart.taken) {
                 bool now = cpuStart.trigger.empty() && vblankRecords >= cpuStart.from;
                 if (!cpuStart.trigger.empty())
@@ -858,6 +862,12 @@ void GsHost::setPaused(bool paused) {
 }
 
 void GsHost::setHdTextures(bool on) { impl->target->frontend().setReplacements(on); }
+
+void GsHost::sendRequests() {
+    if (!impl->link || !impl->link->running() || !impl->contentsWanted.exchange(false)) return;
+    const uint32_t command = 5;   // send every texture content again (runtime/frame.cpp)
+    impl->link->write(GT4_REC_HOST_CMD, &command, sizeof command);
+}
 
 void GsHost::setGameOption(uint32_t id, uint32_t value) {
     if (!impl->link || !impl->link->running() || id >= 8 || impl->gameOptions[id] == value) return;

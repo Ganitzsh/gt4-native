@@ -44,6 +44,8 @@ public:
     // rectangle back and answers with completeRead (ok = false: the game gets the memory model's bytes).
     bool takeReadRequest(gsn::ReadRequest& request);
     void completeRead(bool ok, std::vector<uint8_t>&& pixels);
+    // Requests the GS thread queued for the game (from the main thread, which owns the link's host -> game ring).
+    void sendRequests();
     // Host -> game pad state (libpad2 layout, 18 bytes). Ignored without a live game.
     void sendPad(uint32_t port, bool connected, const uint8_t data[18]);
     // Stops or restarts the game's clock (its VBlanks, alarms and timers): the in-game settings menu.

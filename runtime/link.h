@@ -29,6 +29,10 @@ void link_poll();
 // false is returned.
 bool link_read_image(uint32_t qwc, void *dst);
 
+// The host lost a texture content it was counted on to keep (GT4_REC_HOST_CMD 5): runtime/frame.cpp sends every
+// content again.
+void frame_forget_sent_contents();
+
 // The pad state the host sent (18 bytes, libpad2 layout); false if none yet.
 bool link_pad(int port, uint8_t out[18]);
 

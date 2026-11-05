@@ -141,6 +141,18 @@ private:
     // The texture sets' upload contents (gfx::ContentFifo of kUploadsKept, as the runtime keeps them): bytes by hash.
     gfx::ContentFifo uploadHashes{gfx::kUploadsKept};
     std::unordered_map<uint64_t, std::vector<uint8_t>> uploadBytes;
+    // A reference to a content not kept (never in a live run unless the two ends diverged): the set is not stored, and
+    // the game is asked to send every content again (contentsLost; the host's GT4_REC_HOST_CMD 5 until its mark).
+    bool contentsLost = false, contentsAsked = false;
+public:
+    // GT4_TEST_FORGET_UPLOADS=VBLANK (testing the recovery): the kept upload bytes dropped, as if the ends diverged.
+    void forgetUploadsForTest() { uploadBytes.clear(); }
+    bool takeContentsLost() {
+        if (!contentsLost || contentsAsked) return false;
+        contentsAsked = true;
+        return true;
+    }
+private:
     void keepUpload(uint64_t hash, std::vector<uint8_t>&& bytes) {
         if (uploadHashes.add(hash, [&](uint64_t gone) { uploadBytes.erase(gone); })) uploadBytes[hash] = std::move(bytes);
     }

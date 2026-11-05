@@ -202,6 +202,7 @@ void GraphicsStream::records(const uint8_t* data, size_t bytes) {
             // the record, then the uploads' bytes (GT4_REC_GFX_DATA ahead of the block) when the game sent them
             std::vector<uint8_t>& blob = texSetBlob;
             blob.assign(payload, payload + h.bytes());
+            bool incomplete = false;
             if (r.sent && sizeof r + r.uploads * sizeof(gfx::TexSetUpload) <= h.bytes()) {
                 const auto* uploads = reinterpret_cast<const gfx::TexSetUpload*>(payload + sizeof r);
                 for (uint32_t k = 0; k < r.uploads; ++k) {
@@ -216,10 +217,18 @@ void GraphicsStream::records(const uint8_t* data, size_t bytes) {
                     const std::vector<uint8_t>* bytes = &it->bytes;
                     if (it->reference) {
                         auto kept = uploadBytes.find(it->hash);
+                        if (!it->bytes.empty() && (kept == uploadBytes.end() || kept->second != it->bytes)) {
+                            std::fprintf(stderr, "GS: GT4_VERIFY_UPLOADS: the upload at %08X (%zu bytes, content %016llX) %s\n",
+                                         uploads[k].source, n, static_cast<unsigned long long>(it->hash),
+                                         kept == uploadBytes.end() ? "is not kept" : "differs from the content kept");
+                            std::fflush(stderr);
+                            std::abort();
+                        }
                         if (kept == uploadBytes.end()) {
                             ++counters.uploadsWithoutData;
                             blob.resize(blob.size() + n, 0);
                             recordData.erase(it);
+                            incomplete = true;
                             continue;
                         }
                         bytes = &kept->second;
@@ -229,6 +238,14 @@ void GraphicsStream::records(const uint8_t* data, size_t bytes) {
                     if (!it->reference) keepUpload(gfx::contentHash(it->bytes.data(), it->bytes.size()), std::move(it->bytes));
                     recordData.erase(it);
                 }
+            }
+            if (incomplete) {   // not stored (stale or missing bytes are never drawn as this content); asked again
+                if (!contentsLost) std::fprintf(stderr, "GS: a texture set's upload content was not kept: asking the game for every content\n");
+                contentsLost = true;
+                gfx::TexSetRecord kept;
+                std::memcpy(&kept, blob.data(), sizeof kept);
+                kept.sent = 0;
+                std::memcpy(blob.data(), &kept, sizeof kept);
             }
             ++counters.texSets;
             gs.texSet(blob.data(), blob.size());
@@ -654,6 +671,13 @@ void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload)
         uint32_t head[2];
         std::memcpy(head, payload, 8);
         const size_t n = std::min<size_t>(head[1] & gfx::kDataBytes, size - 8);
+        if ((head[1] & (gfx::kDataKeep | gfx::kDataReference)) == (gfx::kDataKeep | gfx::kDataReference)) {
+            // the game's mark: from here both ends keep no upload content (it sends them all again)
+            uploadHashes = gfx::ContentFifo(gfx::kUploadsKept);
+            uploadBytes.clear();
+            contentsLost = contentsAsked = false;
+            break;
+        }
         if (head[1] & gfx::kDataKeep) {   // (a recording's start: a content the runtime counts on the host keeping)
             std::vector<uint8_t> bytes(payload + 8, payload + 8 + n);
             keepUpload(gfx::contentHash(bytes.data(), bytes.size()), std::move(bytes));
@@ -666,6 +690,7 @@ void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload)
             d.reference = true;
             d.size = head[1] & gfx::kDataBytes;
             std::memcpy(&d.hash, payload + 8, 8);
+            if (size >= 16 + size_t(d.size)) d.bytes.assign(payload + 16, payload + 16 + d.size);   // GT4_VERIFY_UPLOADS
         } else {
             d.bytes.assign(payload + 8, payload + 8 + n);
         }
