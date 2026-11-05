@@ -1034,6 +1034,39 @@ int run(const Options& options) {
         if (presented) {
             ++frames;
             perfGpu += renderer->gpuMilliseconds();
+            // The hitch log (GT4_HITCH_LOG=0: off): with a live game, one line for a present more than 25 ms after the
+            // one before, or that skipped game frames, or after which the game waited for the host: its time, the GPU's
+            // last frame, and what can make a frame slow (frames skipped, textures decoded and uploaded, render targets and pipelines
+            // created). At most 20 lines a second. (CPU time: the perf line; the process clocks tick by 15.6 ms, too
+            // coarse for one frame. The GPU's passes: GT4_GPU_PROFILE=2. Auto exposure is not applied to game frames.)
+            static const bool hitchLog = [] { const char* e = std::getenv("GT4_HITCH_LOG"); return !(e && *e == '0'); }();
+            if (hitchLog && gs && gs->live()) {
+                static struct {
+                    Uint64 at = 0, second = 0;
+                    uint32_t lines = 0, waits = 0, waitMs = 0;
+                    gt4::GsnScene::Counters c;
+                } hitch;
+                const Uint64 now = SDL_GetPerformanceCounter();
+                const gt4::GsnScene::Counters c = renderer->sceneCounters();
+                uint32_t waits, waitMs;
+                gs->hostWaits(waits, waitMs);
+                if (hitch.at) {
+                    const double ms = static_cast<double>(now - hitch.at) * 1000.0 / frequency;
+                    const uint64_t skipped = c.framesSkipped - hitch.c.framesSkipped;
+                    if (now - hitch.second >= frequency) hitch.second = now, hitch.lines = 0;
+                    if ((ms > 25.0 || skipped || waits != hitch.waits) && hitch.lines < 20) {
+                        ++hitch.lines;
+                        std::printf("hitch: %.1f ms since the last present; GPU %.2f ms; %llu frames skipped; "
+                                    "%llu textures (%llu KB), %llu new targets, %llu pipelines created; the game waited %u times (%u ms)\n",
+                                    ms, renderer->gpuMilliseconds(),
+                                    static_cast<unsigned long long>(skipped), static_cast<unsigned long long>(c.textures - hitch.c.textures),
+                                    static_cast<unsigned long long>((c.textureBytes - hitch.c.textureBytes) / 1024),
+                                    static_cast<unsigned long long>(c.targets - hitch.c.targets),
+                                    static_cast<unsigned long long>(c.pipelines - hitch.c.pipelines), waits - hitch.waits, waitMs - hitch.waitMs);
+                    }
+                }
+                hitch.at = now, hitch.c = c, hitch.waits = waits, hitch.waitMs = waitMs;
+            }
             if (session)
                 session->frame(frames, static_cast<double>(SDL_GetPerformanceCounter() - frameStarted) * 1000.0 / frequency,
                                renderer->gpuMilliseconds(), renderer->drawableExtent().width, renderer->drawableExtent().height);

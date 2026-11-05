@@ -2,6 +2,7 @@
 // The host renderer: Vulkan device, presentation (a swapchain, or an offscreen image in headless mode),
 // frames in flight, captures, and the display pipeline (platform/render/pipeline.h) fed by the game's frames
 // from the native renderer (platform/render/gsn_scene.h), or by the test scene without a game.
+#include "gsn_scene.h"
 #include "settings.h"
 #include "settings_menu.h"
 
@@ -60,6 +61,7 @@ public:
     bool readGsTarget(const gt4::gsn::ReadRequest& request, std::vector<uint8_t>& out);
     const GpuInfo& gpu() const;
     double gpuMilliseconds() const;          // GPU time of the last finished frame (0 if unknown)
+    gt4::GsnScene::Counters sceneCounters() const;   // the native renderer's running totals (hitch log)
     double averageGpuMilliseconds() const;   // mean GPU time over every timed frame so far
     std::string pipelineDescription() const;
 

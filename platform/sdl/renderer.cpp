@@ -984,5 +984,6 @@ bool Renderer::readGsTarget(const gt4::gsn::ReadRequest& request, std::vector<ui
 }
 const GpuInfo& Renderer::gpu() const { return impl->info; }
 double Renderer::gpuMilliseconds() const { return impl->gpuMs; }
+gt4::GsnScene::Counters Renderer::sceneCounters() const { return impl->gsnScene ? impl->gsnScene->counters() : gt4::GsnScene::Counters{}; }
 double Renderer::averageGpuMilliseconds() const { return impl->gpuSamples ? impl->gpuMsTotal / static_cast<double>(impl->gpuSamples) : 0.0; }
 std::string Renderer::pipelineDescription() const { return impl->pipeline->describe(); }

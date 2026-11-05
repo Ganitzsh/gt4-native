@@ -35,6 +35,11 @@ public:
     // with a VSYNC is shown.
     void addFrames(std::vector<gsn::FrameList>& lists);
     bool hasFrame() const;
+    // Running totals for the host's hitch log (main.cpp): what can make one frame slow.
+    struct Counters {
+        uint64_t framesSkipped = 0, textures = 0, textureBytes = 0, targets = 0, pipelines = 0;
+    };
+    Counters counters() const;
     // A GS -> host read of drawn pixels: executes the pending lists at once (waiting for the GPU) and packs
     // the target's rectangle as `request.psm`. False when it cannot (nothing prepared yet, no such target).
     bool read(const gsn::ReadRequest& request, std::vector<uint8_t>& out);

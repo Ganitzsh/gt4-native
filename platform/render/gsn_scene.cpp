@@ -174,6 +174,7 @@ struct GsnScene::Impl {
     bool temporal = false;
     uint64_t displayedFrames = 0;   // frames shown so far (the jitter's phase, the histories' age)
     uint64_t framesSkipped = 0;     // complete frames not drawn, behind the game (addFrames, GT4_FRAME_SKIP)
+    GsnScene::Counters counters;     // the hitch log's (framesSkipped kept above)
     std::chrono::steady_clock::time_point skipUntil{};   // ... skipping until then
     gsn::FrameList heldBack;                           // GT4_FRAME_SKIP_TEST: the frame held back
     bool held = false;
@@ -447,6 +448,7 @@ struct GsnScene::Impl {
                          VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE, VK_DYNAMIC_STATE_STENCIL_OP, VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK,
                          VK_DYNAMIC_STATE_STENCIL_WRITE_MASK, VK_DYNAMIC_STATE_STENCIL_REFERENCE};
         desc.name = "gsn draw";
+        ++counters.pipelines;
         return pipelines[key] = vk::createGraphics(device, desc);
     }
 
@@ -572,6 +574,8 @@ struct GsnScene::Impl {
         }
         VkDeviceSize bytes = 4;
         for (const auto& t : frame.textures) bytes += VkDeviceSize(t.pixels.size()) * 4;
+        counters.textures += frame.textures.size();
+        counters.textureBytes += bytes - 4;
         vk::Buffer& stage = buffer(staging, slot, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
         VkDeviceSize offset = 0;
         vk::Barriers b;
@@ -2099,6 +2103,11 @@ void GsnScene::addFrames(std::vector<gsn::FrameList>& lists) {
 }
 
 bool GsnScene::hasFrame() const { return impl->any; }
+GsnScene::Counters GsnScene::counters() const {
+    Counters c = impl->counters;
+    c.framesSkipped = impl->framesSkipped;
+    return c;
+}
 void GsnScene::setScale(uint32_t scale) { impl->scaleSetting = scale; }
 void GsnScene::setAnisotropy(int anisotropy) { impl->makeMipSamplers(static_cast<float>(anisotropy)); }
 
@@ -2263,6 +2272,7 @@ void GsnScene::Impl::executePending(VkCommandBuffer command, uint32_t slot, VkEx
                 if (!existed || targets[t.id].image.image != before) created.push_back(t.id);
             }
             for (uint32_t id : created) clearNew(command, targets[id]);
+            counters.targets += created.size();
         }
         mark(command, "new targets");
         uploadTextures(command, slot);
