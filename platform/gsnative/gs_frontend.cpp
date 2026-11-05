@@ -2038,13 +2038,16 @@ void GsFrontend::vsync(uint64_t vblank, FrameList& out) {
         replacementsOn = wanted;
         resetTextures();
     }
-    // Textures unused for two seconds are dropped, and the least recently used ones beyond a budget (GT4's
+    // Textures unused for 30 seconds are dropped, and the least recently used ones beyond a budget (GT4's
     // menus animate palettes: every palette is a texture, and they piled up until the GPU ran out of
-    // memory).
+    // memory). Two seconds, before, dropped a race's trackside textures between sightings: 300-600 decoded
+    // and uploaded again every 5 s, in bursts of up to 333 a frame (the hitches), with the cache at 10-18 of
+    // its 64 Mtexels.
     constexpr uint64_t kBudget = 64ull << 20;   // texels (256 MiB of RGBA8)
+    constexpr uint64_t kUnused = 1800;          // frames
     if (!(++frameCount % 16) || cachedTexels > kBudget) {
         for (auto it = replacementTextures.begin(); it != replacementTextures.end();) {
-            if (it->second.lastUsed + 120 < frameCount) {
+            if (it->second.lastUsed + 120 < frameCount) {   // (a texture pack's images: large, and outside the budget)
                 frame.retiredTextures.push_back(it->second.id);
                 cachedTexels -= it->second.texels;
                 it = replacementTextures.erase(it);
@@ -2054,9 +2057,9 @@ void GsFrontend::vsync(uint64_t vblank, FrameList& out) {
         }
         // (the per-address entries own no texture: they go with their last use)
         for (auto it = textureCache.begin(); it != textureCache.end();)
-            it = it->second.lastUsed + 120 < frameCount ? textureCache.erase(it) : std::next(it);
+            it = it->second.lastUsed + kUnused < frameCount ? textureCache.erase(it) : std::next(it);
         for (auto it = decoded.begin(); it != decoded.end();) {
-            if (it->second.lastUsed + 120 < frameCount) {
+            if (it->second.lastUsed + kUnused < frameCount) {
                 frame.retiredTextures.push_back(it->second.id);
                 cachedTexels -= it->second.texels;
                 it = decoded.erase(it);
