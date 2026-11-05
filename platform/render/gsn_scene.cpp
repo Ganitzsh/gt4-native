@@ -1971,6 +1971,9 @@ GsnScene::~GsnScene() = default;
 // - no later waiting list reads one of them (a texture, a reinterpretation or its palette, an effect's or a relight's
 //   source) before writing it itself: it would read the skipped frame's pixels. (GT4's race and replay frames,
 //   measured: none does; each frame draws what it samples.)
+// A target no later waiting list writes is no obstacle either when it is the frame's own scratch: the frame does not
+// read it before writing it, and no later waiting list reads it at all (a race's small 64-pixel-wide targets, drawn
+// and used by a frame when a car needs them: most of the frames the first rule kept). GT4_SKIP_STRICT=1: not.
 // Returns how many were skipped. (A GS -> host read waiting: keepComplete 0, so its list waits only for itself.)
 size_t GsnScene::Impl::skipOlderFrames(size_t keepComplete) {
     auto writes = [](const gsn::FrameList& l, std::vector<uint32_t>& out) {
@@ -2016,6 +2019,24 @@ size_t GsnScene::Impl::skipOlderFrames(size_t keepComplete) {
         }
         return false;
     };
+    // Whether `l` reads `id` at all (as readsFirst, whatever it wrote before).
+    auto readsAny = [](const gsn::FrameList& l, uint32_t id) {
+        for (const auto& c : l.commands) {
+            if ((c.kind == gsn::FrameList::Command::Kind::Draw || c.kind == gsn::FrameList::Command::Kind::Clear) && c.index < l.draws.size()) {
+                const gsn::Draw& d = l.draws[c.index];
+                if (d.texture.kind == gsn::TextureSource::Kind::Target && d.texture.id == id) return true;
+                if (d.texture.kind == gsn::TextureSource::Kind::Reinterpreted && d.texture.id < l.reinterpretations.size() &&
+                    (l.reinterpretations[d.texture.id].target == id || l.reinterpretations[d.texture.id].clutTarget == id))
+                    return true;
+            } else if (c.kind == gsn::FrameList::Command::Kind::Effect && c.index < l.effects.size()) {
+                if (l.effects[c.index].source == id) return true;
+            } else if (c.kind == gsn::FrameList::Command::Kind::Light && c.index < l.lights.size()) {
+                if (l.lights[c.index].target == id || l.lights[c.index].depth == id) return true;
+            }
+        }
+        return false;
+    };
+    static const bool strict = [] { const char* e = std::getenv("GT4_SKIP_STRICT"); return e && *e && *e != '0'; }();
     size_t complete = 0, skipped = 0;
     for (const auto& list : pending) complete += list.displayed ? 1 : 0;
     while (complete > keepComplete && pending.size() > 1 && pending[0].displayed) {
@@ -2030,7 +2051,14 @@ size_t GsnScene::Impl::skipOlderFrames(size_t keepComplete) {
             if (t.depth || std::find(shownBp.begin(), shownBp.end(), t.bp) != shownBp.end()) later.push_back(t.id);
         std::sort(later.begin(), later.end());
         bool again = true;
-        for (uint32_t t : first) again = again && std::binary_search(later.begin(), later.end(), t);
+        for (uint32_t t : first) {
+            if (!again) break;
+            if (std::binary_search(later.begin(), later.end(), t)) continue;
+            // the frame's own scratch: not read before its write here, nor at all by a later waiting list
+            bool scratch = !strict && !readsFirst(pending[0], std::vector<uint32_t>{t});
+            for (size_t i = 1; i < pending.size() && scratch; ++i) scratch = !readsAny(pending[i], t);
+            again = scratch;
+        }
         if (!again) break;
         bool read = false;
         for (size_t i = 1; i < pending.size() && !read; ++i) read = readsFirst(pending[i], first);
