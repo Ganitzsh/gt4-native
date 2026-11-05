@@ -134,6 +134,13 @@ the user's game and stays in `build/`.
   thread already holds is taken again. A call that waits for another thread (a database read the loader thread
   completes) cannot finish in eeref: `game_link.py --eeorig` and `GT4_ORIG=ADDR,...` run the original code in the
   game instead, which is how a crash is placed in the native code or not (below).
+- Known limit (2026-11-05): the original code of the current matrix's operations that chain VU0 macro
+  instructions through ACC (004A7844 translate: vmulax, vmaddax, vmaddw; 004A7890 scale; the rotations
+  004A7988/79B0/79D8) disagrees with their native copies on every random trial under `GT4_DIFFTEST`, its result
+  as if the ACC terms were lost (translate leaves vf31 unmoved), while 004A7844's native copy follows its MIPS
+  line for line and 004A7698 (product) and 004A7454 (identity) agree. Treat a DIFFER on such code as the
+  reference's until its ACC handling is checked. (Natives called from original code under `GT4_ORIG` are not
+  affected: the motion code run as original with these natives drew the car wash's people right.)
 - Verdicts: `agree`; `close` (the only differences are within 1e-3 relative or 1e-5 absolute: long float
   computations drift that far); `known` (an understood difference listed in `tools/eeref/known.txt`);
   `DIFFER`; `STOPPED` (with where and why); `CORRUPT`. An audit of the native-only code (every provisional
