@@ -84,6 +84,7 @@ std::vector<std::vector<uint8_t>> g_sticky;
 bool g_window_started = false;
 
 void link_remember(uint32_t type, const void *payload, uint32_t size) {
+    KernelScope ks;   // see link_send
     std::lock_guard<std::mutex> lock(g_send_mutex);
     std::vector<uint8_t> rec(sizeof(uint32_t) + size);
     std::memcpy(rec.data(), &type, 4);
@@ -102,6 +103,7 @@ bool link_capture_finished() {
 }
 
 void link_capture_close() {
+    KernelScope ks;
     std::lock_guard<std::mutex> lock(g_send_mutex);
     if (g_capture) fclose(g_capture);
     g_capture = nullptr;
@@ -121,6 +123,11 @@ bool link_connected() { return g_hdr != nullptr; }
 
 void link_send(uint32_t type, const void *payload, uint32_t size, const void *extra, uint32_t extra_size) {
     if (!g_hdr && !g_capture) return;
+    // Runtime code (KernelScope): the frame's interrupts must not freeze this thread while it holds the send mutex.
+    // Their handlers send records too (VSYNC, GFX), under the kernel lock: frozen here, it would never release the
+    // mutex and every guest thread would stop (the F7 freeze: a send waiting for ring room was preempted after
+    // 50 ms). Held interrupts are delivered as it leaves, after the mutex is released.
+    KernelScope ks;
     std::lock_guard<std::mutex> lock(g_send_mutex);
     Gt4LinkRecord rec{type, size + extra_size, ++g_seq};
     const uint32_t total = static_cast<uint32_t>((sizeof rec + size + extra_size + 15) & ~15u);
@@ -150,13 +157,20 @@ void link_send(uint32_t type, const void *payload, uint32_t size, const void *ex
         return;
     }
     uint64_t head = g_hdr->g2h.head;
-    // wait for room (the host consumes continuously; give up after a second rather than hang)
-    for (int spins = 0; head + total - g_hdr->g2h.tail > ring; ++spins) {
-        if (spins > 1000) {
-            log_warn("link: host not consuming; record dropped");
-            return;
+    // Wait for room (the host drains continuously). Not forever: some records are sent while the game holds its
+    // kernel lock (GFX records from the frame callbacks), and an endless wait there stops every guest thread, VBlanks
+    // included (seen with a host throttled behind the game). After a second the record is dropped, loudly.
+    if (head + total - g_hdr->g2h.tail > ring) {
+        const DWORD since = GetTickCount();
+        while (head + total - g_hdr->g2h.tail > ring) {
+            Sleep(1);
+            if (GetTickCount() - since >= 1000) {
+                static uint32_t dropped = 0;
+                log_warn("link: the host drained nothing for 1 s; a record of type %u (%u bytes) DROPPED (%u so far)", type,
+                         total, ++dropped);
+                return;
+            }
         }
-        Sleep(1);
     }
     ring_write(g_g2h, ring, head, &rec, sizeof rec);
     if (size) ring_write(g_g2h, ring, head + sizeof rec, payload, size);
@@ -167,6 +181,7 @@ void link_send(uint32_t type, const void *payload, uint32_t size, const void *ex
 
 void link_poll() {
     if (!g_hdr) return;
+    KernelScope ks;   // the interrupt handlers poll too (see link_send)
     std::lock_guard<std::recursive_mutex> poll_lock(g_poll_mutex);
     // the game's CPU time for the host's perf lines, every 100 ms at most (Wine's GetProcessTimes on another
     // process gives the caller's own, so the host cannot read it)
@@ -240,6 +255,7 @@ bool link_read_image(uint32_t qwc, void *dst) {
     if (!g_hdr) return false;
     static uint32_t next_id = 0;
     {
+        KernelScope ks;
         std::lock_guard<std::recursive_mutex> poll_lock(g_poll_mutex);
         g_image_id = ++next_id ? next_id : ++next_id;
         g_image_dst = static_cast<uint8_t *>(dst);
@@ -247,24 +263,34 @@ bool link_read_image(uint32_t qwc, void *dst) {
         g_image_done = false;
     }
     const uint32_t req[2] = {g_image_id, qwc};
+    const DWORD since = GetTickCount();
     link_send(GT4_REC_GS_READ, req, sizeof req);
     bool done = false;
     for (int waited = 0; waited < 2000 && !done; ++waited) {
         link_poll();
         {
+            KernelScope ks;
             std::lock_guard<std::recursive_mutex> poll_lock(g_poll_mutex);
             done = g_image_done;
         }
         if (!done) Sleep(1);
     }
+    KernelScope ks;
     std::lock_guard<std::recursive_mutex> poll_lock(g_poll_mutex);
     g_image_id = 0;
     g_image_dst = nullptr;
-    if (!done) log_warn("link: no GS_IMAGE for a %u-qword download", qwc);
+    // Reads, and the slow ones (the host answers after drawing everything queued before the read).
+    static uint32_t reads = 0, slow = 0;
+    ++reads;
+    const DWORD took = GetTickCount() - since;
+    if (!done) log_warn("link: no GS_IMAGE for a %u-qword download after %lu ms (read %u)", qwc, static_cast<unsigned long>(took), reads);
+    else if (took >= 50 && (++slow <= 20 || slow % 100 == 0))
+        log_warn("link: a %u-qword GS read took %lu ms (read %u, %u slow so far)", qwc, static_cast<unsigned long>(took), reads, slow);
     return done;
 }
 
 bool link_pad(int port, uint8_t out[18]) {
+    KernelScope ks;   // link_poll takes this mutex in the interrupt handlers (see link_send)
     std::lock_guard<std::mutex> lock(g_pad_mutex);
     if (port < 0 || port > 1 || !g_pad_valid[port]) return false;
     std::memcpy(out, g_pad[port], 18);

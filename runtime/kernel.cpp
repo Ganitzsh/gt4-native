@@ -264,6 +264,11 @@ bool cooperative_delivery() {
 }
 constexpr uint64_t kCooperativeLimit = static_cast<uint64_t>(kBusHz * 0.05);   // 50 ms of bus cycles
 uint64_t g_due_since = 0;   // when something to deliver came due (0: nothing waits)
+// GT4_WATCH's guard: guest threads frozen by an interrupt inside runtime code outside a KernelScope (which may hold a
+// runtime mutex the handlers then wait for: the F7 freeze). Counted here, logged by the watchdog (no logging while a
+// thread is frozen: it may hold the log's own locks).
+bool g_guard_frozen = false;
+std::atomic<uint32_t> g_frozen_in_runtime{0}, g_frozen_in_runtime_at{0};
 uint64_t g_delivered_cooperatively = 0, g_delivered_preemptively = 0;
 
 // From the interrupt thread: freeze the running guest thread, run handlers, resume or preempt. False when it left
@@ -281,6 +286,24 @@ bool interrupt_now() {
         CONTEXT ctx;
         ctx.ContextFlags = CONTEXT_CONTROL;
         GetThreadContext(r->host, &ctx);  // makes the suspension take effect
+        if (g_guard_frozen) {
+            // the innermost return address in the image: runtime code (not a game function) means frozen inside it
+            ctx.ContextFlags = CONTEXT_CONTROL;
+            uint32_t at = ctx.Eip >= 0x02000000 && ctx.Eip < 0x04000000 ? ctx.Eip : 0;
+            const auto *sp = reinterpret_cast<const uint32_t *>(ctx.Esp);
+            MEMORY_BASIC_INFORMATION mi;
+            for (int k = 0; !at && k < 1024; ++k) {
+                if ((k == 0 || (reinterpret_cast<uintptr_t>(sp + k) & 0xFFF) == 0) &&
+                    (!VirtualQuery(sp + k, &mi, sizeof mi) || mi.State != MEM_COMMIT || (mi.Protect & (PAGE_GUARD | PAGE_NOACCESS))))
+                    break;
+                if (sp[k] >= 0x02000000 && sp[k] < 0x04000000 && *native_name_for(sp[k], nullptr)) at = sp[k];
+            }
+            uint32_t g = 0;
+            if (at && !std::strcmp(native_name_for(at, &g), "runtime")) {
+                g_frozen_in_runtime_at = at;
+                ++g_frozen_in_runtime;
+            }
+        }
     }
     deliver_pending();
     Thread *best = best_ready();
@@ -594,6 +617,9 @@ DWORD WINAPI watchdog_thread(void *p) {
             continue;
         }
         LeaveCriticalSection(&g_lock);
+        if (const uint32_t frozen = g_frozen_in_runtime.load())
+            log_warn("watch: guest threads frozen by an interrupt inside runtime code (outside a KernelScope): %u so far, "
+                     "the last at %08x (see the map)", frozen, g_frozen_in_runtime_at.load());
         {
             Lock lock;
             for (int i = 1; i < kMaxThreads && n < 900; ++i) {
@@ -674,6 +700,7 @@ void kernel_start_interrupts() {
     HANDLE h = CreateThread(nullptr, 1u << 20, interrupt_thread, nullptr, 0, nullptr);
     if (!h) fatal("cannot start the interrupt thread");
     log_info("kernel: frame clock at %.2f Hz", kFrameHz);
+    g_guard_frozen = getenv("GT4_WATCH") != nullptr;
     if (const char *w = getenv("GT4_WATCH"))
         CreateThread(nullptr, 1u << 16, watchdog_thread, reinterpret_cast<void *>(static_cast<uintptr_t>(atoi(w))), 0,
                      nullptr);
