@@ -73,6 +73,7 @@ void send_data(uint32_t source, uint32_t bytes) {
 // holds them (gfx::SetSlots: the host keeps the same).
 std::unordered_set<uint64_t> g_sent_sets;
 gfx::SetSlots g_set_slots;
+gfx::ContentFifo g_sent_uploads(gfx::kUploadsKept);   // the set uploads' contents the host keeps
 
 // A texture set record (gfx::TexSetRecord, in the frame's buffer): its content hashed now, as the frame is sent (the
 // game changes some sets in place: the PS2 uploaded what was there then), and its bytes sent when the host has not
@@ -109,9 +110,17 @@ void send_tex_set(uint8_t *payload, uint32_t bytes) {
     r.sent = g_sent_sets.insert(hash).second ? 1u : 0u;
     std::memcpy(payload, &r, sizeof r);
     if (!r.sent) return;
+    // each upload's bytes, or a reference to a content the host keeps (gfx::kDataReference)
     for (uint32_t k = 0; k < r.uploads; ++k) {
-        const uint32_t head[2] = {uploads[k].source, uploads[k].qwords * 16};
-        link_send(GT4_REC_GFX_DATA, head, sizeof head, data[k].data(), uploads[k].qwords * 16);
+        const uint32_t n = uploads[k].qwords * 16;
+        const uint64_t content = gfx::contentHash(data[k].data(), data[k].size());
+        if (g_sent_uploads.add(content, [](uint64_t) {})) {
+            const uint32_t head[2] = {uploads[k].source, n};
+            link_send(GT4_REC_GFX_DATA, head, sizeof head, data[k].data(), n);
+        } else {
+            const uint32_t head[2] = {uploads[k].source, n | gfx::kDataReference};
+            link_send(GT4_REC_GFX_DATA, head, sizeof head, &content, sizeof content);
+        }
     }
 }
 

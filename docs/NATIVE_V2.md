@@ -34,6 +34,10 @@ Natively:
 - **Both ends keep the same sets** (`gfx::SetSlots`, in the order of the set records): a set lives until another is
   uploaded over its slot, a content until its last set goes; the walker then forgets it was sent, the host drops it.
   Nothing is ever asked back.
+- **A set content's uploads go one by one.** GT4 animates small palettes inside big sets (a 1 KB palette of a
+  350 KB track set changed every frame of a replay: 2 MB a frame of data). The uploads of a set content not held go
+  as their bytes only when the host does not keep that upload's content (`gfx::ContentFifo` of `kUploadsKept`, both
+  ends adding each sent set's uploads in order), as a reference otherwise (`gfx::kDataReference`, link version 2).
 - **A draw names its set.** The runtime keeps the sets in graphics memory by slot (`runtime/native/pgl.cpp`); any
   TEX0 (or TEX2) flushed with its image inside one names that set, whatever bound it (0049CC48 binds a record, the
   pglu calls, the mirror's own TEX0s). A frame buffer set at a slot ends the set there.

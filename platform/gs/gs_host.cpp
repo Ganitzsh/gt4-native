@@ -576,6 +576,14 @@ struct GsHost::Impl {
                     target->readVram(vram.data());
                     const std::vector<uint8_t> state = stream->saveState(vram.data());
                     recorder->out->write(GT4_REC_STATE, state.data(), static_cast<uint32_t>(state.size()));
+                    // the set upload contents the runtime counts on the host keeping (gfx::kDataKeep), oldest first
+                    stream->exportUploads([&](const std::vector<uint8_t>& bytes) {
+                        std::vector<uint8_t> data(8 + bytes.size());
+                        const uint32_t head[2] = {0, static_cast<uint32_t>(bytes.size()) | gfx::kDataKeep};
+                        std::memcpy(data.data(), head, 8);
+                        std::memcpy(data.data() + 8, bytes.data(), bytes.size());
+                        recorder->out->write(GT4_REC_GFX_DATA, data.data(), static_cast<uint32_t>(data.size()));
+                    });
                     // the native texture sets in graphics memory (docs/NATIVE_V2.md), as set records with their bytes
                     target->frontend().exportSets([&](const gfx::TexSetRecord& r, const std::vector<gfx::TexSetUpload>& uploads,
                                                       const std::vector<uint8_t>& bytes) {

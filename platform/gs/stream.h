@@ -133,12 +133,28 @@ private:
     struct RecordData {
         uint32_t source = 0;
         std::vector<uint8_t> bytes;
+        bool reference = false;   // a set upload's content the host keeps (gfx::kDataReference): `hash`, `size` bytes
+        uint64_t hash = 0;
+        uint32_t size = 0;
     };
     std::vector<RecordData> recordData;
+    // The texture sets' upload contents (gfx::ContentFifo of kUploadsKept, as the runtime keeps them): bytes by hash.
+    gfx::ContentFifo uploadHashes{gfx::kUploadsKept};
+    std::unordered_map<uint64_t, std::vector<uint8_t>> uploadBytes;
+    void keepUpload(uint64_t hash, std::vector<uint8_t>&& bytes) {
+        if (uploadHashes.add(hash, [&](uint64_t gone) { uploadBytes.erase(gone); })) uploadBytes[hash] = std::move(bytes);
+    }
     // The model packets' contents (gfx::ContentFifo, as the runtime keeps them): bytes by hash.
     gfx::ContentFifo modelHashes{gfx::kModelsKept};
     std::unordered_map<uint64_t, std::vector<uint8_t>> modelBytes;
 public:
+    // Every set upload content kept, oldest first (a recording that starts mid-run).
+    void exportUploads(const std::function<void(const std::vector<uint8_t>& bytes)>& out) const {
+        for (const uint64_t h : uploadHashes.all()) {
+            auto it = uploadBytes.find(h);
+            if (it != uploadBytes.end()) out(it->second);
+        }
+    }
     // Every model packet content kept, oldest first (a recording that starts mid-run).
     void exportModels(const std::function<void(uint64_t hash, const std::vector<uint8_t>& bytes)>& out) const {
         for (const uint64_t h : modelHashes.all()) {

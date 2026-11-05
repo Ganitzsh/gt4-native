@@ -511,6 +511,28 @@ private:
 };
 inline constexpr size_t kModelsKept = 8192;
 
+// The bytes of an upload or a model packet as both ends hash them (ContentFifo keys).
+inline uint64_t contentHash(const uint8_t* bytes, size_t n) {
+    uint64_t hash = 0xCBF29CE484222325ull ^ n;
+    size_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+        uint64_t w;
+        std::memcpy(&w, bytes + i, 8);
+        hash = (hash ^ w) * 0x9E3779B97F4A7C15ull;
+        hash ^= hash >> 31;
+    }
+    for (; i < n; ++i) hash = (hash ^ bytes[i]) * 0x100000001B3ull;
+    return hash;
+}
+
+// A texture set's uploads go one by one (GT4_REC_GFX_DATA, its u32 bytes field): a content the host keeps already
+// (ContentFifo of kUploadsKept, both ends adding the uploads of each set sent, in order) goes as a reference,
+// kDataReference set and the content's u64 hash as the payload. GT4 animates small palettes inside big sets: in a
+// replay a 350 KB track set went again every frame for a 1 KB palette of it (2 MB a frame of data).
+// kDataKeep (host recordings that start mid-run): a content to keep, no record takes it.
+inline constexpr uint32_t kDataReference = 0x80000000u, kDataKeep = 0x40000000u, kDataBytes = 0x3FFFFFFFu;
+inline constexpr size_t kUploadsKept = 2048;
+
 // The batch just filled is drawn by the renderer at `entry` (its address in 8-byte units, GT4's program layout),
 // with the lighting chain `itop` (0xFFFFFFFF: the previous run's); the next batch fills the other buffer.
 struct BatchRun {

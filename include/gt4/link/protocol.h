@@ -19,7 +19,7 @@
 #include <stdint.h>
 
 #define GT4_LINK_MAGIC 0x4B4E4C34u /* "4LNK" */
-#define GT4_LINK_VERSION 1u
+#define GT4_LINK_VERSION 2u /* 2: GT4_REC_GFX_DATA references to set uploads the host keeps (gfx::kDataReference) */
 #define GT4_LINK_SIZE (128u << 20)
 #define GT4_LINK_G2H_SIZE (96u << 20) /* game -> host ring */
 #define GT4_LINK_H2G_SIZE (8u << 20)  /* host -> game ring */

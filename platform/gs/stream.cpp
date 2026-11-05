@@ -212,8 +212,21 @@ void GraphicsStream::records(const uint8_t* data, size_t bytes) {
                         blob.resize(blob.size() + n, 0);
                         continue;
                     }
-                    blob.insert(blob.end(), it->bytes.begin(), it->bytes.begin() + std::min(n, it->bytes.size()));
-                    if (it->bytes.size() < n) blob.resize(blob.size() + n - it->bytes.size(), 0);
+                    // the bytes, or the kept content a reference names; new bytes are kept as the runtime counts on
+                    const std::vector<uint8_t>* bytes = &it->bytes;
+                    if (it->reference) {
+                        auto kept = uploadBytes.find(it->hash);
+                        if (kept == uploadBytes.end()) {
+                            ++counters.uploadsWithoutData;
+                            blob.resize(blob.size() + n, 0);
+                            recordData.erase(it);
+                            continue;
+                        }
+                        bytes = &kept->second;
+                    }
+                    blob.insert(blob.end(), bytes->begin(), bytes->begin() + std::min(n, bytes->size()));
+                    if (bytes->size() < n) blob.resize(blob.size() + n - bytes->size(), 0);
+                    if (!it->reference) keepUpload(gfx::contentHash(it->bytes.data(), it->bytes.size()), std::move(it->bytes));
                     recordData.erase(it);
                 }
             }
@@ -640,9 +653,22 @@ void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload)
         if (size < 8) break;
         uint32_t head[2];
         std::memcpy(head, payload, 8);
+        const size_t n = std::min<size_t>(head[1] & gfx::kDataBytes, size - 8);
+        if (head[1] & gfx::kDataKeep) {   // (a recording's start: a content the runtime counts on the host keeping)
+            std::vector<uint8_t> bytes(payload + 8, payload + 8 + n);
+            keepUpload(gfx::contentHash(bytes.data(), bytes.size()), std::move(bytes));
+            break;
+        }
         RecordData d;
         d.source = head[0];
-        d.bytes.assign(payload + 8, payload + 8 + std::min<size_t>(head[1], size - 8));
+        if (head[1] & gfx::kDataReference) {
+            if (size < 16) break;
+            d.reference = true;
+            d.size = head[1] & gfx::kDataBytes;
+            std::memcpy(&d.hash, payload + 8, 8);
+        } else {
+            d.bytes.assign(payload + 8, payload + 8 + n);
+        }
         recordData.push_back(std::move(d));
         break;
     }
