@@ -186,11 +186,13 @@ struct Vertices {
                 if (stLanes & (1u << i)) r.store(kSt + k, i, st[k][i]);
             }
         }
-        for (uint32_t k = 0; k < colours; ++k)
+        for (uint32_t k = 0; k < colours; ++k) {
             for (int i = 0; i < 4; ++i) {
                 if (colourSlot == ColourSlot::Normals && i < 3) r.store(kColors + k, i, normal[k][i]);
                 if (colourSlot == ColourSlot::Words) r.store(kColors + k, i, colour[k][i]);
             }
+            if (colourSlot != ColourSlot::Given) r.buffer.uploaded(kColors + k);   // (the batch holds them now)
+        }
     }
 };
 
@@ -1043,8 +1045,15 @@ bool Renderers3d::run(const Batch3d& batch, PrimitiveSink& sink, uint32_t& conti
             const std::vector<uint8_t> header = copyPacket(r, kHeader);
             sink.packet(header.data(), header.size());
         }
+        // What the chain leaves in the colour slot, as Vertices::writeBack would (BatchBuffer::litColours).
+        auto markLit = [&](bool words, bool normals, uint32_t colours) {
+            const uint64_t mask = colours >= 64 ? ~0ull : (1ull << colours) - 1;
+            if (words) batch.buffer->litColours |= mask, batch.buffer->litNormals &= ~mask;
+            if (normals) batch.buffer->litNormals |= mask, batch.buffer->litColours &= ~mask;
+        };
         // a fade to alpha 0 ends the program with nothing drawn
         if (entry.lighting && chain.body == 0x16F8 && !static_cast<uint16_t>(r.words((r.half(202, 0) + 203u) & 0x3FF)[0])) {
+            markLit(chain.unpack == 3 || chain.unpack == 4, chain.unpack == 1, n);
             r.store(kWeight, 0, 0x8000u);
             continueAt = 0x1810 / 8;
             return true;
@@ -1087,7 +1096,31 @@ bool Renderers3d::run(const Batch3d& batch, PrimitiveSink& sink, uint32_t& conti
             job.previousScale[i] = previous.scale[i];
             job.previousOffset[i] = previous.offset[i];
         }
-        sink.model(job, &batch.buffer->words[0][0]);   // (as sent: qword 242 still holds the weight it had)
+        // 0x0290's sum takes the next vertex's normal; after the last vertex, the qword after the batch's normals as
+        // the batch holds it. Where a chain on the GPU left lit colours there, the VU reads those words as floats:
+        // zero (integers 0..2^23 have no exponent); where it left decoded normals, those of the bytes still there.
+        const uint32_t* words = &batch.buffer->words[0][0];
+        static thread_local std::array<uint32_t, gfx::kModelWords> patched;
+        if (entry.lighting && chain.model.nextNormal && n < 64) {
+            const uint64_t bit = 1ull << n;
+            if ((batch.buffer->litColours | batch.buffer->litNormals) & bit) {
+                std::memcpy(patched.data(), words, sizeof patched);
+                uint32_t* q = patched.data() + size_t(kColors + n) * 4;
+                if (batch.buffer->litColours & bit) {
+                    q[0] = q[1] = q[2] = q[3] = 0;
+                } else {
+                    const Vec4 normal = byteNormal(r.words(kColors + n), 0.0f);
+                    for (int i = 0; i < 3; ++i) q[i] = std::bit_cast<uint32_t>(normal[i]);
+                }
+                words = patched.data();
+                ++stats.patchedNext;
+            }
+        }
+        sink.model(job, words);   // (as sent: qword 242 still holds the weight it had)
+        if (entry.lighting) {
+            const bool litWords = chain.body != 0x0B0 || chain.unpack == 3 || chain.unpack == 4;
+            markLit(litWords, !litWords && chain.unpack == 1, chain.body == 0x16F8 ? (n + 1) & ~1u : n);
+        }
         for (int i = 0; i < 4; ++i) r.store(kWeight, i, tag.words[i]);
         ++stats.gpu;
         return true;

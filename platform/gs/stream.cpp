@@ -450,7 +450,10 @@ std::vector<uint8_t> GraphicsStream::saveState(const uint8_t* vram) const {
     w.u32(kStateMagic);
     w.u32(kStateVersion);
     w.bytes(vif1.program.data(), Vif1::kProgramBytes);
-    w.bytes(vif1.buffers, sizeof vif1.buffers);
+    for (const BatchBuffer& b : vif1.buffers) {   // (the layout of version 2 on: words, then vertexWrites)
+        w.bytes(b.words, sizeof b.words);
+        w.u32(b.vertexWrites);
+    }
     w.bytes(&renderers.constants, sizeof renderers.constants);
     w.u32(vif1.continueAt);
     for (uint32_t v : {vif1.cl, vif1.wl, vif1.mode, vif1.mask, vif1.base, vif1.ofst, vif1.tops, vif1.itops, vif1.mark,
@@ -499,7 +502,11 @@ void GraphicsStream::restoreState(const uint8_t* payload, size_t size) {
         if (reference) reference->tool.restore(data.data(), vf, vif1.program);
 #endif
     } else {
-        r.bytes(vif1.buffers, sizeof vif1.buffers);
+        for (BatchBuffer& b : vif1.buffers) {
+            r.bytes(b.words, sizeof b.words);
+            b.vertexWrites = r.u32();
+            b.litColours = b.litNormals = 0;   // (not saved: what the batch holds is taken as uploaded)
+        }
         r.bytes(&renderers.constants, sizeof renderers.constants);
         vif1.continueAt = r.u32();
         for (uint32_t* v : {&vif1.cl, &vif1.wl, &vif1.mode, &vif1.mask, &vif1.base, &vif1.ofst, &vif1.tops, &vif1.itops, &vif1.mark}) *v = r.u32();

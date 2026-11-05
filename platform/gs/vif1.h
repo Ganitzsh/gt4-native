@@ -33,6 +33,17 @@ struct BatchBuffer {
     static constexpr uint32_t kQwords = 256;   // the batch layout ends at qword 242 (docs/VU1_PROGRAMS.md)
     uint32_t words[kQwords][4] = {};
     uint32_t vertexWrites = 0;   // writes into the vertex data (qwords 0..191) so far (renderers3d: a batch drawn again)
+    // The colour slot's qwords (128..191, one bit each) that a lighting chain run on the GPU left as lit colour
+    // words or as decoded normals: the VU, and the CPU renderers, write those back into the batch, the GPU does
+    // not, and a later batch can read one (0x0290's "next normal" after its last vertex). An upload clears them.
+    uint64_t litColours = 0, litNormals = 0;
+    void uploaded(uint32_t q) {
+        if (q >= 128 && q < 192) {
+            const uint64_t keep = ~(1ull << (q - 128));
+            litColours &= keep;
+            litNormals &= keep;
+        }
+    }
     const uint32_t* qword(uint32_t q) const { return words[q % kQwords]; }
     uint32_t* qword(uint32_t q) { return words[q % kQwords]; }
 };

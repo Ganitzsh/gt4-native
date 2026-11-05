@@ -56,6 +56,7 @@ public:
         uint64_t setups = 0, matched = 0;     // objects (setups), and those found in the previous frame
         uint64_t gpu = 0;                     // batches handed to the GPU whole (docs/NATIVE_V2.md, step 2)
         uint64_t redrawn = 0;                 // ... of them, drawn again without new vertices (the chain run again)
+        uint64_t patchedNext = 0;             // ... of them, sent with the colour-slot qword the VU would read (0x0290)
     } stats;
 
 private:

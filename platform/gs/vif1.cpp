@@ -179,6 +179,7 @@ void Vif1::batchWrite(uint32_t qword, const uint32_t* words, uint32_t count, uin
         for (uint32_t f = 0; f < 4; ++f)
             if ((lanes >> f) & 1) b.words[qword + k][f] = words[4 * k + f];
         if (qword + k < 192) ++b.vertexWrites;
+        b.uploaded(qword + k);
     }
 }
 
@@ -226,6 +227,7 @@ void Vif1::batchModel(const uint8_t* bytes, size_t size, uint32_t modelMask, uin
                 for (uint32_t f = 0; f < 4; ++f)
                     if ((w.lanes >> f) & 1) q[f] = w.value[f];
                 if (w.qword < 192) ++buffers[w.buffer].vertexWrites;
+                buffers[w.buffer].uploaded(w.qword);
             }
             cl = e.cl, wl = e.wl, mask = e.mask, mode = e.mode, base = e.base, ofst = e.ofst, tops = e.tops, itops = e.itops, mark = e.mark;
             dbf = e.dbf;
@@ -312,6 +314,7 @@ void Vif1::unpack(uint32_t code, const uint32_t* source) {
         if (relative) {
             vuAddress = (bufferStart[current] + a) & 0x3FF;
             if (a < 192) ++buffers[current].vertexWrites;
+            buffers[current].uploaded(a);
             written = current, writtenQword = a;
             if (a < BatchBuffer::kQwords) return buffers[current].words[a];
             return nullptr;
@@ -320,6 +323,7 @@ void Vif1::unpack(uint32_t code, const uint32_t* source) {
         for (uint32_t b : {current, current ^ 1u}) {
             const uint32_t r = (vuAddress - bufferStart[b]) & 0x3FF;
             if (r < 192) ++buffers[b].vertexWrites;
+            buffers[b].uploaded(r);
             written = b, writtenQword = r;
             if (r < BatchBuffer::kQwords) return buffers[b].words[r];
         }
