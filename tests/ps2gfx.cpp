@@ -295,7 +295,7 @@ void testVifUnpack() {
 
 // A model packet replayed from its recorded effect (Vif1::batchModel, the second time) leaves the batch buffers as
 // decoding it does: whole qwords (copied as runs), a masked write that keeps a write-protected lane (applied lane by
-// lane), a packet that writes one qword twice (the per-write replay, in order), and the colour slot's lit bits.
+// lane), a packet that writes one qword twice (merged in order), and the colour slot's lit bits.
 void testModelReplay() {
     using namespace vif;
     auto check = [](const Stream& packet, uint32_t mask, const char* what) {
@@ -329,8 +329,8 @@ void testModelReplay() {
     Stream masked;
     masked.add(UNPACK(3, 0, 1, 4, true)).add(b, 16).add(UNPACK(3, 0, 1, 5)).add(a, 16);   // w write-protected at 4
     check(masked, 3u << 6, "model replay: a masked write keeps its protected lane");
-    // qword 6 written twice, a masked write then a whole one: in order the whole one wins (runs first, then the
-    // masked writes, would leave the masked one's lanes)
+    // qword 6 written twice, a masked write then a whole one: in order the whole one wins (applied out of order,
+    // the masked one's lanes would stay)
     Stream twice;
     twice.add(UNPACK(3, 0, 1, 6, true)).add(a, 16).add(UNPACK(3, 0, 1, 6)).add(b, 16);
     check(twice, 3u << 6, "model replay: a qword written twice replays in order");

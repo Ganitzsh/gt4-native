@@ -128,8 +128,8 @@ public:
             uint32_t value[4];
         };
         std::vector<Write> writes;
-        // The writes as replayed when no qword is written twice (`compact`): runs of whole qwords copied at once,
-        // the other writes one by one, and per buffer the vertex writes counted and the colour slot's qwords
+        // The writes as replayed (`compact`: all in the batch buffers' range): merged per qword, those whole copied as
+        // runs, the others lane by lane, and per buffer the vertex writes counted and the colour slot's qwords
         // uploaded (BatchBuffer::uploaded) in one go.
         struct Run {
             uint16_t buffer, qword, count;

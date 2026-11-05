@@ -280,33 +280,39 @@ void Vif1::batchModel(const uint8_t* bytes, size_t size, uint32_t modelMask, uin
         effect.unpacks = stats.unpacks - unpacksBefore;
         effect.codes = stats.codes - codesBefore;
         if (modelEffects.size() > 32768) modelEffects.clear();   // (a bound: models of courses left long ago)
-        // (compacted for the replays when no qword is written twice: then the writes' order does not matter)
+        // (compacted for the replays: the writes merged per qword, in order, so each lane keeps the last value
+        // written to it; the qwords whole by then copied as runs, the rest lane by lane. The vertex-write count and
+        // the colour slots uploaded do not depend on the order. GT4 often writes a qword in two parts: XYZ, then W.)
         {
-            std::array<std::array<bool, BatchBuffer::kQwords>, 2> seen{};
-            bool once = true;
-            for (const ModelEffect::Write& w : effect.writes) {
-                if (w.buffer > 1 || w.qword >= BatchBuffer::kQwords || seen[w.buffer][w.qword]) {
-                    once = false;
-                    break;
-                }
-                seen[w.buffer][w.qword] = true;
-            }
-            if (once) {
-                effect.compact = true;
+            bool inRange = true;
+            for (const ModelEffect::Write& w : effect.writes) inRange = inRange && w.buffer <= 1 && w.qword < BatchBuffer::kQwords;
+            if (inRange) {
+                std::array<std::array<uint8_t, BatchBuffer::kQwords>, 2> lanes{};
+                std::array<std::array<std::array<uint32_t, 4>, BatchBuffer::kQwords>, 2> merged;
                 for (const ModelEffect::Write& w : effect.writes) {
                     if (w.qword < 192) ++effect.vertexWrites[w.buffer];
                     if (w.qword >= 128 && w.qword < 192) effect.uploadedSlots[w.buffer] |= 1ull << (w.qword - 128);
-                    if ((w.lanes & 15) != 15) {
-                        effect.partial.push_back(w);
-                        continue;
-                    }
-                    ModelEffect::Run* last = effect.runs.empty() ? nullptr : &effect.runs.back();
-                    if (!last || last->buffer != w.buffer || uint32_t(last->qword) + last->count != w.qword ||
-                        last->at + last->count * 4u != effect.runWords.size())
-                        effect.runs.push_back({w.buffer, w.qword, 0, static_cast<uint32_t>(effect.runWords.size())});
-                    ++effect.runs.back().count;
-                    effect.runWords.insert(effect.runWords.end(), w.value, w.value + 4);
+                    for (uint32_t f = 0; f < 4; ++f)
+                        if ((w.lanes >> f) & 1) merged[w.buffer][w.qword][f] = w.value[f];
+                    lanes[w.buffer][w.qword] |= uint8_t(w.lanes & 15);
                 }
+                effect.compact = true;
+                for (uint16_t b = 0; b < 2; ++b)
+                    for (uint16_t q = 0; q < BatchBuffer::kQwords; ++q) {
+                        const uint8_t l = lanes[b][q];
+                        if (!l) continue;
+                        if (l != 15) {
+                            ModelEffect::Write w{b, q, l, {}};
+                            std::memcpy(w.value, merged[b][q].data(), 16);
+                            effect.partial.push_back(w);
+                            continue;
+                        }
+                        ModelEffect::Run* last = effect.runs.empty() ? nullptr : &effect.runs.back();
+                        if (!last || last->buffer != b || uint32_t(last->qword) + last->count != q)
+                            effect.runs.push_back({b, q, 0, static_cast<uint32_t>(effect.runWords.size())});
+                        ++effect.runs.back().count;
+                        effect.runWords.insert(effect.runWords.end(), merged[b][q].begin(), merged[b][q].end());
+                    }
                 effect.writes.clear();
                 effect.writes.shrink_to_fit();
             }
