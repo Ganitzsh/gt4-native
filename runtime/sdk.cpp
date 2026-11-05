@@ -53,8 +53,9 @@ extern "C" uint32_t gt4_replace_scePowerOffHandler(uint32_t func, uint32_t arg) 
 }
 
 // _InitTLB (005B9AF0): programs the EE's TLB (scratchpad, kernel, default and extended mappings). Native memory
-// is mapped by the runtime (guest.cpp); nothing to do. Returns the wired entry count, which nothing reads.
-extern "C" int gt4_replace_func_005B9AF0() { return 0; }
+// is mapped by the runtime (guest.cpp); nothing to do. Returns the wired entry count, which nothing reads: as the
+// 64-bit value its caller (005B9AB0, `long long`) takes (tools/hook_lint.py).
+extern "C" int64_t gt4_replace_func_005B9AF0() { return 0; }
 
 // loadcore.o's _sceErxExecModuleFunction (00586208) and _sceErxExecGpFunction (00586398): call a function of an
 // EE relocatable module (ERX) under that module's $gp, forwarding their variadic arguments. GT4 loads no ERX
