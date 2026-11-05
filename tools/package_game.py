@@ -18,9 +18,14 @@ extracted over the same folder. The game data stays the user's: never distribute
 
 A public release holds no game data at all:
 
-    py tools/package_game.py --release 0.1.0 [--decomp C:\\path\\to\\gt4-decomp] [--out build/package]
+    py tools/release_game.py --decomp C:\\path\\to\\gt4-decomp            (the game, from an empty folder)
+    py tools/package_game.py --release 0.1.1 --decomp C:\\path\\to\\gt4-decomp [--game-build build/game_release]
+                             [--out build/package]
 
-writes OUT/GT4-Native-VERSION-windows-x64.zip:
+takes gt4_game.exe only from a clean build (tools/release_game.py): it refuses one whose BUILD-STAMP.json does not
+match the exe, or whose inputs (either tree) have changed since. It writes OUT/GT4-Native-VERSION-game-sources.zip
+(the decomp's files at the stamped commit, the native corrections and drafts as compiled, the stamp) and
+OUT/GT4-Native-VERSION-windows-x64.zip:
     GT4-Native-VERSION/gt4_host.exe, gt4_game.exe, msvcp140.dll, vcruntime140*.dll
     GT4-Native-VERSION/settings.ini, settings-handheld.ini   the desktop and handheld profiles
     GT4-Native-VERSION/README.txt, LICENSE, THIRD_PARTY_NOTICES.md, CREDITS.md, BUILD-INFO.txt
@@ -28,9 +33,9 @@ writes OUT/GT4-Native-VERSION-windows-x64.zip:
     GT4-Native-VERSION/game/PUT-YOUR-GAME-HERE.txt           the player's disc image goes here; gt4_host.exe makes
                                                              game/CORE.GT4.elf from it on the first start
     GT4-Native-VERSION/saves/                                empty
-BUILD-INFO.txt names this repository's commit and, with --decomp, the decomp's (the game is compiled from its
-sources) and the executables' SHA-256. With --decomp the executables are also checked for blocks of the original
-executable (orig/SCUS-97328/CORE.GT4.elf): a release must not carry any.
+BUILD-INFO.txt names this repository's commit, the game build's two commits (gt4-decomp: the game's sources;
+gt4-native: game_src/ and the runtime), the executables' SHA-256 and the provisional drafts. The executables are
+also checked for blocks of the original executable (orig/SCUS-97328/CORE.GT4.elf): a release must not carry any.
 """
 import argparse
 import glob
@@ -140,28 +145,119 @@ def original_blocks(exe, elf, block=4096, step=65536):
     return found
 
 
+def checked_game_build(build, decomp, root):
+    """The stamp of a clean game build (tools/release_game.py), after checking that it still describes the exe and
+    the trees: refuses a game built incrementally, rebuilt since, or whose inputs have changed since."""
+    import hashlib
+    import json
+    stamp_path = os.path.join(build, "BUILD-STAMP.json")
+    game = os.path.join(build, "gt4_game.exe")
+    if not os.path.isfile(stamp_path) or not os.path.isfile(game):
+        raise SystemExit(f"{build} is not a clean game build (no BUILD-STAMP.json): run tools/release_game.py")
+    stamp = json.load(open(stamp_path))
+    if hashlib.sha256(open(game, "rb").read()).hexdigest() != stamp["game_sha256"]:
+        raise SystemExit(f"{game} is not the exe its stamp describes: rebuild with tools/release_game.py")
+    for repo, commit, paths, what in ((decomp, stamp["decomp_commit"], ["src", "include", "config", "project.toml"],
+                                       "gt4-decomp"),
+                                      (root, stamp["native_commit"], ["game_src", "compat", "runtime", "include",
+                                       "tools/game_cc.py", "tools/game_link.py", "tools/game_toolchain"], "gt4-native")):
+        changed = subprocess.run(["git", "-C", repo, "diff", "--name-only", commit, "--"] + paths,
+                                 capture_output=True, text=True, check=True).stdout.split()
+        untracked = subprocess.run(["git", "-C", repo, "ls-files", "-o", "--exclude-standard", "--"] + paths,
+                                   capture_output=True, text=True, check=True).stdout.split()
+        if changed or untracked:
+            raise SystemExit(f"the game's {what} inputs changed since the build ({commit[:10]}): "
+                             f"{(changed + untracked)[:5]}...: rebuild with tools/release_game.py")
+    snap = os.path.join(build, "sources")
+    for kind, folder in (("curated", "native_curated"), ("drafts", "native_drafts")):
+        for n, digest in stamp[kind].items():
+            p = os.path.join(snap, folder, n)
+            if not os.path.isfile(p) or hashlib.sha256(open(p, "rb").read()).hexdigest() != digest:
+                raise SystemExit(f"{p} differs from the stamp")
+    return stamp
+
+
+SOURCES_NOTE = """The game sources gt4_game.exe of GT4 Native {version} was compiled from (tools/release_game.py, from an
+empty build folder; BUILD-STAMP.json lists every input's SHA-256).
+
+- src/, include/, config/, project.toml, LICENSE: gt4-decomp at commit {decomp}
+  (a fork of https://github.com/gustavocanepa/gt4-decomp, MIT licence: LICENSE).
+- native_curated/: gt4-native's game_src/ at commit {native}: native corrections, which replace the decomp's
+  function of the same address.
+- native_drafts/: provisional sources for {drafts} functions the decompilation has not matched yet, chosen by
+  gt4-native's tools/draft_natives.py from the decompilation's draft store (where each came from: DRAFTS.txt).
+
+To rebuild: check out gt4-decomp at that commit and gt4-native at {native}, put native_drafts/ under the decomp's
+build/ folder, and run in gt4-native:
+  py tools/release_game.py --decomp DECOMP --drafts DECOMP/build/native_drafts
+The exe's SHA-256 must then be {sha}.
+"""
+
+
+def game_sources_zip(path, stamp, build, decomp, version):
+    """The game's sources as compiled: the decomp's files at the stamped commit (git archive), the curated and draft
+    sources as staged, the stamp itself and a note."""
+    import io
+    import json
+    import tarfile
+    tar = subprocess.run(["git", "-C", decomp, "archive", "--format=tar", stamp["decomp_commit"], "--",
+                          "src", "include", "config", "project.toml", "LICENSE"], capture_output=True, check=True).stdout
+    top = "gt4-decomp"
+    with zipfile.ZipFile(path + ".part", "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+        with tarfile.open(fileobj=io.BytesIO(tar)) as t:
+            for m in t.getmembers():
+                if m.isfile():
+                    z.writestr(f"{top}/{m.name}", t.extractfile(m).read())
+        add_tree(z, os.path.join(build, "sources", "native_curated"), f"{top}/native_curated")
+        add_tree(z, os.path.join(build, "sources", "native_drafts"), f"{top}/native_drafts")
+        z.writestr(f"{top}/BUILD-STAMP.json", json.dumps(stamp, indent=1) + "\n")
+        z.writestr(f"{top}/DRAFTS.txt", "\n".join(stamp.get("draft_list") or ["(no list)"]) + "\n")
+        z.writestr(f"{top}/SOURCES-FOR-GT4-NATIVE-{version}.txt", SOURCES_NOTE.format(
+            version=version, decomp=stamp["decomp_commit"], native=stamp["native_commit"],
+            drafts=len(stamp["drafts"]), sha=stamp["game_sha256"]))
+        bad = [n for n in z.namelist() if n.lower().endswith((".iso", ".elf", ".ps2", ".psu", ".bin", ".gt4"))
+               or "/orig/" in n]
+    if bad:
+        os.remove(path + ".part")
+        raise SystemExit(f"game data in the sources archive: {bad[:5]}")
+    os.replace(path + ".part", path)
+
+
 def release(a):
     import hashlib
     name = f"{NAME}-{a.release}"
     root = a.build_root or ROOT
-    host, game = (os.path.join(root, os.path.relpath(f, ROOT)) for f in (HOST, GAME))
+    if not a.decomp:
+        raise SystemExit("--release needs --decomp (the game build's sources are checked against it)")
+    host = os.path.join(root, os.path.relpath(HOST, ROOT))
+    build = a.game_build or os.path.join(root, "build", "game_release")
+    stamp = checked_game_build(build, a.decomp, root)
+    game = os.path.join(build, "gt4_game.exe")
     for f in (host, game):
         if not os.path.isfile(f):
             raise SystemExit(f"missing {f}")
-    info = [f"GT4 Native {a.release}", f"gt4-native commit: {git_head(root)}"]
-    if a.decomp:
-        info.append(f"gt4-decomp commit (the game's sources): {git_head(a.decomp)}")
-        elf = os.path.join(a.decomp, "orig", "SCUS-97328", "CORE.GT4.elf")
-        for exe in (host, game):
-            hits = original_blocks(exe, elf)
-            if hits:
-                raise SystemExit(f"{exe} holds {len(hits)} blocks of the original executable, e.g. address "
-                                 f"{hits[0][0]:08X} at offset {hits[0][1]:#x}: not releasable")
-        print("no block of the original executable in either program")
+    info = [f"GT4 Native {a.release}", f"gt4-native commit: {git_head(root)}",
+            f"gt4_game.exe built from an empty folder (tools/release_game.py) on {stamp['built']}:",
+            f"  gt4-decomp commit (the game's sources): {stamp['decomp_commit']}",
+            f"  gt4-native commit (game_src/, the runtime): {stamp['native_commit']}",
+            f"  {len(stamp['curated'])} native corrections (game_src/), {len(stamp['drafts'])} provisional drafts "
+            f"(listed below; sources in the game-sources zip)"]
+    elf = os.path.join(a.decomp, "orig", "SCUS-97328", "CORE.GT4.elf")
+    for exe in (host, game):
+        hits = original_blocks(exe, elf)
+        if hits:
+            raise SystemExit(f"{exe} holds {len(hits)} blocks of the original executable, e.g. address "
+                             f"{hits[0][0]:08X} at offset {hits[0][1]:#x}: not releasable")
+    print("no block of the original executable in either program")
     for f in (host, game):
         info.append(f"{os.path.basename(f)} SHA-256: {hashlib.sha256(open(f, 'rb').read()).hexdigest()}")
+    info += ["", "Provisional drafts (address, source in the decomp's draft store, kind, differing/total instructions):"]
+    info += [l for l in (stamp.get("draft_list") or ["(no list)"]) if not l.startswith("#")]
 
     os.makedirs(a.out, exist_ok=True)
+    sources = os.path.join(a.out, f"{name}-game-sources.zip")
+    print(f"writing {sources}")
+    game_sources_zip(sources, stamp, build, a.decomp, a.release)
     archive = os.path.join(a.out, f"{name}-windows-x64.zip")
     files = [(f, os.path.basename(f)) for f in [host, game] + vc_runtime()]
     files += [(os.path.join(root, d), d) for d in RELEASE_DOCS if os.path.isfile(os.path.join(root, d))]
@@ -189,8 +285,12 @@ def release(a):
     digest = hashlib.sha256(open(archive, "rb").read()).hexdigest()
     with open(archive + ".sha256", "w", newline="\n") as f:
         f.write(f"{digest}  {os.path.basename(archive)}\n")
-    print("\n".join(info))
+    print("\n".join(info[:9]))
     print(f"{archive}: {os.path.getsize(archive) / 2**20:.1f} MiB, SHA-256 {digest}")
+    sdigest = hashlib.sha256(open(sources, "rb").read()).hexdigest()
+    with open(sources + ".sha256", "w", newline="\n") as f:
+        f.write(f"{sdigest}  {os.path.basename(sources)}\n")
+    print(f"{sources}: {os.path.getsize(sources) / 2**20:.1f} MiB, SHA-256 {sdigest}")
 
 
 def vc_runtime():
@@ -231,6 +331,8 @@ def main():
     ap.add_argument("--release", metavar="VERSION", help="a public release archive, without any game data")
     ap.add_argument("--build-root", help="with --release: the checkout whose build/ holds the programs and whose "
                     "commit BUILD-INFO names (default: this one)")
+    ap.add_argument("--game-build", help="with --release: the clean game build folder (tools/release_game.py; "
+                    "default BUILD_ROOT/build/game_release)")
     ap.add_argument("--decomp", help="gt4-decomp checkout (orig/SCUS-97328: CORE.GT4.elf, the .iso)")
     ap.add_argument("--save", help="a PS2 memory card image (or folder card, .psu) to take the saves from")
     ap.add_argument("--profile", choices=sorted(PROFILES), default="desktop")

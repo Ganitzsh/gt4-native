@@ -726,6 +726,7 @@ def main():
     cmd = [tool("g++"), "-o", exe, "@" + rsp,
            "-Wl,-T," + script, "-Wl,--image-base=0x10000", "-Wl,--disable-dynamicbase",
            "-Wl,--section-alignment=0x1000", "-Wl,--large-address-aware", "-Wl,--stack,0x400000",
+           "-Wl,--no-insert-timestamp",   # the same inputs give the same file (tools/release_game.py)
            "-static", "-static-libgcc", "-static-libstdc++", "-Wl,-Map," + os.path.join(a.out, "gt4_game.map"),
            "-L" + os.path.join(FFMPEG, "lib")] + ["-l" + n for n in FFMPEG_LIBS] + ["-lbcrypt"]
     if a.eeorig:  # the translated code's RAM and scratchpad are the guest's, at their PS2 addresses
