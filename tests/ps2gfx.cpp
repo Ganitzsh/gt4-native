@@ -293,6 +293,49 @@ void testVifUnpack() {
     expect(bufferWord(split, 0, 3, 0) == 1 && bufferWord(split, 0, 3, 3) == 4, "UNPACK split across records");
 }
 
+// A model packet replayed from its recorded effect (Vif1::batchModel, the second time) leaves the batch buffers as
+// decoding it does: whole qwords (copied as runs), a masked write that keeps a write-protected lane (applied lane by
+// lane), a packet that writes one qword twice (the per-write replay, in order), and the colour slot's lit bits.
+void testModelReplay() {
+    using namespace vif;
+    auto check = [](const Stream& packet, uint32_t mask, const char* what) {
+        auto prefill = [](gt4::ps2::Vif1& v) {
+            for (uint32_t b = 0; b < 2; ++b) {
+                for (uint32_t q = 0; q < gt4::ps2::BatchBuffer::kQwords; ++q) std::memset(v.buffers[b].words[q], 0xEE, 16);
+                v.buffers[b].vertexWrites = 7;
+                v.buffers[b].litColours = v.buffers[b].litNormals = ~0ull;
+            }
+        };
+        gt4::ps2::Vif1 decoded, replayed;
+        prefill(decoded);
+        decoded.batchModel(packet.bytes(), packet.size(), mask, 0);
+        replayed.batchModel(packet.bytes(), packet.size(), mask, 0);   // decoded and recorded
+        prefill(replayed);
+        const uint64_t before = replayed.modelStats.replayed;
+        replayed.batchModel(packet.bytes(), packet.size(), mask, 0);   // replayed from the recording
+        bool same = replayed.modelStats.replayed == before + 1;
+        for (uint32_t b = 0; b < 2; ++b) {
+            same = same && std::memcmp(decoded.buffers[b].words, replayed.buffers[b].words, sizeof decoded.buffers[b].words) == 0;
+            same = same && decoded.buffers[b].vertexWrites == replayed.buffers[b].vertexWrites;
+            same = same && decoded.buffers[b].litColours == replayed.buffers[b].litColours &&
+                   decoded.buffers[b].litNormals == replayed.buffers[b].litNormals;
+        }
+        expect(same, what);
+    };
+    const uint32_t a[8] = {1, 2, 3, 4, 5, 6, 7, 8}, b[4] = {9, 10, 11, 12};
+    Stream whole;
+    whole.add(UNPACK(3, 0, 2, 0)).add(a, 32).add(UNPACK(3, 0, 1, 130)).add(b, 16);   // runs at 0..1 and 130 (colour slot)
+    check(whole, 0, "model replay: whole qwords as runs, colour slot bits cleared");
+    Stream masked;
+    masked.add(UNPACK(3, 0, 1, 4, true)).add(b, 16).add(UNPACK(3, 0, 1, 5)).add(a, 16);   // w write-protected at 4
+    check(masked, 3u << 6, "model replay: a masked write keeps its protected lane");
+    // qword 6 written twice, a masked write then a whole one: in order the whole one wins (runs first, then the
+    // masked writes, would leave the masked one's lanes)
+    Stream twice;
+    twice.add(UNPACK(3, 0, 1, 6, true)).add(a, 16).add(UNPACK(3, 0, 1, 6)).add(b, 16);
+    check(twice, 3u << 6, "model replay: a qword written twice replays in order");
+}
+
 // GT4's strip renderer (entry 0x1B08: setup, GS state header, strip) on a hand-made batch: identity
 // transform, viewport offset 2048, one strip of three vertices.
 void testRenderers3d() {
@@ -511,6 +554,7 @@ int main() {
     testXgkick();
 #endif
     testVifUnpack();
+    testModelReplay();
     testRenderers3d();
 #if GT4_VU1_INTERPRETER
     testTransformMicroprogram();   // a toy program: the interpreter runs it

@@ -4,6 +4,7 @@
 #include "gt4/unpack.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -192,8 +193,9 @@ void Vif1::batchModel(const uint8_t* bytes, size_t size, uint32_t modelMask, uin
     const size_t outerPos = pos;
     pos = 0;
     inModel = true;
-    if (std::getenv("GT4_MODEL_LOG")) {   // (debugging) the first codes of model packets, the cycle they start with
-        static int left = std::atoi(std::getenv("GT4_MODEL_LOG"));
+    static const char* const modelLog = std::getenv("GT4_MODEL_LOG");   // (read once: getenv locks and scans the environment)
+    if (modelLog) {   // (debugging) the first codes of model packets, the cycle they start with
+        static int left = std::atoi(modelLog);
         if (left-- > 0) {
             uint32_t w[4] = {};
             std::memcpy(w, bytes, std::min<size_t>(size, 16));
@@ -222,12 +224,27 @@ void Vif1::batchModel(const uint8_t* bytes, size_t size, uint32_t modelMask, uin
         auto known = modelEffects.find(key);
         if (known != modelEffects.end()) {
             const ModelEffect& e = known->second;
-            for (const ModelEffect::Write& w : e.writes) {
-                uint32_t* q = buffers[w.buffer].words[w.qword];
-                for (uint32_t f = 0; f < 4; ++f)
-                    if ((w.lanes >> f) & 1) q[f] = w.value[f];
-                if (w.qword < 192) ++buffers[w.buffer].vertexWrites;
-                buffers[w.buffer].uploaded(w.qword);
+            if (e.compact) {
+                for (const ModelEffect::Run& r : e.runs)
+                    std::memcpy(buffers[r.buffer].words[r.qword], e.runWords.data() + r.at, size_t(r.count) * 16);
+                for (const ModelEffect::Write& w : e.partial) {
+                    uint32_t* q = buffers[w.buffer].words[w.qword];
+                    for (uint32_t f = 0; f < 4; ++f)
+                        if ((w.lanes >> f) & 1) q[f] = w.value[f];
+                }
+                for (uint32_t b = 0; b < 2; ++b) {
+                    buffers[b].vertexWrites += e.vertexWrites[b];
+                    buffers[b].litColours &= ~e.uploadedSlots[b];
+                    buffers[b].litNormals &= ~e.uploadedSlots[b];
+                }
+            } else {
+                for (const ModelEffect::Write& w : e.writes) {
+                    uint32_t* q = buffers[w.buffer].words[w.qword];
+                    for (uint32_t f = 0; f < 4; ++f)
+                        if ((w.lanes >> f) & 1) q[f] = w.value[f];
+                    if (w.qword < 192) ++buffers[w.buffer].vertexWrites;
+                    buffers[w.buffer].uploaded(w.qword);
+                }
             }
             cl = e.cl, wl = e.wl, mask = e.mask, mode = e.mode, base = e.base, ofst = e.ofst, tops = e.tops, itops = e.itops, mark = e.mark;
             dbf = e.dbf;
@@ -263,6 +280,37 @@ void Vif1::batchModel(const uint8_t* bytes, size_t size, uint32_t modelMask, uin
         effect.unpacks = stats.unpacks - unpacksBefore;
         effect.codes = stats.codes - codesBefore;
         if (modelEffects.size() > 32768) modelEffects.clear();   // (a bound: models of courses left long ago)
+        // (compacted for the replays when no qword is written twice: then the writes' order does not matter)
+        {
+            std::array<std::array<bool, BatchBuffer::kQwords>, 2> seen{};
+            bool once = true;
+            for (const ModelEffect::Write& w : effect.writes) {
+                if (w.buffer > 1 || w.qword >= BatchBuffer::kQwords || seen[w.buffer][w.qword]) {
+                    once = false;
+                    break;
+                }
+                seen[w.buffer][w.qword] = true;
+            }
+            if (once) {
+                effect.compact = true;
+                for (const ModelEffect::Write& w : effect.writes) {
+                    if (w.qword < 192) ++effect.vertexWrites[w.buffer];
+                    if (w.qword >= 128 && w.qword < 192) effect.uploadedSlots[w.buffer] |= 1ull << (w.qword - 128);
+                    if ((w.lanes & 15) != 15) {
+                        effect.partial.push_back(w);
+                        continue;
+                    }
+                    ModelEffect::Run* last = effect.runs.empty() ? nullptr : &effect.runs.back();
+                    if (!last || last->buffer != w.buffer || uint32_t(last->qword) + last->count != w.qword ||
+                        last->at + last->count * 4u != effect.runWords.size())
+                        effect.runs.push_back({w.buffer, w.qword, 0, static_cast<uint32_t>(effect.runWords.size())});
+                    ++effect.runs.back().count;
+                    effect.runWords.insert(effect.runWords.end(), w.value, w.value + 4);
+                }
+                effect.writes.clear();
+                effect.writes.shrink_to_fit();
+            }
+        }
         modelEffects.emplace(key, std::move(effect));
     } else if (memo) {
         ++modelStats.uncacheable;

@@ -128,6 +128,19 @@ public:
             uint32_t value[4];
         };
         std::vector<Write> writes;
+        // The writes as replayed when no qword is written twice (`compact`): runs of whole qwords copied at once,
+        // the other writes one by one, and per buffer the vertex writes counted and the colour slot's qwords
+        // uploaded (BatchBuffer::uploaded) in one go.
+        struct Run {
+            uint16_t buffer, qword, count;
+            uint32_t at;   // into runWords
+        };
+        bool compact = false;
+        std::vector<Run> runs;
+        std::vector<uint32_t> runWords;
+        std::vector<Write> partial;
+        uint32_t vertexWrites[2] = {0, 0};
+        uint64_t uploadedSlots[2] = {0, 0};
         uint32_t cl, wl, mask, mode, row[4], col[4], base, ofst, tops, itops, mark;
         bool dbf;
         uint64_t unpacks, codes;
