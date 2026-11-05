@@ -272,7 +272,7 @@ endif()
 # Settings and display math checks (no GPU or window needed).
 if(BUILD_TESTING)
   add_executable(gt4_host_settings_test tests/host_settings.cpp platform/sdl/settings.cpp platform/sdl/settings_menu.cpp)
-  target_include_directories(gt4_host_settings_test PRIVATE platform/sdl platform/render)
+  target_include_directories(gt4_host_settings_test PRIVATE platform/sdl platform/render platform/gs)
   if(MSVC)
     target_compile_options(gt4_host_settings_test PRIVATE /W4)
   else()

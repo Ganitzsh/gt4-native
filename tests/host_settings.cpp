@@ -1,5 +1,6 @@
 // gt4_host settings and display math: option parsing, presets, the settings file round trip, the aspect
 // ratios and the Hor+ reverse-Z projection. No GPU or window needed.
+#include "chord_guard.h"
 #include "settings.h"
 #include "settings_menu.h"
 #include "vecmath.h"
@@ -23,6 +24,31 @@ bool near(float a, float b, float epsilon = 1e-4f) { return std::fabs(a - b) <= 
 
 int main() {
     using namespace gt4;
+
+    // The menu's Select + Start chord never reaches the game; a short Start alone does, after its release.
+    {
+        using ps2::PadSelect;
+        using ps2::PadStart;
+        auto poll = [](ChordGuard& g, bool start, bool select, uint64_t t) {
+            ps2::PadInput in{};
+            in.button[PadStart] = start ? 1.0f : 0.0f;
+            in.button[PadSelect] = select ? 1.0f : 0.0f;
+            g.filter(in, t);
+            return (in.button[PadStart] > 0.0f ? 1 : 0) | (in.button[PadSelect] > 0.0f ? 2 : 0);
+        };
+        ChordGuard chord;   // Start first, then Select: the chord
+        bool leaked = poll(chord, true, false, 0) != 0 || poll(chord, true, false, 50) != 0;
+        leaked |= poll(chord, true, true, 80) != 0 || poll(chord, true, true, 400) != 0 || poll(chord, false, true, 450) != 0;
+        leaked |= poll(chord, false, false, 500) != 0 || poll(chord, false, false, 520) != 0;
+        check(!leaked, "Select + Start (Start first) sends neither to the game");
+        ChordGuard tap;     // a short Start alone: sent after its release, for a few polls
+        const bool held = poll(tap, true, false, 1000) != 0 || poll(tap, true, false, 1100) != 0;
+        int sent = 0;
+        for (uint64_t t = 1150; t < 1300; t += 16) sent += poll(tap, false, false, t) == 1 ? 1 : 0;
+        check(!held && sent == ChordGuard::kTapFrames, "a short Start reaches the game after its release");
+        ChordGuard hold;    // a long Start alone: sent from kChordMs on
+        check(poll(hold, true, false, 0) == 0 && poll(hold, true, false, 250) == 1, "a Start held alone reaches the game");
+    }
 
     // Parsing and validation.
     Settings s;

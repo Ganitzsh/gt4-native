@@ -11,6 +11,7 @@
 #include "display.h"
 #include "gs_host.h"
 #include "ps2_pad.h"
+#include "chord_guard.h"
 #include "renderer.h"
 #include "save_import.h"
 #include "session.h"
@@ -651,6 +652,7 @@ int run(const Options& options) {
     gt4::SettingsMenu menu(gsMode);
     menu.setStartValues(settings);
     bool padHeldBack = false;
+    gt4::ChordGuard chordGuard;   // Select + Start, the menu's chord: neither reaches the game (chord_guard.h)
     SDL_GamepadButton menuHeld = SDL_GAMEPAD_BUTTON_INVALID;
     Uint64 menuRepeatAt = 0;
     int stickHeld = 0;   // the left stick in the menu: -1 up, 1 down
@@ -862,6 +864,7 @@ int run(const Options& options) {
                 // Nothing reaches the game while the menu is open, nor afterwards until every button is up
                 // (the button that closed the menu would act in the game).
                 gt4::ps2::PadInput input = readPad(session ? session->gamepad() : gamepad);
+                if (menuEnabled) chordGuard.filter(input, SDL_GetTicks());
                 if (padHeldBack) {
                     bool held = std::fabs(input.leftX) > 0.3f || std::fabs(input.leftY) > 0.3f;
                     for (float pressure : input.button) held |= pressure > 0.0f;
