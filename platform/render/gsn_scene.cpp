@@ -667,6 +667,7 @@ struct GsnScene::Impl {
     }
 
     void execute(VkCommandBuffer command, uint32_t slot);
+    void snapSprites();
     // Executes every pending list in order into `command` (the scale from `extent`), then empties the queue.
     // `profiled`: a frame's own submission (GT4_GPU_PROFILE).
     void executePending(VkCommandBuffer command, uint32_t slot, VkExtent2D extent, bool profiled = false);
@@ -684,7 +685,45 @@ struct GsnScene::Impl {
     }
 };
 
+// Sprites cover whole GS pixels at any scale. The GS covers pixel k when x0 <= k < x1 (its sample point is the
+// pixel's corner); a render pixel j samples the GS at j / scale (gsnPosition), so above 1x a sprite edge at k - 0.5
+// (GT4 fills its targets from -0.5 to size - 0.5) cut the last GS pixel's block in two: a target's last render row
+// and column stayed unfilled, and draws sampling a target at its edge (the car pictures' reflection lookups,
+// clamped) read them. Each edge moves to ceil(x) - 0.5 / scale, which covers the blocks of exactly the GS's pixels
+// (and changes nothing at 1x), with the texture coordinates continued along the sprite. Idempotent: a list drawn
+// again for presentation is unchanged.
+void GsnScene::Impl::snapSprites() {
+    for (const gsn::Draw& d : frame.draws) {
+        if (d.modeled || d.topology != gsn::Topology::Triangles || (d.state.prim & 7) != 6 || d.count % 6) continue;
+        auto t = targets.find(d.target);
+        if (t == targets.end()) continue;
+        const float sx = 0.5f / float(t->second.scaleX), sy = 0.5f / float(t->second.scaleY);
+        for (uint32_t first = d.first; first + 6 <= d.first + d.count; first += 6) {
+            gsn::Vertex* v = &frame.vertices[first];   // corners: left top, right top, left bottom, right top, right bottom, left bottom
+            const float x0 = v[0].x, x1 = v[1].x, y0 = v[0].y, y1 = v[2].y;
+            const float nx0 = std::ceil(x0) - sx, nx1 = std::ceil(x1) - sx, ny0 = std::ceil(y0) - sy, ny1 = std::ceil(y1) - sy;
+            if (nx0 == x0 && nx1 == x1 && ny0 == y0 && ny1 == y1) continue;
+            const float dx = x1 - x0, dy = y1 - y0;
+            // per unit of x and of y: U and S along x, V and T along y (a sprite's corners share them so)
+            const float ku = dx != 0.0f ? (v[1].u - v[0].u) / dx : 0.0f, ks = dx != 0.0f ? (v[1].s - v[0].s) / dx : 0.0f;
+            const float kv = dy != 0.0f ? (v[2].v - v[0].v) / dy : 0.0f, kt = dy != 0.0f ? (v[2].t - v[0].t) / dy : 0.0f;
+            for (int k = 0; k < 6; ++k) {
+                gsn::Vertex& p = v[k];
+                const bool right = p.x == x1 && x1 != x0, bottom = p.y == y1 && y1 != y0;
+                const float mx = (right ? nx1 : nx0) - p.x, my = (bottom ? ny1 : ny0) - p.y;
+                p.x += mx;
+                p.y += my;
+                p.u += ku * mx;
+                p.s += ks * mx;
+                p.v += kv * my;
+                p.t += kt * my;
+            }
+        }
+    }
+}
+
 void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
+    snapSprites();
     const VkDeviceSize vertexBytes = std::max<VkDeviceSize>((frame.vertices.size() + frame.modelVertices) * sizeof(gsn::Vertex), 64);
     vk::Buffer& vertices = buffer(vertexBuffers, slot, vertexBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     const uint32_t modelBase = static_cast<uint32_t>(frame.vertices.size());   // where the GPU's vertices start
