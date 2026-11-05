@@ -16,6 +16,7 @@ struct SettingsMenu::Item {
     float step = 0.0f, minimum = 0.0f, maximum = 0.0f;
     bool percent = false;     // a 0..1 value shown as a percentage
     bool restart = false;
+    bool nextRace = false;    // applies from the next race
     int action = 0;           // 1 resume, 2 quit
 };
 
@@ -113,6 +114,12 @@ std::vector<Item> buildItems(bool game) {
         items.push_back(choice("Rear-view mirror", "effects.mirror", {{"original", "Original"}, {"high", "High detail"}},
             "High detail: the mirror shows the course's detail objects, sharp textures and full-detail cars, as the "
             "main view does. Original: the PS2's reduced mirror."));
+        Item frames = choice("Race frames", "display.race_frames",
+            {{"progressive", "Whole frames (480p)"}, {"fields", "Fields (480i)"}},
+            "Whole frames: the game's own 480p mode, 448 lines a frame. Fields: the PS2's usual 480i, 224 lines a "
+            "field, two fields blended: softer. Applies from the next race.");
+        frames.nextRace = true;
+        items.push_back(std::move(frames));
     }
     if (game)
         items.push_back(choice("HD textures", "texture.hd_pack", kOnOff,
@@ -203,6 +210,18 @@ SettingsMenu::~SettingsMenu() = default;
 
 void SettingsMenu::open() {
     open_ = true;
+}
+
+void SettingsMenu::open(const Settings& settings) {
+    openValues_.clear();
+    for (const auto& item : items_) openValues_.push_back(item.nextRace ? getOption(settings, item.key) : std::string());
+    open();
+}
+
+bool SettingsMenu::nextRacePending(const Settings& settings) const {
+    for (size_t i = 0; i < items_.size() && i < openValues_.size(); ++i)
+        if (items_[i].nextRace && getOption(settings, items_[i].key) != openValues_[i]) return true;
+    return false;
 }
 
 void SettingsMenu::move(int direction) {
@@ -304,6 +323,7 @@ MenuView SettingsMenu::view(const Settings& settings) const {
         row.selected = i == selected_;
         row.adjustable = item.kind == Item::Choice || item.kind == Item::Step;
         row.restart = item.restart;
+        row.nextRace = item.nextRace;
         if (item.kind == Item::Choice) {
             const std::string current = getOption(settings, item.key);
             row.value = current;
@@ -329,6 +349,7 @@ MenuView SettingsMenu::view(const Settings& settings) const {
         view.rows.push_back(std::move(row));
     }
     view.footer = "Up/Down: choose   Left/Right: change   L1/R1, PgUp/PgDn: section   Esc: close";
+    if (nextRacePending(settings)) view.footer = "+ applies from the next race.   " + view.footer;
     if (restartPending(settings)) view.footer = "* applies when the game starts again.   " + view.footer;
     return view;
 }

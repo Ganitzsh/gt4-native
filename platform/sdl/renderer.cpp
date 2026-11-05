@@ -646,7 +646,7 @@ struct Renderer::Impl {
                 continue;
             }
             if (row.selected) overlay->pixelRect(px + pad * 0.5f, y - 2.0f * scale, panelW - pad, rowHeight, bar);
-            const std::string label = "  " + row.label + (row.restart ? " *" : "");
+            const std::string label = "  " + row.label + (row.restart ? " *" : row.nextRace ? " +" : "");
             overlay->pixelText(x, y + 1.0f * scale, scale, label, row.selected ? ink : text);
             if (row.adjustable) {
                 const std::string value = row.selected ? "< " + row.value + " >" : row.value + "  ";

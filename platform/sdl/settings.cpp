@@ -284,7 +284,8 @@ const std::vector<Option>& options() {
             "twice or four times as far before the simpler ones take over."));
         o.push_back(enumOption("display.race_frames", &Settings::raceFrames, kRaceFrames,
             "Races: fields (the PS2's usual 480i: each frame draws every other line, 224 of them, and the picture "
-            "alternates) or progressive (the game's own 480p mode: whole 448-line frames, twice the vertical detail)."));
+            "alternates) or progressive (the game's own 480p mode: whole 448-line frames, twice the vertical detail). The game reads it as a race "
+            "starts: a change applies from the next race."));
         o.push_back(enumOption("post.tonemapper", &Settings::tonemapper, kTonemappers,
             "HDR to display: original (clamp, as the PS2), reinhard (luminance), aces (Hill fit), agx and "
             "agx_punchy (Sobotka, Wrensch fit), pbr_neutral (Khronos PBR Neutral)."));

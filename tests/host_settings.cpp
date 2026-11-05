@@ -166,6 +166,26 @@ int main() {
         (void)view;
     }
 
+    // Race frames apply from the next race: a preset switched in the menu that changes them says so.
+    {
+        Settings m;
+        applyPreset(m, Preset::Original);
+        SettingsMenu menu(true);
+        menu.setStartValues(m);
+        menu.open(m);
+        check(!menu.nextRacePending(m), "nothing waits for the next race");
+        bool marked = false;
+        for (const auto& row : menu.view(m).rows) marked = marked || (row.label == "Race frames" && row.nextRace);
+        check(marked, "the race frames row is marked");
+        check(menu.input(SettingsMenu::Input::Right, m).changed && m.raceFrames == RaceFrames::Progressive,
+              "a preset from original changes the race frames");
+        check(menu.nextRacePending(m), "the race frames wait for the next race");
+        check(menu.view(m).footer.find("next race") != std::string::npos, "the footer says so");
+        menu.close();
+        menu.open(m);
+        check(!menu.nextRacePending(m), "opened again: nothing pending");
+    }
+
     if (failures == 0) std::puts("host settings: all checks passed");
     return failures == 0 ? 0 : 1;
 }

@@ -15,6 +15,7 @@ struct MenuRow {
     bool selected = false;
     bool adjustable = false;  // left / right change the value
     bool restart = false;     // applies when the game starts again
+    bool nextRace = false;    // applies from the next race (the game reads it as a race starts)
 };
 
 struct MenuView {
@@ -39,11 +40,14 @@ public:
 
     bool isOpen() const { return open_; }
     void open();
+    void open(const Settings& settings);   // (and notes the next-race options' values as it opens)
     void close() { open_ = false; }
     Result input(Input input, Settings& settings);
     MenuView view(const Settings& settings) const;
     // Whether a restart-only option differs from the value the game started with.
     bool restartPending(const Settings& settings) const;
+    // Whether a next-race option changed since the menu opened (a preset can change one too).
+    bool nextRacePending(const Settings& settings) const;
     void setStartValues(const Settings& settings);
 
     struct Item;
@@ -53,6 +57,7 @@ private:
     size_t selected_ = 0;
     bool open_ = false;
     std::vector<std::string> startValues_;   // restart-only options, as the game started
+    std::vector<std::string> openValues_;    // next-race options, as the menu opened
     void move(int direction);
 };
 

@@ -661,7 +661,7 @@ int run(const Options& options) {
 
     bool running = true, firstResize = false, minimized = false, restored = false, sawMinimized = false;
     auto openMenu = [&](bool open) {
-        if (open) menu.open();
+        if (open) menu.open(settings);
         else menu.close();
         if (!open) padHeldBack = true;
         menuHeld = SDL_GAMEPAD_BUTTON_INVALID;
