@@ -2281,12 +2281,17 @@ void GsnScene::Impl::executePending(VkCommandBuffer command, uint32_t slot, VkEx
         }
     }
     writeDump();   // a dump recorded in an earlier submission is complete now
-    // (a new list: from the previous frame's state, where the one before ended)
-    modelTPrevious = 0.0f;
-    modelT = interpolate ? sinceArrival() : 1.0f;
+    // Only the list shown now moves with the display's clock (interpolation); every other one is drawn as the game drew
+    // it: what a later list samples or the game reads back, or keeps (a car picture drawn once), is the frame's own.
+    size_t shownIndex = pending.size();
+    for (size_t i = 0; i < pending.size(); ++i)
+        if (pending[i].displayed) shownIndex = i;
     vk::beginLabel(command, "gsn frame");
     for (listIndex = 0; listIndex < pending.size(); ++listIndex) {
         std::swap(frame, pending[listIndex]);
+        // (a new list: from the previous frame's state, where the one before ended)
+        modelTPrevious = 0.0f;
+        modelT = interpolate && listIndex == shownIndex ? sinceArrival() : 1.0f;
         // GT4_GPU_THROTTLE_MS=N (testing): N ms more for each complete frame drawn, as a GPU that takes that long for
         // one (the Odin's in a replay's blurred far camera) costs the host for every frame it draws.
         static const int throttle = [] { const char* e = std::getenv("GT4_GPU_THROTTLE_MS"); return e ? std::atoi(e) : 0; }();
@@ -2403,7 +2408,11 @@ bool GsnScene::read(const gsn::ReadRequest& request, std::vector<uint8_t>& out) 
     vkDeviceWaitIdle(s.device.device);   // the frames in flight are done: slot 0's buffers are free
     vk::Uploader up(s.device, s.pool);
     VkCommandBuffer command = up.command();
+    // the pixels as the game drew them: no frame interpolation (its moving 3D a step behind, by the display's clock)
+    const bool interpolating = s.interpolate;
+    s.interpolate = false;
     s.executePending(command, 0, s.lastExtent);
+    s.interpolate = interpolating;
     auto it = s.targets.find(request.target);
     if (it == s.targets.end() || !it->second.image.valid() || it->second.depth) {
         up.submit();
