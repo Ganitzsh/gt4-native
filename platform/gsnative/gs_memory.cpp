@@ -248,7 +248,40 @@ size_t GsMemory::writePixels(const uint8_t* bytes, size_t count, bool& changed) 
     auto in16 = [&](size_t i) { uint16_t v; std::memcpy(&v, bytes + i * 2, 2); return v; };
     auto in4 = [&](size_t i) { return uint32_t(bytes[i >> 1] >> ((i & 1) * 4)) & 15; };
     switch (psm) {
-    case PSMCT32: rows([&](uint32_t x, uint32_t y, size_t i) { word(address32(bp, bw, x, y), in32(i), 0); }); return k * 4;
+    case PSMCT32:
+        // (8 pixels of a block row at once where they start on a block column: the column table puts them in four
+        // adjacent pairs, at c0, c0 + 4, c0 + 8 and c0 + 12 words of their block; GT4 sends its textures this way)
+        while (k < count && xferY < xfer.rrh) {
+            const uint32_t y = (xfer.dsay + xferY) & 2047;
+            const size_t run = std::min<size_t>(count - k, xfer.rrw - xferX);
+            const uint32_t c0 = kColumn32[y & 7][0], blockRow = (y >> 3) & 3, pageRow = (y >> 5) * bw;
+            for (size_t i = 0; i < run;) {
+                const uint32_t x = (xfer.dsax + xferX + uint32_t(i)) & 2047;
+                if (!(x & 7) && i + 8 <= run && x <= 2040) {
+                    const uint32_t block = bp + ((x >> 6) + pageRow) * 32 + kBlock32[blockRow][(x >> 3) & 7];
+                    uint8_t* at = m + ((block * 256) & kMask) + c0 * 4;
+                    const uint8_t* from = bytes + (k + i) * 4;
+                    for (uint32_t pair = 0; pair < 4; ++pair) {
+                        uint8_t* q = at + pair * 16;
+                        if (std::memcmp(q, from + pair * 8, 8)) {
+                            changed = true;
+                            std::memcpy(q, from + pair * 8, 8);
+                        }
+                    }
+                    i += 8;
+                } else {
+                    word(address32(bp, bw, x, y), in32(k + i), 0);
+                    ++i;
+                }
+            }
+            k += run;
+            xferX += uint32_t(run);
+            if (xferX == xfer.rrw) {
+                xferX = 0;
+                ++xferY;
+            }
+        }
+        return k * 4;
     case PSMZ32: rows([&](uint32_t x, uint32_t y, size_t i) { word(addressZ32(bp, bw, x, y), in32(i), 0); }); return k * 4;
     case PSMCT24: rows([&](uint32_t x, uint32_t y, size_t i) { word(address32(bp, bw, x, y), in24(i), 0xFF000000u); }); return k * 3;
     case PSMZ24: rows([&](uint32_t x, uint32_t y, size_t i) { word(addressZ32(bp, bw, x, y), in24(i), 0xFF000000u); }); return k * 3;
@@ -412,9 +445,49 @@ void GsMemory::loadClut(const Tex0& t) {
     storeClut(t, entries);
 }
 
+namespace {
+// The CLUT's pixels in load order (CSM1, as readClut walks them), as byte offsets from the start of block CBP, per
+// layout: the palette is 16 pixels wide in a buffer one page wide, so each pixel's address is CBP * 256 plus one of
+// these (wrapped round the memory).
+struct ClutLayout {
+    uint32_t eight[256], four[16];
+};
+const ClutLayout& clutLayout(uint32_t psm) {
+    static const auto make = [](uint32_t (*address)(uint32_t, uint32_t, uint32_t, uint32_t)) {
+        ClutLayout l{};
+        for (uint32_t i = 0; i < 256; ++i) {
+            const uint32_t p = (i & ~0x18u) | ((i & 0x08u) << 1) | ((i & 0x10u) >> 1);
+            l.eight[i] = address(0, 1, p & 15, p >> 4);
+        }
+        for (uint32_t i = 0; i < 16; ++i) l.four[i] = address(0, 1, i & 7, i >> 3);
+        return l;
+    };
+    static const ClutLayout c32 = make(&GsMemory::address32), c16 = make(&GsMemory::address16), c16s = make(&GsMemory::address16S);
+    return psm == PSMCT16 ? c16 : psm == PSMCT16S ? c16s : c32;
+}
+}  // namespace
+
 void GsMemory::readClut(const Tex0& t, uint32_t* entries) const {
     const bool four = t.psm == PSMT4 || t.psm == PSMT4HL || t.psm == PSMT4HH;
     const uint32_t count = four ? 16 : 256;
+    // The palette formats GT4 uses: read through the layout's offsets (readPixel's addressing, once per format).
+    const uint32_t layout = t.cpsm == PSMCT24 ? PSMCT32 : t.cpsm;
+    if (layout == PSMCT32 || layout == PSMCT16 || layout == PSMCT16S) {
+        const ClutLayout& l = clutLayout(layout);
+        const uint32_t* offsets = four ? l.four : l.eight;
+        const uint8_t* m = mem.data();
+        const uint32_t base = t.cbp * 256;
+        if (layout == PSMCT32) {
+            for (uint32_t i = 0; i < count; ++i) std::memcpy(&entries[i], m + ((base + offsets[i]) & kMask), 4);
+        } else {
+            for (uint32_t i = 0; i < count; ++i) {
+                uint16_t h;
+                std::memcpy(&h, m + ((base + offsets[i]) & kMask), 2);
+                entries[i] = h;
+            }
+        }
+        return;
+    }
     for (uint32_t i = 0; i < count; ++i) {
         uint32_t x, y;
         if (four) {
