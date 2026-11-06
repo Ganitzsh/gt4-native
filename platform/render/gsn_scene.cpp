@@ -1705,8 +1705,14 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
                 stencilDepth = depthId;
             }
         }
-        // Keep the bound Z buffer for a draw without depth test on the same target.
-        if (!depthId && rendering && boundColour == d.target) depthId = boundDepth;
+        // Keep the bound Z buffer for a draw without depth test on the same target, unless it is smaller than the
+        // target: the pass's render area would cut the draw off (Photo Travel's help line under the menu's 416-line Z
+        // buffer, in a 448-line frame).
+        if (!depthId && rendering && boundColour == d.target) {
+            const vk::Image* bound = boundDepth == ~0u ? &scratchDepth : boundDepth ? &targets[boundDepth].image : nullptr;
+            if (!bound || (bound->extent.width >= colourTarget.image.extent.width && bound->extent.height >= colourTarget.image.extent.height))
+                depthId = boundDepth;
+        }
         if (!rendering || boundColour != d.target || boundDepth != depthId) {
             end();
             begin(d.target, depthId);
@@ -1730,16 +1736,19 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         const bool zte = c.depthTest;
         const uint32_t ztst = c.depthFunc;
         static const VkCompareOp zops[4] = {VK_COMPARE_OP_NEVER, VK_COMPARE_OP_ALWAYS, VK_COMPARE_OP_GREATER_OR_EQUAL, VK_COMPARE_OP_GREATER};
+        // (a Z buffer the game inverted in place: its Z turned round by the front end, the tests too; Draw::depthInverted)
+        static const VkCompareOp invertedZops[4] = {VK_COMPARE_OP_NEVER, VK_COMPARE_OP_ALWAYS, VK_COMPARE_OP_LESS_OR_EQUAL, VK_COMPARE_OP_LESS};
+        const int compareKey = int(ztst) | (d.depthInverted ? 4 : 0);
         const bool zwrite = hasDepth && zte && d.depth && c.depthWrite;
         const int depthTest = hasDepth && zte && d.depth ? 1 : 0, stencilTest = date && hasDepth ? 1 : 0;
         if (recorded.depthTest != depthTest) vkCmdSetDepthTestEnable(command, depthTest ? VK_TRUE : VK_FALSE);
-        if (recorded.compare != int(ztst)) vkCmdSetDepthCompareOp(command, zops[ztst]);
+        if (recorded.compare != compareKey) vkCmdSetDepthCompareOp(command, (d.depthInverted ? invertedZops : zops)[ztst]);
         if (stencilTest && recorded.reference != int(c.destPass)) {
             vkCmdSetStencilReference(command, VK_STENCIL_FACE_FRONT_AND_BACK, c.destPass);
             recorded.reference = int(c.destPass);
         }
         recorded.depthTest = depthTest;
-        recorded.compare = int(ztst);
+        recorded.compare = compareKey;
         // Scissor, in render pixels.
         const uint32_t x0 = c.scissorX0, x1 = c.scissorX1;
         const uint32_t y0 = c.scissorY0, y1 = c.scissorY1;

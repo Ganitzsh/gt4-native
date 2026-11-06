@@ -40,9 +40,11 @@ mostly the field lines, which the native renderer does not jitter.
   2026-10-30 hold VU1's memory and registers instead, and still replay), and `gt4_host --replay PATH --frames N` then plays it at either
   resolution (`--preset original` / `high`), the same frames every time.
 
-The menus' 2D keeps a centred 4:3 area in the game's 16:9 mode (game-side, gt4-native-game
-WIDESCREEN.md). Open: COLCLAMP = 0 (wrapping), Z formats as frames and textures (GT4's Z24
-pass), dithering, the GPU cost of the colour grading (one dispatch per batch would do). GT mode's map is
+In the game's 16:9 mode the menus' 2D keeps GT4's own layout, or a centred 4:3 area with aspect.hud = centered (game-side,
+WIDESCREEN.md). GT4's Z24 pass (Photo Travel's depth of field: white drawn into the Z buffer as a frame, (Cs - Cd),
+inverts its depths in place) is kept as a state of the Z buffer: the draws tested against it get max - Z and the
+opposite compare (`Target::inverted`, `Draw::depthInverted`). Open: COLCLAMP = 0 (wrapping), other Z formats as frames, Z
+read back by the game (served from memory), dithering, the GPU cost of the colour grading (one dispatch per batch would do). GT mode's map is
 broken in the game port itself (paraLLEl-GS shows the same shards): a game-side bug.
 
 ## The scene stage

@@ -598,6 +598,28 @@ void GsFrontend::emit(const Vertex* v, uint32_t n, Topology topology) {
         out[k] = v[k];
         if (!((prim >> 3) & 1)) out[k].rgba = v[n - 1].rgba;
     }
+    // GT4's Z24 pass (Photo Travel's depth of field): white drawn into a Z buffer's memory as a frame of its format,
+    // blended (Cs - Cd) x 128 / 128, turns every depth Z into max - Z, which the draws after it test with GEQUAL;
+    // a second pass turns them back. Here the Z buffer is a depth image, which a colour draw cannot reach: the
+    // inversion is kept as a state of the Z buffer instead (its draws' Z and tests turned round). One run of
+    // these primitives (the pass's strips) is one inversion.
+    {
+        const uint32_t f = s.c.colorFormat;
+        const bool zFrame = f == PSMZ32 || f == PSMZ24 || f == PSMZ16 || f == PSMZ16S;
+        bool inverts = zFrame && !((prim >> 4) & 1) && ((prim >> 6) & 1) && s.c.blendA == 0 && s.c.blendB == 1 && s.c.blendC == 2 &&
+                       s.c.blendD == 2 && s.c.blendFixed == 0x80 && (s.c.colorKeep & 0xFFFFFF) == 0;
+        for (uint32_t k = 0; inverts && k < n; ++k) inverts = (out[k].rgba & 0xFFFFFF) == 0xFFFFFF;
+        if (inverts) {
+            for (Target& t : targets) {
+                if (!t.depth || t.bp != s.c.colorBase || t.bw != s.c.colorWidth || (t.psm & 2) != (f & 2)) continue;
+                if (invertRun != t.id) t.inverted = !t.inverted;
+                invertRun = t.id;
+                ++stats.draws;
+                return;
+            }
+        }
+        invertRun = 0;
+    }
     // Targets: the frame buffer and, when the depth test is on, the Z buffer.
     const uint32_t scissorX0 = s.c.scissorX0, scissorX1 = s.c.scissorX1;
     float x0 = 1e30f, x1 = -1e30f, y0 = 1e30f, y1 = -1e30f;
@@ -646,6 +668,15 @@ void GsFrontend::emit(const Vertex* v, uint32_t n, Topology topology) {
     const uint32_t colour = cache.colour, depth = cache.depth;
     const bool zte = cache.zte;
     if (!colour || (zte && !depth)) return;   // past the target limit
+    // A Z buffer inverted in place (above): the Z this draw tests and writes, turned round the same way.
+    const bool depthInverted = depth && depth <= targets.size() && targets[depth - 1].inverted;
+    if (depthInverted) {
+        const uint32_t zf = targets[depth - 1].psm;
+        const uint32_t most = zf == PSMZ32 ? 0xFFFFFFFFu : zf == PSMZ24 ? 0xFFFFFFu : 0xFFFFu;
+        for (uint32_t k = 0; k < n; ++k)
+            out[k].z = out[k].w != 0.0f ? std::bit_cast<uint32_t>(static_cast<float>(most) - std::bit_cast<float>(out[k].z))
+                                        : most - std::min(out[k].z, most);
+    }
     if (s.c.colorKeep != 0xFFFFFFFFu) markWritten(colour, s.c.colorBase, width, s.c.colorFormat, left, right, top, bottom);
     if (depth && s.c.depthWrite) markWritten(depth, s.c.depthBase, width, s.c.depthFormat, left, right, top, bottom);
     TextureSource texture;
@@ -698,6 +729,7 @@ void GsFrontend::emit(const Vertex* v, uint32_t n, Topology topology) {
         Draw& last = frame.draws[frame.commands.back().index];
         if (last.topology == topology && last.state == s && last.target == colour && last.depth == depth &&
             last.texture.kind == texture.kind && last.texture.id == texture.id && last.texture.version == texture.version &&
+            last.depthInverted == depthInverted &&
             last.first + last.count == frame.vertices.size()) {
             frame.vertices.insert(frame.vertices.end(), out, out + n);
             last.count += n;
@@ -711,6 +743,7 @@ void GsFrontend::emit(const Vertex* v, uint32_t n, Topology topology) {
     d.count = n;
     d.target = colour;
     d.depth = depth;
+    d.depthInverted = depthInverted;
     d.texture = texture;
     frame.vertices.insert(frame.vertices.end(), out, out + n);
     frame.commands.push_back({FrameList::Command::Kind::Draw, static_cast<uint32_t>(frame.draws.size())});
@@ -736,6 +769,10 @@ void GsFrontend::noteDraw(uint32_t colour, uint32_t depth, const TextureSource& 
 void GsFrontend::markExact(uint32_t target) {
     // (narrow ones only: the car pictures' chain is 64 to 128 wide; a screen-sized buffer they read keeps its scale)
     if (!target || target > targets.size() || targets[target - 1].exact || targets[target - 1].bw * 64 >= 512) return;
+    // A Z buffer sampled into such a chain keeps the scale of the scene drawn with it (Photo Travel samples the
+    // preview's Z into a narrow target: at the PS2's resolution under a finer colour buffer, it bounded the render
+    // area of the depth-of-field pass to the top-left part). Sampled at either scale it gives the same depths.
+    if (targets[target - 1].depth) return;
     Target& t = targets[target - 1];
     t.exact = true;
     if (t.lastDepth && t.lastDepth <= targets.size() && targets[t.lastDepth - 1].bw * 64 < 512) targets[t.lastDepth - 1].exact = true;

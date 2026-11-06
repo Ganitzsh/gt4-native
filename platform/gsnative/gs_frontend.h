@@ -83,6 +83,9 @@ struct Draw {
     // Its vertices come from gsn_models.comp (FrameList::models): not known here, `first` counts from the end of
     // FrameList::vertices; `moving`: motion vectors known.
     bool modeled = false, moving = false;
+    // Its Z buffer is inverted (Target::inverted): its vertices' Z are given as max - Z, and the back end tests
+    // them the other way round (GEQUAL as LEQUAL, GREATER as LESS).
+    bool depthInverted = false;
 };
 
 // A decoded texture the back end must (re)upload: RGBA8, R in the low byte, the GS's alpha (0x80 = 1.0).
@@ -120,6 +123,9 @@ struct Target {
     // pixels as data; drawn finer, the car pictures' 1-bit alpha lost parts of the body.
     bool exact = false;
     uint32_t lastDepth = 0;    // the Z buffer of its last depth-tested draw
+    // A Z buffer whose depths the game has inverted in place (GT4's Z24 pass, GsFrontend::emit): drawn as kept, its tests
+    // turned round (Draw::depthInverted).
+    bool inverted = false;
     uint32_t sources[4] = {};  // targets its draws sampled (the latest four)
 };
 
@@ -416,6 +422,7 @@ private:
     // The drawing state changes (register writes of its groups, state records): emit() works out the state and the
     // targets once while it stays.
     uint64_t stateSerial = 0;
+    uint32_t invertRun = 0;   // the Z buffer the primitives just before inverted (one inversion per run of them)
     struct EmitCache {
         bool valid = false;
         uint32_t prim = 0;
