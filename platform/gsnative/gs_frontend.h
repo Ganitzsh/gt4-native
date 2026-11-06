@@ -134,6 +134,13 @@ struct Display {
     uint32_t target1 = 0, target2 = 0;   // the targets read circuits 1 and 2 show (0: memory, not drawn this way)
 };
 
+// A GS -> host read of pixels a draw made: the rectangle of a colour target in GS pixels, wanted packed in
+// `psm` (the target's own format and layout), from the GPU.
+struct ReadRequest {
+    uint32_t target = 0, x = 0, y = 0, width = 0, height = 0, psm = 0;
+    bool async = false;   // the game does not wait for it (gfx::kReadAsync)
+};
+
 // One frame: commands in the game's order.
 struct FrameList {
     struct Command {
@@ -179,14 +186,15 @@ struct FrameList {
     Display display;
     uint64_t vblank = 0;
     bool displayed = false;   // ends at a VSYNC (display set); a list cut for a GS -> host read does not
+    // GS -> host reads the game does not wait for (gfx::kReadAsync): the rectangle is copied once this list is drawn
+    // and the game answered (GS_IMAGE `id`, `qwc` qwords) when the GPU is done with it.
+    struct Readback {
+        ReadRequest request;
+        uint32_t id = 0, qwc = 0;
+    };
+    std::vector<Readback> readbacks;
     bool dump = false;   // debugging: the renderer writes this frame's targets out (GT4_GSN_TRIGGER)
     void clear();
-};
-
-// A GS -> host read of pixels a draw made: the rectangle of a colour target in GS pixels, wanted packed in
-// `psm` (the target's own format and layout), from the GPU.
-struct ReadRequest {
-    uint32_t target = 0, x = 0, y = 0, width = 0, height = 0, psm = 0;
 };
 
 // A frame that will not be drawn: its texture uploads and retirements move to the next one, `into`.
@@ -323,6 +331,7 @@ private:
     bool readTarget = false;
     ReadRequest gpuRead;
     bool gpuReadPending = false;
+    bool readAsync = false;   // the read record being started is gfx::kReadAsync
     EventSink events;
 
     // Targets and the owner of each 8 KiB page (0: memory; else a target id), with when it was written.

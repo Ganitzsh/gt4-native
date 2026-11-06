@@ -6,6 +6,7 @@
 #include "gs_frontend.h"
 #include "scene.h"
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -43,6 +44,19 @@ public:
     // A GS -> host read of drawn pixels: executes the pending lists at once (waiting for the GPU) and packs
     // the target's rectangle as `request.psm`. False when it cannot (nothing prepared yet, no such target).
     bool read(const gsn::ReadRequest& request, std::vector<uint8_t>& out);
+    // The game's asynchronous reads (gsn::FrameList::readbacks): copied when their list is drawn; slotDone(slot), once
+    // that frame slot's fence is signalled, packs them, and takeReadAnswers hands them over (for GsHost::answerRead).
+    struct ReadAnswer {
+        uint32_t id = 0, qwc = 0;
+        std::vector<uint8_t> pixels;   // packed as the GS keeps them (empty: the target was gone)
+    };
+    void slotDone(uint32_t slot);
+    void takeReadAnswers(std::vector<ReadAnswer>& out);
+    // Never left unanswered (the game would wait): lists with such reads not drawn for `after` (a minimised window
+    // draws nothing) have them answered with zeros; abandonReadbacks, before the renderer goes, answers all (the GPU's
+    // copies, or zeros for lists never drawn).
+    void answerUndrawnReadbacks(std::chrono::milliseconds after);
+    void abandonReadbacks();
     // Render pixels per GS pixel; 0 = from the render extent (the nearest integer, 1..8).
     void setScale(uint32_t scale);
     // Anisotropic filtering of mipmapped textures (texture.anisotropy; 1 = off). Waits for the GPU on a change.

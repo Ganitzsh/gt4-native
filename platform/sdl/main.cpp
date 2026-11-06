@@ -716,6 +716,14 @@ int run(const Options& options) {
         uint32_t waits, waitMs;
     } perf{};
     uint64_t newestAdded = 0;   // the VBlank of the newest displayed list given to the renderer (drawn at its next draw)
+    // The game's asynchronous reads the GPU has finished (the flare pass's), to the game.
+    std::vector<gt4::GsnScene::ReadAnswer> readAnswers;
+    auto sendReadAnswers = [&] {
+        if (!gs) return;
+        renderer->takeReadAnswers(readAnswers);
+        for (const auto& a : readAnswers) gs->answerRead(a.id, a.qwc, a.pixels);
+        readAnswers.clear();
+    };
     uint64_t freshShown = 0;   // presents that showed a frame the game drew since the one before
     bool freshPending = false;
     double perfGpu = 0.0;   // GPU milliseconds of the frames presented so far
@@ -816,6 +824,8 @@ int run(const Options& options) {
         // display.gpu changed (key, session or settings): choose the device again with a new renderer.
         if (settings.gpu != activeGpu) {
             std::printf("display.gpu = %s: recreating the renderer\n", settings.gpu.c_str());
+            renderer->abandonReadbacks();   // (the game's asynchronous reads answered first)
+            sendReadAnswers();
             renderer.reset();
             renderer = makeRenderer(settings.gpu);
             activeGpu = settings.gpu;
@@ -828,6 +838,7 @@ int run(const Options& options) {
         const bool followGame = gs && gs->live() && windowed && !lockstep && !everyRefresh && !settings.frameInterpolation &&
                                 settings.fpsLimit == 0 && !menu.isOpen();
         const bool freshFrame = !followGame || gs->waitNativeFrames(30);
+        bool servedRead = false;   // a read of drawn pixels answered in this pass
         // The game's frames: in lockstep replay one VBlank per rendered frame; otherwise the newest one.
         if (gs) {
             if (lockstep) gs->advance();
@@ -842,11 +853,13 @@ int run(const Options& options) {
             // to it are drawn now and the pixels read back.
             gt4::gsn::ReadRequest read;
             if (gs->takeReadRequest(read)) {
+                servedRead = true;
                 if (gs->takeNativeFrames(nativeFrames)) renderer->addNativeFrames(nativeFrames);
                 std::vector<uint8_t> pixels;
                 const bool ok = renderer->readGsTarget(read, pixels);
                 gs->completeRead(ok, std::move(pixels));
             }
+            sendReadAnswers();
             gs->setHdTextures(settings.hdTextures);
             gs->sendRequests();
             if (gs->live()) {
@@ -988,6 +1001,10 @@ int run(const Options& options) {
             }
         }
         if (!freshFrame) continue;   // nothing new from the game: no frame to present
+        // Woken by a read alone (the list cut at it displays nothing): presenting would show the last picture again,
+        // and wait a refresh for it with vsync, while the rest of the game's frame is on its way (the Odin's race with
+        // the flare pass's read every frame: 88 presents a second, 53 of them new).
+        if (followGame && servedRead && !freshPending) continue;
 
         // The simulation clock: fixed 60 Hz ticks. Rendering only observes the result and interpolates.
         const Uint64 now = SDL_GetPerformanceCounter();
@@ -1022,10 +1039,13 @@ int run(const Options& options) {
         try {
             presented = renderer->draw(delta);
             if (gs) gs->setFrameDrawn(newestAdded);   // every list added was drawn (or skipped) by this draw
+            sendReadAnswers();
         } catch (const PresentationLost& lost) {
             // The window is now on a display this GPU cannot present to: choose a device again.
             std::fprintf(stderr, "%s\n", lost.what());
             if (settings.gpu != "auto") throw;
+            renderer->abandonReadbacks();
+            sendReadAnswers();
             renderer.reset();
             renderer = makeRenderer("auto");
             continue;

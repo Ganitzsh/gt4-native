@@ -44,6 +44,9 @@ public:
     // rectangle back and answers with completeRead (ok = false: the game gets the memory model's bytes).
     bool takeReadRequest(gsn::ReadRequest& request);
     void completeRead(bool ok, std::vector<uint8_t>&& pixels);
+    // An asynchronous read's pixels (gsn::FrameList::readbacks, packed as the GS keeps them) to the game, which did not
+    // wait for them: GS_IMAGE `id`, `qwc` qwords.
+    void answerRead(uint32_t id, uint32_t qwc, const std::vector<uint8_t>& pixels);
     // Requests the GS thread queued for the game (from the main thread, which owns the link's host -> game ring).
     void sendRequests();
     // Host -> game pad state (libpad2 layout, 18 bytes). Ignored without a live game.

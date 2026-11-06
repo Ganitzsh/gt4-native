@@ -265,6 +265,8 @@ void GraphicsStream::records(const uint8_t* data, size_t bytes) {
             if (h.bytes() >= sizeof(gfx::ReadRecord)) {
                 gfx::ReadRecord r;
                 std::memcpy(&r, payload, sizeof r);
+                readsAsync.push_back((r.qwords & gfx::kReadAsync) != 0);
+                if (readsAsync.size() > 64) readsAsync.pop_front();   // (a capture without a host asks for none)
                 gs.read(r);
             } else {
                 ++counters.badRecords;
@@ -735,6 +737,9 @@ void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload)
         std::memcpy(&id, payload, 4);
         std::memcpy(&qwc, payload + 4, 4);
         ++counters.reads;
+        const bool async = !readsAsync.empty() && readsAsync.front();
+        if (!readsAsync.empty()) readsAsync.pop_front();
+        if (async && gs.readLater(id, qwc)) break;   // (answered by the target when the GPU has the pixels)
         scratch.assign(8 + size_t(qwc) * 16, 0);
         std::memcpy(scratch.data(), &id, 4);
         std::memcpy(scratch.data() + 4, &qwc, 4);

@@ -454,6 +454,7 @@ static_assert(sizeof(UploadRecord) == 20);
 // Pixels from graphics memory into the game's memory: a w x h rectangle at (x, y) of the surface at `base`,
 // `width`, in `format`, packed (`qwords` x 16 bytes) to `destination` (a game address). What was drawn before
 // the record is in it. The game's runtime asks the host for the pixels when it reaches the record.
+// qwords bit 31 (kReadAsync): the game does not wait for them (runtime/frame.cpp; the host ignores the bit).
 struct ReadRecord {
     uint16_t base;
     uint8_t width, format;
@@ -462,6 +463,7 @@ struct ReadRecord {
     uint32_t qwords;
 };
 static_assert(sizeof(ReadRecord) == 20);
+constexpr uint32_t kReadAsync = 0x80000000u;
 
 // Qwords into the batch being filled, from `qword` (0..255) on: the lanes `lanes` says (bit k: lane k) of each.
 struct BatchWrite {

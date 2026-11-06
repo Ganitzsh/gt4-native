@@ -11,6 +11,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <string>
@@ -45,6 +46,10 @@ public:
     virtual void vsync(uint32_t field, uint32_t count) = 0;
     // GS -> EE transfer data (after TRXDIR = 1), `qwc` qwords into `out`.
     virtual void readTransfer(void* out, uint32_t qwc) = 0;
+    // A read the game does not wait for (gfx::kReadAsync): true when the target answers it itself, later (GS_IMAGE
+    // `id`, `qwc` qwords, written by its own means); false: readTransfer now, as for any other.
+    virtual bool readLater(uint32_t id, uint32_t qwc) { (void)id; (void)qwc; return false; }
+    virtual bool readsLater() const { return false; }   // whether readLater can return true
     // The whole 4 MiB of GS local memory (debugging: GT4_VRAM_DUMP).
     virtual void readVram(void* out) { (void)out; }
     // Replaces the whole of GS local memory (a saved state restored: GraphicsStream::restoreState).
@@ -199,6 +204,7 @@ private:
     std::unique_ptr<Reference> reference;
 #endif
     HostRecordWriter hostWriter;
+    std::deque<bool> readsAsync;   // the read records not yet asked for by GT4_REC_GS_READ: gfx::kReadAsync each
     AudioWriter audioWriter;
     Stats counters;
     std::vector<uint8_t> scratch;

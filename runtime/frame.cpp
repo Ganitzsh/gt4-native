@@ -231,7 +231,16 @@ void send_block(uint8_t *block, uint32_t bytes) {
         at += gfx::recordQwords(h.bytes()) * 16;
     }
     link_send(GT4_REC_GFX, block, bytes);
-    for (const gfx::ReadRecord &r : reads) {
+    for (gfx::ReadRecord r : reads) {
+        const bool async = (r.qwords & gfx::kReadAsync) != 0;
+        r.qwords &= ~gfx::kReadAsync;
+        // (asynchronous: the pixels land in place when the host sends them; the game does not wait)
+        if (async) {
+            if (uint8_t *at = ptr(r.destination); in_guest(at, size_t(r.qwords) * 16)) {
+                link_read_image_async(r.qwords, at);
+                continue;
+            }
+        }
         std::vector<uint8_t> pixels(size_t(r.qwords) * 16);
         link_read_image(r.qwords, pixels.data());   // zeros without a host
         for (uint32_t q = 0; q < r.qwords; ++q) std::memcpy(ptr(r.destination + q * 16), &pixels[q * 16], 16);

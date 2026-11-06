@@ -184,6 +184,29 @@ struct GsnScene::Impl {
     // GS -> host reads (GsnScene::read): how many, the frames skipped ahead of them, and GT4_READ_SKIP_TEST's frames
     // held back (the newest lists, drawn only at the next read: a backlog for a lockstep replay's reads).
     uint64_t reads = 0, readSkips = 0;
+    // A rectangle of a target copied into a host buffer (GsnScene::read, FrameList::readbacks), packed as the GS keeps
+    // it once the GPU has done the copy.
+    struct Copied {
+        gsn::ReadRequest request;
+        vk::Buffer pixels;
+        uint32_t w = 0, h = 0, scaleX = 1, scaleY = 1;
+        gsn::FrameList::Readback readback;   // (an asynchronous read's: who asked)
+    };
+    bool copyRect(VkCommandBuffer command, const gsn::ReadRequest& request, Copied& c);
+    void pack(Copied& c, std::vector<uint8_t>& out);   // (frees the buffer)
+    // Asynchronous reads (FrameList::readbacks): copied in the frame being recorded, then in flight with its slot, then
+    // packed for GsHost::answerRead once that slot's fence is signalled (GsnScene::slotDone).
+    std::vector<Copied> readbacksRecorded, readbacksInFlight[kSlots];
+    std::vector<GsnScene::ReadAnswer> readAnswers;
+    std::chrono::steady_clock::time_point readbacksWaitingSince{};   // a pending list's, not drawn yet (zero: none)
+    void finishReadbacks(std::vector<Copied>& done) {
+        for (Copied& c : done) {
+            GsnScene::ReadAnswer a{c.readback.id, c.readback.qwc, {}};
+            if (c.pixels.buffer) pack(c, a.pixels);
+            readAnswers.push_back(std::move(a));
+        }
+        done.clear();
+    }
     // Targets a frame was seen reading before writing them: their content is kept from frame to frame (an environment
     // map a later frame samples), so a frame that writes one is never skipped as if it were scratch (skipOlderFrames).
     std::unordered_set<uint32_t> carried;
@@ -2080,32 +2103,43 @@ size_t GsnScene::Impl::skipOlderFrames(size_t keepComplete) {
     static const bool strict = [] { const char* e = std::getenv("GT4_SKIP_STRICT"); return e && *e && *e != '0'; }();
     size_t complete = 0, skipped = 0;
     for (const auto& list : pending) complete += list.displayed ? 1 : 0;
-    while (complete > keepComplete && pending.size() > 1 && pending[0].displayed) {
+    // The oldest frame: its lists cut at asynchronous reads (FrameList::readbacks, not displayed) and the displayed one
+    // that ends it, skipped together (the flare pass reads every frame: a frame is two lists then).
+    while (complete > keepComplete && pending.size() > 1) {
+        size_t last = 0;
+        while (last < pending.size() && !pending[last].displayed) ++last;
+        if (last + 1 >= pending.size()) break;
         std::vector<uint32_t> first, later;
-        writes(pending[0], first);
-        for (size_t i = 1; i < pending.size(); ++i) writes(pending[i], later);
+        for (size_t k = 0; k <= last; ++k) writes(pending[k], first);
+        for (size_t i = last + 1; i < pending.size(); ++i) writes(pending[i], later);
         std::vector<uint32_t> shownBp;
         for (const auto& list : pending)
             for (const gsn::Target& t : list.targets)
                 if (t.id && (t.id == list.display.target1 || t.id == list.display.target2)) shownBp.push_back(t.bp);
-        for (const gsn::Target& t : pending[0].targets)
-            if (t.depth || std::find(shownBp.begin(), shownBp.end(), t.bp) != shownBp.end()) later.push_back(t.id);
+        for (size_t k = 0; k <= last; ++k)
+            for (const gsn::Target& t : pending[k].targets)
+                if (t.depth || std::find(shownBp.begin(), shownBp.end(), t.bp) != shownBp.end()) later.push_back(t.id);
         std::sort(later.begin(), later.end());
         bool again = true;
         for (uint32_t t : first) {
             if (!again) break;
             if (std::binary_search(later.begin(), later.end(), t)) continue;
             // the frame's own scratch: not read before its write here, never seen carried, read by no later list
-            bool scratch = !strict && !carried.count(t) && !readsFirst(pending[0], std::vector<uint32_t>{t});
-            for (size_t i = 1; i < pending.size() && scratch; ++i) scratch = !readsAny(pending[i], t);
+            bool scratch = !strict && !carried.count(t);
+            std::vector<uint32_t> written;
+            for (size_t k = 0; k <= last && scratch; ++k) {
+                if (!std::binary_search(written.begin(), written.end(), t) && readsFirst(pending[k], std::vector<uint32_t>{t})) scratch = false;
+                writes(pending[k], written);
+            }
+            for (size_t i = last + 1; i < pending.size() && scratch; ++i) scratch = !readsAny(pending[i], t);
             again = scratch;
         }
         if (!again) break;
         bool read = false;
-        for (size_t i = 1; i < pending.size() && !read; ++i) read = readsFirst(pending[i], first);
+        for (size_t i = last + 1; i < pending.size() && !read; ++i) read = readsFirst(pending[i], first);
         if (read) break;
-        gsn::carryOver(pending[0], pending[1]);
-        pending.erase(pending.begin());
+        for (size_t k = last + 1; k-- > 0;) gsn::carryOver(pending[k], pending[last + 1]);   // (the newest first: order kept)
+        pending.erase(pending.begin(), pending.begin() + static_cast<std::ptrdiff_t>(last + 1));
         --complete;
         ++skipped;
         ++framesSkipped;
@@ -2115,6 +2149,9 @@ size_t GsnScene::Impl::skipOlderFrames(size_t keepComplete) {
 
 void GsnScene::addFrames(std::vector<gsn::FrameList>& lists) {
     Impl& s = *impl;
+    for (const auto& list : lists)
+        if (!list.readbacks.empty() && s.readbacksWaitingSince == std::chrono::steady_clock::time_point{})
+            s.readbacksWaitingSince = std::chrono::steady_clock::now();
     for (const auto& list : lists)
         if (list.displayed) s.arrival = std::chrono::steady_clock::now();
     for (auto& list : lists) {
@@ -2356,6 +2393,14 @@ void GsnScene::Impl::executePending(VkCommandBuffer command, uint32_t slot, VkEx
         mark(command, "texture uploads");
         tally("lists");
         execute(command, slot);
+        // The game's asynchronous reads at this list's end (it was cut there): the rectangle copied now, answered when
+        // the GPU is done (a target gone: answered with zeros).
+        for (const gsn::FrameList::Readback& rb : frame.readbacks) {
+            Copied c;
+            if (!copyRect(command, rb.request, c)) c = Copied();
+            c.readback = rb;
+            readbacksRecorded.push_back(std::move(c));
+        }
         retireTextures();
         static const long dumpAt = std::getenv("GT4_GSN_DUMP") ? std::strtol(std::getenv("GT4_GSN_DUMP"), nullptr, 10) : -1;
         static bool dumped = false;   // the first frame drawn at or after that VBlank
@@ -2397,6 +2442,7 @@ void GsnScene::Impl::executePending(VkCommandBuffer command, uint32_t slot, VkEx
     // The executed lists go back to the front end for reuse (gsn::recycleFrameList); the last one stays in `frame`.
     for (gsn::FrameList& list : pending) gsn::recycleFrameList(std::move(list));
     pending.clear();
+    readbacksWaitingSince = {};
     listIndex = 0;
     // The displayed buffer is sampled by recordMain whatever the lists left it as (a read's copy, a draw).
     if (auto it = targets.find(displayTarget); it != targets.end() && it->second.image.valid() && !it->second.depth) {
@@ -2414,6 +2460,9 @@ void GsnScene::recordPrepass(VkCommandBuffer command, const SceneView& view) {
     // Each list is executed once (its blends would apply again)...
     if (!s.pending.empty()) {
         s.executePending(command, view.slot, view.renderExtent, true);
+        auto& inFlight = s.readbacksInFlight[view.slot % kSlots];
+        for (auto& c : s.readbacksRecorded) inFlight.push_back(std::move(c));
+        s.readbacksRecorded.clear();
         return;
     }
     // ... except the last one, drawn again whole between two of the game's frames with its moving 3D a step further
@@ -2435,38 +2484,14 @@ void GsnScene::recordPrepass(VkCommandBuffer command, const SceneView& view) {
 
 void GsnScene::setInterpolation(bool on) { impl->interpolate = on; }
 
-bool GsnScene::read(const gsn::ReadRequest& request, std::vector<uint8_t>& out) {
-    Impl& s = *impl;
-    if (!s.stencilPrep.valid() || !s.blank.valid()) return false;   // not prepared yet (no frame shown)
-    for (auto& list : s.readHeld) s.pending.push_back(std::move(list));   // (GT4_READ_SKIP_TEST)
-    s.readHeld.clear();
-    // The game waits for these pixels: the complete frames ahead of the read's list are skipped by skipOlderFrames'
-    // rule, so a host behind the game answers now instead of after drawing its backlog (the Odin's blurred replay
-    // cameras: reads of 4 to 25 s, then F7's stop). A frame is drawn all the same when a target it writes is not
-    // written again by a later list, the read's own included (what the read returns is then that frame's), or when a
-    // later list reads one of its targets before writing it. GT4_READ_SKIP=0: every list drawn first.
-    static const bool readSkip = [] { const char* e = std::getenv("GT4_READ_SKIP"); return !(e && *e == '0'); }();
-    ++s.reads;
-    const size_t skipped = readSkip ? s.skipOlderFrames(0) : 0;
-    s.readSkips += skipped;
-    vkDeviceWaitIdle(s.device.device);   // the frames in flight are done: slot 0's buffers are free
-    vk::Uploader up(s.device, s.pool);
-    VkCommandBuffer command = up.command();
-    // the pixels as the game drew them: no frame interpolation (its moving 3D a step behind, by the display's clock)
-    const bool interpolating = s.interpolate;
-    s.interpolate = false;
-    s.executePending(command, 0, s.lastExtent);
-    s.interpolate = interpolating;
-    auto it = s.targets.find(request.target);
-    if (it == s.targets.end() || !it->second.image.valid() || it->second.depth) {
-        up.submit();
-        return false;
-    }
+bool GsnScene::Impl::copyRect(VkCommandBuffer command, const gsn::ReadRequest& request, Copied& c) {
+    auto it = targets.find(request.target);
+    if (it == targets.end() || !it->second.image.valid() || it->second.depth) return false;
     vk::Image& image = it->second.image;
     const uint32_t scaleX = it->second.scaleX, scaleY = it->second.scaleY;
     const uint32_t x0 = std::min(request.x * scaleX, image.extent.width), y0 = std::min(request.y * scaleY, image.extent.height);
     const uint32_t w = std::min(request.width * scaleX, image.extent.width - x0), h = std::min(request.height * scaleY, image.extent.height - y0);
-    vk::Buffer pixels = vk::createBuffer(s.device, std::max<VkDeviceSize>(VkDeviceSize(w) * h * 8, 8), VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, true);
+    vk::Buffer pixels = vk::createBuffer(device, std::max<VkDeviceSize>(VkDeviceSize(w) * h * 8, 8), VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, true);
     vk::Barriers b;
     if (w && h) {
         b.image(image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_READ_BIT);
@@ -2488,7 +2513,16 @@ bool GsnScene::read(const gsn::ReadRequest& request, std::vector<uint8_t>& out) 
     }
     vk::toSampled(b, image, vk::kFragment);
     b.flush(command);
-    up.submit();
+    c.request = request;
+    c.pixels = pixels;
+    c.w = w;
+    c.h = h;
+    c.scaleX = scaleX;
+    c.scaleY = scaleY;
+    return true;
+}
+
+void GsnScene::Impl::pack(Copied& c, std::vector<uint8_t>& out) {
     // Each GS pixel is the render pixel at its own sample point (j / scale = x: the first of its sx x sy),
     // stored as colour / 255 and alpha / 128 (gsn targets), packed in the target's format as the GS keeps it.
     auto toFloat = [](uint16_t v) {
@@ -2497,7 +2531,9 @@ bool GsnScene::read(const gsn::ReadRequest& request, std::vector<uint8_t>& out) 
                                  : std::ldexp(static_cast<float>(mantissa), -24);
         return sign ? -f : f;
     };
-    const auto* half = static_cast<const uint16_t*>(pixels.mapped);
+    const auto* half = static_cast<const uint16_t*>(c.pixels.mapped);
+    const gsn::ReadRequest& request = c.request;
+    const uint32_t w = c.w, h = c.h, scaleX = c.scaleX, scaleY = c.scaleY;
     const uint32_t bytes = request.psm == gsn::PSMCT32 ? 4 : request.psm == gsn::PSMCT24 ? 3 : 2;
     out.assign(size_t(request.width) * request.height * bytes, 0);
     for (uint32_t y = 0; y < request.height; ++y)
@@ -2521,7 +2557,76 @@ bool GsnScene::read(const gsn::ReadRequest& request, std::vector<uint8_t>& out) 
                 if (bytes == 4) o[3] = static_cast<uint8_t>(a);
             }
         }
-    vk::destroy(s.device, pixels);
+    vk::destroy(device, c.pixels);
+}
+
+void GsnScene::answerUndrawnReadbacks(std::chrono::milliseconds after) {
+    Impl& s = *impl;
+    if (s.readbacksWaitingSince == std::chrono::steady_clock::time_point{} || std::chrono::steady_clock::now() - s.readbacksWaitingSince < after)
+        return;
+    size_t n = 0;
+    for (auto& list : s.pending) {
+        for (const auto& rb : list.readbacks) s.readAnswers.push_back({rb.id, rb.qwc, {}});
+        n += list.readbacks.size();
+        list.readbacks.clear();
+    }
+    for (auto& list : s.readHeld) {
+        for (const auto& rb : list.readbacks) s.readAnswers.push_back({rb.id, rb.qwc, {}});
+        n += list.readbacks.size();
+        list.readbacks.clear();
+    }
+    s.readbacksWaitingSince = {};
+    static uint64_t total = 0;
+    total += n;
+    std::printf("gsn: %zu asynchronous read(s) answered with zeros: their lists not drawn for %lld ms (%llu so far)\n", n,
+                static_cast<long long>(after.count()), static_cast<unsigned long long>(total));
+}
+
+void GsnScene::abandonReadbacks() {
+    Impl& s = *impl;
+    vkDeviceWaitIdle(s.device.device);
+    for (auto& inFlight : s.readbacksInFlight) s.finishReadbacks(inFlight);
+    s.finishReadbacks(s.readbacksRecorded);
+    s.readbacksWaitingSince = std::chrono::steady_clock::time_point{std::chrono::steady_clock::duration{1}};
+    answerUndrawnReadbacks(std::chrono::milliseconds(0));
+}
+
+void GsnScene::slotDone(uint32_t slot) { impl->finishReadbacks(impl->readbacksInFlight[slot % kSlots]); }
+
+void GsnScene::takeReadAnswers(std::vector<ReadAnswer>& out) {
+    for (auto& a : impl->readAnswers) out.push_back(std::move(a));
+    impl->readAnswers.clear();
+}
+
+bool GsnScene::read(const gsn::ReadRequest& request, std::vector<uint8_t>& out) {
+    Impl& s = *impl;
+    if (!s.stencilPrep.valid() || !s.blank.valid()) return false;   // not prepared yet (no frame shown)
+    for (auto& list : s.readHeld) s.pending.push_back(std::move(list));   // (GT4_READ_SKIP_TEST)
+    s.readHeld.clear();
+    // The game waits for these pixels: the complete frames ahead of the read's list are skipped by skipOlderFrames'
+    // rule, so a host behind the game answers now instead of after drawing its backlog (the Odin's blurred replay
+    // cameras: reads of 4 to 25 s, then F7's stop). A frame is drawn all the same when a target it writes is not
+    // written again by a later list, the read's own included (what the read returns is then that frame's), or when a
+    // later list reads one of its targets before writing it. GT4_READ_SKIP=0: every list drawn first.
+    static const bool readSkip = [] { const char* e = std::getenv("GT4_READ_SKIP"); return !(e && *e == '0'); }();
+    ++s.reads;
+    const size_t skipped = readSkip ? s.skipOlderFrames(0) : 0;
+    s.readSkips += skipped;
+    vkDeviceWaitIdle(s.device.device);   // the frames in flight are done: slot 0's buffers are free
+    for (auto& inFlight : s.readbacksInFlight) s.finishReadbacks(inFlight);
+    vk::Uploader up(s.device, s.pool);
+    VkCommandBuffer command = up.command();
+    // the pixels as the game drew them: no frame interpolation (its moving 3D a step behind, by the display's clock)
+    const bool interpolating = s.interpolate;
+    s.interpolate = false;
+    s.executePending(command, 0, s.lastExtent);
+    s.interpolate = interpolating;
+    Impl::Copied copied;
+    const bool copiedOk = s.copyRect(command, request, copied);
+    up.submit();
+    s.finishReadbacks(s.readbacksRecorded);   // (asynchronous reads in the lists drawn: done too)
+    if (!copiedOk) return false;
+    s.pack(copied, out);
     // GT4_READ_HASH=1 (testing): each read's bytes as a hash (FNV-1a), to compare runs.
     static const bool readHash = [] { const char* e = std::getenv("GT4_READ_HASH"); return e && *e && *e != '0'; }();
     if (readHash) {

@@ -59,6 +59,8 @@ public:
     // A GS -> host read of drawn pixels (gsn::GsFrontend::takeGpuRead): the lists added so far are drawn
     // first. False when it cannot be served.
     bool readGsTarget(const gt4::gsn::ReadRequest& request, std::vector<uint8_t>& out);
+    void takeReadAnswers(std::vector<gt4::GsnScene::ReadAnswer>& out);   // the game's asynchronous reads, done
+    void abandonReadbacks();   // before the renderer goes: every asynchronous read answered (then takeReadAnswers)
     const GpuInfo& gpu() const;
     double gpuMilliseconds() const;          // GPU time of the last finished frame (0 if unknown)
     gt4::GsnScene::Counters sceneCounters() const;   // the native renderer's running totals (hitch log)

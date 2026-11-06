@@ -31,6 +31,86 @@ uint32_t g_image_id = 0;           // the download waiting for its GS_IMAGE (0: 
 uint8_t *g_image_dst = nullptr;
 uint32_t g_image_qwc = 0;
 bool g_image_done = false;
+uint32_t g_image_next = 0;         // the last download's id (both kinds)
+// The asynchronous downloads in flight (link_read_image_async), up to 8 tracked. The host copies the pixels when it
+// draws the read's list and answers when the GPU has finished that frame: they land 2.7-3.0 VBlanks after the ask at
+// 60 frames a second (never before 2; the PS2's within 1), later with a host behind. The game does not wait for them:
+// waiting with 1, 2 or 3 in flight held it to 29, 58 and 60 game frames/s at George V on a desktop, and to 40 with
+// a slow GPU (GT4_GPU_THROTTLE_MS=18). GT4_READ_ASYNC_DEPTH=N (1..8, testing): N tracked instead.
+struct AsyncRead {
+    uint32_t id = 0;
+    uint8_t *dst = nullptr;
+    uint32_t qwc = 0;
+    uint32_t frame = 0;   // the VBlank it was asked for at
+};
+constexpr int kAsyncMax = 8;
+constexpr uint32_t kAsyncMaxQwc = 512;   // 64 x 32 PSMCT32: the flare target is 64 x N, N = 8 in every race seen
+AsyncRead g_async[kAsyncMax];
+bool g_async_landed = false;       // one has arrived (the first is waited for)
+int async_depth() {
+    static const int depth = [] {
+        const char *e = std::getenv("GT4_READ_ASYNC_DEPTH");
+        const int n = e ? std::atoi(e) : kAsyncMax;
+        return n < 1 ? 1 : n > kAsyncMax ? kAsyncMax : n;
+    }();
+    return depth;
+}
+
+int async_in_flight() {
+    int n = 0;
+    for (const AsyncRead &a : g_async) n += a.dst ? 1 : 0;
+    return n;
+}
+
+// Their pixels, held here until the game's code that owns the destination runs again (link_async_deliver): landing
+// 2-3 frames after the ask, straight into game memory they could have hit an object freed meanwhile (a race's end, a
+// quit to the menu). The newest per destination; one older than kLandedFrames VBlanks is not delivered (an object
+// at the same address since). Fixed storage: they land in link_poll, which runs in the frame's delivery, where nothing
+// may allocate (a guest thread can be frozen inside the heap); a larger read is waited for (link_read_image_async).
+struct Landed {
+    uint8_t *dst = nullptr;
+    uint8_t bytes[kAsyncMaxQwc * 16];
+    uint32_t size = 0;
+    uint32_t frame = 0;   // the VBlank it landed at
+    bool fresh = false;
+};
+constexpr uint32_t kLandedFrames = 8;
+Landed g_landed[kAsyncMax];
+uint32_t g_async_landings = 0, g_async_delivered = 0, g_async_expired = 0, g_async_superseded = 0;   // (GT4_READ_STATS)
+
+void async_land(uint8_t *dst, const uint8_t *bytes, size_t n) {
+    Landed *slot = nullptr;
+    for (Landed &l : g_landed)
+        if (l.dst == dst) slot = &l;
+    for (Landed &l : g_landed)
+        if (!slot && (!l.fresh || g_hdr->frame - l.frame > kLandedFrames)) slot = &l;
+    if (!slot) slot = &g_landed[0];
+    if (slot->fresh) ++g_async_superseded;   // (a newer one before the game ran: the older never delivered)
+    slot->dst = dst;
+    slot->size = static_cast<uint32_t>(n < sizeof slot->bytes ? n : sizeof slot->bytes);
+    std::memcpy(slot->bytes, bytes, slot->size);
+    slot->frame = g_hdr->frame;
+    slot->fresh = true;
+    ++g_async_landings;
+}
+
+// GT4_READ_STATS=1 (testing): how many VBlanks after it was asked for each asynchronous read landed, per 300.
+void async_landed_after(uint32_t vblanks) {
+    static const bool on = [] { const char *e = std::getenv("GT4_READ_STATS"); return e && *e && *e != '0'; }();
+    if (!on) return;
+    static uint32_t n = 0, sum = 0, most = 0, hist[6] = {};
+    ++n;
+    sum += vblanks;
+    if (vblanks > most) most = vblanks;
+    ++hist[vblanks < 5 ? vblanks : 5];
+    if (n < 300) return;
+    log_info("link: asynchronous reads landed %.2f VBlanks after the ask on average (most %u; 0/1/2/3/4/5+: %u/%u/%u/%u/%u/%u); "
+             "so far %u landed, %u delivered, %u expired, %u superseded",
+             double(sum) / n, most, hist[0], hist[1], hist[2], hist[3], hist[4], hist[5], g_async_landings, g_async_delivered,
+             g_async_expired, g_async_superseded);
+    n = sum = most = 0;
+    for (uint32_t &h : hist) h = 0;
+}
 
 void ring_write(uint8_t *data, uint32_t size, uint64_t pos, const void *src, uint32_t n) {
     const uint32_t off = static_cast<uint32_t>(pos % size);
@@ -208,7 +288,13 @@ void link_poll() {
         Gt4LinkRecord rec;
         ring_read(g_h2g, ring, tail, &rec, sizeof rec);
         if (tail + sizeof rec + rec.size > head) break;  // not all written yet
-        static std::vector<uint8_t> buf;  // records of any size (GS_IMAGE carries image data)
+        // Records of any size (GS_IMAGE carries image data). Reserved once, up to a photo's 640 x 480 x 24-bit read:
+        // this runs in the frame's delivery too, where nothing may allocate (a guest thread frozen inside the heap).
+        static std::vector<uint8_t> buf = [] {
+            std::vector<uint8_t> v;
+            v.reserve(1u << 20);
+            return v;
+        }();
         buf.resize(rec.size ? rec.size : 1);
         uint8_t *payload = buf.data();
         const uint32_t n = rec.size;
@@ -232,6 +318,17 @@ void link_poll() {
                 const uint32_t got = copy < have ? copy : have;
                 std::memcpy(g_image_dst, payload + 8, got * 16);
                 g_image_done = true;
+            } else {
+                for (AsyncRead &a : g_async) {
+                    if (!a.dst || a.id != id) continue;
+                    const uint32_t have = (n - 8) / 16;
+                    const uint32_t copy = (qwc < a.qwc ? qwc : a.qwc);
+                    const uint32_t got = copy < have ? copy : have;
+                    async_land(a.dst, payload + 8, size_t(got) * 16);
+                    async_landed_after(g_hdr->frame - a.frame);
+                    a = AsyncRead();
+                    g_async_landed = true;
+                }
             }
         } else if (rec.type == GT4_REC_HOST_CMD && n >= 4) {
             uint32_t cmd;
@@ -258,11 +355,10 @@ void link_poll() {
 bool link_read_image(uint32_t qwc, void *dst) {
     std::memset(dst, 0, static_cast<size_t>(qwc) * 16);
     if (!g_hdr) return false;
-    static uint32_t next_id = 0;
     {
         KernelScope ks;
         std::lock_guard<std::recursive_mutex> poll_lock(g_poll_mutex);
-        g_image_id = ++next_id ? next_id : ++next_id;
+        g_image_id = ++g_image_next ? g_image_next : ++g_image_next;
         g_image_dst = static_cast<uint8_t *>(dst);
         g_image_qwc = qwc;
         g_image_done = false;
@@ -292,6 +388,84 @@ bool link_read_image(uint32_t qwc, void *dst) {
     else if (took >= 50 && (++slow <= 20 || slow % 100 == 0))
         log_warn("link: a %u-qword GS read took %lu ms (read %u, %u slow so far)", qwc, static_cast<unsigned long>(took), reads, slow);
     return done;
+}
+
+bool link_read_image_async(uint32_t qwc, void *dst) {
+    if (!g_hdr) {
+        std::memset(dst, 0, static_cast<size_t>(qwc) * 16);
+        return false;
+    }
+    static uint32_t reads = 0, untracked = 0, lost = 0;
+    ++reads;
+    if (qwc > kAsyncMaxQwc) {   // (more than the landing buffers hold: waited for)
+        static bool told = false;
+        if (!told) log_warn("link: a %u-qword asynchronous read (over %u) is waited for", qwc, kAsyncMaxQwc);
+        told = true;
+        return link_read_image(qwc, dst);
+    }
+    link_poll();   // (what has landed so far frees its slot)
+    // The first one is read as the game asks (nothing landed yet to read the frame after).
+    bool landed;
+    {
+        KernelScope ks;
+        std::lock_guard<std::recursive_mutex> poll_lock(g_poll_mutex);
+        landed = g_async_landed;
+    }
+    if (!landed) {
+        const bool done = link_read_image(qwc, dst);
+        KernelScope ks;
+        std::lock_guard<std::recursive_mutex> poll_lock(g_poll_mutex);
+        g_async_landed = done;
+        return done;
+    }
+    // Never waited for, as on the PS2: a read that finds every slot taken (a host far behind) is sent all the same and
+    // its pixels not kept (the game goes on with the newest that landed); one not answered within kLostFrames VBlanks
+    // frees its slot (an answer lost: never seen, but the game must not wait on it).
+    uint32_t req[2] = {0, qwc};
+    {
+        KernelScope ks;
+        std::lock_guard<std::recursive_mutex> poll_lock(g_poll_mutex);
+        constexpr uint32_t kLostFrames = 60;
+        for (AsyncRead &a : g_async) {
+            if (!a.dst || g_hdr->frame - a.frame <= kLostFrames) continue;
+            ++lost;
+            log_warn("link: no GS_IMAGE for asynchronous read id %u after %u VBlanks: its slot freed (%u so far)", a.id,
+                     g_hdr->frame - a.frame, lost);
+            a = AsyncRead();
+        }
+        req[0] = ++g_image_next ? g_image_next : ++g_image_next;
+        bool kept = false;
+        for (int k = 0; k < async_depth() && !kept; ++k) {
+            AsyncRead &a = g_async[k];
+            if (a.dst) continue;
+            a.id = req[0];
+            a.dst = static_cast<uint8_t *>(dst);
+            a.qwc = qwc;
+            a.frame = g_hdr->frame;
+            kept = true;
+        }
+        if (!kept && (++untracked <= 10 || untracked % 100 == 0))
+            log_info("link: asynchronous read %u sent untracked, %d in flight (the host is behind; %u so far)", reads,
+                     async_in_flight(), untracked);
+    }
+    link_send(GT4_REC_GS_READ, req, sizeof req);
+    return true;
+}
+
+void link_async_deliver(void *dst) {
+    if (!g_hdr) return;
+    KernelScope ks;
+    std::lock_guard<std::recursive_mutex> poll_lock(g_poll_mutex);
+    for (Landed &l : g_landed) {
+        if (!l.fresh || l.dst != dst) continue;
+        if (g_hdr->frame - l.frame <= kLandedFrames) {
+            std::memcpy(dst, l.bytes, l.size);
+            ++g_async_delivered;
+        } else {
+            ++g_async_expired;
+        }
+        l.fresh = false;
+    }
 }
 
 void link_wait_for_host() {

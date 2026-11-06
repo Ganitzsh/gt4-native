@@ -792,6 +792,10 @@ struct Renderer::Impl {
         Frame& frame = frames[slot];
         check(vkWaitForFences(device.device, 1, &frame.fence, VK_TRUE, UINT64_MAX), "vkWaitForFences");
         readTimestamps(frame, slot);
+        // The game's asynchronous reads copied in frames the GPU has finished (this slot's, and the other's if done).
+        if (gsnScene)
+            for (uint32_t k = 0; k < kFramesInFlight; ++k)
+                if (k == slot || vkGetFenceStatus(device.device, frames[k].fence) == VK_SUCCESS) gsnScene->slotDone(k);
         uint32_t index = 0;
         bool suboptimal = false;
         if (!headless) {
@@ -981,6 +985,17 @@ void Renderer::useGameFrame(bool enabled) {
 void Renderer::addNativeFrames(std::vector<gt4::gsn::FrameList>& lists) { impl->gsnScene->addFrames(lists); }
 bool Renderer::readGsTarget(const gt4::gsn::ReadRequest& request, std::vector<uint8_t>& out) {
     return impl->gsnScene->read(request, out);
+}
+void Renderer::abandonReadbacks() {
+    if (impl->gsnScene) impl->gsnScene->abandonReadbacks();
+}
+void Renderer::takeReadAnswers(std::vector<gt4::GsnScene::ReadAnswer>& out) {
+    if (!impl->gsnScene) return;
+    impl->gsnScene->answerUndrawnReadbacks(std::chrono::milliseconds(250));
+    // (between draws every frame submitted so far is in flight: a signalled fence is a finished frame)
+    for (uint32_t k = 0; k < kFramesInFlight; ++k)
+        if (vkGetFenceStatus(impl->device.device, impl->frames[k].fence) == VK_SUCCESS) impl->gsnScene->slotDone(k);
+    impl->gsnScene->takeReadAnswers(out);
 }
 const GpuInfo& Renderer::gpu() const { return impl->info; }
 double Renderer::gpuMilliseconds() const { return impl->gpuMs; }

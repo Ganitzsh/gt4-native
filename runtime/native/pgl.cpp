@@ -754,6 +754,8 @@ int gt4_replace_func_00499728(uint32_t set) {
     return slot;
 }
 
+static bool g_read_async = false;   // the read record being made is gt4_replace_func_00497EF8's
+
 // 004A5178(address, format, width, x, y, w, h, destination): reads the w x h rectangle at (x, y) of the buffer
 // at byte `address` (format, `width` pixels wide) into game memory at `destination`, once what the frame drew
 // before it is done. The original put the transfer (BITBLTBUF ... FINISH, TRXDIR = 1) in the VIF1 stream behind
@@ -782,8 +784,42 @@ void gt4_replace_func_004A5178(uint32_t address, int format, int width, int x, i
     read.w = static_cast<uint16_t>(w);
     read.h = static_cast<uint16_t>(h);
     read.destination = destination;
-    read.qwords = qwords;
+    read.qwords = qwords | (g_read_async ? gfx::kReadAsync : 0u);
     append(kContext, gfx::kRead, &read, sizeof read);
+}
+
+// 00497EF8(target, destination): the flare pass's visibility read (its one caller, 003B8848, after 003B88C8 drew
+// a sample per light into the 64-pixel-wide target): the target's rows into the flare object's buffer. On the PS2
+// nothing waited for it: the download was done by the DMA handler while the EE built the next frame, which uses
+// the pixels. So it is an asynchronous read (gfx::kReadAsync): the game goes on, the pixels arrive a frame later
+// (runtime/link.cpp). Natively the game waited each frame for the host to draw everything before it (the slow
+// motion with headlights or street lamps in view). GT4_READ_ASYNC=0: waited for, as before.
+// The pixels are delivered into the object's buffer (+0x38, the destination) when its code runs again: here before it
+// asks anew, and in 00497F48, which reads them (link_async_deliver). They land 2-3 frames after the ask, by when the
+// object may be gone (a race's end, a quit to the menu); an object that calls is alive.
+static void *flare_buffer(uint32_t address) {   // (as runtime/frame.cpp maps a read's destination)
+    const uint32_t high = address >> 28;
+    return guest_ptr((high == 0 || high == 2 || high == 3) ? address & 0x01FFFFFF : address);
+}
+void gt4_replace_func_00497EF8(uint32_t self, uint32_t destination) {
+    static const bool async = [] { const char *e = std::getenv("GT4_READ_ASYNC"); return !(e && *e == '0'); }();
+    if (const uint32_t before = guest_ref<uint32_t>(self + 0x38)) link_async_deliver(flare_buffer(before));
+    guest_ref<uint32_t>(self + 0x38) = destination;
+    g_read_async = async;
+    gt4_replace_func_004A5178(guest_ref<uint32_t>(self), 0, 0x40, 0, 0, 0x40, static_cast<int>(guest_ref<uint32_t>(self + 4)), destination);
+    g_read_async = false;
+    guest_ref<uint32_t>(self + 8) = 0;
+}
+
+// 00497F48(self, value, x, y, z): a flare's sample, `self`'s next (its count at +8), read from the buffer at +0x38 by
+// 00497838. As the original, the buffer first brought up to date (00497EF8 above).
+void gt4_replace_func_00497F48(uint32_t self, int32_t value, float x, float y, float z) {
+    const uint32_t words = guest_ref<uint32_t>(self + 0x38);
+    if (words) link_async_deliver(flare_buffer(words));
+    const int32_t n = guest_ref<int32_t>(self + 8);
+    using Sample = void (*)(uint32_t, int32_t, uint32_t, int32_t, float, float, float);
+    reinterpret_cast<Sample>(guest_ptr(0x00497838))(self, value, words + static_cast<uint32_t>(n & ~3) * 4, n & 3, x, y, z);
+    guest_ref<int32_t>(self + 8) = guest_ref<int32_t>(self + 8) + 1;
 }
 
 // The font texture's upload (00499B60 sets it up, 00499C38 sends it with the pixels' address).

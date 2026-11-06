@@ -32,6 +32,25 @@ namespace gt4::gs {
 
 namespace {
 
+// GT4_READ_STATS=1 (testing): per 60 reads of 32-bit pixels of each kind (waited for, asynchronous), the mean count of
+// pixels not zero and their mean channel value: the flare pass's visibility both ways.
+void readStats(bool async, const uint8_t* pixels, size_t bytes) {
+    static const bool on = [] { const char* e = std::getenv("GT4_READ_STATS"); return e && *e && *e != '0'; }();
+    if (!on || bytes != 64 * 8 * 4) return;   // (the flare target's 64 x 8)
+    static uint64_t reads[2], lit[2], sum[2];
+    const int k = async ? 1 : 0;
+    for (size_t i = 0; i + 4 <= bytes; i += 4) {
+        const uint32_t v = pixels[i] | (pixels[i + 1] << 8) | (pixels[i + 2] << 16) | (uint32_t(pixels[i + 3]) << 24);
+        if (!v) continue;
+        ++lit[k];
+        sum[k] += pixels[i] + pixels[i + 1] + pixels[i + 2] + pixels[i + 3];
+    }
+    if (++reads[k] % 60) return;
+    std::printf("read stats (%s): %.1f lit pixels a read, mean channel %.1f\n", async ? "asynchronous" : "waited for",
+                double(lit[k]) / 60.0, lit[k] ? double(sum[k]) / double(lit[k] * 4) : 0.0);
+    lit[k] = sum[k] = 0;
+}
+
 // A GS -> host read of drawn pixels, served by the render thread: the frame list cut at the read (drawn
 // first) and the rectangle; false when it could not be served in time.
 using ReadService = std::function<bool(gsn::FrameList& partial, const gsn::ReadRequest& request, std::vector<uint8_t>& out)>;
@@ -46,6 +65,32 @@ public:
         stats = mode && !std::strcmp(mode, "stats");
     }
     void setEventSink(gsn::GsFrontend::EventSink sink) { native->setEventSink(std::move(sink)); }
+    // A live game's asynchronous reads (gfx::kReadAsync): the list cut at the read goes to the render thread with the
+    // rectangle to copy when it draws it (`later`, not waited for), and GsHost::answerReads sends the pixels; pixels no
+    // draw made are answered at once (`answer`).
+    using Answer = std::function<void(uint32_t id, uint32_t qwc, const uint8_t* pixels)>;
+    void setReadLater(std::function<void(gsn::FrameList&)> later, Answer answerNow) {
+        queueLater = std::move(later);
+        answer = std::move(answerNow);
+    }
+    bool readsLater() const override { return bool(queueLater); }
+    bool readLater(uint32_t id, uint32_t qwc) override {
+        if (!queueLater) return false;
+        std::vector<uint8_t> pixels(size_t(qwc) * 16, 0);
+        gsn::ReadRequest request;
+        if (native->takeGpuRead(request) && request.async) {
+            gsn::FrameList partial;
+            native->cut(partial);
+            partial.readbacks.push_back({request, id, qwc});
+            native->readTransfer(pixels.data(), qwc);   // (the front end's read consumed; its memory model's pixels unused)
+            queueLater(partial);
+            ++laterReads;
+        } else {
+            native->readTransfer(pixels.data(), qwc);
+            answer(id, qwc, pixels.data());
+        }
+        return true;
+    }
     gsn::GsFrontend& frontend() { return *native; }
     void gif(uint32_t path, const uint8_t* data, size_t bytes) override { native->gif(path, data, bytes); }
     void state(const gfx::StateRecord& r) override { native->applyState(r); }
@@ -213,7 +258,10 @@ public:
                 gsn::FrameList partial;
                 native->cut(partial);
                 std::vector<uint8_t> pixels;
-                if ((served = serveRead(partial, request, pixels))) native->setReadData(std::move(pixels));
+                if ((served = serveRead(partial, request, pixels))) {
+                    readStats(false, pixels.data(), pixels.size());
+                    native->setReadData(std::move(pixels));
+                }
             }
             ++(served ? gpuReads : staleReads);
             if (!served && staleReads == 1)
@@ -235,9 +283,11 @@ public:
         std::memcpy(out, native->memory().data(), gsn::GsMemory::kBytes);
     }
     void writeVram(const void* data) override { native->restoreMemory(data); }
-    uint64_t blankFrames = 0, gpuReads = 0, staleReads = 0;
+    uint64_t blankFrames = 0, gpuReads = 0, staleReads = 0, laterReads = 0;
 private:
     std::function<void(gsn::FrameList&)> publishNative;
+    std::function<void(gsn::FrameList&)> queueLater;
+    Answer answer;
     ReadService serveRead;
     std::unique_ptr<gsn::GsFrontend> native;
     gsn::FrameList list;
@@ -290,6 +340,12 @@ public:
         drain();
         inner.readTransfer(out, qwc);
     }
+    bool readsLater() const override { return inner.readsLater(); }
+    bool readLater(uint32_t id, uint32_t qwc) override {   // (in order with the rest, not waited for)
+        if (!inner.readsLater()) return false;
+        put(Op::ReadLater, id, qwc, nullptr, 0);
+        return true;
+    }
     void readVram(void* out) override {
         drain();
         inner.readVram(out);
@@ -306,7 +362,7 @@ public:
     }
 
 private:
-    enum class Op : uint32_t { Gif, Primitives, Display, State, Upload, Read, Draw, Vsync, TexSet, Model, Effect };
+    enum class Op : uint32_t { Gif, Primitives, Display, State, Upload, Read, Draw, Vsync, TexSet, Model, Effect, ReadLater };
     struct Entry {
         Op op;
         uint32_t a, b;
@@ -384,6 +440,7 @@ private:
             case Op::State: inner.state(*reinterpret_cast<const gfx::StateRecord*>(first)); break;
             case Op::Upload: inner.upload(*reinterpret_cast<const gfx::UploadRecord*>(first), second, e.second); break;
             case Op::Read: inner.read(*reinterpret_cast<const gfx::ReadRecord*>(first)); break;
+            case Op::ReadLater: inner.readLater(e.a, e.b); break;
             case Op::Draw: inner.draw(*reinterpret_cast<const gfx::DrawRecord*>(first), reinterpret_cast<const gfx::Vertex*>(second)); break;
             case Op::Vsync: inner.vsync(e.a, e.b); break;
             case Op::TexSet: inner.texSet(first, e.first); break;
@@ -462,6 +519,12 @@ struct GsHost::Impl {
             ++vsyncs;
             frameReady.notify_all();
         }
+    }
+
+    // An asynchronous read's list (NativeTarget::readLater): queued like any other, drawn with the next frame.
+    void queueReadLater(gsn::FrameList& partial) {
+        std::lock_guard<std::mutex> lock(frameMutex);
+        queue(partial);
     }
 
     // GS -> host reads of drawn pixels, from the worker to the render thread (takeReadRequest/completeRead).
@@ -784,6 +847,14 @@ std::unique_ptr<GsHost> GsHost::create(const Options& options, std::string& erro
         if (!h.link) return nullptr;
         ps2::GameLink* link = h.link.get();
         h.stream->setHostWriter([link](uint32_t type, const void* payload, uint32_t size) { link->write(type, payload, size); });
+        h.target->setReadLater([raw](gsn::FrameList& partial) { raw->queueReadLater(partial); },
+                               [link](uint32_t id, uint32_t qwc, const uint8_t* pixels) {
+                                   std::vector<uint8_t> record(8 + size_t(qwc) * 16);
+                                   std::memcpy(record.data(), &id, 4);
+                                   std::memcpy(record.data() + 4, &qwc, 4);
+                                   std::memcpy(record.data() + 8, pixels, size_t(qwc) * 16);
+                                   link->write(GT4_REC_GS_IMAGE, record.data(), static_cast<uint32_t>(record.size()));
+                               });
         // SIGNAL / FINISH / LABEL as any path writes them: the game applies CSR, IMR and SIGLBLID.
         h.target->setEventSink([raw, link](uint32_t kind, uint64_t payload) {
             struct { uint32_t kind, id; uint64_t value; } event{kind, static_cast<uint32_t>(payload), payload};
@@ -843,6 +914,16 @@ bool GsHost::takeReadRequest(gsn::ReadRequest& request) {
     impl->readTaken = impl->readAsked;
     request = impl->readRequest;
     return true;
+}
+
+void GsHost::answerRead(uint32_t id, uint32_t qwc, const std::vector<uint8_t>& pixels) {
+    if (!impl->link || !impl->link->running()) return;
+    readStats(true, pixels.data(), pixels.size());
+    std::vector<uint8_t> record(8 + size_t(qwc) * 16, 0);
+    std::memcpy(record.data(), &id, 4);
+    std::memcpy(record.data() + 4, &qwc, 4);
+    std::memcpy(record.data() + 8, pixels.data(), std::min(pixels.size(), size_t(qwc) * 16));
+    impl->link->write(GT4_REC_GS_IMAGE, record.data(), static_cast<uint32_t>(record.size()));
 }
 
 void GsHost::completeRead(bool ok, std::vector<uint8_t>&& pixels) {

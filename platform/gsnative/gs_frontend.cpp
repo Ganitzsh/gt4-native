@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <bit>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -70,6 +71,7 @@ void FrameList::clear() {
     targets.clear();
     displayed = false;
     dump = false;
+    readbacks.clear();
 }
 
 namespace {
@@ -95,6 +97,17 @@ FrameList spareFrameList() {
 
 void carryOver(FrameList& dropped, FrameList& into) {
     into.dump = into.dump || dropped.dump;
+    // Its asynchronous reads are never dropped (the game would wait for them): copied after the next list, the target
+    // as that one leaves it.
+    if (!dropped.readbacks.empty()) {
+        static std::atomic<uint64_t> carried{0};
+        const uint64_t total = carried += dropped.readbacks.size();
+        if (total <= 10 || total % 100 == 0)
+            std::printf("gsn: %zu asynchronous read(s) of a skipped list carried over to the next (%llu so far)\n",
+                        dropped.readbacks.size(), static_cast<unsigned long long>(total));
+        into.readbacks.insert(into.readbacks.begin(), dropped.readbacks.begin(), dropped.readbacks.end());
+        dropped.readbacks.clear();
+    }
     if (!dropped.textures.empty()) {
         for (auto& t : into.textures) dropped.textures.push_back(std::move(t));   // the later version wins
         into.textures = std::move(dropped.textures);
@@ -393,7 +406,9 @@ void GsFrontend::read(const gfx::ReadRecord& r) {
     if (logTransfers)
         std::printf("[gsn read] src %X/%u psm %X (%u,%u) %ux%u to %08X\n", t.sbp, t.sbw, t.spsm, t.ssax, t.ssay, t.rrw, t.rrh, r.destination);
     imageActive = false;
+    readAsync = (r.qwords & gfx::kReadAsync) != 0;
     readStarted(t);
+    readAsync = false;
 }
 
 // A GS -> host read starts: the packed pixels from the memory model, or from the GPU where a draw made them.
@@ -430,7 +445,7 @@ void GsFrontend::readStarted(const GsMemory::Transfer& t) {
             Target& o = targets[owner - 1];
             if (oneOwner && !o.depth && o.bp == t.sbp && o.bw == t.sbw && o.psm == t.spsm &&
                 (t.spsm == PSMCT32 || t.spsm == PSMCT24 || t.spsm == PSMCT16 || t.spsm == PSMCT16S)) {
-                gpuRead = {owner, t.ssax, t.ssay, t.rrw, t.rrh, t.spsm};
+                gpuRead = {owner, t.ssax, t.ssay, t.rrw, t.rrh, t.spsm, readAsync};
                 gpuReadPending = true;
             } else {
                 static bool warned = false;

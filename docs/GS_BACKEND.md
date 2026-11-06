@@ -141,6 +141,25 @@ render thread. Design and state: `docs/NATIVE_RENDERER.md`. What the host owes t
   to answer, so its reads stay in memory. Against paraLLEl-GS on the race route: the 38 reads give the same
   pictures, 89 % of the pixels identical, 99.6 % within 4/32 per channel (`GT4_GS_READ_DUMP=DIR` writes
   what each read returned).
+- **Asynchronous reads** (`gfx::kReadAsync`): the flare pass (003B88C8 draws a sample per headlight, lamp
+  or sun into a 64 x 8 target, 00497EF8 reads it back every frame one is in view, 00497F48 reads the samples
+  the next frame) did not wait on the PS2: the DMA handler (004AB930) did the download while the EE built the
+  next frame. Waited for natively, it tied the game's frame to the host's GPU frame (George V at night on a
+  desktop, ultra: 33 game frames/s; the Odin's slow motion with headlights). Only that read is marked
+  (`gt4_replace_func_00497EF8`). The game sends it and never waits (`link_read_image_async`: up to 8 tracked,
+  a read past them sent untracked, one unanswered for 60 VBlanks dropped; the first of all waited for); the
+  pixels land in a runtime buffer and reach the object's buffer when its code runs again (00497F48, 00497EF8:
+  `link_async_deliver`), never in memory an object freed since. The stream hands the read to the front end without
+  waiting (`GsTarget::readLater`), which cuts the list there with a `FrameList::Readback`; the render thread copies
+  the rectangle right after that list in the frame's own command buffer and answers (`GsHost::answerRead`) once that
+  frame's fence is signalled. A readback is never dropped: a skipped frame (its cut list and displayed list skipped
+  together) carries it to the next list kept, lists not drawn for 250 ms (a minimised window) answer with zeros, and
+  a renderer rebuilt (display.gpu) answers all first. The pixels land 2.7-3.0 VBlanks after the ask at 60 frames a
+  second (the PS2's within 1; the host pipeline's floor is 2), about 5 with a slow GPU (GT4_GPU_THROTTLE_MS=18).
+  `GT4_READ_ASYNC=0`: waited for, as before; `GT4_READ_ASYNC_DEPTH=N` and `GT4_READ_STATS=1` for testing.
+- **No present for a read alone**: a list cut at a read displays nothing; with the presentation following the
+  game, the render loop goes back to waiting instead of showing the last picture again (88 presents a
+  second, 53 of them new, in the Odin's race).
 - **Every frame list is drawn**, in order, even when the render thread falls behind (the host queues them;
   the renderer executes all pending ones before showing the newest): later frames and reads see what each
   one drew. Past 64 queued lists (a minimised window) the oldest lists' draws are dropped, their texture

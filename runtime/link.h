@@ -28,6 +28,13 @@ void link_poll();
 // GS_IMAGE, copied to dst (qwc x 16 bytes). Without a host, or on timeout, dst is zero-filled and
 // false is returned.
 bool link_read_image(uint32_t qwc, void *dst);
+// The same without waiting (gfx::kReadAsync, the PS2's interrupt-driven downloads): the pixels land in a buffer of
+// the runtime when the host's GS_IMAGE arrives and reach dst through link_async_deliver. Never waits (a host far
+// behind: the read sent untracked); the first of all is read as link_read_image does.
+bool link_read_image_async(uint32_t qwc, void *dst);
+// Its pixels go into dst only here: the newest that landed for dst, if any (called by the code that owns dst, when
+// it runs again: runtime/native/pgl.cpp, 00497F48 and 00497EF8).
+void link_async_deliver(void *dst);
 // The last resort against a host that falls behind: from a game thread at a safe point (no lock held, not in an
 // interrupt), waits while the game is more than a few VBlanks ahead of the newest frame the host drew.
 void link_wait_for_host();
