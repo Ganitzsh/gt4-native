@@ -1028,17 +1028,30 @@ bool Renderers3d::run(const Batch3d& batch, PrimitiveSink& sink, uint32_t& conti
         // size in a frame: the same drawing in another role (a quad of the loading screen, then of the race's sky).
         // Matched by order, or that far apart, the interpolated object swept across the screen for a frame (a dark
         // sky, a grey box over it at the race start). Steady motion stays under 0.2 (a race start, B-spec, 1300 frames).
+        // The translation row dominates that size, so a drawing whose scale changed passed it: the game hides a part
+        // by drawing it with its axes scaled to ~0, and paired with last frame's full-size drawing it showed, at full
+        // size, a grey box over the sky for a frame (14c). A previous drawing counts only at a scale within 2x of
+        // this one's (the axes' length, which turning does not change).
         hasPrevious = false;
         if (then != lastFrame.end()) {
             float size = 0.0f, best = FLT_MAX;
             for (int k = 0; k < 4; ++k)
                 for (int i = 0; i < 4; ++i) size += std::fabs(constants.matrix[k][i]);
+            auto axes = [](const Constants& c) {
+                float s = 0.0f;
+                for (int k = 0; k < 3; ++k)
+                    for (int i = 0; i < 4; ++i) s += c.matrix[k][i] * c.matrix[k][i];
+                return s;
+            };
+            const float scale = axes(constants);
             for (const Constants& c : then->second) {
                 bool sameView = true;   // the same viewport (not its copy in a reflection map's pass)
                 for (int i = 0; i < 4; ++i)
                     sameView = sameView && std::fabs(constants.scale[i] - c.scale[i]) <= 0.01f * std::fabs(constants.scale[i]) + 1e-3f &&
                                std::fabs(constants.offset[i] - c.offset[i]) <= 0.01f * std::fabs(constants.offset[i]) + 1e-3f;
                 if (!sameView) continue;
+                const float before = axes(c);   // squared lengths: within 2x is within 4x here
+                if (!(before <= 4.0f * scale && scale <= 4.0f * before)) continue;
                 float moved = 0.0f;
                 for (int k = 0; k < 4; ++k)
                     for (int i = 0; i < 4; ++i) moved += std::fabs(constants.matrix[k][i] - c.matrix[k][i]);
