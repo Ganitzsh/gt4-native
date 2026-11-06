@@ -60,6 +60,7 @@ struct Thread {
     int32_t stack_size = 0;
     int init_prio = 0, prio = 0;
     int wakeup_count = 0;
+    uint32_t waits_since = 0;    // the frame it began its current wait (GT4_WATCH)
     bool suspended = false;      // SuspendThread (guest)
     uint32_t arg = 0;
     HANDLE host = nullptr;
@@ -270,6 +271,7 @@ uint64_t g_due_since = 0;   // when something to deliver came due (0: nothing wa
 bool g_guard_frozen = false;
 std::atomic<uint32_t> g_frozen_in_runtime{0}, g_frozen_in_runtime_at{0};
 uint64_t g_delivered_cooperatively = 0, g_delivered_preemptively = 0;
+std::atomic<uint32_t> g_self_wakeups{0};   // wakeups a handler gave the thread it ran on (GT4_WATCH)
 
 // From the interrupt thread: freeze the running guest thread, run handlers, resume or preempt. False when it left
 // them for the running thread's next safe point.
@@ -632,7 +634,15 @@ DWORD WINAPI watchdog_thread(void *p) {
                               t.prio, t.kernel_depth ? "(k)" : "");
                 if (t.status == THS_WAIT && t.wait == WAIT_SEMA)   // which semaphore, and its count
                     n += snprintf(line + n, sizeof line - n, "[s%d c%d]", t.wait_id, g_semas[t.wait_id].count);
+                else if (t.status == THS_WAIT || t.status == THS_WAITSUSPEND)   // asleep since that frame
+                    n += snprintf(line + n, sizeof line - n, "[f%u w%d]", t.waits_since, t.wakeup_count);
             }
+            // the alarms set (DelayThread's among them), the wakeups handlers gave their own thread, and the game
+            // thread's flip cycle and "wait one VBlank" switch (D_006186E4, D_006186DC: docs/IOP_SERVICES.md 4)
+            int alarms = 0;
+            for (const Alarm &a : g_alarms) alarms += a.used ? 1 : 0;
+            n += snprintf(line + n, sizeof line - n, "; alarms %d, self-wakeups %u, flip %d/%d", alarms,
+                          g_self_wakeups.load(), guest_ref<int32_t>(0x006186E4), guest_ref<int32_t>(0x006186DC));
             if (Thread *r = g_running) {
                 running = r->id;
                 if (!r->host_frozen && SuspendThread(r->host) != static_cast<DWORD>(-1)) {
@@ -902,6 +912,7 @@ SYSCALL int gt4_sys_SleepThread() {
     } else {
         me->status = THS_WAIT;
         me->wait = WAIT_SLEEP;
+        me->waits_since = g_frames.load();
         switch_away(me);
     }
     LeaveCriticalSection(&g_lock);
@@ -913,7 +924,13 @@ SYSCALL int gt4_sys_WakeupThread(int id) {
     EnterCriticalSection(&g_lock);
     Thread *t = thread_by_id(id);
     int r = -1;
-    if (t && t != self()) {
+    // From a handler (an alarm, the frame callback) the thread it wakes may be the one the handler runs on: the
+    // cooperative delivery runs handlers on the running thread at its safe point. As on the PS2 (iWakeupThread of
+    // the thread the interrupt stopped) that counts a wakeup for its next SleepThread. Refusing it lost the wakeup
+    // of DelayThread's alarm when it came due before the thread slept, and the game thread slept for good (the
+    // Odin's freeze in a race: the picture and the engine sound stop, the music plays on).
+    if (t && (t != self() || g_in_interrupt)) {
+        if (t == self()) ++g_self_wakeups;
         if ((t->status == THS_WAIT || t->status == THS_WAITSUSPEND) && t->wait == WAIT_SLEEP)
             wake(t);
         else

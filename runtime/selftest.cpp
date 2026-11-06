@@ -23,6 +23,7 @@ int gt4_sys_WakeupThread(int);
 int gt4_sys_GetThreadId();
 int gt4_sys_ChangeThreadPriority(int, int);
 int gt4_sys_RotateThreadReadyQueue(int);
+int gt4_sys_SetAlarm(uint32_t, uint32_t, uint32_t);
 }
 
 namespace {
@@ -64,6 +65,12 @@ void frame_callback(uint32_t) {
     ++g_frames;
     g_spin_flag = 1;
     gt4_sys_SignalSema(g_sema_frame);  // iSignalSema in the frame callbacks' context
+}
+
+std::atomic<int> g_alarm_wakes{0};
+void alarm_wake(int, uint16_t, uint32_t thread) {   // DelayThread's alarm handler (runtime/iop.cpp)
+    ++g_alarm_wakes;
+    gt4_sys_WakeupThread(static_cast<int>(thread));
 }
 
 int create(void (*fn)(uint32_t), int prio) {
@@ -119,6 +126,26 @@ int kernel_self_test() {
     while (!g_spin_flag && GetTickCount() - t0 < 1000) {
     }
     ok &= check(g_spin_flag == 1, "interrupt delivered to a spinning thread");
+    // 5. DelayThread's alarm comes due before the thread sleeps: the handler runs on the thread itself at its next
+    //    safe point (here the end of a KernelScope) and its wakeup must still count for the SleepThread after it.
+    //    A second alarm 1 s later wakes the thread if that wakeup was lost (the Odin's race freeze).
+    const uint32_t me = static_cast<uint32_t>(gt4_sys_GetThreadId());
+    const uint32_t handler = addr_of(reinterpret_cast<const void *>(&alarm_wake));
+    g_alarm_wakes = 0;
+    gt4_sys_SetAlarm(15, handler, me);        // 1 ms
+    gt4_sys_SetAlarm(15734, handler, me);     // 1 s: the rescue
+    {
+        KernelScope ks;
+        Sleep(5);                             // the thread descheduled past the alarm (the Odin under load)
+    }
+    const DWORD t1 = GetTickCount();
+    gt4_sys_SleepThread();
+    const DWORD slept = GetTickCount() - t1;
+    ok &= check(slept < 500, ("an alarm due before the sleep still wakes the thread (slept " + std::to_string(slept) + " ms)").c_str());
+    if (slept < 500) {                        // (otherwise the rescue is what woke it)
+        while (g_alarm_wakes < 2) Sleep(1);   // let the rescue alarm fire
+        gt4_sys_SleepThread();                // and take its wakeup (counted while this thread ran)
+    }
     log_info("self-test: %s", ok ? "PASSED" : "FAILED");
     return ok ? 0 : 1;
 }
