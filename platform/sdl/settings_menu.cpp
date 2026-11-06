@@ -160,9 +160,9 @@ std::vector<Item> buildItems(bool game) {
              : "Content shape; other window shapes get black bars.",
         game));
     if (game)
-        items.push_back(choice("Menu layout", "aspect.hud", {{"anchored", "Centred 4:3"}, {"stretched", "Stretched (PS2)"}},
-            "In widescreen: the menus in a centred 4:3 area, or stretched across the screen as on a PS2 with a "
-            "widescreen TV. The race HUD always uses the full width.",
+        items.push_back(choice("Menu layout", "aspect.hud", {{"anchored", "Stretched (PS2)"}, {"centered", "Centred 4:3"}},
+            "In widescreen: the menus stretched across the screen as on a PS2 with a widescreen TV (GT4's own "
+            "16:9 layout), or in a centred 4:3 area. The race HUD always uses the full width.",
             true));
     else
         items.push_back(choice("HUD layout", "aspect.hud",
