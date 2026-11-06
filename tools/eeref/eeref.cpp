@@ -29,8 +29,19 @@
 
 void register_generated_code();
 
-// The bridge's hook at function entries (tools/eeref/hook_entries.py): the replay runs everything translated.
-bool gt4_orig_native(ps2::Cpu &, std::uint32_t) { return false; }
+// The bridge's hook at function entries (tools/eeref/hook_entries.py): the replay runs everything translated. In
+// the last slice before a call counts as spinning it counts the functions entered (and from where), to name the loop.
+struct EntryCount { std::uint64_t n; std::uint32_t ra; };
+std::map<std::uint32_t, EntryCount> g_entries;
+bool g_count_entries;
+bool gt4_orig_native(ps2::Cpu &c, std::uint32_t addr) {
+    if (g_count_entries) {
+        EntryCount &e = g_entries[addr];
+        ++e.n;
+        e.ra = c.r[31].w[0];
+    }
+    return false;
+}
 
 namespace ps2 {
 
@@ -127,11 +138,19 @@ void bad_entry(Cpu &c, std::uint32_t unit_base) {
 int g_slices;
 bool preempt(Cpu &c) {
     c.budget = 1 << 24;
-    if (++g_slices >= 16) {
+    if (++g_slices == 15) g_count_entries = true;   // the last slice: which functions the loop enters
+    if (g_slices >= 16) {
         // the registers that usually name what it waits on (an object in $s0/$a0)
+        auto word = [](std::uint32_t a) { return a + 4 <= kRamSize ? load<std::uint32_t>(g_ram + a) : slow_ld32(a); };
         std::fprintf(stderr, "eeref: spinning with s0 %08X a0 %08X v0 %08X; [s0+0x18..0x24] %08X %08X %08X %08X\n",
-                     c.r[16].w[0], c.r[4].w[0], c.r[2].w[0], slow_ld32(c.r[16].w[0] + 0x18), slow_ld32(c.r[16].w[0] + 0x1C),
-                     slow_ld32(c.r[16].w[0] + 0x20), slow_ld32(c.r[16].w[0] + 0x24));
+                     c.r[16].w[0], c.r[4].w[0], c.r[2].w[0], word(c.r[16].w[0] + 0x18), word(c.r[16].w[0] + 0x1C),
+                     word(c.r[16].w[0] + 0x20), word(c.r[16].w[0] + 0x24));
+        std::vector<std::pair<std::uint64_t, std::uint32_t>> top;
+        for (auto &[addr, e] : g_entries) top.push_back({e.n, addr});
+        std::sort(top.rbegin(), top.rend());
+        for (std::size_t k = 0; k < top.size() && k < 12; ++k)
+            std::fprintf(stderr, "eeref:   entered %08X %llu times in the last slice (last from %08X)\n", top[k].second,
+                         static_cast<unsigned long long>(top[k].first), g_entries[top[k].second].ra);
         stop(c, c.pc, "spinning");
     }
     return g_halted;
@@ -164,9 +183,15 @@ void breakpoint(Cpu &c, std::uint32_t pc) { stop(c, pc, "break"); }
 void trap(Cpu &c, std::uint32_t pc) { stop(c, pc, "trap"); }
 void probe(Cpu &, std::uint32_t) {}
 
-std::uint32_t mfc0(Cpu &c, std::uint32_t reg, std::uint32_t) { return reg == 12 ? 0x10001u : c.cop0[reg & 31]; }
-void mtc0(Cpu &c, std::uint32_t reg, std::uint32_t value) { c.cop0[reg & 31] = value; }
-void set_interrupts(Cpu &, bool) {}
+// Status (cop0 12): interrupts enabled (EIE, bit 16) until a di. The SDK's DIntr (005B72A8) repeats di until
+// Status reads back with EIE clear, so a constant enabled Status kept it spinning
+std::uint32_t g_status = 0x10001u;
+std::uint32_t mfc0(Cpu &c, std::uint32_t reg, std::uint32_t) { return reg == 12 ? g_status : c.cop0[reg & 31]; }
+void mtc0(Cpu &c, std::uint32_t reg, std::uint32_t value) {
+    if (reg == 12) g_status = value;
+    else c.cop0[reg & 31] = value;
+}
+void set_interrupts(Cpu &, bool enable) { g_status = enable ? g_status | 0x10000u : g_status & ~0x10000u; }
 std::uint32_t eret(Cpu &c) { return c.cop0[14]; }
 bool cpcond0(Cpu &) { return true; }
 
@@ -506,6 +531,8 @@ int main(int argc, char **argv) {
         dispatch(c, 0, 0);
     }
     const bool returned = c.pc == kReturn && !g_halted;
+    if (g_halted && (c.pc & kUnwind))   // a preempted loop leaves its branch target here (stop() saw a stale pc)
+        std::fprintf(stderr, "eeref: halted in the loop at %08X (ra %08X)\n", c.pc & ~kUnwind, c.r[31].w[0]);
 
     std::printf("%08X call %u (VBlank %u): original %s\n", pre.h.addr, pre.h.index, pre.h.vblank,
                 returned ? "returned" : "did NOT return");
