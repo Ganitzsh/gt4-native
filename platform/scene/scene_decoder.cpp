@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace gt4::scene {
@@ -315,7 +317,18 @@ void SceneDecoder::closeInstance() {
         return;
     }
     const InstanceData& d = frame_->instances[instance_];
-    if (d.runs != d.items) ++frame_->counters.itemsMismatch;   // exactly `items` kBatchRun records follow (a.5 3)
+    if (d.runs != d.items) {   // exactly `items` kBatchRun records follow (a.5 3)
+        ++frame_->counters.itemsMismatch;
+        // GT4_SCENE_DEBUG=1 (debugging): the first few, with the Cmd and its view
+        static const bool debug = [] { const char* e = std::getenv("GT4_SCENE_DEBUG"); return e && e[0] == '1'; }();
+        static int shown = 0;
+        if (debug && shown < 8) {
+            ++shown;
+            const ViewData* v = d.view && d.view <= frame_->views.size() ? &frame_->views[d.view - 1] : nullptr;
+            std::fprintf(stderr, "scene: frame %u instance %u (Cmd %08x, view %u role %d pass %u): %u items, %u runs\n", frame_->frame,
+                         d.serial, d.cmd, d.view, v ? int(v->role) : -1, v ? v->pass : 0u, unsigned(d.items), unsigned(d.runs));
+        }
+    }
     instance_ = -1;
     runInstance_ = -1;
 }

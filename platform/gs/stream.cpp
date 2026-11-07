@@ -809,6 +809,19 @@ std::string GraphicsStream::describe() const {
         << " GS reads, " << counters.path3Held << " PATH3 records held by MSKPATH3 (" << counters.path3ForcedAtVsync
         << " released at VSYNC); model packets: " << vif1.modelStats.decoded << " decoded, " << vif1.modelStats.replayed << " replayed, "
         << vif1.modelStats.uncacheable << " not kept; 3D batches on the GPU: " << counters.modelBatches;
+    if (sceneDecoder_.seen()) {   // the scene records' counters (CONTRACTS.md a.7), totals of the finished frames
+        const scene::SceneCounters& s = sceneDecoder_.totals();
+        out << "; scene: " << s.records << " records, " << s.frames << " frames (" << s.framesUnclosed << " unclosed, "
+            << s.countsMismatch << " counts mismatched, " << s.begins << " FrameBegins), " << s.views << " views (" << s.viewsNested << " nested, "
+            << s.viewEndWithoutBegin << " ends without begin, " << s.viewsUnclosed << " unclosed), " << s.projections
+            << " projections (" << s.projectionUnknown << " unknown), " << s.instances << " instances ("
+            << s.instancesWithoutView << " without a view, " << s.itemsMismatch << " items mismatched), " << s.jobsTagged
+            << " jobs tagged (" << s.jobsUntaggedInView << " untagged in a view), matrices " << s.matrixChecked << " checked, "
+            << s.matrixMismatch << " mismatched (largest " << s.matrixMaxError << "), " << s.viewportMismatch
+            << " viewports mismatched, " << s.guardUnexpected << " guards unexpected, cameras " << s.cameraChecked
+            << " checked, " << s.cameraMismatch << " mismatched; " << s.bad << " bad, " << s.versionUnknown << " version unknown, "
+            << s.unknownKind << " kind unknown, " << s.outsideFrame << " outside a frame";
+    }
     if (!vif1.lastWarning.empty()) out << "; last VIF warning: " << vif1.lastWarning;
     return out.str();
 }
