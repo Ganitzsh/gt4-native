@@ -64,6 +64,7 @@ public:
     const GpuInfo& gpu() const;
     double gpuMilliseconds() const;          // GPU time of the last finished frame (0 if unknown)
     gt4::GsnScene::Counters sceneCounters() const;   // the native renderer's running totals (hitch log)
+    std::string textureHeapSummary() const;          // its texture memory blocks (hitch log)
     double averageGpuMilliseconds() const;   // mean GPU time over every timed frame so far
     std::string pipelineDescription() const;
 

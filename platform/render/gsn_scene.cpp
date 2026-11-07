@@ -139,6 +139,8 @@ struct GsnScene::Impl {
     std::map<std::tuple<uint32_t, uint32_t, uint32_t>, std::vector<vk::Image>> texturePool;   // (width, height, levels)
     size_t pooledTextures = 0;
     static constexpr size_t kMaxPooledTextures = 256;
+    static constexpr size_t kDestroysPerSweep = 64;
+    vk::ImageHeap textureHeap;   // the textures' memory (vk.h); destroyed after them (~Impl)
     void retireTexture(vk::Image& image) {
         if (image.valid()) textureGraveyard.emplace_back(uploads, image);
         image = vk::Image{};
@@ -394,6 +396,7 @@ struct GsnScene::Impl {
         for (auto& [when, image] : textureGraveyard) vk::destroy(device, image);
         for (auto& [key, images] : texturePool)
             for (vk::Image& image : images) vk::destroy(device, image);
+        textureHeap.destroy(device);
         vk::destroy(device, blank);
         vk::destroy(device, feedback);
         vk::destroy(device, scratchDepth);
@@ -580,6 +583,9 @@ struct GsnScene::Impl {
                 ++it;
             }
         }
+        // At most kDestroysPerSweep images destroyed a submission: a burst retired (a catch-up's textures, 1000 and
+        // more) goes over the next frames instead of in one (one sweep took 3 s).
+        size_t destroyed = 0;
         for (auto it = textureGraveyard.begin(); it != textureGraveyard.end();) {
             if (it->first + kSlots + 1 > uploads) {
                 ++it;
@@ -589,8 +595,12 @@ struct GsnScene::Impl {
             if (pooledTextures < kMaxPooledTextures) {
                 texturePool[{image.extent.width, image.extent.height, image.mips}].push_back(image);
                 ++pooledTextures;
-            } else {
+            } else if (destroyed < kDestroysPerSweep) {
                 vk::destroy(device, image);
+                ++destroyed;
+            } else {
+                ++it;
+                continue;
             }
             it = textureGraveyard.erase(it);
         }
@@ -626,6 +636,8 @@ struct GsnScene::Impl {
                 desc.mips = t.levels > 1 ? t.levels : g.generated;
                 desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
                 desc.name = "gsn texture";
+                desc.heap = &textureHeap;   // (a burst of new textures: no allocation each)
+                desc.mipViews = false;      // (its mips are made by blits: no view of each)
                 auto pooled = texturePool.find({t.width, t.height, desc.mips});
                 if (pooled != texturePool.end() && !pooled->second.empty()) {
                     g.image = pooled->second.back();   // (its contents are discarded below)
@@ -2220,6 +2232,8 @@ void GsnScene::addFrames(std::vector<gsn::FrameList>& lists) {
 }
 
 bool GsnScene::hasFrame() const { return impl->any; }
+std::string GsnScene::textureHeapSummary() const { return impl->textureHeap.summary(); }
+
 GsnScene::Counters GsnScene::counters() const {
     Counters c = impl->counters;
     c.framesSkipped = impl->framesSkipped;

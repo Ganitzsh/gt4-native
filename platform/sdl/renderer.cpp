@@ -1023,6 +1023,7 @@ void Renderer::takeReadAnswers(std::vector<gt4::GsnScene::ReadAnswer>& out) {
 }
 const GpuInfo& Renderer::gpu() const { return impl->info; }
 double Renderer::gpuMilliseconds() const { return impl->gpuMs; }
+std::string Renderer::textureHeapSummary() const { return impl->gsnScene ? impl->gsnScene->textureHeapSummary() : std::string(); }
 gt4::GsnScene::Counters Renderer::sceneCounters() const { return impl->gsnScene ? impl->gsnScene->counters() : gt4::GsnScene::Counters{}; }
 double Renderer::averageGpuMilliseconds() const { return impl->gpuSamples ? impl->gpuMsTotal / static_cast<double>(impl->gpuSamples) : 0.0; }
 std::string Renderer::pipelineDescription() const { return impl->pipeline->describe(); }

@@ -1103,7 +1103,8 @@ int run(const Options& options) {
                         if (ms >= 100.0)
                             stages = "; " + std::to_string(passesWithoutFrame) + " passes without a new frame, " +
                                      std::to_string(drawsWithoutPresent) + " draws without a present; stages: " +
-                                     gt4::cpuprofile::busiest(stagesBefore, 5.0, 8);
+                                     gt4::cpuprofile::busiest(stagesBefore, 5.0, 8) + "; texture heap " +
+                                     renderer->textureHeapSummary();
                         std::printf("hitch: %.1f ms since the last present; GPU %.2f ms; %llu frames skipped; "
                                     "%llu textures (%llu KB), %llu new targets, %llu pipelines created; the game waited %u times (%u ms)%s\n",
                                     ms, renderer->gpuMilliseconds(),

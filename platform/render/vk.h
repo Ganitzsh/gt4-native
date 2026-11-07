@@ -6,6 +6,7 @@
 #include <array>
 #include <cstdint>
 #include <initializer_list>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -30,6 +31,8 @@ struct Device {
     uint32_t maxSamples(uint32_t requested) const;
 };
 
+class ImageHeap;
+
 struct ImageDesc {
     VkFormat format = VK_FORMAT_R16G16B16A16_SFLOAT;
     VkExtent2D extent{1, 1};
@@ -39,11 +42,15 @@ struct ImageDesc {
     VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
     bool cube = false;
     const char* name = "";
+    ImageHeap* heap = nullptr;   // memory carved from the heap's blocks (else its own allocation; also when it does not fit)
+    bool mipViews = true;        // a view per mip as well (sampled, storage or colour images with mips)
 };
 
 struct Image {
     VkImage image = VK_NULL_HANDLE;
-    VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;         // its own, or a heap's block (heap set)
+    ImageHeap* heap = nullptr;
+    VkDeviceSize offset = 0;                        // in the heap's block
     VkImageView view = VK_NULL_HANDLE;              // all mips / layers
     // One view per mip (storage writes, per-mip reads). For cube images these are 2D arrays of the 6 faces.
     std::vector<VkImageView> mipViews;
@@ -64,6 +71,35 @@ struct Buffer {
     VkDeviceMemory memory = VK_NULL_HANDLE;
     void* mapped = nullptr;
     VkDeviceSize size = 0;
+};
+
+// Device memory for many small images (a texture stream): ranges of 64 MiB blocks, first fit, merged when freed. One
+// allocation per image cost 1-3 ms on the desktop's driver (a burst of 995 new textures: 1.4 s; freeing them: 3 s).
+// The render thread's alone (no lock). Destroy every image in it before the heap. Images only, all of them optimal
+// tiling (createImage): no linear resource shares a block, so bufferImageGranularity does not apply; each range is
+// aligned to its image's own alignment, and each memory type has its own blocks.
+class ImageHeap {
+public:
+    explicit ImageHeap(VkDeviceSize blockSize = 64ull << 20) : blockSize(blockSize) {}
+    // False when the image does not fit a block (it gets its own allocation then).
+    bool allocate(const Device& device, const VkMemoryRequirements& requirements, uint32_t memoryType,
+                  VkDeviceMemory& memory, VkDeviceSize& offset);
+    void release(const Device& device, VkDeviceMemory memory, VkDeviceSize offset);
+    void destroy(const Device& device);
+    size_t blockCount() const { return blocks.size(); }
+    // "2 blocks of 64 MiB: free 12.3 MiB (largest 2.0), free 63.9 MiB (largest 63.9); 3 own": fragmentation in a log line
+    std::string summary() const;
+    uint64_t ownAllocations = 0;   // images that did not fit a block (their own allocation), so far
+
+private:
+    struct Block {
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        uint32_t type = 0;
+        std::map<VkDeviceSize, VkDeviceSize> free;   // offset -> size
+        std::map<VkDeviceSize, VkDeviceSize> used;
+    };
+    VkDeviceSize blockSize;
+    std::vector<Block> blocks;
 };
 
 Image createImage(const Device& device, const ImageDesc& desc);

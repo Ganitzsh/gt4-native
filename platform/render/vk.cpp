@@ -1,7 +1,9 @@
 #include "vk.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
+#include <iterator>
 #include <stdexcept>
 
 namespace gt4::vk {
@@ -79,16 +81,21 @@ Image createImage(const Device& device, const ImageDesc& desc) {
     check(vkCreateImage(device.device, &info, nullptr, &image.image), "vkCreateImage");
     VkMemoryRequirements requirements{};
     vkGetImageMemoryRequirements(device.device, image.image, &requirements);
-    VkMemoryDedicatedAllocateInfo dedicated{};
-    dedicated.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
-    dedicated.image = image.image;
-    VkMemoryAllocateInfo allocation{};
-    allocation.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocation.pNext = &dedicated;
-    allocation.allocationSize = requirements.size;
-    allocation.memoryTypeIndex = device.memoryType(requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    check(vkAllocateMemory(device.device, &allocation, nullptr, &image.memory), "vkAllocateMemory(image)");
-    check(vkBindImageMemory(device.device, image.image, image.memory, 0), "vkBindImageMemory");
+    const uint32_t type = device.memoryType(requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (desc.heap && desc.heap->allocate(device, requirements, type, image.memory, image.offset)) {
+        image.heap = desc.heap;
+    } else {
+        VkMemoryDedicatedAllocateInfo dedicated{};
+        dedicated.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
+        dedicated.image = image.image;
+        VkMemoryAllocateInfo allocation{};
+        allocation.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocation.pNext = &dedicated;
+        allocation.allocationSize = requirements.size;
+        allocation.memoryTypeIndex = type;
+        check(vkAllocateMemory(device.device, &allocation, nullptr, &image.memory), "vkAllocateMemory(image)");
+    }
+    check(vkBindImageMemory(device.device, image.image, image.memory, image.offset), "vkBindImageMemory");
     VkImageViewCreateInfo view{};
     view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     view.image = image.image;
@@ -96,7 +103,7 @@ Image createImage(const Device& device, const ImageDesc& desc) {
     view.format = desc.format;
     view.subresourceRange = {image.aspect, 0, desc.mips, 0, image.layers};
     check(vkCreateImageView(device.device, &view, nullptr, &image.view), "vkCreateImageView");
-    const bool perMip = desc.mips > 1 || desc.cube;
+    const bool perMip = (desc.mips > 1 && desc.mipViews) || desc.cube;
     if (perMip && (desc.usage & (VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT))) {
         image.mipViews.resize(desc.mips);
         for (uint32_t mip = 0; mip < desc.mips; ++mip) {
@@ -113,8 +120,99 @@ void destroy(const Device& device, Image& image) {
     for (auto view : image.mipViews) if (view) vkDestroyImageView(device.device, view, nullptr);
     if (image.view) vkDestroyImageView(device.device, image.view, nullptr);
     if (image.image) vkDestroyImage(device.device, image.image, nullptr);
-    if (image.memory) vkFreeMemory(device.device, image.memory, nullptr);
+    if (image.heap) image.heap->release(device, image.memory, image.offset);
+    else if (image.memory) vkFreeMemory(device.device, image.memory, nullptr);
     image = Image{};
+}
+
+bool ImageHeap::allocate(const Device& device, const VkMemoryRequirements& requirements, uint32_t memoryType,
+                         VkDeviceMemory& memory, VkDeviceSize& offset) {
+    const VkDeviceSize size = requirements.size, align = std::max<VkDeviceSize>(requirements.alignment, 1);
+    if (size > blockSize / 4) {   // a large one: its own allocation (blocks stay dense)
+        ++ownAllocations;
+        return false;
+    }
+    auto fit = [&](Block& b) {
+        for (auto it = b.free.begin(); it != b.free.end(); ++it) {
+            const VkDeviceSize start = it->first, end = it->first + it->second;
+            const VkDeviceSize at = (start + align - 1) / align * align;
+            if (at + size > end) continue;
+            b.free.erase(it);
+            if (at > start) b.free[start] = at - start;
+            if (at + size < end) b.free[at + size] = end - (at + size);
+            b.used[at] = size;
+            memory = b.memory;
+            offset = at;
+            return true;
+        }
+        return false;
+    };
+    for (Block& b : blocks)
+        if (b.type == memoryType && fit(b)) return true;
+    Block b;
+    b.type = memoryType;
+    VkMemoryAllocateInfo allocation{};
+    allocation.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocation.allocationSize = blockSize;
+    allocation.memoryTypeIndex = memoryType;
+    if (vkAllocateMemory(device.device, &allocation, nullptr, &b.memory) != VK_SUCCESS) return false;   // (out of memory: own)
+    b.free[0] = blockSize;
+    blocks.push_back(std::move(b));
+    return fit(blocks.back());
+}
+
+void ImageHeap::release(const Device& device, VkDeviceMemory memory, VkDeviceSize offset) {
+    for (size_t i = 0; i < blocks.size(); ++i) {
+        Block& b = blocks[i];
+        if (b.memory != memory) continue;
+        auto used = b.used.find(offset);
+        if (used == b.used.end()) return;
+        VkDeviceSize start = offset, size = used->second;
+        b.used.erase(used);
+        // merged with the free ranges either side
+        auto next = b.free.lower_bound(start);
+        if (next != b.free.end() && next->first == start + size) {
+            size += next->second;
+            next = b.free.erase(next);
+        }
+        if (next != b.free.begin()) {
+            auto prev = std::prev(next);
+            if (prev->first + prev->second == start) {
+                start = prev->first;
+                size += prev->second;
+                b.free.erase(prev);
+            }
+        }
+        b.free[start] = size;
+        // An empty block goes when another one is empty too (one kept for the next burst).
+        if (b.used.empty()) {
+            for (size_t k = 0; k < blocks.size(); ++k)
+                if (k != i && blocks[k].used.empty() && blocks[k].type == b.type) {
+                    vkFreeMemory(device.device, b.memory, nullptr);
+                    blocks.erase(blocks.begin() + static_cast<std::ptrdiff_t>(i));
+                    break;
+                }
+        }
+        return;
+    }
+}
+
+std::string ImageHeap::summary() const {
+    std::string out = std::to_string(blocks.size()) + " blocks of " + std::to_string(blockSize >> 20) + " MiB";
+    char text[64];
+    for (size_t i = 0; i < blocks.size(); ++i) {
+        VkDeviceSize free = 0, largest = 0;
+        for (const auto& [at, size] : blocks[i].free) free += size, largest = std::max(largest, size);
+        std::snprintf(text, sizeof text, "%s free %.1f MiB (largest %.1f)", i ? "," : ":", double(free) / 1048576.0,
+                      double(largest) / 1048576.0);
+        out += text;
+    }
+    return out + "; " + std::to_string(ownAllocations) + " own";
+}
+
+void ImageHeap::destroy(const Device& device) {
+    for (Block& b : blocks) vkFreeMemory(device.device, b.memory, nullptr);
+    blocks.clear();
 }
 
 Buffer createBuffer(const Device& device, VkDeviceSize size, VkBufferUsageFlags usage, bool hostVisible, bool hostCached) {
