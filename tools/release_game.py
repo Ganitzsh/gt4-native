@@ -44,6 +44,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 
 # Children start without a console window: each would get a console host of its own (the machine's process
 # rule, docs/modern/CAPTURES.md).
@@ -79,7 +80,9 @@ def stage(src, dst):
 
 def run(cmd):
     print("+", " ".join(cmd), flush=True)
+    start = time.time()
     subprocess.run(cmd, cwd=ROOT, check=True, **NO_WINDOW)
+    print(f"  ({time.time() - start:.0f} s)", flush=True)
 
 
 def failed_sources(census):

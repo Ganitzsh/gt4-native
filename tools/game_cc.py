@@ -894,7 +894,7 @@ def compiler_digest():
     """SHA-256 of the compiler's whole installation in WSL (driver, cc1, cc1plus, its own headers and libraries)."""
     script = ('set -e; g="%s"; d=$(dirname "$(dirname "$g")"); cd "$d"; '
               'find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum' % GCC)
-    p = subprocess.run(["wsl", "-e", "bash", "-c", script], capture_output=True, text=True)
+    p = subprocess.run(["wsl", "-e", "bash", "-c", script], capture_output=True, text=True, **NO_WINDOW)
     if p.returncode != 0 or len(p.stdout.split()[0]) != 64:
         raise SystemExit(f"cannot hash the compiler in WSL for the object cache: {p.stderr.strip()[-500:]} "
                          "(--no-cache builds without it)")
@@ -972,7 +972,7 @@ def main():
             if os.path.exists(o_path):
                 os.remove(o_path)
             key = cache.key(rel, data, profiles[prof], addresses.get(rel) or stem_address(rel)) if cache else None
-            rec = cache.get(key, o_path) if cache else None
+            rec = cache.get(key, o_path, os.path.join(out, "s", rel + ".s.err")) if cache else None
             if rec is not None:   # (compiled before from the same inputs: its object is written to o_path)
                 kept[rel] = dict(rec, cached=True)
                 continue
@@ -999,6 +999,8 @@ def main():
                 rec["category"] = classify_compile(rc, rec["first_error"] or "")
                 os.makedirs(os.path.dirname(s_path), exist_ok=True)
                 open(s_path + ".err", "w", encoding="utf-8", newline="\n").write(err)
+                if cache and rc not in (124, 137, -1):   # (refused by the compiler: kept; killed or lost: not)
+                    cache.put_refused(keys[i], rec, err)
             else:
                 os.makedirs(os.path.dirname(s_path), exist_ok=True)
                 open(s_path, "wb").write(asm)

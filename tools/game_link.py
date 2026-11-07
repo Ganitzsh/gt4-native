@@ -26,6 +26,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 # Children start without a console window: each would get a console host of its own (the machine's process
@@ -70,6 +71,16 @@ def chunked(items, path=lambda x: x, most=150, chars=24000):
     if current:
         out.append(current)
     return out
+
+
+_LAP = [time.time()]
+
+
+def lap(what):
+    """The time since the last lap, printed (where a link spends its time)."""
+    now = time.time()
+    print(f"  {what}: {now - _LAP[0]:.1f} s", flush=True)
+    _LAP[0] = now
 
 
 def mingw_env():
@@ -717,6 +728,7 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     nm_cache_load(a.out)
     rt_objs = compile_runtime(a.out) + compile_eeorig(a.out, a.eeorig)
+    lap("runtime compiled")
     exclude = set()
     if a.exclude:
         exclude = {l.strip() for l in open(a.exclude) if l.strip() and not l.startswith("#")}
@@ -770,6 +782,7 @@ def main():
             print(f"{len(stale)} provisional drafts left out: their functions now compile from source")
             game_objs = [o for o in game_objs if o not in stale]
     game_objs = export_extra_functions(a.out, game_objs)
+    lap("objects chosen (nm)")
     game_objs, renamed = rename_collisions(a.out, game_objs)
     if renamed:
         print(f"renamed {len(renamed)} game symbols that clash with host libraries (e.g. "
@@ -799,6 +812,7 @@ def main():
         o = os.path.join(gen, c[:-2] + ".o")
         run([tool("gcc"), "-c", "-O1", os.path.join(gen, c), "-o", o], env=mingw_env())
         gen_objs.append(o)
+    lap("tables generated and compiled")
     script = link_script(a.out)
     exe = os.path.join(a.out, "gt4_game.exe")
     rsp = os.path.join(gen, "objects.rsp")
@@ -824,6 +838,7 @@ def main():
         with open(os.path.join(a.out, "object_cache.jsonl"), "a", encoding="utf-8", newline="\n") as f:
             f.write(json.dumps({"nm_from_cache": nm_content().hits, "nm_run": nm_content().runs}) + "\n")
     run(cmd, env=mingw_env())
+    lap("linked")
     with open(os.path.join(a.out, "LINK_REPORT.txt"), "w") as f:
         f.write(f"game objects: {len(game_objs)} ({len(dropped)} left out for runtime replacements)\n")
         f.write(f"runtime replacements: {len(replaced)}\n")

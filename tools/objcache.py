@@ -8,8 +8,9 @@ a reader sees a whole entry or none, and any number of checkouts can use the cac
 key write the same bytes.
 
 The folder: GT4_OBJ_CACHE, else %LOCALAPPDATA%/gt4-native/objcache (~/.cache/gt4-native/objcache elsewhere).
-GT4_OBJ_CACHE=0 (or --no-cache) builds without it. Only objects that compiled and assembled are kept: a source
-that fails is compiled again each time.
+GT4_OBJ_CACHE=0 (or --no-cache) builds without it. Kept: objects that compiled and assembled, and the sources the
+compiler refused (their census record and error output: the same inputs fail the same way). A compile killed
+for its time or an assembler failure is not kept: tried again each time.
 """
 import hashlib
 import json
@@ -109,24 +110,40 @@ class ObjectCache:
     def key(self, rel, source, flags, address):
         return digest(self.base, rel, source, flags, "" if address is None else f"{address:08X}")
 
-    def get(self, key, o_path):
-        """The census record of a kept object, with the object written to o_path; None when not kept."""
-        record = self.store.get("obj", key, "json")
-        data = self.store.get("obj", key, "o") if record is not None else None
-        if data is None or hashlib.sha256(data).hexdigest() != json.loads(record)["sha256"]:
+    def get(self, key, o_path, err_path):
+        """The census record of a kept result, None when not kept. An object is written to o_path; a source the
+        compiler refused has its error output written to err_path instead (and no object)."""
+        raw = self.store.get("obj", key, "json")
+        if raw is None:
             return None
-        os.makedirs(os.path.dirname(o_path), exist_ok=True)
-        with open(o_path, "wb") as f:
-            f.write(data)
+        entry = json.loads(raw)
+        if entry.get("sha256"):
+            data = self.store.get("obj", key, "o")
+            if data is None or hashlib.sha256(data).hexdigest() != entry["sha256"]:
+                return None
+            os.makedirs(os.path.dirname(o_path), exist_ok=True)
+            with open(o_path, "wb") as f:
+                f.write(data)
+        else:
+            os.makedirs(os.path.dirname(err_path), exist_ok=True)
+            with open(err_path, "w", encoding="utf-8", newline="\n") as f:
+                f.write(entry.get("err", ""))
         self.hits += 1
-        return json.loads(record)["record"]
+        return entry["record"]
 
     def put(self, key, o_path, record):
+        """An object that compiled and assembled."""
         with open(o_path, "rb") as f:
             data = f.read()
         self.store.put("obj", key, "o", data)
         self.store.put("obj", key, "json", json.dumps(
             {"sha256": hashlib.sha256(data).hexdigest(), "record": record}, sort_keys=True).encode())
+        self.stored += 1
+
+    def put_refused(self, key, record, err):
+        """A source the compiler refused (an error, not a timeout): the same inputs are refused again."""
+        self.store.put("obj", key, "json", json.dumps(
+            {"sha256": None, "record": record, "err": err}, sort_keys=True).encode())
         self.stored += 1
 
 
