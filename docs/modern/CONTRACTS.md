@@ -548,12 +548,22 @@ read, then the one that receives `FrameEnd`. (Race route: 38 reads in about 4900
       std::vector<gfx::scene::Emitter> emitters;  // frame-wide records that arrived before this ViewEnd
       std::vector<gfx::scene::Vehicle> vehicles;  //   (later ones are not available to a partial substitution)
   };
-  // FrameList gains: std::vector<std::shared_ptr<const SceneView>> views;   (SceneViews pooled, below)
+  struct FrameList::ViewOnList {                  // nested, platform/gsnative/gs_frontend.h
+      std::shared_ptr<const SceneView> package;   // made by the decoder at ViewEnd; const once shared
+      uint32_t target = 0, depth = 0;             // the front end's binding, filled when the package arrives
+      bool splitTargets = false;                  //   (after its ViewEnd, so every tagged draw is bound)
+  };
+  // FrameList gains: std::vector<ViewOnList> views;   (SceneViews pooled, below)
   ```
+  - The package can't hold the binding: it is made before the front end binds any of the view's draws, and it
+    is const once shared. So the binding goes beside it on the list.
+  - Packages are made only while the front end's scene split is on (no consumer otherwise). A list
+    the renderer skips drops its scene and packages; that is counted (`listsSkippedWithScene`, reported in the
+    host summary; until that lands, the running count in carryOver's log line).
   - `ViewData` gains `bool valid`. The decoder keeps per-view error counts and sets it at `ViewEnd`: the
     instances match `ViewEnd::instances`, and the view has no item, matrix, viewport or `projectionUnknown`
     errors. Every job of the view has been checked by then, because `job()` runs before the target sees the
-    job. `viewSplitTargets` is the front end's own check, made when the view is bound.
+    job. `viewSplitTargets` is the front end's own check (`ViewOnList::splitTargets`).
   - The copies cost about 80 KB per main view per frame (about 260 instances), tens of microseconds on the GS
     thread. A lazy copy is not possible, since the decoder runs ahead of the front end. `SceneView` objects are
     pooled: `recycleFrameList` returns the ones no one else still holds (`use_count() == 1`, so the render thread
