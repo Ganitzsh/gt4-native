@@ -10,6 +10,7 @@
 #include "disc_setup.h"
 #include "display.h"
 #include "gs_host.h"
+#include "cpu_profile.h"
 #include "ps2_pad.h"
 #include "chord_guard.h"
 #include "renderer.h"
@@ -722,12 +723,16 @@ int run(const Options& options) {
     std::vector<gt4::GsnScene::ReadAnswer> readAnswers;
     auto sendReadAnswers = [&] {
         if (!gs) return;
+        GT4_STAGE_SCOPE("main: the game's asynchronous reads");
         renderer->takeReadAnswers(readAnswers);
         for (const auto& a : readAnswers) gs->answerRead(a.id, a.qwc, a.pixels);
         readAnswers.clear();
     };
     uint64_t freshShown = 0;   // presents that showed a frame the game drew since the one before
     bool freshPending = false;
+    // since the last present (the hitch log): loop passes that found no new frame of the game, draws that presented nothing
+    uint32_t passesWithoutFrame = 0, drawsWithoutPresent = 0;
+    std::vector<uint64_t> stagesBefore;   // the stages' totals at the last present (cpuprofile::busiest)
     double perfGpu = 0.0;   // GPU milliseconds of the frames presented so far
     while (running) {
         for (; nextScriptedKey < scriptedKeys.size() && scriptedKeys[nextScriptedKey].frame <= frames; ++nextScriptedKey) {
@@ -736,6 +741,10 @@ int run(const Options& options) {
             key.key.key = scriptedKeys[nextScriptedKey].key;
             key.key.down = true;
             SDL_PushEvent(&key);
+        }
+        {
+            GT4_STAGE_SCOPE("main: window events");   // (the polls below pump again: little left to do then)
+            SDL_PumpEvents();
         }
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
@@ -839,12 +848,18 @@ int run(const Options& options) {
         static const bool everyRefresh = [] { const char* e = std::getenv("GT4_PRESENT_EVERY_REFRESH"); return e && std::strcmp(e, "0"); }();
         const bool followGame = gs && gs->live() && windowed && !lockstep && !everyRefresh && !settings.frameInterpolation &&
                                 settings.fpsLimit == 0 && !menu.isOpen();
-        const bool freshFrame = !followGame || gs->waitNativeFrames(30);
+        bool freshFrame;
+        {
+            GT4_STAGE_SCOPE("main: waiting for the game's frames");
+            freshFrame = !followGame || gs->waitNativeFrames(30);
+        }
+        if (!freshFrame) ++passesWithoutFrame;
         bool servedRead = false;   // a read of drawn pixels answered in this pass
         // The game's frames: in lockstep replay one VBlank per rendered frame; otherwise the newest one.
         if (gs) {
             if (lockstep) gs->advance();
             if (gs->takeNativeFrames(nativeFrames)) {
+                GT4_STAGE_SCOPE("main: frames to the renderer");
                 for (const auto& list : nativeFrames) {
                     freshPending = freshPending || list.displayed;
                     if (list.displayed) newestAdded = std::max(newestAdded, list.vblank);
@@ -855,6 +870,7 @@ int run(const Options& options) {
             // to it are drawn now and the pixels read back.
             gt4::gsn::ReadRequest read;
             if (gs->takeReadRequest(read)) {
+                GT4_STAGE_SCOPE("main: a read the game waits for");
                 servedRead = true;
                 if (gs->takeNativeFrames(nativeFrames)) renderer->addNativeFrames(nativeFrames);
                 std::vector<uint8_t> pixels;
@@ -1081,15 +1097,25 @@ int run(const Options& options) {
                     if (now - hitch.second >= frequency) hitch.second = now, hitch.lines = 0;
                     if ((ms > 25.0 || skipped || waits != hitch.waits) && hitch.lines < 20) {
                         ++hitch.lines;
+                        // A long one (100 ms and more) also names where the threads spent the time since the last
+                        // present: the main loop, the render calls, the GS thread and the front end (GT4_STAGE_SCOPE).
+                        std::string stages;
+                        if (ms >= 100.0)
+                            stages = "; " + std::to_string(passesWithoutFrame) + " passes without a new frame, " +
+                                     std::to_string(drawsWithoutPresent) + " draws without a present; stages: " +
+                                     gt4::cpuprofile::busiest(stagesBefore, 5.0, 8);
                         std::printf("hitch: %.1f ms since the last present; GPU %.2f ms; %llu frames skipped; "
-                                    "%llu textures (%llu KB), %llu new targets, %llu pipelines created; the game waited %u times (%u ms)\n",
+                                    "%llu textures (%llu KB), %llu new targets, %llu pipelines created; the game waited %u times (%u ms)%s\n",
                                     ms, renderer->gpuMilliseconds(),
                                     static_cast<unsigned long long>(skipped), static_cast<unsigned long long>(c.textures - hitch.c.textures),
                                     static_cast<unsigned long long>((c.textureBytes - hitch.c.textureBytes) / 1024),
                                     static_cast<unsigned long long>(c.targets - hitch.c.targets),
-                                    static_cast<unsigned long long>(c.pipelines - hitch.c.pipelines), waits - hitch.waits, waitMs - hitch.waitMs);
+                                    static_cast<unsigned long long>(c.pipelines - hitch.c.pipelines), waits - hitch.waits,
+                                    waitMs - hitch.waitMs, stages.c_str());
                     }
                 }
+                if (gt4::cpuprofile::stagesMeasured()) gt4::cpuprofile::busiest(stagesBefore, 1e18, 0);   // from this present on
+                passesWithoutFrame = drawsWithoutPresent = 0;
                 hitch.at = now, hitch.c = c, hitch.waits = waits, hitch.waitMs = waitMs;
             }
             if (session)
@@ -1101,6 +1127,7 @@ int run(const Options& options) {
                 running = false;
             if (options.smoke) SDL_Delay(8);
         } else {
+            ++drawsWithoutPresent;
             SDL_Delay(10);
         }
         // Frame-rate cap (display.fps_limit): paces presentation only; the tick rate above is unaffected.

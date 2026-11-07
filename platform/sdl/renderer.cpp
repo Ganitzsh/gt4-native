@@ -788,9 +788,15 @@ struct Renderer::Impl {
         if (displayMoved) checkPresentation();
         if (!headless && (presentedVsync != settings.vsync || presentedBits != settings.outputBits || wantedHdr != settings.hdr)) resized = true;
         if (headless && presentedBits != settings.outputBits) resized = true;
-        if (resized && !recreateTarget()) return false;
+        if (resized) {
+            GT4_STAGE_SCOPE("render: new swapchain or targets");
+            if (!recreateTarget()) return false;
+        }
         Frame& frame = frames[slot];
-        check(vkWaitForFences(device.device, 1, &frame.fence, VK_TRUE, UINT64_MAX), "vkWaitForFences");
+        {
+            GT4_STAGE_SCOPE("render: waiting for the GPU (frame slot)");
+            check(vkWaitForFences(device.device, 1, &frame.fence, VK_TRUE, UINT64_MAX), "vkWaitForFences");
+        }
         readTimestamps(frame, slot);
         // The game's asynchronous reads copied in frames the GPU has finished (this slot's, and the other's if done).
         if (gsnScene)
@@ -799,6 +805,7 @@ struct Renderer::Impl {
         uint32_t index = 0;
         bool suboptimal = false;
         if (!headless) {
+            GT4_STAGE_SCOPE("render: acquiring a swapchain image");
             VkResult result = vkAcquireNextImageKHR(device.device, swapchain, 100000000, frame.acquired, VK_NULL_HANDLE, &index);
             if (result == VK_TIMEOUT || result == VK_NOT_READY) return false;
             if (result == VK_ERROR_OUT_OF_DATE_KHR) { resized = true; return false; }
@@ -814,9 +821,12 @@ struct Renderer::Impl {
             target.access = VK_ACCESS_2_NONE;
         }
         gt4::SceneSource& active = gameFrame ? static_cast<gt4::SceneSource&>(*gsnScene) : static_cast<gt4::SceneSource&>(*scene);
-        if (sceneSwitched) { vkDeviceWaitIdle(device.device); pipeline.reset(); pipeline = std::make_unique<gt4::FramePipeline>(device, pool);
+        if (sceneSwitched) { GT4_STAGE_SCOPE("render: new scene source"); vkDeviceWaitIdle(device.device); pipeline.reset(); pipeline = std::make_unique<gt4::FramePipeline>(device, pool);
                              pipeline->prepareOutput(format, srgbFormat, static_cast<uint32_t>(presentedBits)); sceneSwitched = false; }
-        pipeline->configure(settings, extent, active);
+        {
+            GT4_STAGE_SCOPE("render: pipeline setup (targets)");
+            pipeline->configure(settings, extent, active);
+        }
         // HDR10 output when the swapchain is (display.hdr on a display that offers it).
         pipeline->setHdr(presentedHdr ? settings.hdrPaperWhite : 0.0f, settings.hdrPeak);
         overlay->setHdr(presentedHdr ? settings.hdrPaperWhite : 0.0f);
@@ -871,8 +881,12 @@ struct Renderer::Impl {
         }
         scene->setControls(stick, action);
         scene->apply(settings);
-        const gt4::SceneView view = pipeline->beginFrame(slot, frameCounter);
-        composeOverlay(slot);
+        gt4::SceneView view;
+        {
+            GT4_STAGE_SCOPE("render: frame begin and overlay");
+            view = pipeline->beginFrame(slot, frameCounter);
+            composeOverlay(slot);
+        }
         check(vkResetCommandBuffer(frame.command, 0), "vkResetCommandBuffer");
         VkCommandBufferBeginInfo begin{};
         begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -882,7 +896,10 @@ struct Renderer::Impl {
             vkCmdResetQueryPool(frame.command, timestamps, slot * 2, 2);
             vkCmdWriteTimestamp2(frame.command, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, timestamps, slot * 2);
         }
-        pipeline->record(frame.command, active, view, target, *overlay, deltaSeconds);
+        {
+            GT4_STAGE_SCOPE("render: recording (uploads, scene, effects)");
+            pipeline->record(frame.command, active, view, target, *overlay, deltaSeconds);
+        }
         const bool capturing = !capturePath.empty();
         if (capturing) recordCapture(frame.command, target);
         if (!headless) {
@@ -906,7 +923,10 @@ struct Renderer::Impl {
         submit.commandBufferCount = 1;
         submit.pCommandBuffers = &frame.command;
         check(vkResetFences(device.device, 1, &frame.fence), "vkResetFences");
-        check(vkQueueSubmit(device.queue, 1, &submit, frame.fence), "vkQueueSubmit");
+        {
+            GT4_STAGE_SCOPE("render: submitting");
+            check(vkQueueSubmit(device.queue, 1, &submit, frame.fence), "vkQueueSubmit");
+        }
         if (capturing) {
             check(vkWaitForFences(device.device, 1, &frame.fence, VK_TRUE, UINT64_MAX), "vkWaitForFences(capture)");
             saveCapture(target);
@@ -921,7 +941,11 @@ struct Renderer::Impl {
         present.swapchainCount = 1;
         present.pSwapchains = &swapchain;
         present.pImageIndices = &index;
-        const VkResult result = vkQueuePresentKHR(device.queue, &present);
+        VkResult result;
+        {
+            GT4_STAGE_SCOPE("render: presenting");
+            result = vkQueuePresentKHR(device.queue, &present);
+        }
         if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || suboptimal) resized = true;
         if (result == VK_ERROR_SURFACE_LOST_KHR) { recreateSurface(); resized = true; return true; }
         if (result != VK_ERROR_OUT_OF_DATE_KHR && result != VK_SUBOPTIMAL_KHR) check(result, "vkQueuePresentKHR");

@@ -1,5 +1,6 @@
 #include "pipeline.h"
 
+#include "../gs/cpu_profile.h"
 #include "fsr2.h"
 #include "gt4_shaders.h"
 #include "smaa_textures.h"
@@ -456,7 +457,10 @@ struct FramePipeline::Impl {
     vk::Image& depthImage() { return config.msaa > 1 ? depthResolved : sceneDepth; }
 
     void renderScene(VkCommandBuffer command, SceneSource& scene, const SceneView& view) {
-        scene.recordPrepass(command, view);
+        {
+            GT4_STAGE_SCOPE("render: the scene (game lists)");
+            scene.recordPrepass(command, view);
+        }
         vk::beginLabel(command, "scene");
         const bool ms = config.msaa > 1;
         vk::Image& color = ms ? msColor : sceneColor;
@@ -476,7 +480,10 @@ struct FramePipeline::Impl {
         depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         depthAttachment.clearValue.depthStencil = {0.0f, 0};   // reverse Z: far
         beginRendering(command, config.render, colors, 2, &depthAttachment);
-        scene.recordMain(command, view);
+        {
+            GT4_STAGE_SCOPE("render: the scene's main pass");
+            scene.recordMain(command, view);
+        }
         vkCmdEndRendering(command);
         vk::endLabel(command);
         if (ms) {

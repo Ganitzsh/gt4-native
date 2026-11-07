@@ -570,6 +570,7 @@ struct GsnScene::Impl {
 
     // Once per submission: retired images the frames in flight can no longer sample are destroyed.
     void sweepGraveyard() {
+        GT4_STAGE_SCOPE("render: retired images destroyed or pooled");
         ++uploads;
         for (auto it = graveyard.begin(); it != graveyard.end();) {
             if (it->first + kSlots + 1 <= uploads) {
@@ -604,13 +605,19 @@ struct GsnScene::Impl {
         for (const auto& t : frame.textures) bytes += VkDeviceSize(t.pixels.size()) * 4;
         counters.textures += frame.textures.size();
         counters.textureBytes += bytes - 4;
-        vk::Buffer& stage = buffer(staging, slot, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+        vk::Buffer* stagePtr;
+        {
+            GT4_STAGE_SCOPE("render: texture staging buffer");
+            stagePtr = &buffer(staging, slot, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+        }
+        vk::Buffer& stage = *stagePtr;
         VkDeviceSize offset = 0;
         vk::Barriers b;
         std::vector<std::pair<gsn::TextureImage*, VkDeviceSize>> copies;
         for (auto& t : frame.textures) {
             GpuTexture& g = textures[t.id];
             if (!g.image.valid() || g.width != t.width || g.height != t.height || g.levels != t.levels) {
+                GT4_STAGE_SCOPE("render: texture images made (pooled or new)");
                 retireTexture(g.image);
                 vk::ImageDesc desc;
                 desc.format = VK_FORMAT_R8G8B8A8_UNORM;
@@ -707,6 +714,7 @@ struct GsnScene::Impl {
 
     // After the frame's draws are recorded: its retired textures go to the graveyard.
     void retireTextures() {
+        GT4_STAGE_SCOPE("render: textures retired");
         for (const uint32_t id : frame.retiredTextures) {
             auto it = textures.find(id);
             if (it == textures.end()) continue;
@@ -2354,6 +2362,7 @@ void GsnScene::Impl::executePending(VkCommandBuffer command, uint32_t slot, VkEx
         const uint32_t wantedY = scaleSetting ? scaleSetting
                                               : std::clamp<uint32_t>(static_cast<uint32_t>(std::lround(extent.height / double(shownHeight))), 1, 8);
         if (wantedX != sx || wantedY != sy) {
+            GT4_STAGE_SCOPE("render: new scale (targets dropped)");
             vkDeviceWaitIdle(device.device);
             for (auto& [id, t] : targets) vk::destroy(device, t.image);
             targets.clear();
@@ -2378,6 +2387,7 @@ void GsnScene::Impl::executePending(VkCommandBuffer command, uint32_t slot, VkEx
         static const int throttle = [] { const char* e = std::getenv("GT4_GPU_THROTTLE_MS"); return e ? std::atoi(e) : 0; }();
         if (throttle > 0 && frame.displayed) std::this_thread::sleep_for(std::chrono::milliseconds(throttle));
         {
+            GT4_STAGE_SCOPE("render: the lists' targets");
             std::vector<uint32_t> created;
             for (const gsn::Target& t : frame.targets) {
                 const bool existed = targets.count(t.id) && targets[t.id].image.valid();
@@ -2389,10 +2399,16 @@ void GsnScene::Impl::executePending(VkCommandBuffer command, uint32_t slot, VkEx
             counters.targets += created.size();
         }
         mark(command, "new targets");
-        uploadTextures(command, slot);
+        {
+            GT4_STAGE_SCOPE("render: texture uploads");
+            uploadTextures(command, slot);
+        }
         mark(command, "texture uploads");
         tally("lists");
-        execute(command, slot);
+        {
+            GT4_STAGE_SCOPE("render: the lists' draws");
+            execute(command, slot);
+        }
         // The game's asynchronous reads at this list's end (it was cut there): the rectangle copied now, answered when
         // the GPU is done (a target gone: answered with zeros).
         for (const gsn::FrameList::Readback& rb : frame.readbacks) {

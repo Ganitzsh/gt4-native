@@ -385,7 +385,10 @@ private:
     void submit() {
         if (filling.empty()) return;
         std::unique_lock<std::mutex> lock(mutex);
-        idle.wait(lock, [&] { return queue.size() < 3; });
+        {
+            GT4_STAGE_SCOPE("GS thread: waiting for the front end");
+            idle.wait(lock, [&] { return queue.size() < 3; });
+        }
         queue.push_back(std::move(filling));
         if (!spare.empty()) {
             filling = std::move(spare.back());
@@ -416,7 +419,7 @@ private:
         }
     }
     void replay(const std::vector<uint8_t>& chunk) {
-        GT4_CPU_SCOPE("front end thread: busy");
+        GT4_STAGE_SCOPE("front end thread: busy");
         size_t at = 0;
         while (at + sizeof(Entry) <= chunk.size()) {
             Entry e;
@@ -717,7 +720,12 @@ struct GsHost::Impl {
         auto onRecord = [this](const Gt4LinkRecord& h, const uint8_t* p) { dispatch(h, p); };
         int idle = 0;
         while (!stop) {
-            if (link->poll(onRecord)) { idle = 0; continue; }
+            bool got;
+            {
+                GT4_STAGE_SCOPE("GS thread: the game's records");
+                got = link->poll(onRecord);
+            }
+            if (got) { idle = 0; continue; }
             if (!link->running()) {
                 // Drain what the game wrote before exiting.
                 while (link->poll(onRecord)) {}
