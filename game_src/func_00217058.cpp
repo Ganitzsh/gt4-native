@@ -1,5 +1,11 @@
 /* compiler: ee-gcc2.96-no-strict-aliasing */
 /* Native correction of the provisional draft drafts/00217058/00217058_05fa655b822e57a9.cpp (argument widths, argcheck.py width/retwidth): func_00216E78 takes `int n`; the draft declared it long (8 bytes natively), which shifted flag, e and mode one slot. */
+/* Scene records (docs/modern/CONTRACTS.md a.5.1): this entry opens the frame (the first FrameBegin since the last kick;
+ * later ones merge) and each of its car passes is a kViewMenu view, pass = the loop's index. The scene loads its own
+ * camera (R1: mCarModelPS2 / ModelSet2::render), so the views go without kViewCameraKnown. Nothing is sent while scene
+ * records are off. */
+#include "gt4_gfx.h"
+#include "spr.h"
 struct Vec { float x,y,z,w; Vec() {} Vec(float a,float b,float c,float d) {x=a;y=b;z=c;w=d;} };
 struct View { int a,b,width,c,x,y,w,h; char pad[0x1c]; };
 struct Pair { View v[2]; int cur; View *current(){return v+cur;} };
@@ -46,6 +52,7 @@ extern "C" void func_00217058(Obj *self,Obj *o,Obj *extra) {
  int count=func_0021A808(o); if(count==0 || count==2) count=2;else count=4;
  func_004AA4A0();float scale=0.3f;
  if(self->state==0) {
+ gt4_scene_frame_begin(spr_base(),0);
  func_004A5418(0x887);func_004AB040(8);func_004A1638(5);func_004A26F0(3);func_004A1638(100);func_004AB040(8);func_004A4550(1,0);func_004A2930(1,1,1,1);
  Global *g=&D_0061850C;View *view=g->p.current();
  View a,b;func_00105378(&a,view);func_00105378(&b,view);
@@ -63,10 +70,12 @@ extern "C" void func_00217058(Obj *self,Obj *o,Obj *extra) {
  float alpha=func_0021A7E8(o);
  for(int i=0;dual?i<2:i<1;i++) {
  int first=dual?(i==0):0;
+ gt4_scene_view_begin(spr_base(),8,0,(unsigned)i);   /* kViewMenu */
  func_004A53F8();Entry1 *e1=(Entry1 *)(o->vt48+0x10);e1->fn((char *)o+e1->delta,first);
  Entry *e2=(Entry *)(o->vt48+0x20);e2->fn((char *)o+e2->delta);
  func_00216E78(&zero,o,&b,view,&a,first?count/2:count,first,separate?0:extra,0);
  if(separate)render(&zero,extra,&b,&a,&a,1,first,0,1);
+ gt4_scene_view_end(spr_base());
  func_004A5400();View *out=choose(1,&a,&b);func_00105728(out);
  View tmp;func_00105378(&tmp,view);func_001054A0(&tmp,0);func_001056A0(&tmp);
  func_004A4550(3,0);func_004A4550(2,0);func_004A29A8(0);func_004AB040(5);func_004AB040(4);func_004A1638(6);
