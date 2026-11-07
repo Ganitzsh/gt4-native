@@ -640,6 +640,13 @@ void GsFrontend::emit(const Vertex* v, uint32_t n, Topology topology) {
                         invertFirst[2 * k + 1] = out[k].y;
                     }
                 }
+                if (again) {   // (a heuristic: logged, so a log shows it if another pass ever trips it)
+                    static uint64_t passes = 0;
+                    ++passes;
+                    if ((passes & (passes - 1)) == 0)
+                        std::fprintf(stderr, "gsn: Z24 pass at bp %X drew its first primitive again: a second inversion (%llu so far)\n", t.bp,
+                                     static_cast<unsigned long long>(passes));
+                }
                 if (invertRun != t.id || again) t.inverted = !t.inverted;
                 invertRun = t.id;
                 ++stats.draws;
