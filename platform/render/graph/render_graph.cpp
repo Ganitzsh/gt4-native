@@ -660,6 +660,7 @@ void Graph::planBarriers() {
         uint32_t lastPass = kNone;
         VkImageLayout lastPassLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         size_t lastBarrier = SIZE_MAX;   // its barrier in lastPass's list, when that use made one
+        Sync passStart;                  // the state before that barrier (what a write joining it must wait for)
     };
     auto before = [](const Sync& s) {   // everything a write or a layout change waits for
         const VkPipelineStageFlags2 all = s.writeStage | s.readStages;
@@ -837,6 +838,11 @@ void Graph::planBarriers() {
                         earlier.dstStage |= stages;
                         earlier.dstAccess |= access;
                         earlier.replaces = earlier.replaces || write;
+                        if (write) {   // a write joining a read's barrier waits for every use before this pass
+                                       // (that barrier may wait for the last write only)
+                            earlier.srcStage |= before(s.passStart);
+                            earlier.srcAccess |= s.passStart.writeAccess;
+                        }
                         if (write) afterWrite(s, earlier.dstStage, earlier.dstAccess);
                         else afterRead(s, stages, access, true);
                         continue;
@@ -850,6 +856,7 @@ void Graph::planBarriers() {
                 b.newLayout = layout;
                 b.dstStage = stages;
                 b.dstAccess = access;
+                s.passStart = s;   // (the Sync part: the state this use's barrier starts from)
                 const bool change = s.fromImage || discard || s.layout != layout;
                 if (s.fromImage) {   // after Opaque: the old state is vk::Image's when it runs
                     b.fromImage = true;

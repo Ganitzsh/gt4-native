@@ -518,6 +518,26 @@ int main() {
               "same pass: the second use joins the first's barrier");
     }
 
+    // A write joining a read's barrier in the same pass waits for the reads before the pass, not only the last write:
+    // write in compute, read in fragment, then a compute read and a compute write of the same mip in one pass.
+    {
+        Graph g(backend);
+        g.begin(frameInfo());
+        vk::Image xImage = importable(VK_IMAGE_LAYOUT_GENERAL);
+        Texture x = g.import(xImage, "x");
+        g.pass("write", [&](PassBuilder& b) { x = b.use(x, Use::StorageWrite, kComp); }, nothing);
+        g.pass("read in fragment", [&](PassBuilder& b) { b.use(x, Use::StorageRead, kFrag); b.keep(); }, nothing);
+        g.pass("read then write", [&](PassBuilder& b) {
+            b.use(x, Use::StorageRead, kComp);
+            x = b.use(x, Use::StorageWrite, kComp);
+        }, nothing);
+        g.compile();
+        const PlanPass* p3 = find(g.plan(), "read then write");
+        check(g.plan().ok() && p3 && p3->barriers.size() == 1 && (p3->barriers[0].srcStage & kFrag) && (p3->barriers[0].srcStage & kComp) &&
+                  p3->barriers[0].replaces,
+              "same pass: a write joining a read's barrier waits for the fragment read before it (write after read)");
+    }
+
     // Opaque: mips left in different layouts are made one first; a partial range is an error; after it, the import's
     // mips are made whole again from vk::Image's state.
     {
