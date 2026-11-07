@@ -28,6 +28,11 @@ enum GameOption : uint32_t { kOptionAiCatchUp = 0, kOptionMirrorDetail = 1, kOpt
                              kOptionSceneRecords = 5, kGameOptionCount = 8 };
 void set_game_option(uint32_t id, uint32_t value);   // GT4_REC_HOST_CMD 4 (runtime/link.cpp)
 
+// Scene records (docs/modern/CONTRACTS.md a.5.1): a scene frame is one kicked list. At the kick (runtime/frame.cpp)
+// scene_frame_end closes the open frame: false when none is open, else `record` is its FrameEnd (`bytes` long, its
+// counts as runtime/native/pgl.cpp appended them) and `thread` the thread that opened it.
+bool scene_frame_end(void *record, uint32_t bytes, uint32_t *thread);
+
 }  // namespace gt4::rt
 
 // GT4_ORIG (tools/eeref/orig_bridge.cpp, linked with game_link.py --eeorig; otherwise an empty stub).

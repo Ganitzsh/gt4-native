@@ -13,6 +13,7 @@
 #include "kernel.h"
 #include "link.h"
 #include "log.h"
+#include "runtime.h"
 #include "gt4/gfx.h"
 #include "gt4/link/protocol.h"
 
@@ -28,6 +29,8 @@
 
 using namespace gt4::rt;
 namespace gfx = gt4::gfx;
+
+extern "C" unsigned int gt4_scene_on(void);   // runtime/native/pgl.cpp
 
 namespace {
 
@@ -263,7 +266,13 @@ void walk(uint32_t start) {
             uint8_t *block = ptr(id == 3 || id == 4 || id == 0 ? addr : body | self);
             gfx::Header first;
             std::memcpy(&first, block, sizeof first);
-            if (first.type() <= gfx::kScene && sizeof first + first.bytes() <= bytes) {
+            if (first.type() == gfx::kScene && depth > 0) {
+                // a scene record in a display list called from the frame's list would be sent once per call: dropped
+                // (docs/modern/CONTRACTS.md a.5.1; one record per block, pgl.cpp's append). FrameEnd's counts then
+                // differ, so the host sees it too.
+                static uint32_t dropped = 0;
+                if (dropped++ == 0) log_warn("frame: a scene record in a called display list (at %08x): dropped", at);
+            } else if (first.type() <= gfx::kScene && sizeof first + first.bytes() <= bytes) {
                 send_block(block, bytes);
             } else {
                 static int warned = 0;
@@ -312,6 +321,31 @@ void walk(uint32_t start) {
 
 void gt4::rt::frame_forget_sent_contents() { g_forget_requested = true; }
 
+namespace {
+
+// FrameEnd as a record block of its own (CONTRACTS.md a.5.1), right after the walked list.
+void send_frame_end() {
+    struct {
+        gfx::Header header;
+        gfx::scene::FrameEnd end;
+        uint8_t pad[8];
+    } block{};
+    static_assert(sizeof block == 32);   // 4 + 20, padded to two qwords
+    uint32_t thread = 0;
+    if (!scene_frame_end(&block.end, sizeof block.end, &thread)) return;
+    if (thread != GetCurrentThreadId()) {   // A3's check: the frame opened on another thread than its kick
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            log_warn("frame: a scene frame opened on thread %lu, kicked on %lu", static_cast<unsigned long>(thread),
+                     static_cast<unsigned long>(GetCurrentThreadId()));
+        }
+    }
+    block.header = gfx::header(gfx::kScene, sizeof block.end);
+    link_send(GT4_REC_GFX, &block, sizeof block);
+}
+}  // namespace
+
 // 004A11F8(pair): the frame's kick. `pair` (or the library's current one, +0x20C) holds where the frame's list
 // starts and where its PATH3 list starts. The original started both DMA channels and let their interrupts tell
 // the library when they were done; here the list is walked and sent at once.
@@ -329,6 +363,7 @@ extern "C" void gt4_replace_func_004A11F8(uint32_t pair) {
     // (The PATH3 list, at pair + 4, is left: it holds nothing natively, and recording a display list relinks it
     // into the frame's list, whose blocks would be sent twice.)
     if (const uint32_t list = guest_ref<uint32_t>(pair)) walk(list);
+    send_frame_end();   // the scene frame is this list (CONTRACTS.md a.5.1)
     signal(1);
     signal(2);
 }

@@ -41,6 +41,11 @@ kScene = 11,   // scene::Prefix, then the record of that kind (docs/modern/CONTR
  * starts with its Prefix; `bytes` is the size of that kind's struct. Nothing is sent unless gt4_scene_on(). */
 void gt4_gfx_scene(void *context, const void *record, int bytes);
 unsigned int gt4_scene_on(void);   /* gt4_game_option(kOptionSceneRecords) */
+/* The hooks' helpers (runtime/native/pgl.cpp; A2, A3): each builds its record from pgl's state and sends it. */
+void gt4_scene_frame_begin(void *context, unsigned int flags);   /* FrameEnd: the runtime, at the kick */
+unsigned int gt4_scene_view_begin(void *context, int role, int flags, unsigned int pass);
+void gt4_scene_view_end(void *context);
+void gt4_scene_cmd(void *context, const void *cmd);
 ```
 
 - gcc 2.9 cannot include `gfx.h` (C++17), so the structs are restated in **`compat/game/gt4_scene.h`** (plain C,
@@ -50,6 +55,11 @@ unsigned int gt4_scene_on(void);   /* gt4_game_option(kOptionSceneRecords) */
 - Arguments are pointers and `int`; no `long`, no float arguments or results. `tools/hook_lint.py` must pass.
 - The runtime fills in `FrameBegin::frame` and `FrameBegin::vblank`, drops a `FrameBegin` while a frame is open, and
   sends `FrameEnd` itself at the frame's kick (a.5.1). The game never sends `FrameEnd`.
+- The helpers build whole records from pgl's state, so each hook is one call: views numbered in order with the camera
+  (set 0 when the view starts) and its `Projection` (set 1, viewport SPR+0xFA0); per Cmd, set 0 and set 1 as 0049E480
+  picks them by `s->current`, the scales, `items`, and a `Projection` with the viewport the batch holds (the runtime's
+  copy of qwords 197..199 from the last 0049E548 batch write), sent only when it differs from the last one this frame.
+  `flags` passes `kViewCameraKnown` when the hook's set 0 is the view's camera (else the view sends identity).
 
 ### a.3 Conventions for every record
 

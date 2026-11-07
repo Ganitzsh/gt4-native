@@ -70,10 +70,22 @@ int gt4_gfx_grade(void *context, unsigned int sourcePage, unsigned int destinati
 void gt4_gfx_effect_end(void *context);
 /* Scene records (include/gt4/gfx.h gt4::gfx::scene; the layouts restated in compat/game/gt4_scene.h): `record`
  * starts with its prefix; `bytes` is the size of that kind's struct. Appended to the packet like the batch records, so
- * in order with them. The runtime fills in a frame begin's frame and vblank. Nothing is sent unless gt4_scene_on(). */
+ * in order with them. The runtime fills in a frame begin's frame and vblank; a FrameEnd from game code is dropped.
+ * Nothing is sent unless gt4_scene_on(). */
 void gt4_gfx_scene(void *context, const void *record, int bytes);
 /* The host's kOptionSceneRecords (runtime/runtime.h): 1 when it wants scene records. */
 unsigned int gt4_scene_on(void);
+/* The hooks' helpers (runtime/native/pgl.cpp): each builds its record from pgl's state and sends it, or does nothing
+ * while scene records are off. `context` is pgl's (spr_base()). A frame is one kicked list (docs/modern/CONTRACTS.md
+ * a.5.1): the first FrameBegin since the last kick opens it (render_world, the menus' 3D entry), later ones are merged,
+ * and the runtime sends FrameEnd at the kick. A view starts with its projection in set 1 and, when `flags` has
+ * kViewCameraKnown, its camera in set 0 (role, flags and pass as include/gt4/gfx.h ViewRole / ViewFlags; returns its
+ * number); gt4_scene_cmd sends one Cmd's Instance (and its Projection when set 1 or the batch's viewport changed) from
+ * 0049D328, after 0049E480 / 0049E548 and before its items. Records while no frame is open are dropped. */
+void gt4_scene_frame_begin(void *context, unsigned int flags);
+unsigned int gt4_scene_view_begin(void *context, int role, int flags, unsigned int pass);
+void gt4_scene_view_end(void *context);
+void gt4_scene_cmd(void *context, const void *cmd);
 #ifdef __cplusplus
 }
 #endif

@@ -10,6 +10,7 @@
 #include "../link.h"
 #include "../log.h"
 #include "../runtime.h"
+#include "../shared_state.h"
 #include "gt4/link/protocol.h"
 #include "gt4/gfx.h"
 #include "gt4/unpack.h"
@@ -361,30 +362,239 @@ int gt4_gfx_upload_now(uint32_t destination, int x, int y, int w, int h, uint32_
 int gt4_game_option(int id);   // runtime/sdk.cpp
 unsigned int gt4_scene_on(void) { return gt4_game_option(static_cast<int>(kOptionSceneRecords)) != 0 ? 1u : 0u; }
 
+}  // extern "C"
+
+namespace {
+uint32_t g_sceneFrames = 0;            // FrameBegin::frame of the last frame begun
+// What the batch holds in qwords 197..199 (viewport scale, offset, clamp): the last 0049E548 write, which runs for only
+// some of the Cmds (R1: 27.5 %), so a Cmd's Projection carries these, not SPR+0xFA0 read at the Cmd (CONTRACTS.md a.4).
+float g_batchViewport[12] = {};
+// This frame's scene records (CONTRACTS.md a.5.1: one frame per kicked list): FrameEnd's counts, per kind as they are
+// appended (they also number the views, instances and projections), the FrameBegins merged, the view open.
+struct SceneFrameState {
+    bool inFrame = false;
+    uint16_t views = 0, instances = 0, lights = 0, emitters = 0, projections = 0, begins = 0;
+    DWORD thread = 0;   // the thread that opened the frame (the kick must be the same: A3's check)
+    uint32_t flags = 0;  // the opening FrameBegin's (they stand for the frame)
+    uint16_t openView = 0, viewInstances = 0;
+    bool haveProjection = false;
+    float clip[16] = {}, viewport[12] = {};   // the last Projection sent
+};
+SceneFrameState g_scene;
+
+// Appends a scene record to the open frame and counts it by kind (FrameEnd's counts, a.5.1). Records while no frame
+// is open are dropped here (a.5.6).
+bool sceneAppend(uint32_t context, const void *record, uint32_t bytes) {
+    namespace scene = gfx::scene;
+    if (!g_scene.inFrame) return false;
+    scene::Prefix prefix;
+    std::memcpy(&prefix, record, sizeof prefix);
+    switch (prefix.kind) {
+    case scene::kViewBegin: ++g_scene.views; break;
+    case scene::kInstance: ++g_scene.instances; break;
+    case scene::kLight: ++g_scene.lights; break;
+    case scene::kEmitter: ++g_scene.emitters; break;
+    case scene::kProjection: ++g_scene.projections; break;
+    default: break;
+    }
+    append(context, gfx::kScene, record, bytes);
+    return true;
+}
+
+constexpr uint32_t kSpr = 0x70002000;   // pgl's state: current set +1, fE +0xE, scale +0xBD0, sets +0xED0, viewport +0xFA0
+const float *sprFloats(uint32_t offset) { return static_cast<const float *>(guest_ptr(kSpr + offset)); }
+
+// The projection id for set 1 `clip` with `viewport` (scale, offset, clamp): a Projection is sent when either differs from
+// the last one sent this frame (CONTRACTS.md a.5 4a), else the last id is reused.
+uint16_t sceneProjection(uint32_t context, const float *clip, const float *viewport, uint16_t view) {
+    namespace scene = gfx::scene;
+    SceneFrameState &s = g_scene;
+    if (s.haveProjection && !std::memcmp(s.clip, clip, sizeof s.clip) && !std::memcmp(s.viewport, viewport, sizeof s.viewport))
+        return s.projections;
+    scene::Projection r{};
+    r.prefix = {scene::kProjection, scene::kVersion};
+    r.id = static_cast<uint16_t>(s.projections + 1);   // (counted as it is appended)
+    r.view = view;
+    std::memcpy(r.viewToClip, clip, sizeof r.viewToClip);
+    std::memcpy(r.viewportScale, viewport, 16);
+    std::memcpy(r.viewportOffset, viewport + 4, 16);
+    std::memcpy(r.clamp, viewport + 8, 16);
+    sceneAppend(context, &r, sizeof r);
+    s.haveProjection = true;
+    std::memcpy(s.clip, clip, sizeof s.clip);
+    std::memcpy(s.viewport, viewport, sizeof s.viewport);
+    return r.id;
+}
+
+// pgl's two matrices as 0049E480 picks them by the current set (R1): B = set 0 (object-to-view), A = set 1 (view-to-clip).
+void currentSets(float (&set0)[16], float (&set1)[16]) {
+    const uint8_t current = guest_ref<uint8_t>(kSpr + 1);
+    const float *vectors = &gt4_shared_vectors[28][0];
+    const float *saved0 = sprFloats(0xED0), *saved1 = sprFloats(0xF10);
+    std::memcpy(set0, current == 0 ? vectors : saved0, sizeof set0);
+    std::memcpy(set1, current == 1 ? vectors : saved1, sizeof set1);
+}
+
+// A FrameBegin opens the frame unless one is open: then it is dropped and counted (FrameEnd::begins), so the opening
+// one's flags stand (CONTRACTS.md a.5.1). The runtime fills in its frame and VBlank.
+void sceneFrameBegin(uint32_t context, const gfx::scene::FrameBegin &record, const void *extra, uint32_t extraBytes) {
+    if (g_scene.inFrame) {
+        if (g_scene.begins < 0xFFFF) ++g_scene.begins;
+        if (record.flags != g_scene.flags) {   // A3's check: a merged FrameBegin wanted other flags than the opening one's
+            static bool warned = false;
+            if (!warned) {
+                warned = true;
+                log_warn("pgl: a FrameBegin with flags %x merged into a frame opened with %x", record.flags, g_scene.flags);
+            }
+        }
+        return;
+    }
+    g_scene = SceneFrameState{};
+    g_scene.inFrame = true;
+    g_scene.begins = 1;
+    g_scene.thread = GetCurrentThreadId();
+    g_scene.flags = record.flags;
+    gfx::scene::FrameBegin begin = record;
+    begin.frame = ++g_sceneFrames;
+    begin.vblank = kernel_frame_count();
+    append(context, gfx::kScene, &begin, sizeof begin, extra, extraBytes);
+}
+}  // namespace
+
+extern "C" {
+
 void gt4_gfx_scene(uint32_t context, const void *record, int bytes) {
     namespace scene = gfx::scene;
     if (bytes < static_cast<int>(sizeof(scene::Prefix)) || !gt4_scene_on()) return;
     scene::Prefix prefix;
     std::memcpy(&prefix, record, sizeof prefix);
     if (prefix.kind == scene::kFrameBegin && bytes >= static_cast<int>(sizeof(scene::FrameBegin))) {
-        // the runtime's part of a frame begin: its count and the VBlank (logs, captures)
-        static uint32_t frames = 0;
         scene::FrameBegin begin;
         std::memcpy(&begin, record, sizeof begin);
-        begin.frame = ++frames;
-        begin.vblank = kernel_frame_count();
-        append(context, gfx::kScene, &begin, sizeof begin, static_cast<const uint8_t *>(record) + sizeof begin,
-               static_cast<uint32_t>(bytes) - static_cast<uint32_t>(sizeof begin));
+        sceneFrameBegin(context, begin, static_cast<const uint8_t *>(record) + sizeof begin,
+                        static_cast<uint32_t>(bytes) - static_cast<uint32_t>(sizeof begin));
         return;
     }
-    append(context, gfx::kScene, record, static_cast<uint32_t>(bytes));
+    if (prefix.kind == scene::kFrameEnd) {   // the runtime sends FrameEnd at the kick, never the game (a.5.1)
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            log_warn("pgl: a FrameEnd from game code: dropped (the kick sends it)");
+        }
+        return;
+    }
+    sceneAppend(context, record, static_cast<uint32_t>(bytes));
 }
+
+// The hooks' helpers (compat/game/gt4_gfx.h): each builds its record from pgl's state, so a hook is one call. Nothing is
+// sent unless the host asked for scene records; with them off every helper returns at once.
+void gt4_scene_frame_begin(uint32_t context, uint32_t flags) {
+    namespace scene = gfx::scene;
+    if (!gt4_scene_on()) return;
+    scene::FrameBegin r{};
+    r.prefix = {scene::kFrameBegin, scene::kVersion};
+    r.flags = flags;
+    sceneFrameBegin(context, r, nullptr, 0);
+}
+
+// A view starts: its projection is set 1 with the viewport pgl set for it (SPR+0xFA0); its camera is pgl's set 0 now (at
+// the depth the view starts with) when `flags` has kViewCameraKnown, else identity (the host estimates). Returns the
+// view's number (0: not sent).
+uint32_t gt4_scene_view_begin(uint32_t context, int role, int flags, uint32_t pass) {
+    namespace scene = gfx::scene;
+    if (!gt4_scene_on() || !g_scene.inFrame) return 0;
+    float set0[16], set1[16], viewport[12];
+    currentSets(set0, set1);
+    std::memcpy(viewport, sprFloats(0xFA0), sizeof viewport);
+    const uint16_t view = static_cast<uint16_t>(g_scene.views + 1);   // (counted as it is appended)
+    scene::ViewBegin r{};
+    r.prefix = {scene::kViewBegin, scene::kVersion};
+    r.view = view;
+    r.role = static_cast<uint8_t>(role);
+    r.flags = static_cast<uint8_t>(flags);
+    r.pass = pass;
+    r.projection = sceneProjection(context, set1, viewport, view);
+    if (r.flags & scene::kViewCameraKnown) {
+        std::memcpy(r.worldToView, set0, sizeof r.worldToView);
+    } else {
+        for (int i = 0; i < 4; ++i) r.worldToView[i][i] = 1.0f;
+    }
+    sceneAppend(context, &r, sizeof r);
+    g_scene.openView = view;
+    g_scene.viewInstances = 0;
+    return view;
+}
+
+void gt4_scene_view_end(uint32_t context) {
+    namespace scene = gfx::scene;
+    if (!gt4_scene_on() || !g_scene.openView) return;
+    scene::ViewEnd r{};
+    r.prefix = {scene::kViewEnd, scene::kVersion};
+    r.view = g_scene.openView;
+    r.instances = g_scene.viewInstances;
+    sceneAppend(context, &r, sizeof r);
+    g_scene.openView = 0;
+}
+
+// One Cmd 0049D328 draws, after 0049E480 / 0049E548 and before its items (CONTRACTS.md a.4): its object-to-view (set 0
+// as 0049E480 picks it), the scales, its items, and the Projection of set 1 with the viewport the batch holds.
+void gt4_scene_cmd(uint32_t context, uint32_t cmd) {
+    namespace scene = gfx::scene;
+    if (!gt4_scene_on() || !g_scene.inFrame) return;
+    float set0[16], set1[16];
+    currentSets(set0, set1);
+    const uint8_t flag = guest_ref<uint8_t>(cmd + 8), bits = guest_ref<uint8_t>(cmd + 9);
+    scene::Instance r{};
+    r.prefix = {scene::kInstance, scene::kVersion};
+    r.view = g_scene.openView;
+    r.flags = static_cast<uint16_t>((flag ? scene::kInstLighting : 0) | ((bits & 0x80) ? scene::kInstSkinned : 0));
+    r.serial = static_cast<uint32_t>(g_scene.instances) + 1;   // (counted as it is appended)
+    r.cmd = cmd;
+    r.entrant = 0xFFFFFFFFu;
+    std::memcpy(r.objectToView, set0, sizeof r.objectToView);
+    const bool axisScaled = guest_ref<uint8_t>(kSpr + 0xE) != 0;
+    for (int i = 0; i < 3; ++i) r.axisScale[i] = axisScaled ? sprFloats(0xBD0)[i] : 1.0f;
+    r.shapeScale = guest_ref<float>(cmd + 4);
+    r.items = guest_ref<uint16_t>(cmd + 10);
+    r.matrixSet = guest_ref<uint8_t>(kSpr + 1);
+    r.section = 0xFFFF;
+    r.projection = sceneProjection(context, set1, g_batchViewport, g_scene.openView);
+    sceneAppend(context, &r, sizeof r);
+    if (g_scene.openView) ++g_scene.viewInstances;
+}
+
+}  // extern "C"
+
+// The kick closes the frame (CONTRACTS.md a.5.1): FrameEnd with the counts appended since its FrameBegin.
+bool gt4::rt::scene_frame_end(void *record, uint32_t bytes, uint32_t *thread) {
+    namespace scene = gfx::scene;
+    if (!g_scene.inFrame || bytes < sizeof(scene::FrameEnd)) return false;
+    scene::FrameEnd r{};
+    r.prefix = {scene::kFrameEnd, scene::kVersion};
+    r.frame = g_sceneFrames;
+    r.views = g_scene.views;
+    r.instances = g_scene.instances;
+    r.lights = g_scene.lights;
+    r.emitters = g_scene.emitters;
+    r.projections = g_scene.projections;
+    r.begins = g_scene.begins;
+    std::memcpy(record, &r, sizeof r);
+    if (thread) *thread = g_scene.thread;
+    g_scene.inFrame = false;
+    g_scene.openView = 0;
+    return true;
+}
+
+extern "C" {
 
 // GT4's 3D batches from game code (compat/game/gt4_gfx.h).
 void gt4_gfx_batch_frame(uint32_t context) { append(context, gfx::kBatchFrame, nullptr, 0); }
 
 void gt4_gfx_batch_write(uint32_t context, uint32_t qword, const void *data, int count, uint32_t lanes) {
     if (count <= 0) return;
+    // the viewport, offset and clamp the batch now holds (qwords 197..199), for the scene records' Projection
+    for (uint32_t q = std::max(qword, 197u); q < std::min(qword + static_cast<uint32_t>(count), 200u); ++q)
+        std::memcpy(&g_batchViewport[(q - 197) * 4], static_cast<const uint8_t *>(data) + (q - qword) * 16, 16);
     const gfx::BatchWrite w{static_cast<uint16_t>(qword), static_cast<uint16_t>(count), lanes};
     append(context, gfx::kBatchWrite, &w, sizeof w, data, static_cast<uint32_t>(count) * 16);
 }
