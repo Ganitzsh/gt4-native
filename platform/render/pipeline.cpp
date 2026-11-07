@@ -286,11 +286,14 @@ struct FramePipeline::Impl {
 
     vk::Image& depthImage() { return config.msaa > 1 ? depthResolved : sceneDepth; }
 
+    // The scene's work outside its main pass (the game's lists: GsnScene::recordPrepass draws them into the GS
+    // targets), as a pass of its own before the scene pass (ticket B4: the GS back end's passes go there).
+    void prepassScene(VkCommandBuffer command, SceneSource& scene, const SceneView& view) {
+        GT4_STAGE_SCOPE("render: the scene (game lists)");
+        scene.recordPrepass(command, view);
+    }
+
     void renderScene(VkCommandBuffer command, SceneSource& scene, const SceneView& view) {
-        {
-            GT4_STAGE_SCOPE("render: the scene (game lists)");
-            scene.recordPrepass(command, view);
-        }
         vk::beginLabel(command, "scene");
         const bool ms = config.msaa > 1;
         vk::Image& color = ms ? msColor : sceneColor;
@@ -379,6 +382,9 @@ struct FramePipeline::Impl {
                                                  : std::vector<vk::Image*>{&sceneColor, &sceneVelocity, &sceneDepth};
         std::vector<rg::Texture> sceneHandles(sceneImages.size());   // after the scene pass
         DisplaySceneState sceneState;
+        // (no graph resources yet: the GS targets are the scene's own, synchronised by their vk::Image state)
+        graph->pass("scene: prepass", [&](rg::PassBuilder& b) { b.keep(); },
+                    [&](rg::PassContext& c) { prepassScene(c.command, scene, view); });
         graph->pass("scene", [&](rg::PassBuilder& b) {
             for (size_t i = 0; i < sceneImages.size(); ++i)
                 sceneHandles[i] = b.use(graph->import(*sceneImages[i], "pipeline image"), Use::Opaque, kAll);
