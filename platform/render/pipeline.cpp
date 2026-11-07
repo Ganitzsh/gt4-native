@@ -383,8 +383,9 @@ struct FramePipeline::Impl {
         std::vector<rg::Texture> sceneHandles(sceneImages.size());   // after the scene pass
         DisplaySceneState sceneState;
         // (no graph resources yet: the GS targets are the scene's own, synchronised by their vk::Image state)
-        graph->pass("scene: prepass", [&](rg::PassBuilder& b) { b.keep(); },
-                    [&](rg::PassContext& c) { prepassScene(c.command, scene, view); });
+        if (!scene.buildPrepass(*graph, view))
+            graph->pass("scene: prepass", [&](rg::PassBuilder& b) { b.keep(); },
+                        [&](rg::PassContext& c) { prepassScene(c.command, scene, view); });
         graph->pass("scene", [&](rg::PassBuilder& b) {
             for (size_t i = 0; i < sceneImages.size(); ++i)
                 sceneHandles[i] = b.use(graph->import(*sceneImages[i], "pipeline image"), Use::Opaque, kAll);

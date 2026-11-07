@@ -11,6 +11,8 @@
 
 namespace gt4 {
 
+namespace rg { class Graph; }
+
 // Formats of the targets a scene renders into (fixed for the lifetime of the pipeline).
 struct SceneFormats {
     VkFormat color = VK_FORMAT_R16G16B16A16_SFLOAT;  // linear HDR radiance
@@ -49,6 +51,9 @@ public:
     virtual void prepare(const SceneFormats& formats) = 0;
     // Work outside the main pass: shadow maps, environment maps, uploads.
     virtual void recordPrepass(VkCommandBuffer command, const SceneView& view) = 0;
+    // The prepass as passes of the pipeline's render graph (ticket B4); false: the pipeline records recordPrepass in
+    // one pass of its own.
+    virtual bool buildPrepass(rg::Graph& graph, const SceneView& view) { (void)graph; (void)view; return false; }
     // Draws into the bound main targets (colour 0, velocity 1, depth), viewport = render extent.
     virtual void recordMain(VkCommandBuffer command, const SceneView& view) = 0;
     virtual SceneCamera camera() const = 0;

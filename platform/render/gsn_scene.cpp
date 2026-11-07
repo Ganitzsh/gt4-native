@@ -1,6 +1,8 @@
 // The native renderer's back end (see gsn_scene.h and docs/NATIVE_RENDERER.md).
 #include "gsn_scene.h"
 
+#include "render_graph.h"
+
 #include "gt4_shaders.h"
 #include "../gs/cpu_profile.h"
 
@@ -758,6 +760,13 @@ struct GsnScene::Impl {
     // Executes every pending list in order into `command` (the scale from `extent`), then empties the queue.
     // `profiled`: a frame's own submission (GT4_GPU_PROFILE).
     void executePending(VkCommandBuffer command, uint32_t slot, VkExtent2D extent, bool profiled = false);
+    // executePending's pieces, in order (the render graph's passes call them one by one: GsnScene::buildPrepass).
+    void beginPending(VkCommandBuffer command, uint32_t slot, VkExtent2D extent, bool profiled);
+    void pendingTargets(VkCommandBuffer command, uint32_t slot);   // list `listIndex`
+    void pendingDraws(VkCommandBuffer command, uint32_t slot);
+    void pendingListEnd(VkCommandBuffer command);
+    void endPending(VkCommandBuffer command);
+    size_t pendingShown = 0;   // the list shown now (pending.size(): none)
 
     // The pixels the display shows: the circuit's size in video clocks over its clocks per pixel; interlaced in
     // field mode each field shows every line of a half-height buffer.
@@ -2406,6 +2415,17 @@ void GsnScene::prepare(const SceneFormats& formats) {
 }
 
 void GsnScene::Impl::executePending(VkCommandBuffer command, uint32_t slot, VkExtent2D extent, bool profiled) {
+    beginPending(command, slot, extent, profiled);
+    for (listIndex = 0; listIndex < pending.size(); ++listIndex) {
+        pendingTargets(command, slot);
+        pendingDraws(command, slot);
+        pendingListEnd(command);
+    }
+    endPending(command);
+}
+
+// The pending lists' work before the first one: the scale, the dump of an earlier submission, the shown list.
+void GsnScene::Impl::beginPending(VkCommandBuffer command, uint32_t slot, VkExtent2D extent, bool profiled) {
     sweepGraveyard();
     markSlot = profiled && profile.on ? static_cast<int>(slot % kSlots) : -1;
     if (markSlot >= 0) profileFrame(command, slot);
@@ -2436,78 +2456,90 @@ void GsnScene::Impl::executePending(VkCommandBuffer command, uint32_t slot, VkEx
     writeDump();   // a dump recorded in an earlier submission is complete now
     // Only the list shown now moves with the display's clock (interpolation); every other one is drawn as the game drew
     // it: what a later list samples or the game reads back, or keeps (a car picture drawn once), is the frame's own.
-    size_t shownIndex = pending.size();
+    pendingShown = pending.size();
     for (size_t i = 0; i < pending.size(); ++i)
-        if (pending[i].displayed) shownIndex = i;
+        if (pending[i].displayed) pendingShown = i;
     vk::beginLabel(command, "gsn frame");
-    for (listIndex = 0; listIndex < pending.size(); ++listIndex) {
-        std::swap(frame, pending[listIndex]);
-        // (a new list: from the previous frame's state, where the one before ended)
-        modelTPrevious = 0.0f;
-        modelT = interpolate && listIndex == shownIndex ? sinceArrival() : 1.0f;
-        // GT4_GPU_THROTTLE_MS=N (testing): N ms more for each complete frame drawn, as a GPU that takes that long for
-        // one (the Odin's in a replay's blurred far camera) costs the host for every frame it draws.
-        static const int throttle = [] { const char* e = std::getenv("GT4_GPU_THROTTLE_MS"); return e ? std::atoi(e) : 0; }();
-        if (throttle > 0 && frame.displayed) std::this_thread::sleep_for(std::chrono::milliseconds(throttle));
-        {
-            GT4_STAGE_SCOPE("render: the lists' targets");
-            std::vector<uint32_t> created;
-            for (const gsn::Target& t : frame.targets) {
-                const bool existed = targets.count(t.id) && targets[t.id].image.valid();
-                const VkImage before = existed ? targets[t.id].image.image : VK_NULL_HANDLE;
-                ensureTarget(t);
-                if (!existed || targets[t.id].image.image != before) created.push_back(t.id);
-            }
-            for (uint32_t id : created) clearNew(command, targets[id]);
-            counters.targets += created.size();
+}
+
+// List `listIndex`: made current (`frame`), its targets made or cleared, its textures uploaded.
+void GsnScene::Impl::pendingTargets(VkCommandBuffer command, uint32_t slot) {
+    std::swap(frame, pending[listIndex]);
+    // (a new list: from the previous frame's state, where the one before ended)
+    modelTPrevious = 0.0f;
+    modelT = interpolate && listIndex == pendingShown ? sinceArrival() : 1.0f;
+    // GT4_GPU_THROTTLE_MS=N (testing): N ms more for each complete frame drawn, as a GPU that takes that long for
+    // one (the Odin's in a replay's blurred far camera) costs the host for every frame it draws.
+    static const int throttle = [] { const char* e = std::getenv("GT4_GPU_THROTTLE_MS"); return e ? std::atoi(e) : 0; }();
+    if (throttle > 0 && frame.displayed) std::this_thread::sleep_for(std::chrono::milliseconds(throttle));
+    {
+        GT4_STAGE_SCOPE("render: the lists' targets");
+        std::vector<uint32_t> created;
+        for (const gsn::Target& t : frame.targets) {
+            const bool existed = targets.count(t.id) && targets[t.id].image.valid();
+            const VkImage before = existed ? targets[t.id].image.image : VK_NULL_HANDLE;
+            ensureTarget(t);
+            if (!existed || targets[t.id].image.image != before) created.push_back(t.id);
         }
-        mark(command, "new targets");
-        {
-            GT4_STAGE_SCOPE("render: texture uploads");
-            uploadTextures(command, slot);
-        }
-        mark(command, "texture uploads");
-        tally("lists");
-        {
-            GT4_STAGE_SCOPE("render: the lists' draws");
-            execute(command, slot);
-        }
-        // The game's asynchronous reads at this list's end (it was cut there): the rectangle copied now, answered when
-        // the GPU is done (a target gone: answered with zeros).
-        for (const gsn::FrameList::Readback& rb : frame.readbacks) {
-            Copied c;
-            if (!copyRect(command, rb.request, c)) c = Copied();
-            c.readback = rb;
-            readbacksRecorded.push_back(std::move(c));
-        }
-        retireTextures();
-        static const long dumpAt = std::getenv("GT4_GSN_DUMP") ? std::strtol(std::getenv("GT4_GSN_DUMP"), nullptr, 10) : -1;
-        static bool dumped = false;   // the first frame drawn at or after that VBlank
-        if (frame.displayed && (frame.dump || (!dumped && dumpAt >= 0 && static_cast<long>(frame.vblank) >= dumpAt))) {
-            dumped = dumped || !frame.dump;
-            dump.vblank = frame.vblank;
-            vk::Barriers b;
-            for (auto& [id, t] : targets) {
-                if (t.depth || !t.image.valid()) continue;
-                vk::Buffer buffer = vk::createBuffer(device, VkDeviceSize(t.image.extent.width) * t.image.extent.height * 8,
-                                                     VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, true);
-                b.image(t.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_READ_BIT);
-                b.flush(command);
-                VkBufferImageCopy copy{};
-                copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                copy.imageExtent = {t.image.extent.width, t.image.extent.height, 1};
-                vkCmdCopyImageToBuffer(command, t.image.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer.buffer, 1, &copy);
-                vk::toSampled(b, t.image, vk::kFragment);
-                b.flush(command);
-                dump.images.emplace_back(id, buffer);
-                dump.extents.push_back(t.image.extent);
-                dump.bps.push_back(0);
-            }
-            for (const gsn::Target& t : frame.targets)
-                for (size_t k = 0; k < dump.images.size(); ++k)
-                    if (dump.images[k].first == t.id) dump.bps[k] = t.bp;
-        }
+        for (uint32_t id : created) clearNew(command, targets[id]);
+        counters.targets += created.size();
     }
+    mark(command, "new targets");
+    {
+        GT4_STAGE_SCOPE("render: texture uploads");
+        uploadTextures(command, slot);
+    }
+    mark(command, "texture uploads");
+    tally("lists");
+}
+
+// The current list's draws (its 3D batches, its commands, the scene stage at its Light commands).
+void GsnScene::Impl::pendingDraws(VkCommandBuffer command, uint32_t slot) {
+    GT4_STAGE_SCOPE("render: the lists' draws");
+    execute(command, slot);
+}
+
+// The current list's end: its asynchronous reads copied, its textures retired, a dump made.
+void GsnScene::Impl::pendingListEnd(VkCommandBuffer command) {
+    // The game's asynchronous reads at this list's end (it was cut there): the rectangle copied now, answered when
+    // the GPU is done (a target gone: answered with zeros).
+    for (const gsn::FrameList::Readback& rb : frame.readbacks) {
+        Copied c;
+        if (!copyRect(command, rb.request, c)) c = Copied();
+        c.readback = rb;
+        readbacksRecorded.push_back(std::move(c));
+    }
+    retireTextures();
+    static const long dumpAt = std::getenv("GT4_GSN_DUMP") ? std::strtol(std::getenv("GT4_GSN_DUMP"), nullptr, 10) : -1;
+    static bool dumped = false;   // the first frame drawn at or after that VBlank
+    if (frame.displayed && (frame.dump || (!dumped && dumpAt >= 0 && static_cast<long>(frame.vblank) >= dumpAt))) {
+        dumped = dumped || !frame.dump;
+        dump.vblank = frame.vblank;
+        vk::Barriers b;
+        for (auto& [id, t] : targets) {
+            if (t.depth || !t.image.valid()) continue;
+            vk::Buffer buffer = vk::createBuffer(device, VkDeviceSize(t.image.extent.width) * t.image.extent.height * 8,
+                                                 VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, true);
+            b.image(t.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_READ_BIT);
+            b.flush(command);
+            VkBufferImageCopy copy{};
+            copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            copy.imageExtent = {t.image.extent.width, t.image.extent.height, 1};
+            vkCmdCopyImageToBuffer(command, t.image.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer.buffer, 1, &copy);
+            vk::toSampled(b, t.image, vk::kFragment);
+            b.flush(command);
+            dump.images.emplace_back(id, buffer);
+            dump.extents.push_back(t.image.extent);
+            dump.bps.push_back(0);
+        }
+        for (const gsn::Target& t : frame.targets)
+            for (size_t k = 0; k < dump.images.size(); ++k)
+                if (dump.images[k].first == t.id) dump.bps[k] = t.bp;
+    }
+}
+
+// After the last list: histories retired, the lists recycled, the displayed target made sampled.
+void GsnScene::Impl::endPending(VkCommandBuffer command) {
     // Histories of scenes not seen for 10 seconds go (a scene's target left behind with its screen).
     for (auto it = histories.begin(); it != histories.end();) {
         if (displayedFrames > it->second.used + 600) {
@@ -2740,6 +2772,53 @@ bool GsnScene::read(const gsn::ReadRequest& request, std::vector<uint8_t>& out) 
                     static_cast<unsigned long long>(s.reads), request.target, request.x, request.y, request.width, request.height,
                     request.psm, skipped, static_cast<unsigned long long>(hash));
     }
+    return true;
+}
+
+// The prepass as passes of the pipeline's render graph (ticket B4, docs/modern/CONTRACTS.md b.6): the pending lists'
+// work, each list its own passes, in the order executePending runs them. The GS targets are not graph resources: each
+// pass records its barriers from their vk::Image state, as before. The lists are known now and do not change before
+// the graph executes (frames are added between draws, and GsnScene::read never runs inside one).
+bool GsnScene::buildPrepass(rg::Graph& graph, const SceneView& view) {
+    Impl& s = *impl;
+    auto keep = [](rg::PassBuilder& b) { b.keep(); };
+    if (s.pending.empty()) {   // the last list drawn again, or nothing
+        graph.pass("gs: frame again", keep, [this, view](rg::PassContext& c) { recordPrepass(c.command, view); });
+        return true;
+    }
+    s.lastExtent = view.renderExtent;
+    graph.pass("gs: frame", keep, [&s, view](rg::PassContext& c) {
+        GT4_STAGE_SCOPE("render: the scene (game lists)");
+        GT4_CPU_SCOPE("render: native renderer's commands");
+        s.beginPending(c.command, view.slot, view.renderExtent, true);
+    });
+    for (size_t i = 0; i < s.pending.size(); ++i) {
+        graph.pass("gs: uploads", keep, [&s, view, i](rg::PassContext& c) {
+            GT4_STAGE_SCOPE("render: the scene (game lists)");
+            GT4_CPU_SCOPE("render: native renderer's commands");
+            s.listIndex = i;
+            s.pendingTargets(c.command, view.slot);
+        });
+        graph.pass("gs: draws", keep, [&s, view](rg::PassContext& c) {
+            GT4_STAGE_SCOPE("render: the scene (game lists)");
+            GT4_CPU_SCOPE("render: native renderer's commands");
+            s.pendingDraws(c.command, view.slot);
+        });
+        graph.pass("gs: list end", keep, [&s](rg::PassContext& c) {
+            GT4_STAGE_SCOPE("render: the scene (game lists)");
+            GT4_CPU_SCOPE("render: native renderer's commands");
+            s.pendingListEnd(c.command);
+        });
+    }
+    graph.pass("gs: frame end", keep, [&s, view](rg::PassContext& c) {
+        GT4_STAGE_SCOPE("render: the scene (game lists)");
+        GT4_CPU_SCOPE("render: native renderer's commands");
+        s.listIndex = s.pending.size();
+        s.endPending(c.command);
+        auto& inFlight = s.readbacksInFlight[view.slot % kSlots];   // (as recordPrepass)
+        for (auto& r : s.readbacksRecorded) inFlight.push_back(std::move(r));
+        s.readbacksRecorded.clear();
+    });
     return true;
 }
 

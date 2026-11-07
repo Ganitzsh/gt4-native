@@ -87,6 +87,7 @@ public:
 
     void prepare(const SceneFormats& formats) override;
     void recordPrepass(VkCommandBuffer command, const SceneView& view) override;
+    bool buildPrepass(rg::Graph& graph, const SceneView& view) override;
     void recordMain(VkCommandBuffer command, const SceneView& view) override;
     SceneCamera camera() const override;
     bool drawsOriginalEffects() const override { return true; }   // the game draws its own glare and fog
