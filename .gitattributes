@@ -3,3 +3,37 @@ upstream/gt4/** text eol=lf
 compat/abi/** text eol=lf
 *.cmd text eol=crlf
 *.bat text eol=crlf
+
+# Text files are LF in the repository and in every checkout, Windows included (core.autocrlf is off on the
+# Windows machines; without this, files written there arrive with CRLF).
+*.md text eol=lf
+*.txt text eol=lf
+*.c text eol=lf
+*.cpp text eol=lf
+*.h text eol=lf
+*.hpp text eol=lf
+*.inc text eol=lf
+*.s text eol=lf
+*.py text eol=lf
+*.sh text eol=lf
+*.ps1 text eol=lf
+*.cmake text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.comp text eol=lf
+*.glsl text eol=lf
+*.frag text eol=lf
+*.vert text eol=lf
+*.hlsl text eol=lf
+
+# Stored with CRLF before these rules: left byte for byte. Vendored code stays as upstream ships it; the project files
+# below can be normalised to LF in a commit of their own.
+third_party/** -text
+game_src/func_00439750.cpp -text
+game_src/func_0043DBA0.cpp -text
+game_src/func_00448540.cpp -text
+game_src/func_00493C70.cpp -text
+game_src/func_00494578.cpp -text
+game_src/func_004CB9C8.cpp -text
+game_src/func_00578D78.cpp -text
+runtime/trace.cpp -text
