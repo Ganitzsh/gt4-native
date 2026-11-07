@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <string>
+#include <tuple>
 
 namespace {
 using namespace gt4::rg;
@@ -81,6 +82,7 @@ bool hasError(const Plan& plan, const std::string& part) {
 
 constexpr VkPipelineStageFlags2 kFrag = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
 constexpr VkPipelineStageFlags2 kOut = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+constexpr VkPipelineStageFlags2 kCompute = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
 constexpr VkPipelineStageFlags2 kComp = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
 auto nothing = [](PassContext&) {};
 
@@ -696,6 +698,59 @@ int main() {
         g.pass("only", [&](PassBuilder& b) { b.keep(); }, nothing);
         g.compile();
         check(g.dump().find("digraph") != std::string::npos && g.dump().find("only") != std::string::npos, "dump: Graphviz");
+    }
+
+    // The compiled plan used again: the same frame twice reuses it (same barriers); a change in what the plan reads
+    // (an import's state, a use, the frame's size) or an error compiles afresh.
+    {
+        Graph g(backend);
+        vk::Image out = importable(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        auto frame = [&](Use last, FrameInfo info) {
+            g.begin(info);
+            Texture target = g.import(out, "output");
+            Texture scene, blurred;
+            g.pass("scene", [&](PassBuilder& b) { scene = b.use(b.create(colour("scene")), Use::ColorWrite, kOut); }, nothing);
+            g.pass("blur", [&](PassBuilder& b) {
+                b.use(scene, Use::Sampled, kCompute);
+                blurred = b.use(b.create(colour("blurred")), Use::StorageWrite, kCompute);
+            }, nothing);
+            g.pass("output", [&](PassBuilder& b) {
+                b.use(blurred, Use::Sampled, kFrag);
+                target = b.use(target, last, last == Use::ColorWrite ? kOut : kCompute);
+            }, nothing);
+            g.compile();
+        };
+        auto barriers = [](const Plan& p) {
+            std::vector<std::tuple<std::string, uint32_t, VkImageLayout, VkImageLayout>> out;
+            for (const PlanPass& s : p.passes)
+                for (const Barrier& b : s.barriers) out.emplace_back(s.name, b.resource, b.oldLayout, b.newLayout);
+            return out;
+        };
+        frame(Use::ColorWrite, frameInfo());
+        check(g.plan().ok() && !g.plan().reused, "plan reuse: the first frame compiles");
+        const auto first = barriers(g.plan());
+        frame(Use::ColorWrite, frameInfo());
+        check(g.plan().ok() && g.plan().reused, "plan reuse: the same frame again reuses the plan");
+        check(barriers(g.plan()) == first && g.plan().passes.size() == 3, "plan reuse: the same passes and barriers");
+        frame(Use::ColorWrite, frameInfo());
+        check(g.plan().reused, "plan reuse: and again (the plan is kept across frames)");
+        out.layout = VK_IMAGE_LAYOUT_GENERAL;   // (as if something outside the graph used it)
+        frame(Use::ColorWrite, frameInfo());
+        check(!g.plan().reused && g.plan().ok(), "plan reuse: an import in another state compiles afresh");
+        frame(Use::StorageWrite, frameInfo());
+        check(!g.plan().reused && g.plan().ok(), "plan reuse: another use compiles afresh");
+        FrameInfo bigger = frameInfo();
+        bigger.render.width += 64;
+        frame(Use::StorageWrite, bigger);
+        check(!g.plan().reused, "plan reuse: another render size compiles afresh");
+        frame(Use::StorageWrite, bigger);
+        check(g.plan().reused, "plan reuse: then reused again");
+        g.begin(bigger);
+        Texture stale = g.import(out, "output");
+        g.pass("a", [&](PassBuilder& b) { b.use(stale, Use::ColorWrite, kOut); }, nothing);
+        g.pass("b", [&](PassBuilder& b) { b.use(stale, Use::ColorWrite, kOut); }, nothing);   // writes version 0 again
+        g.compile();
+        check(!g.plan().ok() && !g.plan().reused, "plan reuse: never when building found an error");
     }
 
     if (failures) std::fprintf(stderr, "%d failure(s)\n", failures);

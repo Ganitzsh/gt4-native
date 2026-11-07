@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <optional>
 #include <sstream>
 #include <vector>
 
@@ -357,6 +358,9 @@ struct FramePipeline::Impl {
         using rg::Use;
         constexpr VkPipelineStageFlags2 kAll = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
         if (!graph) graph = std::make_unique<rg::Graph>(device);
+        // (the graph's own CPU cost, beside its passes': building and compiling it every frame, CONTRACTS b.2)
+        static cpuprofile::Slot& buildSlot = cpuprofile::slot("render graph: build");
+        std::optional<cpuprofile::Scope> building(std::in_place, cpuprofile::stagesMeasured() ? &buildSlot : nullptr);
         rg::FrameInfo info;
         info.slot = frameSlot;
         info.frameIndex = frameIndex;
@@ -400,8 +404,12 @@ struct FramePipeline::Impl {
         in.config = displayConfig();
         in.frameIndex = frameIndex;
         display.build(*graph, board, info);
+        building.reset();
 
-        graph->compile();
+        {
+            GT4_STAGE_SCOPE("render graph: compile");
+            graph->compile();
+        }
         if (!graph->plan().ok()) {
             static bool told = false;
             if (!told)

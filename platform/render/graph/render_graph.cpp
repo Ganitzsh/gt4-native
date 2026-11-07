@@ -9,7 +9,9 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <map>
+#include <string_view>
 #include <sstream>
 
 namespace gt4::rg {
@@ -271,6 +273,12 @@ struct Graph::Physical {
         std::vector<double> cpu;
         bool timed = false;
         std::vector<PassTiming> timings;
+        std::vector<uint64_t> stamps;      // (timings' query results, kept to not allocate each frame)
+        // What the slot's last full realise bound to the transients (index = id - 1), and the plan it did it for
+        // (Cache::generation): a frame using that plan again binds the same objects without searching for them.
+        uint64_t generation = 0;
+        std::vector<vk::Image*> boundImages;
+        std::vector<VkBuffer> boundBuffers;
     };
     struct History {
         ImageInfo info;
@@ -288,12 +296,35 @@ struct Graph::Physical {
     std::vector<void*> mapped;
     float timestampPeriod = 1.0f;
     bool timestamps = false;
+    // execute()'s scratch, kept so that a frame's barriers allocate nothing once it fits.
+    struct ImageState { const vk::Image* image; VkImageLayout layout; VkPipelineStageFlags2 stage; VkAccessFlags2 access; };
+    std::vector<VkImageMemoryBarrier2> imageBarriers;
+    std::vector<VkBufferMemoryBarrier2> bufferBarriers;
+    std::vector<ImageState> before;
+};
+
+// The last compiled plan, kept while the next frame is built: when that frame's signature (what compile() reads) is
+// the same, its plan is used again instead of compiled (Plan::reused). Frames that repeat their passes are the rule
+// (the display pipeline's passes change only with the settings), and compiling costs the render thread every frame.
+struct Graph::Cache {
+    struct NodePlan {
+        bool live = false;
+        uint32_t planIndex = kNone;
+        std::vector<Barrier> merged;
+    };
+    std::vector<uint64_t> key, scratch;   // the signature of the plan held, and this frame's
+    std::vector<NodePlan> nodes;          // what compile() leaves in the passes
+    Plan plan;                            // the plan, while the next frame is built
+    bool held = false;                    // `compiled` is the plan of `key`
+    bool stored = false;                  // `plan` is
+    uint64_t generation = 0;              // counts the plans compiled afresh (Physical::Slot::generation)
 };
 
 // --- Building ----------------------------------------------------------------------------------------------------
 
 Graph::Graph(const vk::Device& vulkan) : device(&vulkan), ownBackend(std::make_unique<VulkanBackend>(vulkan)) {
     backend = ownBackend.get();
+    cache = std::make_unique<Cache>();
     physical = std::make_unique<Physical>();
     physical->timestampPeriod = device->properties.limits.timestampPeriod;
     uint32_t count = 0;
@@ -308,7 +339,7 @@ Graph::Graph(const vk::Device& vulkan) : device(&vulkan), ownBackend(std::make_u
 #endif
 }
 
-Graph::Graph(Backend& fake) : backend(&fake), abortOnError(false) {}
+Graph::Graph(Backend& fake) : backend(&fake), abortOnError(false), cache(std::make_unique<Cache>()) {}
 
 Graph::~Graph() { destroy(); }
 
@@ -316,6 +347,11 @@ void Graph::begin(const FrameInfo& info) {
     frame = info;
     resources.clear();
     passes.clear();
+    if (cache->held) {   // (kept for this frame's compile(): moved, not copied)
+        cache->plan = std::move(compiled);
+        cache->held = false;
+        cache->stored = true;
+    }
     compiled = Plan{};
     if (physical) {
         for (auto& [name, h] : physical->histories) h.written = false;
@@ -451,42 +487,43 @@ void PassBuilder::keep() { graph.passes[pass]->keep = true; }
 
 Texture Graph::useTexture(uint32_t p, Texture t, Use use, VkPipelineStageFlags2 stages, Range range) {
     PassNode& node = *passes[p];
-    const std::string where = std::string("pass '") + node.name + "'";
+    // (the messages are only made for an error: a frame makes hundreds of uses)
+    auto where = [&] { return std::string("pass '") + node.name + "'"; };
     if (!t || t.id > resources.size() || resources[t.id - 1].buffer) {
-        error(where + ": " + useName(use) + " of a texture that does not exist");
+        error(where() + ": " + useName(use) + " of a texture that does not exist");
         return t;
     }
     Resource& r = resources[t.id - 1];
-    const std::string what = where + ": " + useName(use) + " of '" + r.name + "'";
+    auto what = [&] { return where() + ": " + useName(use) + " of '" + r.name + "'"; };
     // A history's version 0 is the previous frame's image: reading it stays valid after this frame's copy is written
     // (it is another image, and nothing writes it this frame).
     const bool previousCopy = r.kind == Resource::Kind::History && t.version == 0 && !writes(use);
     if (t.version != r.version && !previousCopy) {
         if (writes(use) && t.version + 1 < r.producers.size() && r.producers[t.version + 1] != kNone)
-            error(what + " writes version " + std::to_string(t.version) + ", which pass '" + passes[r.producers[t.version + 1]]->name +
+            error(what() + " writes version " + std::to_string(t.version) + ", which pass '" + passes[r.producers[t.version + 1]]->name +
                   "' already wrote (current version " + std::to_string(r.version) + ")");
         else
-            error(what + " uses stale version " + std::to_string(t.version) + " (current " + std::to_string(r.version) + ")");
+            error(what() + " uses stale version " + std::to_string(t.version) + " (current " + std::to_string(r.version) + ")");
         return t;
     }
     if ((use == Use::Opaque || use == Use::Present) && r.kind != Resource::Kind::Imported) {
-        error(what + ": " + useName(use) + " is for imported images");
+        error(what() + ": " + useName(use) + " is for imported images");
         return t;
     }
     if (r.kind == Resource::Kind::Transient && r.version == 0 && !discardFirst(use)) {
-        error(what + ": the first use of a transient must write it without reading (its memory is aliased)");
+        error(what() + ": the first use of a transient must write it without reading (its memory is aliased)");
         return t;
     }
     if (r.kind == Resource::Kind::History && r.version == 0 && writes(use) && !discardFirst(use)) {
-        error(what + ": the first write of a history must not read (it goes to the other copy)");
+        error(what() + ": the first write of a history must not read (it goes to the other copy)");
         return t;
     }
     if (range.mips == 0) {
-        error(what + ": a range of no mips");
+        error(what() + ": a range of no mips");
         return t;
     }
     if (range.mip >= r.mips) {
-        error(what + ": mip " + std::to_string(range.mip) + " of " + std::to_string(r.mips));
+        error(what() + ": mip " + std::to_string(range.mip) + " of " + std::to_string(r.mips));
         return t;
     }
     Use_ u;
@@ -508,20 +545,20 @@ Texture Graph::useTexture(uint32_t p, Texture t, Use use, VkPipelineStageFlags2 
 
 Buffer Graph::useBuffer(uint32_t p, Buffer b, BufferUse use, VkPipelineStageFlags2 stages) {
     PassNode& node = *passes[p];
-    const std::string where = std::string("pass '") + node.name + "'";
+    auto where = [&] { return std::string("pass '") + node.name + "'"; };
     if (!b || b.id > resources.size() || !resources[b.id - 1].buffer) {
-        error(where + ": a use of a buffer that does not exist");
+        error(where() + ": a use of a buffer that does not exist");
         return b;
     }
     Resource& r = resources[b.id - 1];
-    const std::string what = where + ": buffer '" + r.name + "'";
+    auto what = [&] { return where() + ": buffer '" + r.name + "'"; };
     if (b.version != r.version) {
-        error(what + " uses stale version " + std::to_string(b.version) + " (current " + std::to_string(r.version) + ")");
+        error(what() + " uses stale version " + std::to_string(b.version) + " (current " + std::to_string(r.version) + ")");
         return b;
     }
     const bool host = r.kind == Resource::Kind::Transient && r.bufferDesc.hostVisible;
     if (r.kind == Resource::Kind::Transient && !host && r.version == 0 && reads(use)) {
-        error(what + ": read before any write");
+        error(what() + ": read before any write");
         return b;
     }
     Use_ u;
@@ -563,7 +600,109 @@ ImageInfo Graph::imageInfo(const Resource& r) const {
 
 // --- Compile -------------------------------------------------------------------------------------------------------
 
+void Graph::signature(std::vector<uint64_t>& k) const {
+    k.clear();
+    auto put = [&](uint64_t v) { k.push_back(v); };
+    auto pair = [&](uint64_t a, uint64_t b) { put(a << 32 | (b & 0xFFFFFFFFull)); };
+    auto text = [&](std::string_view s) {
+        put(std::hash<std::string_view>{}(s));
+        put(s.size());
+    };
+    auto state = [&](const vk::Image& i) {
+        put(i.layout);
+        put(i.stage);
+        put(i.access);
+        put(i.format);
+        pair(i.extent.width, i.extent.height);
+        pair(i.mips, i.layers);
+    };
+    pair(frame.render.width, frame.render.height);
+    pair(frame.output.width, frame.output.height);
+    put(backend->asyncCompute());
+    put(resources.size());
+    for (const Resource& r : resources) {
+        put(uint64_t(r.kind) | uint64_t(r.buffer) << 8 | uint64_t(r.depth) << 9 | uint64_t(r.historyPreviousValid) << 10);
+        pair(r.mips, r.version);
+        pair(r.usage, r.bufferUsage);
+        const TextureDesc& t = r.texture;
+        pair(t.format, uint32_t(t.size));
+        pair(t.extent.width, t.extent.height);
+        uint32_t sx = 0, sy = 0;
+        std::memcpy(&sx, &t.scaleX, 4);
+        std::memcpy(&sy, &t.scaleY, 4);
+        pair(sx, sy);
+        pair(t.mips, t.layers);
+        pair(t.samples, t.cube);
+        pair(r.bufferDesc.bytes >> 32, r.bufferDesc.bytes);
+        put(r.bufferDesc.hostVisible);
+        put(reinterpret_cast<uintptr_t>(r.image));
+        put(reinterpret_cast<uintptr_t>(r.importedBuffer));
+        if (r.importedBuffer) put(r.importedBuffer->size);
+        if (r.image) state(*r.image);
+        if (r.kind == Resource::Kind::History) {
+            text(r.name);
+            const Physical::History* h = nullptr;
+            if (physical)
+                if (auto it = physical->histories.find(r.name); it != physical->histories.end()) h = &it->second;
+            put(h != nullptr);
+            if (h) {
+                state(h->image[h->previous]);
+                state(h->image[1 - h->previous]);
+                put(h->info.usage);
+            }
+        }
+    }
+    put(passes.size());
+    for (const auto& node : passes) {
+        text(node->name);
+        pair(uint32_t(node->queue), node->keep);
+        put(node->uses.size());
+        for (const Use_& u : node->uses) {
+            pair(u.resource, u.buffer);
+            pair(uint32_t(u.use), uint32_t(u.bufferUse));
+            put(u.stages);
+            pair(u.range.mip, u.range.mips);
+            pair(u.range.layer, u.range.layers);
+            pair(u.versionIn, u.versionOut);
+        }
+    }
+}
+
 void Graph::compile() {
+    // The last compiled frame's plan, when nothing it depends on changed (and building found no error).
+    signature(cache->scratch);
+    if (cache->stored && compiled.ok() && cache->scratch == cache->key && cache->nodes.size() == passes.size()) {
+        compiled = std::move(cache->plan);
+        cache->stored = false;
+        cache->held = true;
+        compiled.reused = true;
+        for (size_t i = 0; i < passes.size(); ++i) {
+            PassNode& node = *passes[i];
+            const Cache::NodePlan& n = cache->nodes[i];
+            node.live = n.live;
+            node.planIndex = n.planIndex;
+            node.merged = n.merged;
+        }
+        return;
+    }
+    cache->stored = false;
+    compileFresh();
+    ++cache->generation;
+    if (compiled.ok()) {
+        cache->key.swap(cache->scratch);
+        cache->nodes.resize(passes.size());
+        for (size_t i = 0; i < passes.size(); ++i) {
+            const PassNode& node = *passes[i];
+            Cache::NodePlan& n = cache->nodes[i];
+            n.live = node.live;
+            n.planIndex = node.planIndex;
+            n.merged = node.merged;
+        }
+        cache->held = true;
+    }
+}
+
+void Graph::compileFresh() {
     // Culling: from the passes kept, the passes writing imports or histories, back through what they read.
     for (auto& node : passes) {
         node->live = node->keep;
@@ -1071,6 +1210,38 @@ std::string Graph::dump() const {
 void Graph::realise() {
     Physical& ph = *physical;
     Physical::Slot& slot = ph.slots[frame.slot % 2];
+    // The plan this slot last realised, used again: the same objects, bound without searching (only the imports, the
+    // history copies of this frame and the host ring are looked at again).
+    if (compiled.reused && slot.generation == cache->generation && slot.boundImages.size() == resources.size()) {
+        ph.images[0] = slot.boundImages;
+        ph.images[1].assign(resources.size(), nullptr);
+        ph.buffers = slot.boundBuffers;
+        ph.bufferOffsets.assign(resources.size(), 0);
+        ph.mapped.assign(resources.size(), nullptr);
+        slot.ringUsed = 0;
+        for (uint32_t id = 1; id <= resources.size(); ++id) {
+            const Resource& r = resources[id - 1];
+            if (r.kind == Resource::Kind::Imported) {
+                if (r.buffer) ph.buffers[id - 1] = r.importedBuffer->buffer;
+                else ph.images[0][id - 1] = r.image;
+            } else if (r.kind == Resource::Kind::History) {
+                Physical::History& h = ph.histories[r.name];
+                ph.images[0][id - 1] = &h.image[h.previous];
+                ph.images[1][id - 1] = &h.image[1 - h.previous];
+            } else if (r.buffer && r.bufferDesc.hostVisible) {
+                slot.ringUsed = alignUp(slot.ringUsed, 256);
+                ph.buffers[id - 1] = slot.ring.buffer;
+                ph.bufferOffsets[id - 1] = slot.ringUsed;
+                ph.mapped[id - 1] = static_cast<char*>(slot.ring.mapped) + slot.ringUsed;
+                slot.ringUsed += r.bufferDesc.bytes;
+            } else if (vk::Image* image = ph.images[0][id - 1]) {
+                image->layout = VK_IMAGE_LAYOUT_UNDEFINED;   // aliased: its contents are not kept
+                image->stage = VK_PIPELINE_STAGE_2_NONE;
+                image->access = VK_ACCESS_2_NONE;
+            }
+        }
+        return;
+    }
     // Arenas: grown (made again, with their images) when the plan needs more.
     std::map<std::pair<uint32_t, bool>, VkDeviceSize> needed;
     for (const Placement& p : compiled.placements) {
@@ -1250,6 +1421,10 @@ void Graph::realise() {
         for (auto& c : slot.images) if (!c->used) destroyImage(*c);
         std::erase_if(slot.images, [](const std::unique_ptr<Physical::CachedImage>& c) { return !c->image.valid(); });
     }
+    // For the frames that use this plan again in this slot (the imports' and histories' entries are set again then).
+    slot.generation = cache->generation;
+    slot.boundImages = ph.images[0];
+    slot.boundBuffers = ph.buffers;
 }
 
 // The image a pass means by a handle. For a history, version 0 is the previous frame's copy when the pass reads
@@ -1286,19 +1461,23 @@ void Graph::execute(VkCommandBuffer command, VkQueue computeQueue) {
         slot.queryCapacity = info.queryCount;
     }
     if (ph.timestamps && queries) vkCmdResetQueryPool(command, slot.queries, 0, queries);
-    slot.names.clear();
-    slot.cpu.clear();
+    slot.names.resize(compiled.passes.size());   // (assigned in place below: no allocation once the names fit)
+    slot.cpu.resize(compiled.passes.size());
 
     auto apply = [&](const std::vector<Barrier>& list) {
-        std::vector<VkImageMemoryBarrier2> images;
-        std::vector<VkBufferMemoryBarrier2> buffers;
+        if (list.empty()) return;
+        std::vector<VkImageMemoryBarrier2>& images = ph.imageBarriers;
+        std::vector<VkBufferMemoryBarrier2>& buffers = ph.bufferBarriers;
+        images.clear();
+        buffers.clear();
         // Each image's state as this list starts (what an Opaque pass left): every mip's barrier reads it from here.
-        struct State { VkImageLayout layout; VkPipelineStageFlags2 stage; VkAccessFlags2 access; };
-        std::map<const vk::Image*, State> before;
+        std::vector<Physical::ImageState>& before = ph.before;
+        before.clear();
         for (const Barrier& b : list)
             if (!b.buffer) {
                 const vk::Image* image = ph.images[b.copy][b.resource - 1];
-                before.try_emplace(image, State{image->layout, image->stage, image->access});
+                if (std::none_of(before.begin(), before.end(), [&](const Physical::ImageState& s) { return s.image == image; }))
+                    before.push_back({image, image->layout, image->stage, image->access});
             }
         for (const Barrier& b : list) {
             if (b.buffer) {
@@ -1316,7 +1495,8 @@ void Graph::execute(VkCommandBuffer command, VkQueue computeQueue) {
                 continue;
             }
             vk::Image* image = ph.images[b.copy][b.resource - 1];
-            const State& was = before[image];
+            const Physical::ImageState& was =
+                *std::find_if(before.begin(), before.end(), [&](const Physical::ImageState& s) { return s.image == image; });
             VkImageMemoryBarrier2 barrier{};
             barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
             barrier.srcStageMask = b.fromImage ? (was.stage ? was.stage : VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT) : b.srcStage;
@@ -1370,8 +1550,8 @@ void Graph::execute(VkCommandBuffer command, VkQueue computeQueue) {
             context.pipelines = pipelines;
             if (node.execute) node.execute(context);
         }
-        slot.cpu.push_back(std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - started).count());
-        slot.names.push_back(node.name);
+        slot.cpu[i] = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - started).count();
+        if (slot.names[i] != node.name) slot.names[i] = node.name;
         if (ph.timestamps) vkCmdWriteTimestamp2(command, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, slot.queries, 2 * i + 1);
         // A history's new copy, once written, is what this frame leaves for the next.
         for (const Use_& u : node.uses)
@@ -1400,17 +1580,17 @@ const std::vector<PassTiming>& Graph::timings(uint32_t slotIndex) {
     static const std::vector<PassTiming> none;
     if (!physical) return none;   // (a compile-only graph)
     Physical::Slot& slot = physical->slots[slotIndex % 2];
-    slot.timings.clear();
-    std::vector<uint64_t> stamps(slot.names.size() * 2, 0);
+    std::vector<uint64_t>& stamps = slot.stamps;
+    stamps.assign(slot.names.size() * 2, 0);
     const bool gpu = slot.timed && !stamps.empty() &&
                      vkGetQueryPoolResults(device->device, slot.queries, 0, static_cast<uint32_t>(stamps.size()), stamps.size() * sizeof(uint64_t),
                                            stamps.data(), sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) == VK_SUCCESS;
+    slot.timings.resize(slot.names.size());   // (the names assigned in place: no allocation once they fit)
     for (size_t i = 0; i < slot.names.size(); ++i) {
-        PassTiming t;
-        t.name = slot.names[i];
+        PassTiming& t = slot.timings[i];
+        if (t.name != slot.names[i]) t.name = slot.names[i];
         t.cpuMicroseconds = slot.cpu[i];
-        if (gpu) t.gpuMicroseconds = static_cast<double>(stamps[2 * i + 1] - stamps[2 * i]) * physical->timestampPeriod / 1000.0;
-        slot.timings.push_back(std::move(t));
+        t.gpuMicroseconds = gpu ? static_cast<double>(stamps[2 * i + 1] - stamps[2 * i]) * physical->timestampPeriod / 1000.0 : -1.0;
     }
     return slot.timings;
 }

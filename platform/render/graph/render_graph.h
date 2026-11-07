@@ -188,6 +188,9 @@ struct Plan {
     };
     std::vector<Export> exports;
     VkDeviceSize transientBytes = 0, transientBytesWithoutAliasing = 0;
+    // The last compiled frame's plan, used again: its passes, their uses and everything the plan reads (the resources'
+    // descriptions, the imports' and history copies' states, the frame's sizes) were the same, so compile() was skipped.
+    bool reused = false;
     std::vector<std::string> errors;
     bool ok() const { return errors.empty(); }
 };
@@ -231,6 +234,9 @@ private:
     struct Use_;
     struct PassNode;
     struct Physical;
+    struct Cache;
+    void signature(std::vector<uint64_t>& key) const;      // what compile()'s result depends on
+    void compileFresh();                                   // compile() without the cache
     PassBuilder addPass(const char* name, std::function<void(PassContext&)> execute);
     uint32_t addResource(Resource resource);
     Texture useTexture(uint32_t pass, Texture t, Use use, VkPipelineStageFlags2 stages, Range range);
@@ -255,6 +261,7 @@ private:
     bool abortOnError;
     PipelineCache* pipelines = nullptr;
     std::unique_ptr<Physical> physical;     // Vulkan objects kept across frames
+    std::unique_ptr<Cache> cache;           // the last compiled plan and its signature
 };
 
 // Feature modules connect through typed slots, not through each other's headers.
