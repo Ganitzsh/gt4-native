@@ -356,10 +356,27 @@ if(BUILD_TESTING)
   add_executable(gt4_gs_memory_test tests/gs_memory.cpp)
   target_link_libraries(gt4_gs_memory_test PRIVATE gt4_gsnative)
   add_test(NAME gs_memory COMMAND gt4_gs_memory_test)
+  # The light list contract (docs/modern/CONTRACTS.md (c)): the C++ and GLSL layouts and functions agree, checked
+  # by a compute shader that is not part of the host. Needs a Vulkan GPU; skipped (77) without one.
+  add_custom_command(OUTPUT ${GT4_SHADER_OUT}/spv_light_list_test.h
+      COMMAND glslang-standalone -V --target-env vulkan1.2 -S comp -I${GT4_SHADER_SOURCE}
+              --vn spv_light_list_test -o ${GT4_SHADER_OUT}/spv_light_list_test.h
+              ${CMAKE_CURRENT_SOURCE_DIR}/tests/shaders/light_list_test.comp
+      DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/shaders/light_list_test.comp ${GT4_SHADER_SOURCE}/light_list.glsl
+      COMMENT "Compiling shader light_list_test")
+  add_executable(gt4_light_list_test tests/light_list.cpp ${GT4_SHADER_OUT}/spv_light_list_test.h)
+  target_include_directories(gt4_light_list_test PRIVATE ${GT4_SHADER_OUT} ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_compile_definitions(gt4_light_list_test PRIVATE VK_NO_PROTOTYPES)
+  target_link_libraries(gt4_light_list_test PRIVATE Vulkan::Headers ${GT4_VOLK} ${GT4_VOLK_HEADERS})
+  if(UNIX AND NOT APPLE)
+    target_link_libraries(gt4_light_list_test PRIVATE ${CMAKE_DL_LIBS})
+  endif()
+  add_test(NAME light_list COMMAND gt4_light_list_test)
+  set_tests_properties(light_list PROPERTIES SKIP_RETURN_CODE 77)
   # The game runtime's whole-range test for game memory (runtime/guest.h).
   add_executable(gt4_guest_ram_test tests/guest_ram.cpp)
   add_test(NAME guest_ram COMMAND gt4_guest_ram_test)
-  foreach(test_target IN ITEMS gt4_ps2gfx_test gt4_gs_host_test gt4_gs_memory_test gt4_guest_ram_test ${gt4_vu1_tests} ${gt4_gs_reference_tests})
+  foreach(test_target IN ITEMS gt4_ps2gfx_test gt4_gs_host_test gt4_gs_memory_test gt4_guest_ram_test gt4_light_list_test ${gt4_vu1_tests} ${gt4_gs_reference_tests})
     if(MSVC)
       target_compile_options(${test_target} PRIVATE /UNDEBUG /W4)
     else()

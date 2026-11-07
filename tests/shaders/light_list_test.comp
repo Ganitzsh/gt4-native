@@ -1,0 +1,55 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+// tests/light_list.cpp: writes a sentinel into every field of the light list structs (so the C++ side can find
+// each at its offsetof) and evaluates light_list.glsl's functions on the cases it is given.
+#include "light_list.glsl"
+layout(local_size_x = 64) in;
+
+layout(std430, set = 0, binding = 0) buffer Layout {
+    LightListHeader header;
+    GpuLight lights[2];
+    ClusterCell cells[2];
+} outLayout;
+
+struct Case { vec4 falloff; vec4 cone; };   // (d, range, sourceRadius, z), (cosAngle, scale, offset, -)
+layout(std430, set = 0, binding = 1) readonly buffer Cases { Case cases[]; };
+layout(std430, set = 0, binding = 2) writeonly buffer Results { vec4 results[]; };   // falloff, cone, slice, index
+layout(push_constant) uniform Push { float sliceScale, sliceBias; uint count; } p;
+
+void main() {
+    const uint i = gl_GlobalInvocationID.x;
+    if (i == 0u) {
+        outLayout.header.count = 1001u;
+        outLayout.header.directionalCount = 1002u;
+        outLayout.header.zNear = 1003.0;
+        outLayout.header.zFar = 1004.0;
+        outLayout.header.sliceScale = 1005.0;
+        outLayout.header.sliceBias = 1006.0;
+        outLayout.header.clustersX = 1007u;
+        outLayout.header.clustersY = 1008u;
+        for (uint l = 0u; l < 2u; ++l) {
+            const float b = 2000.0 + 100.0 * float(l);
+            outLayout.lights[l].position = vec3(b + 0.0, b + 1.0, b + 2.0);
+            outLayout.lights[l].range = b + 3.0;
+            outLayout.lights[l].direction = vec3(b + 4.0, b + 5.0, b + 6.0);
+            outLayout.lights[l].spotScale = b + 7.0;
+            outLayout.lights[l].colour = vec3(b + 8.0, b + 9.0, b + 10.0);
+            outLayout.lights[l].spotOffset = b + 11.0;
+            outLayout.lights[l].type = uint(b) + 12u;
+            outLayout.lights[l].flags = uint(b) + 13u;
+            outLayout.lights[l].sourceRadius = b + 14.0;
+            outLayout.lights[l].id = uint(b) + 15u;
+            outLayout.cells[l].offset = 3000u + 10u * l;
+            outLayout.cells[l].count = 3001u + 10u * l;
+        }
+    }
+    if (i < p.count) {
+        const Case c = cases[i];
+        const uint slice = clusterSlice(c.falloff.w, p.sliceScale, p.sliceBias);
+        results[i] = vec4(lightFalloff(c.falloff.x, c.falloff.y, c.falloff.z),
+                          lightCone(c.cone.x, c.cone.y, c.cone.z),
+                          float(slice),
+                          float(clusterIndex(uvec3(i % kClusterX, (i / kClusterX) % kClusterY, slice),
+                                             kClusterX, kClusterY)));
+    }
+}
