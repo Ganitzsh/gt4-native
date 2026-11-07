@@ -250,7 +250,7 @@ struct Renderer::Impl {
     std::optional<gt4::MenuView> menu;
     std::string message;
     Uint64 messageUntil = 0;   // SDL_GetTicks
-    std::string capturePath;
+    std::vector<std::string> capturePaths;   // this frame written to each (a session's capture and --capture-frames can meet)
     gt4::vk::Buffer readback;
 
     ~Impl() {
@@ -782,11 +782,14 @@ struct Renderer::Impl {
                 rgb[i * 3 + 2] = pixels[i * 4 + (bgra ? 0 : 2)];
             }
         }
-        std::ofstream output(capturePath, std::ios::binary);
-        output << "P6\n" << target.extent.width << " " << target.extent.height << "\n255\n";
-        output.write(reinterpret_cast<const char*>(rgb.data()), static_cast<std::streamsize>(rgb.size()));
-        if (!output) throw std::runtime_error("Could not write framebuffer capture: " + capturePath);
-        capturePath.clear();
+        const std::vector<std::string> paths = std::move(capturePaths);
+        capturePaths.clear();
+        for (const std::string& path : paths) {
+            std::ofstream output(path, std::ios::binary);
+            output << "P6\n" << target.extent.width << " " << target.extent.height << "\n255\n";
+            output.write(reinterpret_cast<const char*>(rgb.data()), static_cast<std::streamsize>(rgb.size()));
+            if (!output) throw std::runtime_error("Could not write framebuffer capture: " + path);
+        }
         gt4::vk::destroy(device, readback);
     }
 
@@ -924,7 +927,7 @@ struct Renderer::Impl {
             GT4_STAGE_SCOPE("render: recording (uploads, scene, effects)");
             pipeline->record(frame.command, active, view, target, *overlay, deltaSeconds);
         }
-        const bool capturing = !capturePath.empty();
+        const bool capturing = !capturePaths.empty();
         if (capturing) recordCapture(frame.command, target);
         if (!headless) {
             gt4::vk::Barriers b;
@@ -1014,8 +1017,10 @@ void Renderer::setControls(float horizontal, bool action) {
     impl->action = action;
 }
 void Renderer::capture(const std::string& path) {
-    if (!impl->capturePath.empty()) throw std::runtime_error("A framebuffer capture is already pending");
-    impl->capturePath = path;
+    // Several requests for one frame (a session's capture command, --capture, --capture-every, --capture-frames) all
+    // get that frame; one of them used to stop the host ("already pending") when another had asked first.
+    auto& paths = impl->capturePaths;
+    if (std::find(paths.begin(), paths.end(), path) == paths.end()) paths.push_back(path);
 }
 void Renderer::setStatus(const std::string& text) { impl->status = text; }
 void Renderer::setMenu(const gt4::MenuView* view) {
