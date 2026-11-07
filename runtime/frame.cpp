@@ -116,6 +116,9 @@ uint64_t identity_hash(const uint8_t *p, size_t n, uint64_t seed) {
 // down the walk (kicks on two threads, or a nested one, each keep their own).
 struct WalkTimes {
     int64_t send = 0, read = 0;   // QPC ticks
+    // its longest synchronous read: how long, into which guest address, how many qwords (for the session's longest)
+    int64_t longestRead = 0;
+    uint32_t readDestination = 0, readQwords = 0;
 };
 int64_t qpc_now() {
     LARGE_INTEGER t;
@@ -265,7 +268,13 @@ void send_block(WalkTimes &times, uint8_t *block, uint32_t bytes) {
         std::vector<uint8_t> pixels(size_t(r.qwords) * 16);
         const int64_t start = qpc_now();
         link_read_image(r.qwords, pixels.data());   // zeros without a host
-        times.read += qpc_now() - start;
+        const int64_t took = qpc_now() - start;
+        times.read += took;
+        if (took > times.longestRead) {
+            times.longestRead = took;
+            times.readDestination = r.destination;
+            times.readQwords = r.qwords;
+        }
         for (uint32_t q = 0; q < r.qwords; ++q) std::memcpy(ptr(r.destination + q * 16), &pixels[q * 16], 16);
     }
 }
@@ -371,6 +380,10 @@ int64_t g_longest_walk = 0;                   // QPC ticks (g_tick_lock)
 std::atomic<uint32_t> g_walks{0}, g_walks_over16{0}, g_walks_over50{0};
 int64_t g_longest_walk_send = 0, g_longest_walk_read = 0;   // the longest walk's time in link_send and in reads (g_tick_lock)
 uint32_t g_longest_walk_vblank = 0;                          // and the VBlank it started at (g_tick_lock)
+// The session's longest synchronous read (g_tick_lock): how long, into which guest address, how many qwords, at which
+// VBlank's kick. (Which game code asked for it is left to whoever diagnoses a long one.)
+int64_t g_longest_read = 0;
+uint32_t g_longest_read_destination = 0, g_longest_read_qwords = 0, g_longest_read_vblank = 0;
 std::atomic<void (*)(const ClockTick &)> g_tick_send{nullptr};   // the clock's sender (gs.cpp), for the queued ticks
 
 struct TickLock {   // g_tick_lock, from a guest thread: inside a KernelScope
@@ -389,20 +402,23 @@ void log_tick_counts() {
     uint32_t last = logged.load();
     const uint32_t bucket = kernel_frame_count() / 3600;
     if (bucket == last || !logged.compare_exchange_strong(last, bucket)) return;   // (one kick logs a bucket)
-    int64_t longest, longestSend, longestRead;
-    uint32_t longestAt;
+    int64_t longest, longestSend, longestRead, read;
+    uint32_t longestAt, readDestination, readQwords, readAt;
     {
         TickLock lock;
         longest = g_longest_walk, longestSend = g_longest_walk_send, longestRead = g_longest_walk_read, longestAt = g_longest_walk_vblank;
+        read = g_longest_read, readDestination = g_longest_read_destination, readQwords = g_longest_read_qwords;
+        readAt = g_longest_read_vblank;
     }
     static LARGE_INTEGER rate{};
     if (!rate.QuadPart) QueryPerformanceFrequency(&rate);
     const double ms = 1000.0 / static_cast<double>(rate.QuadPart);
     log_info("frame: ticks during a walk %u (deferred %u, the longest by %.3f ms; past the ring %u, merged %u); walks %u, over "
-             "16 ms %u, over 50 ms %u, the longest %.3f ms at VBlank %u (%.3f in link_send, %.3f in reads); nested kicks %u",
+             "16 ms %u, over 50 ms %u, the longest %.3f ms at VBlank %u (%.3f in link_send, %.3f in reads); the longest synchronous "
+             "read %.3f ms at VBlank %u (%u qwords into %08x); nested kicks %u",
              g_ticks_mid_walk.load(), g_ticks_deferred.load(), g_longest_deferral.load() * ms, g_ticks_overflowed.load(),
              g_ticks_merged.load(), g_walks.load(), g_walks_over16.load(), g_walks_over50.load(), longest * ms, longestAt,
-             longestSend * ms, longestRead * ms, g_kicks_nested.load());
+             longestSend * ms, longestRead * ms, read * ms, readAt, readQwords, readDestination, g_kicks_nested.load());
 }
 
 }  // namespace
@@ -555,6 +571,12 @@ extern "C" void gt4_replace_func_004A11F8(uint32_t pair) {
             g_longest_walk_send = times.send;
             g_longest_walk_read = times.read;
             g_longest_walk_vblank = vblank;
+        }
+        if (times.longestRead > g_longest_read) {
+            g_longest_read = times.longestRead;
+            g_longest_read_destination = times.readDestination;
+            g_longest_read_qwords = times.readQwords;
+            g_longest_read_vblank = vblank;
         }
     }
     send_frame_end(scene);
