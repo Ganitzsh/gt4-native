@@ -369,8 +369,8 @@ menu for comparison. **Day one.**
 
 **E4: Track-menu band and stutter (S).** The owner's words: "browsing tracks in the various menus like original
 tracks or city tracks is stuttery, the black band at the bottom is moving a bit up and down vertically and it's
-overall not smooth". The previous agent (4200b0a6) found three candidates and the owner has not said which one he
-means: (1) the picture edge, steady except 1 row in 11 of 360 frames; (2) the Course length / Elevation line
+overall not smooth". The previous agent (4200b0a6) found three candidates and the owner has not said which one they
+mean: (1) the picture edge, steady except 1 row in 11 of 360 frames; (2) the Course length / Elevation line
 sliding up over about 18 frames with field-blend doubling; (3) the faint text row at rest (E3). No code for it was
 found. Reproduce on the Odin settings at 1280 x 800 (the original-tracks and city-tracks menus), record a capture,
 and check all three: per frame the black band's top row (1), the text line's position and the field blend
