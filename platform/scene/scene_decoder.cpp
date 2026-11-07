@@ -65,7 +65,7 @@ float largestDifference(const Mat4& a, const Mat4& b) {
 void SceneCounters::add(const SceneCounters& o) {
     records += o.records; bad += o.bad; versionUnknown += o.versionUnknown; unknownKind += o.unknownKind;
     outsideFrame += o.outsideFrame; frames += o.frames; framesUnclosed += o.framesUnclosed;
-    countsMismatch += o.countsMismatch; begins += o.begins; views += o.views; viewsNested += o.viewsNested;
+    countsMismatch += o.countsMismatch; framesTruncated += o.framesTruncated; begins += o.begins; views += o.views; viewsNested += o.viewsNested;
     viewEndWithoutBegin += o.viewEndWithoutBegin; viewsUnclosed += o.viewsUnclosed; projections += o.projections; projectionUnknown += o.projectionUnknown;
     instances += o.instances; instancesWithoutView += o.instancesWithoutView; itemsMismatch += o.itemsMismatch;
     jobsTagged += o.jobsTagged; jobsUntaggedInView += o.jobsUntaggedInView; matrixChecked += o.matrixChecked;
@@ -158,6 +158,15 @@ void SceneDecoder::record(const uint8_t* payload, size_t bytes) {
         break;
     default: break;
     }
+}
+
+void SceneDecoder::finish() {
+    if (!frame_) return;
+    ++totals_.framesTruncated;
+    frame_.reset();
+    cameras_.clear();
+    objects_.clear();
+    view_ = instance_ = runInstance_ = -1;
 }
 
 void SceneDecoder::beginFrame(const rec::FrameBegin& r) {

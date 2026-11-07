@@ -29,6 +29,10 @@ public:
     // Running totals of the frames finished so far (closed or dropped) and of records outside any frame.
     const SceneCounters& totals() const { return totals_; }
     bool seen() const { return seen_; }   // any scene record so far (the stream consults the decoder from then on)
+    bool frameOpen() const { return frame_ != nullptr; }   // a FrameBegin not yet ended
+    // The stream ended: a frame still open is counted as framesTruncated (a capture's last list, CONTRACTS.md a.5.1) and
+    // dropped, its own counters not added to the totals.
+    void finish();
 
 private:
     SceneCounters& counters() { return frame_ ? frame_->counters : orphan_; }

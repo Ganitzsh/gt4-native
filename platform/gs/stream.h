@@ -94,6 +94,11 @@ public:
     // The scene records' decoder (ticket A10): its counters, and the frame its last FrameEnd closed.
     const scene::SceneDecoder& sceneDecoder() const { return sceneDecoder_; }
     std::unique_ptr<scene::SceneFrame> takeSceneFrame() { return sceneDecoder_.takeFrame(); }
+    // CONTRACTS.md a.5.1's checks at each VSync: a scene frame still open (a VSync inside a kicked list), and more than one
+    // frame ended since the last VSync (two kicks' frames in one FrameList)
+    uint64_t sceneVsyncsInFrame() const { return sceneVsyncsInFrame_; }
+    uint64_t sceneListsWithFrames() const { return sceneListsWithFrames_; }
+    void finishScene() { sceneDecoder_.finish(); }   // the stream ended (before the summary): framesTruncated
     const Vif1::Stats& vifStats() const { return vif1.stats; }
     const Renderers3d::Stats& rendererStats() const { return renderers.stats; }
     std::string describe() const;
@@ -222,6 +227,9 @@ private:
     AudioWriter audioWriter;
     Stats counters;
     scene::SceneDecoder sceneDecoder_;   // the kScene records (docs/modern/CONTRACTS.md a.5, a.7; ticket A10)
+    // a.5.1's checks: VSyncs that came while a scene frame was open (a list split across FrameLists), FrameLists that
+    // received more than one frame's end (two kicks in one); the decoder's frame total at the last VSync
+    uint64_t sceneVsyncsInFrame_ = 0, sceneListsWithFrames_ = 0, sceneFramesAtVsync_ = 0;
     std::vector<uint8_t> scratch;
     // PATH3 data that arrived while VIF1 had PATH3 masked (MSKPATH3): sent when it is unmasked, as the
     // GIF arbiter would, or at the next VSYNC if the mask is never lifted.

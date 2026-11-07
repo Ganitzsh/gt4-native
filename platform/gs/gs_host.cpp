@@ -798,6 +798,7 @@ GsHost::~GsHost() {
     impl->frontThread.reset();   // the front end finishes what was queued
     if (impl->link) impl->gameCpuAtEnd = impl->link->processSeconds() * 1000.0;
     impl->link.reset();   // asks the game to quit
+    if (impl->stream) impl->stream->finishScene();   // a scene frame still open: framesTruncated (CONTRACTS.md a.5.1)
     std::printf("GS: %s\n", summary().c_str());
     cpuprofile::print(impl->vsyncs.load() - (impl->cpuStart.taken ? impl->cpuStart.vsyncs : 0));   // GT4_CPU_PROFILE
     std::fflush(stdout);

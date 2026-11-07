@@ -251,6 +251,9 @@ void frames() {
         put(d, e);
         auto f = d.takeFrame();
         check(f && f->complete && f->begins == 3 && d.totals().begins == 3 && d.totals().errorFree(), "begins: reported");
+        check(!d.frameOpen(), "frameOpen: false after FrameEnd");
+        put(d, frameBegin(2));
+        check(d.frameOpen(), "frameOpen: true after FrameBegin");
     }
     {   // FrameEnd's counts differ from what arrived
         SceneDecoder d;
@@ -543,6 +546,54 @@ void throughStream() {
     check(f && f->instances.size() == 1 && f->instances[0].runs == 2, "stream: the first frame's runs reach the decoder");
     check(gs.sceneDecoder().totals().itemsMismatch == 0 && gs.sceneDecoder().totals().errorFree(), "stream: no itemsMismatch");
 }
+
+// a.5.1's checks at VSync: a VSync inside a kicked list, two kicks' frames in one FrameList, a lost FrameEnd counted once.
+void splitsAtVsync() {
+    NullTarget target;
+    gt4::ps2::GraphicsStream gs(target);
+    auto send = [&](std::vector<uint8_t> block) {
+        Gt4LinkRecord h{};
+        h.type = GT4_REC_GFX;
+        h.size = static_cast<uint32_t>(block.size());
+        gs.record(h, block.data());
+    };
+    auto vsync = [&](uint32_t count) {
+        const uint32_t rec[2] = {0, count};
+        Gt4LinkRecord h{};
+        h.type = GT4_REC_VSYNC;
+        h.size = sizeof rec;
+        gs.record(h, reinterpret_cast<const uint8_t*>(rec));
+    };
+    std::vector<uint8_t> a, b, c;
+    appendScene(a, frameBegin(1));
+    send(a);
+    vsync(1);   // inside frame 1's list
+    appendScene(b, frameEnd(1, 0, 0, 0));
+    send(b);
+    vsync(2);
+    check(gs.sceneVsyncsInFrame() == 1 && gs.sceneListsWithFrames() == 0, "VSync inside a kicked list: counted");
+    for (uint32_t n = 2; n <= 3; ++n) {   // two whole frames before one VSync
+        std::vector<uint8_t> k;
+        appendScene(k, frameBegin(n));
+        appendScene(k, frameEnd(n, 0, 0, 0));
+        send(k);
+    }
+    vsync(3);
+    check(gs.sceneListsWithFrames() == 1 && gs.sceneVsyncsInFrame() == 1, "two kicks' frames in one FrameList: counted");
+    appendScene(c, frameBegin(4));   // FrameEnd lost: frame 4 is dropped (framesUnclosed) when frame 5 begins
+    appendScene(c, frameBegin(5));
+    appendScene(c, frameEnd(5, 0, 0, 0));
+    send(c);
+    vsync(4);
+    check(gs.sceneListsWithFrames() == 1, "a lost FrameEnd is not two frames in one FrameList");
+    check(gs.sceneDecoder().totals().framesUnclosed == 1, "a lost FrameEnd: framesUnclosed");
+    std::vector<uint8_t> e;   // the stream ends inside a frame (a capture's last list): truncated, not unclosed
+    appendScene(e, frameBegin(6));
+    send(e);
+    gs.finishScene();
+    check(gs.sceneDecoder().totals().framesTruncated == 1 && gs.sceneDecoder().totals().framesUnclosed == 1 && !gs.sceneDecoder().frameOpen(),
+          "the stream ends in a frame: framesTruncated");
+}
 }  // namespace
 
 int main() {
@@ -556,6 +607,7 @@ int main() {
     history();
     moreCounters();
     throughStream();
+    splitsAtVsync();
     if (failures) std::fprintf(stderr, "%d failure(s)\n", failures);
     else std::printf("scene_decoder: all checks passed\n");
     return failures ? 1 : 0;

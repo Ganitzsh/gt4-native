@@ -731,6 +731,12 @@ void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload)
         if (size >= 8) std::memcpy(&count, payload + 4, 4);
         ++counters.vsyncs;
         lastVblank = count;
+        if (sceneDecoder_.seen()) {   // a scene frame is one kicked list in one FrameList (CONTRACTS.md a.5.1)
+            if (sceneDecoder_.frameOpen()) ++sceneVsyncsInFrame_;              // a VSync split a kicked list
+            const uint64_t frames = sceneDecoder_.totals().frames - sceneDecoder_.totals().framesUnclosed;   // (ended ones only)
+            if (frames > sceneFramesAtVsync_ + 1) ++sceneListsWithFrames_;     // two kicks' frames in one FrameList
+            sceneFramesAtVsync_ = frames;
+        }
         if (!heldPath3.empty()) {   // still masked at the end of the frame: do not lose the data
             ++counters.path3ForcedAtVsync;
             releasePath3();
@@ -812,7 +818,7 @@ std::string GraphicsStream::describe() const {
     if (sceneDecoder_.seen()) {   // the scene records' counters (CONTRACTS.md a.7), totals of the finished frames
         const scene::SceneCounters& s = sceneDecoder_.totals();
         out << "; scene: " << s.records << " records, " << s.frames << " frames (" << s.framesUnclosed << " unclosed, "
-            << s.countsMismatch << " counts mismatched, " << s.begins << " FrameBegins), " << s.views << " views (" << s.viewsNested << " nested, "
+            << s.countsMismatch << " counts mismatched, " << s.framesTruncated << " truncated, " << s.begins << " FrameBegins), " << s.views << " views (" << s.viewsNested << " nested, "
             << s.viewEndWithoutBegin << " ends without begin, " << s.viewsUnclosed << " unclosed), " << s.projections
             << " projections (" << s.projectionUnknown << " unknown), " << s.instances << " instances ("
             << s.instancesWithoutView << " without a view, " << s.itemsMismatch << " items mismatched), " << s.jobsTagged
@@ -820,7 +826,8 @@ std::string GraphicsStream::describe() const {
             << s.matrixMismatch << " mismatched (largest " << s.matrixMaxError << "), " << s.viewportMismatch
             << " viewports mismatched, " << s.guardUnexpected << " guards unexpected, cameras " << s.cameraChecked
             << " checked, " << s.cameraMismatch << " mismatched; " << s.bad << " bad, " << s.versionUnknown << " version unknown, "
-            << s.unknownKind << " kind unknown, " << s.outsideFrame << " outside a frame";
+            << s.unknownKind << " kind unknown, " << s.outsideFrame << " outside a frame; " << sceneVsyncsInFrame_
+            << " VSyncs inside a frame, " << sceneListsWithFrames_ << " FrameLists with two frames";
     }
     if (!vif1.lastWarning.empty()) out << "; last VIF warning: " << vif1.lastWarning;
     return out.str();
