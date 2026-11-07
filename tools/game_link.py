@@ -28,6 +28,10 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
+# Children start without a console window: each would get a console host of its own (the machine's process
+# rule, docs/modern/CAPTURES.md).
+NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # FFmpeg (static, i686) for movies (runtime/native/movie.cpp): tools/build_ffmpeg.sh builds it here
 FFMPEG = os.environ.get("GT4_FFMPEG", os.path.join(ROOT, "build", "ffmpeg-i686"))
@@ -41,7 +45,7 @@ def tool(name):
 
 
 def run(cmd, **kw):
-    r = subprocess.run(cmd, capture_output=True, text=True, **kw)
+    r = subprocess.run(cmd, capture_output=True, text=True, **kw, **NO_WINDOW)
     if r.returncode != 0:
         sys.stderr.write(" ".join(cmd) + "\n" + r.stdout + r.stderr)
         raise SystemExit(f"failed: {os.path.basename(cmd[0])}")
@@ -266,7 +270,7 @@ def host_library_symbols(out):
             p = os.path.join(d, lib)
             if os.path.exists(p):
                 r = subprocess.run([tool("nm"), "-g", "--defined-only", p], capture_output=True, text=True,
-                                   env=mingw_env())
+                                   env=mingw_env(), **NO_WINDOW)
                 for line in r.stdout.splitlines():
                     parts = line.split()
                     if len(parts) == 3:

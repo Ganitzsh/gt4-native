@@ -40,6 +40,10 @@ import shutil
 import subprocess
 import sys
 
+# Children start without a console window: each would get a console host of its own (the machine's process
+# rule, docs/modern/CAPTURES.md).
+NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DECOMP_INPUTS = ["src", "include", "config", "project.toml"]
 NATIVE_INPUTS = ["game_src", "compat", "runtime", "include", "tools/game_cc.py", "tools/game_link.py",
@@ -47,7 +51,7 @@ NATIVE_INPUTS = ["game_src", "compat", "runtime", "include", "tools/game_cc.py",
 
 
 def git(repo, *args):
-    return subprocess.run(["git", "-C", repo] + list(args), capture_output=True, text=True, check=True).stdout
+    return subprocess.run(["git", "-C", repo] + list(args), capture_output=True, text=True, check=True, **NO_WINDOW).stdout
 
 
 def dirty(repo, paths):
@@ -70,7 +74,7 @@ def stage(src, dst):
 
 def run(cmd):
     print("+", " ".join(cmd), flush=True)
-    subprocess.run(cmd, cwd=ROOT, check=True)
+    subprocess.run(cmd, cwd=ROOT, check=True, **NO_WINDOW)
 
 
 def failed_sources(census):

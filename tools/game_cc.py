@@ -49,6 +49,10 @@ import sys
 import tarfile
 import time
 
+# Children start without a console window: each would get a console host of its own (the machine's process
+# rule, docs/modern/CAPTURES.md).
+NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "game_toolchain"))
 import asm_translate  # noqa: E402
 
@@ -513,7 +517,7 @@ def map_flags(command):
 def list_sources(decomp, args):
     if args.all:
         out = subprocess.run(["git", "-C", decomp, "ls-files", "-co", "--exclude-standard", "src"],
-                             capture_output=True, text=True, check=True).stdout.split("\n")
+                             capture_output=True, text=True, check=True, **NO_WINDOW).stdout.split("\n")
         files = [f for f in out if f.endswith((".c", ".cpp"))]
     else:
         files = list(args.files)
@@ -550,7 +554,7 @@ def recovered_sources(decomp):
     if not wanted:
         return {}
     log = subprocess.run(["git", "-C", decomp, "log", "--all", "--diff-filter=D", "--format=commit %H",
-                          "--name-only", "--", "src"], capture_output=True, text=True, check=True).stdout
+                          "--name-only", "--", "src"], capture_output=True, text=True, check=True, **NO_WINDOW).stdout
     found, commit = {}, None
     for line in log.splitlines():
         if line.startswith("commit "):
@@ -561,7 +565,7 @@ def recovered_sources(decomp):
                 found[name] = (commit, line.strip())
     out = {}
     for name, (commit, src) in sorted(found.items()):
-        data = subprocess.run(["git", "-C", decomp, "show", f"{commit}^:{src}"], capture_output=True, check=True).stdout
+        data = subprocess.run(["git", "-C", decomp, "show", f"{commit}^:{src}"], capture_output=True, check=True, **NO_WINDOW).stdout
         out[RECOVERED + src] = (wanted[name], data)
     missing = sorted(set(wanted) - set(found))
     if missing:
@@ -637,7 +641,7 @@ def run_batch(decomp, batch, profiles, static, args):
             jobs.append(f"{i} {rel} {' '.join(flags)}")
         add_bytes(tar, "jobs.txt", ("\n".join(jobs) + "\n").encode())
     script = WSL_SCRIPT.format(gcc=GCC, timeout=args.timeout, jobs=args.jobs)
-    p = subprocess.run(["wsl", "-e", "bash", "-c", script], input=buf.getvalue(), capture_output=True)
+    p = subprocess.run(["wsl", "-e", "bash", "-c", script], input=buf.getvalue(), capture_output=True, **NO_WINDOW)
     if p.returncode != 0:
         raise SystemExit(f"wsl batch failed ({p.returncode}): {p.stderr.decode(errors='replace')[-2000:]}")
     results = {}
@@ -724,7 +728,7 @@ def app_ranges(asm_text):
 
 def assemble(s_path, o_path):
     p = subprocess.run([AS_EXE, "--32", "-o", o_path, s_path], capture_output=True, text=True,
-                       encoding="utf-8", errors="replace")
+                       encoding="utf-8", errors="replace", **NO_WINDOW)
     if p.returncode == 0 and os.path.exists(o_path):
         return True, "", None
     msgs = [l for l in p.stderr.splitlines() if "Error" in l or "error" in l] or p.stderr.splitlines()
@@ -750,7 +754,7 @@ def source_addresses(decomp):
             "r = os.path.join(sys.argv[1], ''); "
             "print(json.dumps({os.path.relpath(p, r).replace(os.sep, '/'): a for a, p in project.sources().items()}))")
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
-    p = subprocess.run([sys.executable, "-B", "-c", code, decomp], capture_output=True, text=True, env=env, cwd=ROOT)
+    p = subprocess.run([sys.executable, "-B", "-c", code, decomp], capture_output=True, text=True, env=env, cwd=ROOT, **NO_WINDOW)
     if p.returncode != 0:
         print(f"warning: no address map from the decomp's tools ({p.stderr.strip()[-300:]}); "
               "objects export their file-name symbol only", file=sys.stderr)

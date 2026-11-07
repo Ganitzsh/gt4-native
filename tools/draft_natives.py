@@ -32,6 +32,10 @@ import shutil
 import subprocess
 import sys
 
+# Children start without a console window: each would get a console host of its own (the machine's process
+# rule, docs/modern/CAPTURES.md).
+NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CLASS_RANK = {"registers": 0, "order": 1, "branch-form": 2, "length": 3, "other": 4}
 
@@ -135,7 +139,7 @@ def main():
         with open(lst, "w") as f:
             f.write("\n".join(crels) + "\n")
         subprocess.run([sys.executable, os.path.join(ROOT, "tools", "game_cc.py"), "--decomp", a.decomp,
-                        "--out", a.game, "--list", lst] + cc_stage, check=False, stdout=subprocess.DEVNULL)
+                        "--out", a.game, "--list", lst] + cc_stage, check=False, stdout=subprocess.DEVNULL, **NO_WINDOW)
         print(f"{len(crels)} curated sources compiled (game_src/)")
         # A curated source that does not compile would silently leave its function to a draft or the
         # matched source: report it, and fail at the end.
@@ -177,7 +181,7 @@ def main():
         with open(lst, "w") as f:
             f.write("\n".join(rels) + "\n")
         subprocess.run([sys.executable, os.path.join(ROOT, "tools", "game_cc.py"), "--decomp", a.decomp,
-                        "--out", a.game, "--list", lst] + cc_stage, check=False, stdout=subprocess.DEVNULL)
+                        "--out", a.game, "--list", lst] + cc_stage, check=False, stdout=subprocess.DEVNULL, **NO_WINDOW)
         failed = set()
         for line in open(census, encoding="utf-8"):
             r = json.loads(line)
