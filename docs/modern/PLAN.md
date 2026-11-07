@@ -142,7 +142,7 @@ env target.
 colour, intensity); 0x00341A30 (car-light reflections); car lamps from the car instances (A6 / D6); `kSrcWarning`
 where the game marks blinking lamps. Depends: A3, R2 verdict on 003B8EA0. Acceptance: `REL`; `ORIG`; on a night
 capture, each glow quad the GS path draws has a `Light` whose position projected through the view's
-`viewToWindow` lands inside that quad (count of misses = 0).
+projection and viewport lands inside that quad (count of misses = 0).
 
 **A8: Emitter records (M).** `RaceSmoke::update` 0x003E7A58, `SparkParticle::Update` 0x003C1430,
 `ParticleManager::Update` 0x003C2780 (drafts). Depends: A3, R2. Acceptance: `REL`; `ORIG`; on a race capture with

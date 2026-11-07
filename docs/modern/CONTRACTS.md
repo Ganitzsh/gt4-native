@@ -54,10 +54,14 @@ unsigned int gt4_scene_on(void);   /* gt4_game_option(kOptionSceneRecords) */
 
 - **Matrices** are `float m[4][4]`, GT4's row-vector convention: `p' = p.x * m[0] + p.y * m[1] + p.z * m[2] +
   p.w * m[3]`. Composition `A · B` applies A first. This is how `0049E480` and the VU code use them.
-- **Spaces.** *Object*: the model's packet coordinates. *View*: pgl's set 0 output (camera space; GT4 looks down
-  -z: 003B8EA0 treats `z + 0.5 <= 0` as in front). *Window*: GS window pixels before XYOFFSET, as set 1 gives
-  them; Z as the GS receives it. *World*: object space of the course (set 0 at the base of the stack, inverted).
-  Units are GT4's; the host converts to metres with `kGameUnitsPerMetre`, measured by spike R1.
+- **Spaces** (spike R1, `spikes/R1.md`). pgl is GL-like: 004A5348 is MatrixMode, set 0 the modelview, set 1 the
+  projection. *Object*: the model's packet coordinates. *View*: set 0's output (right-handed, +y up, looking down
+  -z). *Clip*: set 1's output, a GL perspective (`w' = -z`). *Window*: GS window pixels before XYOFFSET and GS Z,
+  from clip by the viewport (pglViewport 0x004A2D60, the batch's qwords 197 / 198): `window = offset + scale * clip /
+  w` per component (z gives GS Z, w the fog). *World*: object space of the course; course instances are drawn with
+  `objectToView` equal to the view's `worldToView`.
+- **Units.** GT4's units are metres: `kGameUnitsPerMetre = 1.0` (R1: GS Z is about 1.678e6 / d for the race view;
+  the chase camera sits 6.0 behind and 1.7 above the car; within about 5 %, A2 may tighten it).
 - **Views** are numbered from 1 per frame in `ViewBegin` order; 0 means none.
 - **IDs** that must be stable across frames (`Instance::cmd` + `set`/`model`, `Light::id`, `Emitter::id`) are game
   addresses or small indices. The host never dereferences them.
@@ -72,7 +76,7 @@ inline constexpr uint16_t kVersion = 1;   // every kind's layout version in this
 
 enum Kind : uint16_t {
     kFrameBegin = 1, kFrameEnd = 2, kViewBegin = 3, kViewEnd = 4, kInstance = 5,
-    kLight = 6, kEmitter = 7, kMarker = 8, kVehicle = 9,
+    kLight = 6, kEmitter = 7, kMarker = 8, kVehicle = 9, kProjection = 10,
 };
 
 struct Prefix {
@@ -96,8 +100,9 @@ struct FrameEnd {
     uint32_t frame;               // as its FrameBegin
     uint16_t views, instances;    // what the game sent this frame (the host checks its counts)
     uint16_t lights, emitters;
+    uint16_t projections, reserved;
 };
-static_assert(sizeof(FrameEnd) == 16);
+static_assert(sizeof(FrameEnd) == 20);
 
 // --- Views ----------------------------------------------------------------------------------------------
 enum ViewRole : uint8_t {
@@ -107,12 +112,14 @@ enum ViewRole : uint8_t {
     kViewReflection = 4,   // the road reflection buffer (render_reflection 003411D0)
     kViewShowroom = 5,     // showroom and event-screen car; `pass` = jitter pass 0..3
     kViewPhoto = 6,        // Photo Travel / photo mode
+    kViewHud = 7,          // 3D drawn by the HUD outside render_world (RaceRoundMeterBase 003BE3C8); never substituted
+    kViewMenu = 8,         // menus' 3D (mRenderContextPS2::virtual_64 00217058: the Home garage car, small car views)
     kViewOther = 15,
 };
 enum ViewFlags : uint8_t {
     kViewCut = 1,          // camera moved discontinuously: temporal history resets
     kViewInset = 2,        // drawn inside another view's target (the race mirror)
-    kViewCameraKnown = 4,  // worldToView is set 0's stack base; else identity and the host estimates (R1)
+    kViewCameraKnown = 4,  // worldToView is the camera the view loaded; else identity and the host estimates
 };
 struct ViewBegin {
     Prefix prefix;
@@ -120,14 +127,30 @@ struct ViewBegin {
     uint8_t role;                // ViewRole
     uint8_t flags;               // ViewFlags
     uint32_t pass;               // role-specific, else 0
-    float worldToView[4][4];     // set 0 at the base of its stack when the view starts
-    float viewToWindow[4][4];    // set 1: projection and viewport, to GS window pixels and GS Z
-    float fovY, aspect;          // radians; width / height of the view, as the camera code set them (0: unknown)
-    float nearZ, farZ;           // view units (0: unknown)
+    uint16_t projection;         // the camera's Projection (set 1 as the view loaded it), sent before this record
+    uint16_t reserved0;
+    float worldToView[4][4];     // set 0 at the stack depth the view starts with (0 in the race, 4 on the
+                                 // pre-race screen: not absolute depth 0), after the camera load
     uint16_t scissor[4];         // x0, y0, x1, y1 GS pixels, inclusive (all 0: unknown)
-    uint32_t reserved;
 };
-static_assert(sizeof(ViewBegin) == 168);
+static_assert(sizeof(ViewBegin) == 88);
+
+// --- Projections: set 1 and the viewport, sent whenever either changes (about 10 a race frame) -------------
+// R1: the course is drawn in two depth ranges (near 0.1 / far 1200 and near 10 / far 120,019, same x and y),
+// depth-biased objects use near 0.105 / 0.108 (003E4A28, 004524B8), the sky its own (near 1, far 1000), the
+// mirror and env-map passes theirs. fovY, aspect, near and far follow from viewToClip and are not sent.
+struct Projection {
+    Prefix prefix;
+    uint16_t id;                 // 1.. per frame, in sending order
+    uint16_t view;               // the open view, 0 none (env-map passes may come before a view opens)
+    float viewToClip[4][4];      // set 1 as 0049E480 used it
+    // The values the batch HOLDS (the last 0049E548 write of qwords 193..200, kept by the runtime from
+    // gt4_gfx_batch_write), not SPR+0xFA0 read at the Cmd: 0049E548 runs for only 27.5 % of the Cmds (R1).
+    float viewportScale[4];      // qword 197: x, y in GS pixels, z to GS Z, w fog
+    float viewportOffset[4];     // qword 198
+    float clamp[4];              // qword 199: x, y, z always FLT_MAX; w the fog clamp (100, 30, 0 or FLT_MAX by object)
+};
+static_assert(sizeof(Projection) == 120);
 
 struct ViewEnd {
     Prefix prefix;
@@ -162,7 +185,7 @@ struct Instance {
     uint16_t items;              // the Cmd's items: exactly this many BatchRun records follow for it
     uint16_t matrixSet;          // s->current (+1) when it ran: 0, 1 or 2
     uint16_t section;            // course section (CourseData::render_model 0x00397188's model index), 0xFFFF none (RISKS R10)
-    uint16_t reserved;
+    uint16_t projection;         // the Projection current for this Cmd (set 1 and viewport), 0 none
 };
 static_assert(sizeof(Instance) == 120);
 
@@ -269,9 +292,10 @@ Where each record is sent (tickets in PLAN.md):
 
 | Record | Sent by | Ticket |
 |---|---|---|
-| `FrameBegin` / `FrameEnd` | start and end of `render_world` (`game_src/func_0033DEA8.cpp`); menus: the 3D scene's draw entry | A3 |
-| `ViewBegin` / `ViewEnd` | `render_world` (main), `render_back_mirror` (`game_src/func_00341E50.cpp`), the env-map passes 0044E660 / 0044EB10, showroom and photo paths | A3, A6 |
-| `Instance` | `game_src/func_0049D328.cpp`, after 0049E480 / 0049E548, before the item loop | A2 |
+| `FrameBegin` / `FrameEnd` | start and end of `render_world` (`game_src/func_0033DEA8.cpp`; the 3 env-map passes come first inside it); menus: mRenderContextPS2::virtual_64 (00217058) | A3 |
+| `ViewBegin` / `ViewEnd` | main: after 0033EAB8's camera load (a `game_src` copy of 0033EAB8, or a hook at the camera's +0x18 call), `ViewEnd` before `render_back_mirror`; mirror: `game_src/func_00341E50.cpp` (after every main-view instance, so views never nest); env-map passes 0044E660 (before the main view); menus 00217058 (`kViewMenu`); the HUD's 3D widget 003BE3C8 (`kViewHud`); showroom and Photo Travel per R6 | A3, A6 |
+| `Projection` | `game_src/func_0049D328.cpp`, before the `Instance`, when set 1 (as 0049E480 picks it) or the viewport / clamp the batch holds (the runtime's copy of the last qwords 197..199 written by 0049E548) differ from the last `Projection` sent this frame (a 64 + 48-byte compare); also for each view's camera load, before its `ViewBegin` | A2, A3 |
+| `Instance` | `game_src/func_0049D328.cpp`, after 0049E480 / 0049E548, before the item loop; A and B read as 0049E480 picks them (by `s->current`) even when it does not run (R1: it recomposed for 16 % of the Cmds) | A2 |
 | object identity | 00455708 (draft) sets a runtime-global "model context" that A2 reads | A4 |
 | `Light` | 003B8EA0 (draft), 0x00341A30, car lamps from A6 | A7 |
 | `Emitter` | 0x003E7A58, 0x003C1430, 0x003C2780 | A8 |
@@ -290,6 +314,9 @@ Where each record is sent (tickets in PLAN.md):
    Batches outside any instance (immediate-mode glows and billboards: 0049BBF0, 0049C2A8...) stay untagged.
 4. `Light` comes inside the view whose space it uses. `Emitter` and `Vehicle` come anywhere between
    `FrameBegin` and `FrameEnd`.
+4a. A `Projection` comes before the first record that names its id (`ViewBegin::projection`,
+   `Instance::projection`); ids are per frame and never reused within it. A `Projection` may come outside a view
+   (`view` 0): the env-map passes' come before the main view opens.
 5. `kMarkPostBegin` follows the main view's `ViewEnd`; `kMarkHudBegin` follows `kMarkPostEnd`.
 6. Scene records outside a frame are counted (`outsideFrame`) and dropped.
 7. **Relation to the Light command.** The front end still decides where the Light command goes (`sceneRead`,
@@ -301,7 +328,9 @@ Where each record is sent (tickets in PLAN.md):
 
 ### a.6 Versioning
 
-- Each record carries its kind's layout version. This release: all kinds at 1 (`kVersion`).
+- Each record carries its kind's layout version. This release: all kinds at 1 (`kVersion`). The R1 changes
+  (`ViewBegin`, `Projection`, `Instance::projection`, `FrameEnd`) came before any code landed, so they stay at
+  version 1.
 - A layout change adds fields at the end, bumps that kind's version, and keeps the old version decodable for one
   release (old captures). Never reorder or resize fields in place.
 - The host accepts a record when `version <= the version it knows` and `bytes >= sizeof(that version's
@@ -322,10 +351,13 @@ Where each record is sent (tickets in PLAN.md):
 | `records`, `bad`, `versionUnknown`, `unknownKind`, `outsideFrame` | decoding | `bad == versionUnknown == unknownKind == 0` |
 | `framesUnclosed`, `countsMismatch` | `FrameEnd`'s counts differ from what arrived | 0 |
 | `viewsNested`, `viewEndWithoutBegin` | pairing | 0 |
-| `instances`, `instancesWithoutView` | | `instancesWithoutView == 0` in race frames |
+| `instances`, `instancesWithoutView` | | `instancesWithoutView == 0` in race frames (the HUD widget has its `kViewHud`) |
 | `itemsMismatch` | an instance followed by more or fewer `kBatchRun` than `items` | 0 |
-| `matrixChecked`, `matrixMismatch`, `matrixMaxError` | per tagged job: `diag(axisScale·k, 1) · objectToView · viewToWindow` (k = shapeScale, or 1 when 0) against `ModelJob::matrix`; mismatch when the largest difference exceeds `1e-5 · max |entry|` | `matrixMismatch == 0` |
-| `cameraChecked`, `cameraMismatch` | course instances (`kInstCourse`) whose `objectToView · inverse(worldToView)` is not constant over frames of a static object | 0 once R1 has pinned the camera |
+| `projections`, `projectionUnknown` | an `Instance` or `ViewBegin` naming an id not sent this frame | `projectionUnknown == 0` |
+| `matrixChecked`, `matrixMismatch`, `matrixMaxError` | per tagged job: `diag(axisScale·k, 1) · objectToView · projection.viewToClip` (k = shapeScale, or 1 when 0) against `ModelJob::matrix`; mismatch when the largest difference exceeds `1e-5 · max |entry|` (R1: 0 of 270,515, largest 2.3e-7) | `matrixMismatch == 0` |
+| `viewportMismatch` | per tagged job: the instance's `projection.viewportScale / viewportOffset / clamp` against `ModelJob::scale / offset / clamp` | 0 |
+| `guardUnexpected` | tagged jobs whose guard (qword 200, the clipping renderers' clip flags) is not (0.5, 0.5, 1, 1), the only value R1 saw | reported |
+| `cameraChecked`, `cameraMismatch` | course instances (`kInstCourse`) whose `objectToView` differs from their view's `worldToView` (R1: they are equal) | 0 |
 | `jobsUntaggedInView` | untagged model jobs into a bound view's target between its `ViewBegin` and the Light command | reported; the substitution keeps drawing them on the GS path |
 | `viewSplitTargets`, `viewsUnbound` | binding | 0 for main views |
 | `viewFallbacks` (by reason: not bound, mesh pending, pipeline pending, validation, read pending) | modern views drawn by the GS path | reported; 0 after warm-up for `mesh pending` and `pipeline pending` |
@@ -356,15 +388,24 @@ struct MaterialKey {         // GT4's material: what the batch's pixels depend o
 using MeshId = uint32_t;      // 0 = none
 using MaterialId = uint32_t;  // 0 = none
 
+struct ProjectionData {
+    uint16_t id, view;
+    Mat4 viewToClip;                              // GT4's GL projection as sent (its own near / far)
+    float viewportScale[4], viewportOffset[4], clamp[4];
+};
 struct ViewData {
     uint16_t id; uint8_t role, flags; uint32_t pass;
-    Mat4 worldToView, viewToWindow, viewToClip;   // viewToClip: viewToWindow without the GS viewport (reverse Z)
+    uint16_t projection;                          // the camera's (ViewBegin::projection)
+    Mat4 worldToView;
+    Mat4 cameraToClip;                            // the camera projection's x and y rows, with the modern path's own
+                                                  // reverse-Z infinite depth (not GT4's per-instance near / far)
     Mat4 previousWorldToView;                     // matched by role + pass from the last frame
     uint32_t target = 0, depth = 0;               // GS target ids, bound by the front end
     uint32_t firstInstance = 0, instanceCount = 0, firstLight = 0, lightCount = 0;
 };
 struct InstanceData {
     uint16_t view; uint16_t flags; uint32_t serial;
+    uint16_t projection;                          // GT4's projection for this instance: parity and GS Z (B7, B8)
     uint64_t object;                              // set << 32 ^ model << 8 ^ lod, or the Cmd address
     Mat4 objectToView, objectToWorld, previousObjectToWorld;
     float axisScale[3], shapeScale;
@@ -374,6 +415,7 @@ struct InstanceData {
 };
 struct SceneFrame {
     uint32_t frame = 0, vblank = 0, flags = 0;
+    std::vector<ProjectionData> projections;      // by id - 1
     std::vector<ViewData> views;
     std::vector<InstanceData> instances;
     std::vector<gfx::scene::Light> lights;
@@ -614,7 +656,7 @@ public:
 | `FramePipeline::record` (`pipeline.cpp:972`): exposure, MSAA resolve, FSR 2 / TAA, DOF, motion blur, bloom, tone map, RCAS, FXAA / SMAA, EASU / resample, output pass, 2D overlay | `DisplayFeature` (`platform/render/display_feature.cpp`): one pass per stage, same shaders, same order. `sceneColor/Velocity/Depth` imported from the scene source (later: the modern view's outputs). `exposure`, TAA history: `history()`. `hdrA/B`, `ldrA/B`, `outA/B`, `dof*`, `tiles`, `neighbourMax`, `bloomDown/Up`, `smaa*`: transients. `areaTexture`, `searchTexture`: imports. FSR 2's own resources stay inside its dispatch (one pass, imports). Swapchain: import, `Present`. |
 | `GsnScene::Impl::execute` (`gsn_scene.cpp:794`) | `GsFeature`: the 3D batch dispatch (`gsn_models.comp`) as a compute pass writing the vertex buffer; then GS segments split at each Light command, each with `Use::Opaque` on its targets. |
 | The scene stage at a Light command (`gsn_scene.cpp:1494-1518`: motion vectors, relight, reflect, haze, temporal resolve, motion blur, focus) | `SceneStageFeature`: one pass each, between two GS segments; their work images become transients, the per-scene TAA history a `history()`. |
-| (new) a modern view at a Light command | `ModernViewFeature` passes (cull, depth, G-buffer, lighting, transparents...), then the `Compositor` pass: `ColorWrite` on the GS colour target's scene rectangle and `DepthWrite` on its Z target (GS Z = GT4's projection through `viewToWindow`, stored as `z / 2^32`, `gsn_common.glsl:50-53`), then the next GS segment with the view's tagged draws skipped. |
+| (new) a modern view at a Light command | `ModernViewFeature` passes (cull, depth, G-buffer, lighting, transparents...), then the `Compositor` pass: `ColorWrite` on the GS colour target's scene rectangle and `DepthWrite` on its Z target (GS Z = what GT4's own projection and viewport give at each pixel, from the projection of the instance that drew it (`Instance::projection`: the course's two depth ranges and the depth-biased objects give different GS Z, R1), stored as `z / 2^32`, `gsn_common.glsl:50-53`), then the next GS segment with the view's tagged draws skipped. |
 | GPU profile in `gsn_scene.cpp:270-316` and `renderer.cpp:216, 774` | graph timestamps (b.7) |
 | no pipeline cache | `PipelineCache` (b.8) |
 
@@ -674,7 +716,7 @@ struct ClusterCell { uint32_t offset, count; };   // into the index list: uint32
 - Attenuation (every reader uses `light_list.glsl`'s functions, not its own):
   `falloff = saturate(1 - (d / range)^4)^2 / (d^2 + sourceRadius^2)`;
   spot `cone = saturate(dot(-L, direction) * spotScale + spotOffset)^2`.
-- Metres: `kGameUnitsPerMetre` from spike R1. Intensity: the game's colour times a per-source table on the host
+- Metres: `kGameUnitsPerMetre = 1.0` (spike R1). Intensity: the game's colour times a per-source table on the host
   (`platform/render/modern/light_sources.cpp`), tuned against references, a setting under `lighting.night`.
 
 ### c.2 Who writes what

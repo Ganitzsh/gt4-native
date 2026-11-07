@@ -11,6 +11,10 @@ References at `main` a80cfca.
 
 ## R1: The matrix semantics at 0049E480 (ticket A0; blocks A2, A3, B7)
 
+**Status: answered** (lane A, [spikes/R1.md](spikes/R1.md), 2026-11-07): set 0 is object-to-view; set 1 is
+view-to-clip with the viewport separate and changes inside a view; the camera is set 0 at the view's starting stack
+depth; 1 unit = 1 m. CONTRACTS.md (a) follows it.
+
 **What is known.** `func_0049E480.cpp` computes `m[r] = Σ_j B[r][j] · A[j]` (`v · B · A` with GT4's row vectors),
 rows 0-2 scaled by `s->scale` when byte +0xE is set. By `s->current`: 0 -> A = `matrix[1]` (+0xF10), B = shared
 vectors 28..31; 1 -> A = vectors 28..31, B = `matrix[0]` (+0xED0); 2 -> A = `matrix[1]`, B = `matrix[0]`. 004A5348
