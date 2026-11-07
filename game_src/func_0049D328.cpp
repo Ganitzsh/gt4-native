@@ -23,6 +23,7 @@ extern "C" void func_0049D328(Cmd *cmd, Obj *obj, long unusedw0) {
  if(!obj->valid || obj->value!=cmd->value) {
  func_0049E548(obj,0xc1,cmd->value); obj->valid=1; n--;
  }
+ gt4_scene_cmd(obj,cmd);   /* the Cmd's Instance record, before its items' runs (docs/modern/CONTRACTS.md a.4) */
  obj->nc+=cmd->nc;
  Item *item=cmd->item;
  int mode=2;
