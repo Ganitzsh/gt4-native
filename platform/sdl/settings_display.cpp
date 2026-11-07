@@ -44,7 +44,9 @@ void displayOptions(std::vector<Option>& o) {
     o.push_back(enumOption("display.field_mode", &Settings::fieldMode, kFieldModes,
         "Interlaced screens (the menus: each field drawn half a line from the other): blend = the two fields half and "
         "half, the PS2's picture without its bob (a faint line below the picture and doubled copies of what moves); "
-        "clean = without the line a TV hides, and where something moved between the fields only the newer field."));
+        "clean = without the line a TV hides, and where something moved between the fields only the newer field. "
+        "clean is meant for the menus: a race in fields mode (display.race_frames = fields) looks better with blend, "
+        "since clean leaves seams along its moving edges."));
     o.push_back(enumOption("aspect.ratio", &Settings::aspect, kAspects,
         "Content aspect ratio. Other window shapes get black bars (letterbox or pillarbox). 3D is Hor+: the "
         "vertical field of view stays fixed and wider ratios see more to the sides."));
