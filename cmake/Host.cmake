@@ -368,6 +368,18 @@ if(BUILD_TESTING)
   target_link_libraries(gt4_input_map_test PRIVATE gt4_input)
   add_test(NAME input_map COMMAND gt4_input_map_test)
 
+  # The cards behind the game's libmc calls (runtime/save_folder.cpp, built here on its own): cut writes,
+  # hidden copies and backups, backup rotation, the second slot. Works in the build folder.
+  add_executable(gt4_memcard_test tests/memcard.cpp runtime/save_folder.cpp)
+  target_include_directories(gt4_memcard_test PRIVATE runtime)
+  target_compile_features(gt4_memcard_test PRIVATE cxx_std_20)
+  if(MSVC)
+    target_compile_options(gt4_memcard_test PRIVATE /W4)
+  else()
+    target_compile_options(gt4_memcard_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  add_test(NAME memcard COMMAND gt4_memcard_test ${CMAKE_CURRENT_BINARY_DIR}/memcard_test)
+
   # PS2 graphics on the CPU: VIF1, GT4's 3D renderers, stream records, replay, pad (no GPU needed).
   add_executable(gt4_ps2gfx_test tests/ps2gfx.cpp)
   target_link_libraries(gt4_ps2gfx_test PRIVATE gt4_ps2gfx)

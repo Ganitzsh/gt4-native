@@ -14,13 +14,26 @@ Inside, each save the game makes is a folder named as GT4 names it, with its fil
 The files are the game's own data, as it writes them (it encrypts and checksums them itself), so they move
 between the native game, a PS2 and PCSX2 unchanged. Copy the folder to back progress up.
 
+## Saves are never left half written
+
+- A file the game writes is written to a copy beside it (`.NAME.N.tmp`), flushed to the disk, and renamed over the
+  file when the game closes it. If the game, the PC or the power stops in the middle of a save, the old file is
+  still whole; the copy is removed at the next start.
+- Before the first change a session makes to the saves (a save, a new or deleted save folder), the folder's saves
+  are copied to `.backup/YYYYMMDD-HHMMSS/` inside it. The newest 10 are kept (`GT4_SAVE_BACKUPS=N` for another
+  count, `0` for none). To go back to one, quit the game and copy its folders over the ones in the save folder.
+- Names starting with `.` (the copies, `.backup`) are not on the card the game sees: not listed, not counted in its
+  free space.
+
 ## How the game reaches them
 
 GT4's save code (its memory card manager, gt4-decomp unit 005547E8) calls Sony's libmc (`sceMcOpen`,
 `sceMcRead`, `sceMcGetDir`, ...). `runtime/memcard.cpp` replaces those functions at their API and works on the
 folder directly: no IOP, no memory card server, no card file system. What the game still sees of a card is what
 its save code asks: one card in the first slot, always present and formatted, with the free space of an 8 MB
-card; the second slot is empty (trading cars needs a second card: not available).
+card; the second slot is empty unless `GT4_SAVES2=DIR` names a folder for a second card (trading cars between
+two cards; another folder than the first). `runtime/save_folder.cpp` holds the card logic and
+`tests/memcard.cpp` checks it: a cut write, the hidden copies and backups, the rotation, the second slot.
 
 ## Bringing a save from a PS2 or PCSX2
 
