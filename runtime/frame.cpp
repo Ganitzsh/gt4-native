@@ -111,10 +111,28 @@ uint64_t identity_hash(const uint8_t *p, size_t n, uint64_t seed) {
     return (uint64_t(hi) << 32) | lo;
 }
 
-void send_data(uint32_t source, uint32_t bytes) {
+// Where a walk's time goes (logged with the tick counts): inside link_send (copying, and waiting for room when the host
+// is behind: it sleeps 1 ms at a time) and in synchronous reads (waiting for the host's pixels). One per kick, passed
+// down the walk (kicks on two threads, or a nested one, each keep their own).
+struct WalkTimes {
+    int64_t send = 0, read = 0;   // QPC ticks
+};
+int64_t qpc_now() {
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
+    return t.QuadPart;
+}
+void timed_send(WalkTimes &times, uint32_t type, const void *payload, uint32_t size, const void *extra = nullptr,
+                uint32_t extra_size = 0) {
+    const int64_t start = qpc_now();
+    link_send(type, payload, size, extra, extra_size);
+    times.send += qpc_now() - start;
+}
+
+void send_data(WalkTimes &times, uint32_t source, uint32_t bytes) {
     const uint32_t head[2] = {source, bytes};
     const std::vector<uint8_t> data = read_mapped(ptr(source), bytes);
-    link_send(GT4_REC_GFX_DATA, head, sizeof head, data.data(), bytes);
+    timed_send(times, GT4_REC_GFX_DATA, head, sizeof head, data.data(), bytes);
 }
 
 // The texture sets' contents the host has (docs/NATIVE_V2.md): their bytes go once, while a set in graphics memory
@@ -131,7 +149,7 @@ std::atomic<bool> g_forget_requested{false};
 // A texture set record (gfx::TexSetRecord, in the frame's buffer): its content hashed now, as the frame is sent (the
 // game changes some sets in place: the PS2 uploaded what was there then), and its bytes sent when the host has not
 // had that content.
-void send_tex_set(uint8_t *payload, uint32_t bytes) {
+void send_tex_set(WalkTimes &times, uint8_t *payload, uint32_t bytes) {
     gfx::TexSetRecord r;
     std::memcpy(&r, payload, sizeof r);
     if (sizeof r + r.uploads * sizeof(gfx::TexSetUpload) > bytes) return;
@@ -168,16 +186,16 @@ void send_tex_set(uint8_t *payload, uint32_t bytes) {
         const uint64_t content = gfx::contentHash(data[k].data(), data[k].size());
         if (g_sent_uploads.add(content, [](uint64_t) {})) {
             const uint32_t head[2] = {uploads[k].source, n};
-            link_send(GT4_REC_GFX_DATA, head, sizeof head, data[k].data(), n);
+            timed_send(times, GT4_REC_GFX_DATA, head, sizeof head, data[k].data(), n);
         } else if (!g_verify_uploads) {
             const uint32_t head[2] = {uploads[k].source, n | gfx::kDataReference};
-            link_send(GT4_REC_GFX_DATA, head, sizeof head, &content, sizeof content);
+            timed_send(times, GT4_REC_GFX_DATA, head, sizeof head, &content, sizeof content);
         } else {
             std::vector<uint8_t> both(8 + n);
             std::memcpy(both.data(), &content, 8);
             std::memcpy(both.data() + 8, data[k].data(), std::min<size_t>(n, data[k].size()));
             const uint32_t head[2] = {uploads[k].source, n | gfx::kDataReference};
-            link_send(GT4_REC_GFX_DATA, head, sizeof head, both.data(), static_cast<uint32_t>(both.size()));
+            timed_send(times, GT4_REC_GFX_DATA, head, sizeof head, both.data(), static_cast<uint32_t>(both.size()));
         }
     }
 }
@@ -186,12 +204,12 @@ void send_tex_set(uint8_t *payload, uint32_t bytes) {
 gfx::ContentFifo g_sent_models(gfx::kModelsKept);
 
 // One record block: the bytes its records refer to, the block, then its reads.
-void send_block(uint8_t *block, uint32_t bytes) {
+void send_block(WalkTimes &times, uint8_t *block, uint32_t bytes) {
     if (g_forget_requested.exchange(false)) {
         g_sent_uploads = gfx::ContentFifo(gfx::kUploadsKept);
         g_sent_sets.clear();
         const uint32_t head[2] = {0, gfx::kDataReference | gfx::kDataKeep};
-        link_send(GT4_REC_GFX_DATA, head, sizeof head);
+        timed_send(times, GT4_REC_GFX_DATA, head, sizeof head);
         log_warn("frame: the host asked for every texture content again");
     }
     std::vector<gfx::ReadRecord> reads;
@@ -203,7 +221,7 @@ void send_block(uint8_t *block, uint32_t bytes) {
         if (h.type() == gfx::kUpload && h.bytes() >= sizeof(gfx::UploadRecord)) {
             gfx::UploadRecord u;
             std::memcpy(&u, payload, sizeof u);
-            send_data(u.source, u.qwords * 16);
+            send_data(times, u.source, u.qwords * 16);
         } else if (h.type() == gfx::kBatchModel && h.bytes() >= sizeof(gfx::BatchModel)) {
             gfx::BatchModel m;
             std::memcpy(&m, payload, sizeof m);
@@ -222,10 +240,10 @@ void send_block(uint8_t *block, uint32_t bytes) {
             std::memcpy(block + at + sizeof h, &m, sizeof m);
             if (m.sent) {
                 const uint32_t head[2] = {m.source, n};
-                link_send(GT4_REC_GFX_DATA, head, sizeof head, bytes, n);
+                timed_send(times, GT4_REC_GFX_DATA, head, sizeof head, bytes, n);
             }
         } else if (h.type() == gfx::kTexSet && h.bytes() >= sizeof(gfx::TexSetRecord)) {
-            send_tex_set(block + at + sizeof h, h.bytes());
+            send_tex_set(times, block + at + sizeof h, h.bytes());
         } else if (h.type() == gfx::kRead && h.bytes() >= sizeof(gfx::ReadRecord)) {
             gfx::ReadRecord r;
             std::memcpy(&r, payload, sizeof r);
@@ -233,7 +251,7 @@ void send_block(uint8_t *block, uint32_t bytes) {
         }
         at += gfx::recordQwords(h.bytes()) * 16;
     }
-    link_send(GT4_REC_GFX, block, bytes);
+    timed_send(times, GT4_REC_GFX, block, bytes);
     for (gfx::ReadRecord r : reads) {
         const bool async = (r.qwords & gfx::kReadAsync) != 0;
         r.qwords &= ~gfx::kReadAsync;
@@ -245,13 +263,15 @@ void send_block(uint8_t *block, uint32_t bytes) {
             }
         }
         std::vector<uint8_t> pixels(size_t(r.qwords) * 16);
+        const int64_t start = qpc_now();
         link_read_image(r.qwords, pixels.data());   // zeros without a host
+        times.read += qpc_now() - start;
         for (uint32_t q = 0; q < r.qwords; ++q) std::memcpy(ptr(r.destination + q * 16), &pixels[q * 16], 16);
     }
 }
 
 // Walks a list from `start` (bit 31: in the scratchpad), sending its record blocks.
-void walk(uint32_t start) {
+void walk(WalkTimes &times, uint32_t start) {
     uint32_t at = start;
     uint32_t stack[2];
     int depth = 0;
@@ -273,7 +293,7 @@ void walk(uint32_t start) {
                 static uint32_t dropped = 0;
                 if (dropped++ == 0) log_warn("frame: a scene record in a called display list (at %08x): dropped", at);
             } else if (first.type() <= gfx::kScene && sizeof first + first.bytes() <= bytes) {
-                send_block(block, bytes);
+                send_block(times, block, bytes);
             } else {
                 static int warned = 0;
                 if (warned++ < 8)
@@ -317,14 +337,157 @@ void walk(uint32_t start) {
     log_warn("frame: a list that does not end (from %08x)", start);
 }
 
+// The frame clock's ticks during a walk (CONTRACTS.md a.5.1, scene records on only): queued, and sent by the kick
+// after FrameEnd.
+// - The clock's thread runs frame_tick inside on_frame, holding the kernel's g_lock with a guest thread possibly frozen
+//   anywhere (inside the C runtime's heap too): nothing there may allocate, block on anything but g_tick_lock, or log.
+//   So the queue is a fixed ring and the lock an SRWLOCK (no allocation, no lazy initialisation).
+// - A guest thread holds g_tick_lock only inside a KernelScope (no interrupt freezes it there) and never across a
+//   link_send (leaving the send's KernelScope takes g_lock, which the clock holds).
+// - The kick decides once whether to defer (scene records on) and keeps that decision until its queue is drained, so
+//   an option change mid-walk cannot reorder the VSyncs (lane B's review).
+struct QueuedTick {
+    ClockTick tick;
+    LARGE_INTEGER at;
+};
+constexpr uint32_t kTickRing = 256;     // whole ticks: a walk 4.2 s long (about 18 KB)
+constexpr uint32_t kTickOverflow = 1024;   // past that, each tick's field and count, in order (the display collapses to the newest)
+SRWLOCK g_tick_lock = SRWLOCK_INIT;
+uint32_t g_walking = 0;                 // kicks walking with deferral latched on (under g_tick_lock; > 1: nested or another thread's)
+QueuedTick g_ring[kTickRing];           // ticks that came during them, in order (under g_tick_lock)
+uint32_t g_ring_head = 0, g_ring_count = 0;
+struct FieldCount {
+    uint32_t field, count;
+    LARGE_INTEGER at;
+};
+FieldCount g_overflow[kTickOverflow];   // the ticks after a full ring, in order (under g_tick_lock): no VSync is dropped
+uint32_t g_overflow_head = 0, g_overflow_count = 0;
+ClockTick g_overflow_last{};            // the newest of them whole (its display and capture window go with each)
+std::atomic<bool> g_deferring{false};   // g_walking > 0 (read without the lock on the records-off path)
+std::atomic<uint32_t> g_in_walk{0};     // walks under way, any (for the count with scene records off)
+std::atomic<uint32_t> g_ticks_mid_walk{0}, g_ticks_deferred{0}, g_ticks_overflowed{0}, g_ticks_merged{0}, g_kicks_nested{0};
+std::atomic<int64_t> g_longest_deferral{0};   // QPC ticks
+int64_t g_longest_walk = 0;                   // QPC ticks (g_tick_lock)
+std::atomic<uint32_t> g_walks{0}, g_walks_over16{0}, g_walks_over50{0};
+int64_t g_longest_walk_send = 0, g_longest_walk_read = 0;   // the longest walk's time in link_send and in reads (g_tick_lock)
+uint32_t g_longest_walk_vblank = 0;                          // and the VBlank it started at (g_tick_lock)
+std::atomic<void (*)(const ClockTick &)> g_tick_send{nullptr};   // the clock's sender (gs.cpp), for the queued ticks
+
+struct TickLock {   // g_tick_lock, from a guest thread: inside a KernelScope
+    KernelScope ks;
+    TickLock() { AcquireSRWLockExclusive(&g_tick_lock); }
+    ~TickLock() { ReleaseSRWLockExclusive(&g_tick_lock); }
+};
+
+void raise_to(std::atomic<int64_t> &most, int64_t v) {
+    for (int64_t m = most.load(); v > m && !most.compare_exchange_weak(m, v);) {}
+}
+
+// From the kick's thread, never the clock's: every 3600 VBlanks, the ticks that came during a walk and their deferral.
+void log_tick_counts() {
+    static std::atomic<uint32_t> logged{0};
+    uint32_t last = logged.load();
+    const uint32_t bucket = kernel_frame_count() / 3600;
+    if (bucket == last || !logged.compare_exchange_strong(last, bucket)) return;   // (one kick logs a bucket)
+    int64_t longest, longestSend, longestRead;
+    uint32_t longestAt;
+    {
+        TickLock lock;
+        longest = g_longest_walk, longestSend = g_longest_walk_send, longestRead = g_longest_walk_read, longestAt = g_longest_walk_vblank;
+    }
+    static LARGE_INTEGER rate{};
+    if (!rate.QuadPart) QueryPerformanceFrequency(&rate);
+    const double ms = 1000.0 / static_cast<double>(rate.QuadPart);
+    log_info("frame: ticks during a walk %u (deferred %u, the longest by %.3f ms; past the ring %u, merged %u); walks %u, over "
+             "16 ms %u, over 50 ms %u, the longest %.3f ms at VBlank %u (%.3f in link_send, %.3f in reads); nested kicks %u",
+             g_ticks_mid_walk.load(), g_ticks_deferred.load(), g_longest_deferral.load() * ms, g_ticks_overflowed.load(),
+             g_ticks_merged.load(), g_walks.load(), g_walks_over16.load(), g_walks_over50.load(), longest * ms, longestAt,
+             longestSend * ms, longestRead * ms, g_kicks_nested.load());
+}
+
 }  // namespace
 
 void gt4::rt::frame_forget_sent_contents() { g_forget_requested = true; }
 
+// The clock's thread, under g_lock (see above: no allocation, no logging).
+void gt4::rt::frame_tick(const ClockTick &tick, void (*send)(const ClockTick &)) {
+    if (g_in_walk.load() != 0) ++g_ticks_mid_walk;
+    if (!g_deferring.load() && !gt4_scene_on()) {   // records off and no kick deferring: as before, at the tick
+        // (One window is left, at an on-to-off flip only: a kick that latched records on just before it may set
+        // g_deferring after the check above, and this tick then lands inside its list. The host counts it as a VSync
+        // inside a frame.)
+        send(tick);
+        return;
+    }
+    AcquireSRWLockExclusive(&g_tick_lock);
+    g_tick_send = send;
+    if (g_walking) {
+        ++g_ticks_deferred;
+        if (g_ring_count < kTickRing && g_overflow_count == 0) {
+            QueuedTick &q = g_ring[(g_ring_head + g_ring_count++) % kTickRing];
+            q.tick = tick;
+            QueryPerformanceCounter(&q.at);
+        } else if (g_overflow_count < kTickOverflow) {   // ring full: this tick's field and count, in order
+            FieldCount &f = g_overflow[(g_overflow_head + g_overflow_count++) % kTickOverflow];
+            f.field = tick.field;
+            f.count = tick.count;
+            QueryPerformanceCounter(&f.at);
+            g_overflow_last = tick;
+            ++g_ticks_overflowed;
+        } else {   // both full (a walk over 21 s): the newest takes this one's field and count (one VSync fewer)
+            FieldCount &f = g_overflow[(g_overflow_head + kTickOverflow - 1) % kTickOverflow];
+            f.field = tick.field;
+            f.count = tick.count;
+            g_overflow_last = tick;
+            ++g_ticks_merged;
+        }
+        ReleaseSRWLockExclusive(&g_tick_lock);
+        return;
+    }
+    send(tick);   // (held: a kick cannot start its walk before this tick is on the link)
+    ReleaseSRWLockExclusive(&g_tick_lock);
+}
+
 namespace {
 
-// FrameEnd as a record block of its own (CONTRACTS.md a.5.1), right after the walked list.
-void send_frame_end() {
+// After FrameEnd: the queued ticks in order, with this walk still counted, so a new tick cannot overtake a queued one.
+// The last kick still walking drains, whichever it is (another thread's may outlive this one: lane B's review); a kick
+// with another still walking leaves the ticks to it. (With two kicking threads, a kick B may start while this one sends a
+// popped tick outside the lock: that tick then goes out during B's first blocks, a VSync inside B's frame that the host
+// counts, and the rest of the queue is left to B, in order.)
+void drain_ticks() {
+    for (;;) {
+        QueuedTick q;
+        {
+            TickLock lock;
+            if (g_walking > 1 || (g_ring_count == 0 && g_overflow_count == 0)) {
+                if (--g_walking == 0) g_deferring = false;
+                return;
+            }
+            if (g_ring_count) {
+                q = g_ring[g_ring_head];
+                g_ring_head = (g_ring_head + 1) % kTickRing;
+                --g_ring_count;
+            } else {   // the overflow, oldest first: the newest display with each tick's own field and count
+                const FieldCount &f = g_overflow[g_overflow_head];
+                q.tick = g_overflow_last;
+                q.tick.field = f.field;
+                q.tick.count = f.count;
+                q.at = f.at;
+                g_overflow_head = (g_overflow_head + 1) % kTickOverflow;
+                --g_overflow_count;
+            }
+        }
+        LARGE_INTEGER now;
+        QueryPerformanceCounter(&now);
+        raise_to(g_longest_deferral, now.QuadPart - q.at.QuadPart);
+        if (const auto send = g_tick_send.load()) send(q.tick);
+    }
+}
+
+// FrameEnd as a record block of its own (CONTRACTS.md a.5.1), right after the walked list. With scene records off for
+// this kick, a frame left open (they went off after its FrameBegin) is closed unsent, so a later FrameBegin opens anew.
+void send_frame_end(bool send) {
     struct {
         gfx::Header header;
         gfx::scene::FrameEnd end;
@@ -332,7 +495,7 @@ void send_frame_end() {
     } block{};
     static_assert(sizeof block == 32);   // 4 + 20, padded to two qwords
     uint32_t thread = 0;
-    if (!scene_frame_end(&block.end, sizeof block.end, &thread)) return;
+    if (!scene_frame_end(&block.end, sizeof block.end, &thread) || !send) return;
     if (thread != GetCurrentThreadId()) {   // A3's check: the frame opened on another thread than its kick
         static bool warned = false;
         if (!warned) {
@@ -362,8 +525,41 @@ extern "C" void gt4_replace_func_004A11F8(uint32_t pair) {
     for (int k = 0; k < 4; ++k) guest_ref<uint8_t>(kContext + 0x65 + k) = 0;   // the library's transfer counters
     // (The PATH3 list, at pair + 4, is left: it holds nothing natively, and recording a display list relinks it
     // into the frame's list, whose blocks would be sent twice.)
-    if (const uint32_t list = guest_ref<uint32_t>(pair)) walk(list);
-    send_frame_end();   // the scene frame is this list (CONTRACTS.md a.5.1)
+    // With scene records on, the clock's ticks wait until the list and its FrameEnd are sent (CONTRACTS.md a.5.1): decided
+    // once here, kept until the drain.
+    const bool scene = gt4_scene_on() != 0;
+    if (scene) {
+        TickLock lock;
+        if (g_walking++) ++g_kicks_nested;   // (another kick walking: nested, or another thread's)
+        g_deferring = true;
+    }
+    WalkTimes times;
+    const uint32_t vblank = kernel_frame_count();
+    const int64_t start = qpc_now();
+    ++g_in_walk;
+    if (const uint32_t list = guest_ref<uint32_t>(pair)) walk(times, list);
+    --g_in_walk;
+    const int64_t took = qpc_now() - start;
+    {
+        static const int64_t ms16 = [] {
+            LARGE_INTEGER rate;
+            QueryPerformanceFrequency(&rate);
+            return rate.QuadPart * 16 / 1000;
+        }();
+        ++g_walks;
+        if (took > ms16) ++g_walks_over16;
+        if (took > ms16 * 50 / 16) ++g_walks_over50;
+        TickLock lock;
+        if (took > g_longest_walk) {
+            g_longest_walk = took;
+            g_longest_walk_send = times.send;
+            g_longest_walk_read = times.read;
+            g_longest_walk_vblank = vblank;
+        }
+    }
+    send_frame_end(scene);
+    if (scene) drain_ticks();
+    log_tick_counts();
     signal(1);
     signal(2);
 }

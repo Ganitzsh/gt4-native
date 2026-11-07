@@ -12,6 +12,7 @@
 #include "kernel.h"
 #include "link.h"
 #include "log.h"
+#include "runtime.h"
 
 #include <windows.h>
 
@@ -30,6 +31,25 @@ volatile uint64_t g_display[7] = {0, 0, 0, 0, 0, 0, 0};
 gfx::DisplayRecord g_display_sent;
 bool g_display_valid = false;
 
+// A tick's link records: the display when it changed (again when a capture window opened or closed), then the VSync.
+// From the clock's thread at the tick, or from a kick right after its FrameEnd (runtime/frame.cpp frame_tick).
+void send_tick(const ClockTick &t) {
+    static bool capturing = false;
+    if (t.captureWindow != capturing) {  // a capture window opens: send the display again
+        capturing = !capturing;
+        g_display_valid = false;
+    }
+    const gfx::DisplayRecord d = gfx::displayFromRegisters(t.display[0], t.display[1], t.display[2], t.display[3], t.display[4],
+                                                           t.display[5], t.display[6]);
+    if (!g_display_valid || !(d == g_display_sent)) {
+        g_display_valid = true;
+        g_display_sent = d;
+        link_send(GT4_REC_DISPLAY, &d, sizeof d);
+    }
+    const uint32_t rec[2] = {t.field, t.count};
+    link_send(GT4_REC_VSYNC, rec, sizeof rec);
+}
+
 void on_frame(uint32_t count) {
     g_field ^= 1;   // the field alternates every frame
     audio_frame();
@@ -39,20 +59,14 @@ void on_frame(uint32_t count) {
         ExitProcess(0);
     }
     if (!link_active()) return;
-    static bool capturing = false;
-    if (link_capture_window() != capturing) {  // a capture window opens: send the display again
-        capturing = !capturing;
-        g_display_valid = false;
-    }
-    const gfx::DisplayRecord d = gfx::displayFromRegisters(g_display[0], g_display[1], g_display[2], g_display[3], g_display[4],
-                                                           g_display[5], g_display[6]);
-    if (!g_display_valid || !(d == g_display_sent)) {
-        g_display_valid = true;
-        g_display_sent = d;
-        link_send(GT4_REC_DISPLAY, &d, sizeof d);
-    }
-    const uint32_t rec[2] = {g_field, count};
-    link_send(GT4_REC_VSYNC, rec, sizeof rec);
+    // the display as it stands now, the field and the capture window, sent now or (scene records on, a kick walking its
+    // list) after that list's FrameEnd (docs/modern/CONTRACTS.md a.5.1)
+    ClockTick t{};
+    for (int k = 0; k < 7; ++k) t.display[k] = g_display[k];
+    t.field = g_field;
+    t.count = count;
+    t.captureWindow = link_capture_window();
+    frame_tick(t, send_tick);
     link_poll();
 }
 

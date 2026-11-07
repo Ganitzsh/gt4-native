@@ -32,6 +32,15 @@ void set_game_option(uint32_t id, uint32_t value);   // GT4_REC_HOST_CMD 4 (runt
 // scene_frame_end closes the open frame: false when none is open, else `record` is its FrameEnd (`bytes` long, its
 // counts as runtime/native/pgl.cpp appended them) and `thread` the thread that opened it.
 bool scene_frame_end(void *record, uint32_t bytes, uint32_t *thread);
+// The frame clock's tick (runtime/gs.cpp on_frame): its link records (the display as it stands at the tick, then the
+// VSync), sent by `send`. While a kick walks its list with scene records on, the tick is queued and the kick sends it
+// after FrameEnd (a.5.1), so a list and its FrameEnd are never split across the host's FrameLists. Else sent at once.
+struct ClockTick {
+    uint64_t display[7];
+    uint32_t field, count;
+    bool captureWindow;
+};
+void frame_tick(const ClockTick &tick, void (*send)(const ClockTick &));
 
 }  // namespace gt4::rt
 
