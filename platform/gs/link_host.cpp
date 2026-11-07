@@ -17,6 +17,8 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <fcntl.h>
+#include <io.h>
 #else
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -288,7 +290,18 @@ uint64_t fileSize(std::FILE* f) {
 std::unique_ptr<ReplaySource> ReplaySource::open(const std::string& path, std::string& error) {
     auto source = std::make_unique<ReplaySource>();
     source->file = path;
+#ifdef _WIN32
+    // Shared for deleting and renaming, as the mapping before it was: a replay does not keep its capture from being
+    // removed (fopen's sharing would, and a test removing its capture while the replay is open stopped on it).
+    HANDLE handle = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+    const int fd = handle == INVALID_HANDLE_VALUE ? -1 : _open_osfhandle(reinterpret_cast<intptr_t>(handle), _O_RDONLY | _O_BINARY);
+    if (fd < 0 && handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+    std::FILE* f = fd >= 0 ? _fdopen(fd, "rb") : nullptr;
+    if (!f && fd >= 0) _close(fd);
+#else
     std::FILE* f = std::fopen(path.c_str(), "rb");
+#endif
     if (!f) {
         error = "cannot open the capture " + path;
         return nullptr;
