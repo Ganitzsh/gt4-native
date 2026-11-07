@@ -313,8 +313,27 @@ Where each record is sent (tickets in PLAN.md):
    - The first `FrameBegin` since the last kick opens the frame. The runtime drops any later one until the kick
      and counts it in `FrameEnd::begins`, so the opening one's `flags` stand.
    - The kick (004A11F8) sends `FrameEnd` after `walk(list)` when a frame is open. It goes as a `GT4_REC_GFX` block
-     of its own from the kick's thread, with nothing sent on the link between the list's last block and it. So it
-     lands in the same host `FrameList` as the frame's batches.
+     of its own from the kick's thread, with nothing sent on the link between the list's first block and it. So the
+     whole list and its `FrameEnd` land in one host `FrameList` (the host closes `FrameList`s at `GT4_REC_VSYNC`).
+   - **Ticks during a walk are deferred.** The frame clock's tick (`on_frame`, `runtime/gs.cpp`, on the clock's
+     thread under `g_lock`) could send `GT4_REC_VSYNC` between any two blocks of a walk (A3 found it), splitting a
+     list across two `FrameList`s.
+     - `frame.cpp` keeps a mutex, a `walking` flag and a queue of ticks. A tick during a walk queues its records
+       (DISPLAY as the registers stand at the tick, then `{field, count}`). It also queues its capture-window
+       change, so a capture never opens or closes inside a list. It sends nothing.
+     - `audio_frame` and `link_poll` stay at the tick.
+     - After `FrameEnd`, the kick drains the queue in order with the flag still set: lock, pop one, unlock, send,
+       until the queue is empty; then it clears the flag under the lock. So a new tick can't overtake a queued one.
+     - Neither side holds the mutex across a `link_send` from a guest thread. A guest thread takes `g_lock` after
+       each send, and the clock holds `g_lock`.
+     - **Only while scene records are on** (`gt4_scene_on()`). With them off, `on_frame` and the timing are
+       byte-identical to today at every preset: `original` and the GS path don't change timing for a feature they
+       don't use, and the records-off path stays a clean baseline. With records on, the game's VBlank count and
+       interrupts are unchanged; only where `GT4_REC_VSYNC` falls in the stream moves, by at most one walk.
+     - A synchronous read inside a walk (`link_read_image`) does not wait for a VSync. `GsHost::readTransfer`
+       (`gs_host.cpp:251`) serves it at once: it draws the `FrameList` so far as a partial list and reads back
+       (A3 checked). So deferred ticks need no flush before a read. The cut this makes is covered in a.8.
+     - The kick counts the ticks that land mid-walk (logged per session).
    - The frame therefore holds everything drawn from its `FrameBegin` to the kick: the env-map passes, the main
      view, the mirror, the post effects, the HUD's 3D widget (003BE3C8, `kViewHud`, drawn after `render_world`
      returns) and the menus' car views (00217058, `kViewMenu`). The HUD view is never substituted. It is recorded
@@ -329,8 +348,8 @@ Where each record is sent (tickets in PLAN.md):
    A3 checks:
    - frame-open state, `gt4_gfx_scene` and the kick all run on the game thread, and list N+1 is not built
      before kick N returns;
-   - no other sender (VBlank, display, uploads from another thread) can put a record between the list's last
-     block and `FrameEnd`; if one can, the kick holds the link's send order across both;
+   - with the deferral, no `GT4_REC_VSYNC` falls inside a list or between it and `FrameEnd`; no other thread
+     sends records during a walk (uploads, reads);
    - whether pgl records display lists on paths that send scene records;
    - no kick in a race has a menu `FrameBegin` before `render_world`'s (its flags would stand).
 2. `ViewBegin` / `ViewEnd` pairs do not nest. Instances and lights appear only inside a view.
@@ -392,6 +411,7 @@ Where each record is sent (tickets in PLAN.md):
 | `cameraChecked`, `cameraMismatch` | course instances (`kInstCourse`) whose `objectToView` differs from their view's `worldToView` (R1: they are equal) | 0 |
 | `jobsUntaggedInView` | untagged model jobs into a bound view's target between its `ViewBegin` and the Light command | reported; the substitution keeps drawing them on the GS path |
 | `viewSplitTargets`, `viewsUnbound` | binding | 0 for main views |
+| `cuts`, `viewsCut` | partial `FrameList`s drawn at a synchronous read inside the frame's list; views with tagged draws in one, never substituted (a.8) | reported (main views: 0 in race frames, unless R9 names a synchronous reader there) |
 | `viewFallbacks` (by reason: not bound, mesh pending, pipeline pending, validation, read pending) | modern views drawn by the GS path | reported; 0 after warm-up for `mesh pending` and `pipeline pending` |
 | `meshesNew`, `meshesPending`, `materialsNew` | scene cache | reported |
 
@@ -463,8 +483,20 @@ struct SceneFrame {                               // one per kicked list (a.5.1)
 ```
 
 `FrameList` (`gs_frontend.h:145`) gains `std::unique_ptr<scene::SceneFrame> scene` (null without records: the frame
-whose `FrameEnd` arrived while that `FrameList` was being built, which a.5.1 makes the one holding its batches) and
+whose `FrameEnd` arrived while that `FrameList` was being built) and
 `Draw` gains `uint16_t view = 0`. `recycleFrameList` resets them.
+
+**Cuts at a synchronous read.** A synchronous read inside a list (`GsHost::readTransfer`, `gs_host.cpp:251`)
+draws the `FrameList` so far as a partial list. So one kicked list can be drawn as several `FrameList`s: partial
+ones at each read, then the one that receives `FrameEnd`.
+- The scene decoder works in stream order, independent of `FrameList`s. Its open frame, view and instance, and
+  the jobs' tags, carry across a cut.
+- The front end (A10) keeps each `Draw::view` across the cut. The `SceneFrame` goes on the last list only.
+- A partial list is drawn before its frame's `FrameEnd` has arrived and been validated. So a view with tagged
+  draws in a partial list is not substituted in that frame. It is counted as `viewsCut` and drawn as original.
+- Which reads matter, and whether a reader may see the modern image, is R9's question. The flare read is
+  asynchronous and makes no cut.
+- A3's SCENE run counts cuts per frame.
 
 ---
 

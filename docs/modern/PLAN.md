@@ -63,7 +63,7 @@ ARCHITECTURE.md section 1) and the CPU-side tests (B5's mesh check, A10's decode
 
 | Lane | Owns | Shared files it may touch, and in which order |
 |---|---|---|
-| A. Scene extraction | `game_src/` hooks, `runtime/native/pgl.cpp`, `runtime/frame.cpp`, `runtime/runtime.h`, `compat/game/gt4_scene.h`, `include/gt4/gfx.h` scene section, `platform/scene/scene_decoder.*`, `scene_frame.h` | `stream.cpp`, `stream.h`, `gs_host.cpp` (QueuedTarget): A1, A10. `gs_frontend.*`: A10 **after E2**. `protocol.h`: A1 **before D2** |
+| A. Scene extraction | `game_src/` hooks, `runtime/native/pgl.cpp`, `runtime/frame.cpp`, `runtime/runtime.h`, `compat/game/gt4_scene.h`, `include/gt4/gfx.h` scene section, `platform/scene/scene_decoder.*`, `scene_frame.h` | `stream.cpp`, `stream.h`, `gs_host.cpp` (QueuedTarget): A1, A10. `gs_frontend.*`: A10 **after E2**. `protocol.h`: A1 **before D2**. `runtime/gs.cpp` `on_frame` (ticks deferred during a walk, CONTRACTS a.5.1): A3 |
 | B. Renderer | `platform/render/graph/`, `platform/render/modern/`, `platform/scene/mesh_cache.*`, `material_table.*`, `pipeline.cpp`, `gsn_scene.cpp`, `vk.*`, shaders | `renderer.cpp`, `main.cpp`: B2 **first** (day one) |
 | C. Platform, ARM64, tooling | `cmake/`, `tools/build_*`, `tools/package_game.py`, `tools/frame_diff.py`, `tools/perf_report.py`, `platform/core/`, `link_host.cpp`, `docs/modern/CAPTURES.md` | `main.cpp`, `renderer.cpp`: C1 **after B2** |
 | D. Systems | `platform/input/`, `platform/audio/`, `runtime/memcard.cpp`, `platform/saves/`, `runtime/iop.cpp`, `runtime/audio.cpp` | `main.cpp`: D1 **after C1**. `protocol.h`: D2 **after A1**. `stream.cpp`: D5 **after A10** |
@@ -113,11 +113,14 @@ capture with records: `SCENE` (`matrixMismatch == 0`, `itemsMismatch == 0`); gam
 
 **A3: Frame and view records (M).** `game_src/func_0033DEA8.cpp` (`FrameBegin`, the main view); `FrameEnd` from
 the runtime at the kick (`runtime/frame.cpp`, `runtime/native/pgl.cpp`'s per-frame counts; CONTRACTS a.5.1 and its checks);
-the HUD widget's view (003BE3C8, `kViewHud`);
+the HUD widget's view (003BE3C8, `kViewHud`); the tick deferred during a walk (`runtime/gs.cpp` `on_frame`);
 `game_src/func_00341E50.cpp` (mirror, `kViewInset`); the camera as A0 found it (set 0 at its stack base);
 menus' 3D entry for the showroom and event screen (A0 names it). Depends: A1, A0. Acceptance: `REL`; `ORIG`;
 `SCENE` (`viewsNested == 0`, `countsMismatch == 0`, `instancesWithoutView == 0` in race frames, `cameraMismatch == 0`
-on course instances); with A10: `viewsUnbound == 0` for main views.
+on course instances); with A10: `viewsUnbound == 0` for main views. Tick deferral: a live race run, before and after,
+reports the ticks that landed mid-walk; after it, `framesUnclosed == 0` with that count above 0, and frame pacing
+(the host's frame-time stats) unchanged within noise; with scene records off, the same run's link stream and timing
+unchanged from before (the deferral is off there).
 
 **A4: Object identity from 00455708 (S-M).** `game_src/func_00455708.cpp` (draft) sets a runtime-global model
 context (set, model index, level) that A2 reads (`kInstObjectKnown`). Depends: A2, RISKS R2 verdict on 00455708.
