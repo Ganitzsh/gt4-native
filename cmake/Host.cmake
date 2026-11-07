@@ -336,14 +336,16 @@ if(BUILD_TESTING)
   add_test(NAME mesh_cache COMMAND gt4_mesh_cache_test ${GT4_MESH_CAPTURES})
   set_tests_properties(mesh_cache PROPERTIES SKIP_RETURN_CODE 77)
 
-  # The render graph (platform/render/graph): compile on the CPU with a fake backend (no GPU).
+  # The render graph (platform/render/graph): compile on the CPU with a fake backend (no GPU), and a few frames
+  # on a GPU with validation and synchronization validation when the layer is installed (skipped (77) without one).
   add_library(gt4_render_graph_testlib STATIC platform/render/graph/render_graph.cpp platform/render/vk.cpp
       platform/render/pipeline_cache_file.cpp)
   target_include_directories(gt4_render_graph_testlib PUBLIC platform/render platform/render/graph platform/gs third_party)
   target_compile_definitions(gt4_render_graph_testlib PUBLIC VK_NO_PROTOTYPES $<$<BOOL:${WIN32}>:_CRT_SECURE_NO_WARNINGS>)
   target_link_libraries(gt4_render_graph_testlib PUBLIC Vulkan::Headers ${GT4_VOLK} ${GT4_VOLK_HEADERS})
   add_executable(gt4_render_graph_test tests/render_graph.cpp)
-  foreach(t gt4_render_graph_testlib gt4_render_graph_test)
+  add_executable(gt4_render_graph_gpu_test tests/render_graph_gpu.cpp)
+  foreach(t gt4_render_graph_testlib gt4_render_graph_test gt4_render_graph_gpu_test)
     if(MSVC)
       target_compile_options(${t} PRIVATE /W4)
     else()
@@ -351,7 +353,10 @@ if(BUILD_TESTING)
     endif()
   endforeach()
   target_link_libraries(gt4_render_graph_test PRIVATE gt4_render_graph_testlib)
+  target_link_libraries(gt4_render_graph_gpu_test PRIVATE gt4_render_graph_testlib)
   add_test(NAME render_graph COMMAND gt4_render_graph_test)
+  add_test(NAME render_graph_gpu COMMAND gt4_render_graph_gpu_test)
+  set_tests_properties(render_graph_gpu PROPERTIES SKIP_RETURN_CODE 77)
 
   # Saves from memory card images, .psu exports and folder cards (built here; no game data).
   add_executable(gt4_save_import_test tests/save_import.cpp)
