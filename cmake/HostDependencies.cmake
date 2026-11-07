@@ -47,7 +47,29 @@ FetchContent_Declare(glslang
     GIT_REPOSITORY https://github.com/KhronosGroup/glslang.git
     GIT_TAG b5782e52ee2f7b3e40bb9c80d15b47016e008bc9) # vulkan-sdk-1.4.335.0
 
-FetchContent_MakeAvailable(SDL3 VulkanHeaders glslang)
+# The glslang that compiles the shaders runs on the build machine. A native build builds it here (the pinned
+# commit above). A cross build (Windows ARM64 or Linux aarch64 from an x64 machine) cannot run what it builds, so it
+# takes GT4_GLSLANG_EXECUTABLE, or else glslang / glslangValidator from the Vulkan SDK or the PATH, and builds none.
+# (An SDK of another version may emit other SPIR-V bytes: give the pinned version's tool to compare with x64.)
+set(GT4_GLSLANG_EXECUTABLE "" CACHE FILEPATH
+    "glslang for the build machine (cross builds; empty: glslang built here, or the Vulkan SDK's when cross-compiling)")
+if(NOT GT4_GLSLANG_EXECUTABLE AND CMAKE_CROSSCOMPILING)
+  find_program(GT4_GLSLANG_FOUND NAMES glslang glslangValidator
+      HINTS "$ENV{VULKAN_SDK}/Bin" "$ENV{VULKAN_SDK}/bin" NO_CMAKE_FIND_ROOT_PATH)
+  if(NOT GT4_GLSLANG_FOUND)
+    message(FATAL_ERROR "Cross-compiling: no glslang for the build machine. Install the Vulkan SDK or set "
+                        "GT4_GLSLANG_EXECUTABLE to a glslang (or glslangValidator) that runs here.")
+  endif()
+  set(GT4_GLSLANG_EXECUTABLE "${GT4_GLSLANG_FOUND}" CACHE FILEPATH "" FORCE)
+endif()
+if(GT4_GLSLANG_EXECUTABLE)
+  message(STATUS "Shaders: ${GT4_GLSLANG_EXECUTABLE} (glslang not built)")
+  set(GT4_GLSLANG ${GT4_GLSLANG_EXECUTABLE})
+  FetchContent_MakeAvailable(SDL3 VulkanHeaders)
+else()
+  set(GT4_GLSLANG glslang-standalone)   # (the target: built before the shaders)
+  FetchContent_MakeAvailable(SDL3 VulkanHeaders glslang)
+endif()
 
 # volk (MIT): the Vulkan meta-loader, at Granite's pinned commit. With GT4_GS_REFERENCE it is checked out where
 # Granite expects it and Granite compiles it (granite-volk); otherwise gt4-volk below. GT4_VOLK and

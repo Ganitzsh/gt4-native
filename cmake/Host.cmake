@@ -24,7 +24,7 @@ function(gt4_shader name source stage)
   endforeach()
   set(output ${GT4_SHADER_OUT}/spv_${name}.h)
   add_custom_command(OUTPUT ${output}
-      COMMAND glslang-standalone -V --target-env ${SHADER_ENV} -S ${stage} ${defines}
+      COMMAND ${GT4_GLSLANG} -V --target-env ${SHADER_ENV} -S ${stage} ${defines}
               -I${GT4_SHADER_SOURCE} -I${CMAKE_CURRENT_SOURCE_DIR}/third_party
               --vn spv_${name} -o ${output} ${source}
       DEPENDS ${source} ${GT4_SHADER_INCLUDES}
