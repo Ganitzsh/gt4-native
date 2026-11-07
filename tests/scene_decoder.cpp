@@ -637,6 +637,63 @@ void splitsAtVsync() {
     check(gs.sceneDecoder().totals().framesTruncated == 1 && gs.sceneDecoder().totals().framesUnclosed == 1 && !gs.sceneDecoder().frameOpen(),
           "the stream ends in a frame: framesTruncated");
 }
+// a.8: each view's verdict at its ViewEnd, and its package (copies of its instances and the projections they name).
+void viewPackages() {
+    SceneDecoder d;
+    d.setViewPackages(true);
+    put(d, frameBegin(1));
+    put(d, projection(1, 0));
+    put(d, viewBegin(1, 1));
+    const auto course = instance(1, 1, worldToView(), 1, rec::kInstCourse);
+    put(d, course);
+    d.batchRun();
+    gt4::gfx::ModelJob j = jobFor(course);
+    d.job(j);
+    d.runEnd();
+    put(d, viewEnd(1, 1));
+    auto v1 = d.takeClosedView();
+    check(v1 && v1->view.valid && v1->view.id == 1 && v1->instances.size() == 1 && v1->instances[0].serial == 1 &&
+              v1->projections.size() == 1 && v1->projections[0].id == 1,
+          "package: the view's instances and its projection, valid");
+    check(!d.takeClosedView(), "package: taken once");
+    put(d, viewBegin(2, 1));   // a view with a wrong matrix: not valid
+    const auto car = instance(2, 2, translate(1.0f, 0.0f, 5.0f) * worldToView(), 1);
+    put(d, car);
+    d.batchRun();
+    gt4::gfx::ModelJob wrong = jobFor(course);   // (the course's matrix under the car's tag)
+    d.job(wrong);
+    d.runEnd();
+    put(d, viewEnd(2, 1));
+    auto v2 = d.takeClosedView();
+    check(v2 && !v2->view.valid, "package: a view with a matrix mismatch is not valid");
+    put(d, viewBegin(3, 1));   // ViewEnd's count differs: not valid
+    put(d, viewEnd(3, 1));
+    auto v3 = d.takeClosedView();
+    check(v3 && !v3->view.valid, "package: a view whose ViewEnd count differs is not valid");
+    put(d, frameEnd(1, 3, 2, 1));
+    auto f = d.takeFrame();
+    check(f && f->views.size() == 3 && f->views[0].valid && !f->views[1].valid, "the frame's views carry the verdicts");
+    {   // a stray Instance (another view's) inside an open view: not in the package, and the view is not valid
+        SceneDecoder s;
+        s.setViewPackages(true);
+        put(s, frameBegin(1));
+        put(s, projection(1, 0));
+        put(s, viewBegin(1, 1));
+        put(s, instance(1, 1, worldToView(), 0));
+        put(s, instance(2, 7, worldToView(), 0));   // names view 7
+        put(s, instance(3, 1, worldToView(), 0));
+        put(s, viewEnd(1, 2));
+        auto v = s.takeClosedView();
+        check(v && v->instances.size() == 2 && v->instances[0].serial == 1 && v->instances[1].serial == 3 && !v->view.valid,
+              "package: a stray instance is left out and makes the view invalid");
+    }
+    SceneDecoder off;   // packages only when asked for
+    put(off, frameBegin(1));
+    put(off, viewBegin(1, 0));
+    put(off, viewEnd(1, 0));
+    check(!off.takeClosedView(), "no package unless asked for");
+}
+
 }  // namespace
 
 int main() {
@@ -651,6 +708,7 @@ int main() {
     moreCounters();
     throughStream();
     splitsAtVsync();
+    viewPackages();
     if (failures) std::fprintf(stderr, "%d failure(s)\n", failures);
     else std::printf("scene_decoder: all checks passed\n");
     return failures ? 1 : 0;

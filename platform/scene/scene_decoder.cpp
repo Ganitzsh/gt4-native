@@ -229,7 +229,11 @@ void SceneDecoder::viewBegin(const rec::ViewBegin& r) {
     }
     ++c.views;
     if (r.view != frame_->views.size() + 1) ++c.bad;   // numbered from 1 in ViewBegin order (a.3)
-    if (r.projection > frame_->projections.size()) ++c.projectionUnknown;
+    viewErrors_ = 0;
+    if (r.projection > frame_->projections.size()) {
+        ++c.projectionUnknown;
+        ++viewErrors_;
+    }
     ViewData v;
     v.id = r.view;
     v.role = r.role;
@@ -257,8 +261,34 @@ void SceneDecoder::viewEnd(const rec::ViewEnd& r) {
         ++c.viewEndWithoutBegin;
         return;
     }
-    if (r.instances != frame_->views[view_].instanceCount) ++c.countsMismatch;
+    const bool countsMatch = r.instances == frame_->views[view_].instanceCount;
+    if (!countsMatch) ++c.countsMismatch;
+    const int ended = view_;
     closeView(true);
+    ViewData& v = frame_->views[ended];
+    v.valid = countsMatch && viewErrors_ == 0;   // its own checks (a.8); viewSplitTargets is the front end's
+    if (packages_) package(v);
+}
+
+void SceneDecoder::package(const ViewData& v) {
+    std::shared_ptr<SceneView> p = sceneViewFromPool();
+    p->view = v;
+    const SceneFrame& f = *frame_;
+    p->instances.clear();   // (its own: an instance of another view inside it is not one of them)
+    for (size_t k = v.firstInstance; k < f.instances.size(); ++k)
+        if (f.instances[k].view == v.id) p->instances.push_back(f.instances[k]);
+    auto named = [&](uint16_t id) {
+        if (!id || id > f.projections.size()) return;
+        for (const ProjectionData& q : p->projections)
+            if (q.id == id) return;
+        p->projections.push_back(f.projections[id - 1u]);
+    };
+    named(v.projection);
+    for (const InstanceData& i : p->instances) named(i.projection);
+    p->lights.assign(f.lights.begin() + v.firstLight, f.lights.begin() + v.firstLight + v.lightCount);
+    p->emitters = f.emitters;
+    p->vehicles = f.vehicles;
+    closedView_ = std::move(p);
 }
 
 void SceneDecoder::closeView(bool ended) {
@@ -290,10 +320,14 @@ void SceneDecoder::instance(const rec::Instance& r) {
     d.shapeScale = r.shapeScale;
     d.items = r.items;
     // an id not sent yet, or none for a Cmd that draws (its jobs could not be checked)
-    if (r.projection > frame_->projections.size() || (r.projection == 0 && r.items > 0)) ++c.projectionUnknown;
+    if (r.projection > frame_->projections.size() || (r.projection == 0 && r.items > 0)) {
+        ++c.projectionUnknown;
+        if (view_ >= 0) ++viewErrors_;
+    }
     ViewData* view = view_ >= 0 && frame_->views[view_].id == r.view && r.view != 0 ? &frame_->views[view_] : nullptr;
     if (!view) {
         ++c.instancesWithoutView;
+        if (view_ >= 0) ++viewErrors_;   // (an Instance naming another view inside an open one: that view's error too)
         d.view = 0;
     } else {
         d.view = r.view;
@@ -330,6 +364,7 @@ void SceneDecoder::closeInstance() {
     const InstanceData& d = frame_->instances[instance_];
     if (d.runs < d.items) {   // its `items` kBatchRun records follow it (a.5 3): fewer before the next Instance, ViewEnd, Marker
         ++frame_->counters.itemsMismatch;
+        if (view_ >= 0 && d.view == frame_->views[view_].id) ++viewErrors_;
         // GT4_SCENE_DEBUG=1 (debugging): the first few, with the Cmd and its view
         static const bool debug = [] { const char* e = std::getenv("GT4_SCENE_DEBUG"); return e && e[0] == '1'; }();
         static int shown = 0;
@@ -395,6 +430,8 @@ bool SceneDecoder::expectedMatrix(const InstanceData& d, Mat4& out) const {
 void SceneDecoder::job(gfx::ModelJob& job) {
     // the tag is the instance's position + 1, never the record's serial: a bad serial is counted, not trusted
     job.pad[0] = runInstance_ >= 0 ? static_cast<uint32_t>(runInstance_) + 1 : 0;
+    // and its view, for the front end (Draw::view, the view's target: a.5 7, a.8); 0 untagged
+    job.pad[1] = runInstance_ >= 0 && frame_ ? frame_->instances[static_cast<size_t>(runInstance_)].view : 0;
     if (!frame_) return;
     SceneCounters& c = frame_->counters;
     if (runInstance_ < 0) {
@@ -425,10 +462,16 @@ void SceneDecoder::job(gfx::ModelJob& job) {
     const float difference = largestDifference(expected, got), size = largest(got);
     const float error = std::isfinite(difference) && std::isfinite(size) ? difference / std::max(size, 1e-30f) : INFINITY;
     c.matrixMaxError = std::max(c.matrixMaxError, error);
-    if (!(error <= kMatrixTolerance)) ++c.matrixMismatch;
+    const bool inOpenView = view_ >= 0 && d.view == frame_->views[view_].id;
+    if (!(error <= kMatrixTolerance)) {
+        ++c.matrixMismatch;
+        if (inOpenView) ++viewErrors_;
+    }
     if (std::memcmp(p.viewportScale, job.scale, sizeof job.scale) != 0 || std::memcmp(p.viewportOffset, job.offset, sizeof job.offset) != 0 ||
-        std::memcmp(p.clamp, job.clamp, sizeof job.clamp) != 0)
+        std::memcmp(p.clamp, job.clamp, sizeof job.clamp) != 0) {
         ++c.viewportMismatch;
+        if (inOpenView) ++viewErrors_;
+    }
 }
 
 std::unique_ptr<SceneFrame> SceneDecoder::takeFrame() { return std::move(done_); }
