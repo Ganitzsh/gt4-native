@@ -47,22 +47,10 @@ struct Map {
     std::vector<Binding> bindings[kActionCount];
 };
 
+// The PS2 mapping. The host doesn't remap the pad's buttons (docs/modern/spikes/D1-bindings.md): GT4's own
+// controller screen assigns its functions to them, and a host remap would make that screen and the game's button
+// prompts disagree with what happens. The triggers drive the L2/R2 pressures; GT4 can put Gas and Brake there.
 Map originalMap();
-
-// The settings that change the map (input.*; `original` is the PS2 mapping above and gets none of them).
-struct Options {
-    // input.pedals: `original` (the triggers give the L2/R2 pressures) or `triggers` (the right trigger gives the
-    // pressure of the throttle button and the left one the brake's; the gamepad buttons on those two move to R2 and
-    // L2, GT4's default shift up and down)
-    bool triggersAsPedals = false;
-    ps2::PadButton throttle = ps2::PadCross;  // input.throttle_button
-    ps2::PadButton brake = ps2::PadSquare;    // input.brake_button
-};
-Map makeMap(const Options& options);
-
-// "cross" -> PadCross, ...: the names ps2_pad.h and GT4_PAD_SCRIPT use; false for an unknown name
-bool buttonByName(const std::string& name, ps2::PadButton& out);
-const char* buttonName(ps2::PadButton b);
 
 // The pad input of one pad from the snapshot (a pad with no gamepad still reads the keys bound).
 ps2::PadInput apply(const Map& map, const Snapshot& state);

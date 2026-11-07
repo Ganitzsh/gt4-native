@@ -67,44 +67,6 @@ Map originalMap() {
     return m;
 }
 
-Map makeMap(const Options& o) {
-    Map m = originalMap();
-    if (!o.triggersAsPedals) return m;
-    m.name = "triggers";
-    for (auto* list : {&m.bindings[ps2::PadL2], &m.bindings[ps2::PadR2]})
-        std::erase_if(*list, [](const Binding& b) { return b.source == Source::Axis; });
-    // The gamepad buttons on the throttle and brake buttons take the triggers' places, R2 and L2 (a swap): GT4 shifts
-    // on R2/L2 by default, which would otherwise have no gamepad binding left (docs/modern/spikes/D1-bindings.md).
-    const auto moveButtons = [&](ps2::PadButton from, ps2::PadButton to) {
-        if (from == to) return;
-        auto& list = m.bindings[from];
-        for (const Binding& b : list)
-            if (b.source == Source::Button) m.bindings[to].push_back(b);
-        std::erase_if(list, [](const Binding& b) { return b.source == Source::Button; });
-    };
-    moveButtons(o.throttle, ps2::PadR2);
-    moveButtons(o.brake, ps2::PadL2);
-    m.bindings[o.throttle].push_back(axis(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER));
-    m.bindings[o.brake].push_back(axis(SDL_GAMEPAD_AXIS_LEFT_TRIGGER));
-    return m;
-}
-
-namespace {
-const char* const kButtonNames[ps2::PadButtonCount] = {"select", "l3", "r3", "start", "up", "right", "down", "left",
-                                                      "l2", "r2", "l1", "r1", "triangle", "circle", "cross", "square"};
-}
-
-bool buttonByName(const std::string& name, ps2::PadButton& out) {
-    for (uint32_t b = 0; b < ps2::PadButtonCount; ++b)
-        if (name == kButtonNames[b]) {
-            out = static_cast<ps2::PadButton>(b);
-            return true;
-        }
-    return false;
-}
-
-const char* buttonName(ps2::PadButton b) { return b < ps2::PadButtonCount ? kButtonNames[b] : "?"; }
-
 ps2::PadInput apply(const Map& map, const Snapshot& s) {
     ps2::PadInput in;
     for (uint32_t action = 0; action < kActionCount; ++action) {

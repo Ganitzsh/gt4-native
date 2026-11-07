@@ -151,58 +151,6 @@ int main() {
         same(map, s, "a random combination");
     }
 
-    // the options: input.pedals=original is the original map; =triggers moves the triggers to the pedal buttons
-    {
-        input::Options o;
-        const input::Map orig = input::makeMap(o);
-        input::Snapshot s;
-        s.gamepad = true;
-        s.axes[SDL_GAMEPAD_AXIS_RIGHT_TRIGGER] = raw(16384);
-        s.axes[SDL_GAMEPAD_AXIS_LEFT_TRIGGER] = raw(32767);
-        uint8_t a[18], b[18];
-        ps2::encodePad(input::apply(map, s), a);
-        ps2::encodePad(input::apply(orig, s), b);
-        expect(orig.name == "original" && std::memcmp(a, b, 18) == 0, "input.pedals=original is the original map");
-
-        o.triggersAsPedals = true;
-        const input::Map pedals = input::makeMap(o);
-        ps2::encodePad(input::apply(pedals, s), b);
-        // byte 1: bit 0 L2, 1 R2, 6 Cross, 7 Square (pressed = 0); pressures at 6 + (6 Cross, 7 Square, 10 L2, 11 R2)
-        expect(pedals.name == "triggers", "the pedals map's name");
-        expect(b[6 + 6] == 0x80 && !(b[1] & 0x40), "half the right trigger: cross at half pressure, pressed");
-        expect(b[6 + 7] == 0xFF && !(b[1] & 0x80), "the left trigger: square at full pressure");
-        expect(b[6 + 10] == 0 && b[6 + 11] == 0 && (b[1] & 0x03) == 0x03, "L2 and R2 left alone by the triggers");
-        s.keys[SDL_SCANCODE_1] = true;
-        ps2::encodePad(input::apply(pedals, s), b);
-        expect(b[6 + 10] == 0xFF && !(b[1] & 0x01), "L2 still from its key");
-        // the gamepad's south and west buttons now give R2 and L2 (GT4's shift up and down), not Cross and Square
-        s = {};
-        s.gamepad = true;
-        s.buttons[SDL_GAMEPAD_BUTTON_SOUTH] = true;
-        ps2::encodePad(input::apply(pedals, s), b);
-        expect(b[6 + 11] == 0xFF && !(b[1] & 0x02) && b[6 + 6] == 0 && (b[1] & 0x40), "south gives R2, not Cross");
-        s.buttons[SDL_GAMEPAD_BUTTON_SOUTH] = false;
-        s.buttons[SDL_GAMEPAD_BUTTON_WEST] = true;
-        ps2::encodePad(input::apply(pedals, s), b);
-        expect(b[6 + 10] == 0xFF && !(b[1] & 0x01) && b[6 + 7] == 0 && (b[1] & 0x80), "west gives L2, not Square");
-        s = {};
-        s.keys[SDL_SCANCODE_X] = true;
-        ps2::encodePad(input::apply(pedals, s), b);
-        expect(b[6 + 6] == 0xFF && !(b[1] & 0x40), "the keyboard's X key still gives Cross");
-
-        ps2::PadButton t{}, k{};
-        expect(input::buttonByName("r2", t) && !input::buttonByName("pedal", k) && input::buttonByName("l2", k) &&
-                   std::string(input::buttonName(ps2::PadCross)) == "cross",
-               "button names");
-        o.throttle = t;
-        o.brake = k;
-        s = {};
-        s.gamepad = true;
-        s.axes[SDL_GAMEPAD_AXIS_RIGHT_TRIGGER] = raw(32767);
-        ps2::encodePad(input::apply(input::makeMap(o), s), b);
-        expect(b[6 + 11] == 0xFF && b[6 + 6] == 0, "the throttle on another button (R2)");
-    }
-
     if (failures) {
         std::fprintf(stderr, "%d failure(s), %ld byte mismatches\n", failures, mismatches);
         return 1;
