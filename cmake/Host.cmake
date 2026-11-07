@@ -480,6 +480,9 @@ if(BUILD_TESTING)
     add_test(NAME frame_metrics_selftest
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/frame_metrics.py --selftest)
     set_tests_properties(frame_metrics_selftest PROPERTIES SKIP_RETURN_CODE 77)
+    # The frame comparison tool (tools/frame_diff.py, ticket C1) on synthetic frames, with and without numpy.
+    add_test(NAME frame_diff_selftest
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/frame_diff.py --selftest)
   endif()
   # The game runtime's whole-range test for game memory (runtime/guest.h).
   add_executable(gt4_guest_ram_test tests/guest_ram.cpp)

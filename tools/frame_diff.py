@@ -190,7 +190,89 @@ def baseline(args):
     return ok, report
 
 
+def selftest():
+    """ctest frame_diff_selftest: synthetic frames, with numpy (when present) and without."""
+    import tempfile
+    global np
+    failures = []
+
+    def expect(ok, what):
+        if not ok:
+            failures.append(what)
+
+    def ppm(path, w, h, pixels):
+        with open(path, "wb") as f:
+            f.write(b"P6\n%d %d\n255\n" % (w, h) + bytes(pixels))
+
+    class Args:
+        tolerance, min_identical, min_within4, heatmap = 4, 100.0, 100.0, None
+
+    with tempfile.TemporaryDirectory(prefix="gt4_frame_diff_") as tmp:
+        w, h = 8, 4
+        base = [(17 * i) % 251 for i in range(w * h * 3)]
+        a, b = os.path.join(tmp, "a"), os.path.join(tmp, "b")
+        os.makedirs(a)
+        os.makedirs(b)
+
+        def variant(name, change):
+            pixels = list(base)
+            change(pixels)
+            ppm(os.path.join(a, name), w, h, base)
+            ppm(os.path.join(b, name), w, h, pixels)
+
+        variant("same.ppm", lambda p: None)
+        variant("one_off.ppm", lambda p: p.__setitem__(5, (p[5] + 10) % 256))
+        variant("edge4.ppm", lambda p: p.__setitem__(7, p[7] + 4 if p[7] <= 251 else p[7] - 4))
+        variant("edge5.ppm", lambda p: p.__setitem__(7, p[7] + 5 if p[7] <= 250 else p[7] - 5))
+        ppm(os.path.join(tmp, "black_a.ppm"), w, h, [0] * (w * h * 3))
+        ppm(os.path.join(tmp, "black_b.ppm"), w, h, [0] * (w * h * 3))
+        ppm(os.path.join(tmp, "small.ppm"), 4, 4, [1] * 48)
+        for engine in ("numpy", "plain"):
+            if engine == "numpy" and np is None:
+                continue
+            saved = np
+            if engine == "plain":
+                np = None
+            n = w * h
+            r = compare(os.path.join(a, "same.ppm"), os.path.join(b, "same.ppm"))
+            expect(r["identical"] == 1.0 and r["within"] == 1.0 and r["max_error"] == 0 and r["psnr"] == math.inf,
+                   f"{engine}: identical frames")
+            r = compare(os.path.join(a, "one_off.ppm"), os.path.join(b, "one_off.ppm"), heatmap=os.path.join(tmp, "heat"))
+            expect(abs(r["identical"] - (n - 1) / n) < 1e-9 and r["max_error"] == 10 and abs(r["within"] - (n - 1) / n) < 1e-9
+                   and math.isfinite(r["psnr"]), f"{engine}: one pixel 10 off")
+            expect(os.path.exists(os.path.join(tmp, "heat", "one_off_diff.png")), f"{engine}: heat map written")
+            r = compare(os.path.join(a, "edge4.ppm"), os.path.join(b, "edge4.ppm"))
+            expect(r["within"] == 1.0 and r["identical"] < 1.0 and r["max_error"] == 4, f"{engine}: 4 is within 4")
+            r = compare(os.path.join(a, "edge5.ppm"), os.path.join(b, "edge5.ppm"))
+            expect(r["within"] < 1.0 and r["max_error"] == 5, f"{engine}: 5 is not within 4")
+            r = compare(os.path.join(tmp, "black_a.ppm"), os.path.join(tmp, "small.ppm"))
+            expect(r["identical"] == 0.0 and "size" in r, f"{engine}: sizes that differ fail")
+            # the checks: identical passes, a frame under the bar fails, a lower bar lets it pass, black proves nothing
+            quiet = open(os.devnull, "w")
+            stdout, sys.stdout = sys.stdout, quiet
+            try:
+                results = compare_folders(a, b, Args())
+                strict = check({"same.ppm": results["same.ppm"]}, Args(), "")
+                fails = check(results, Args(), "")
+                loose = Args()
+                loose.min_identical, loose.min_within4 = 90.0, 90.0
+                lenient = check(results, loose, "")
+                black = check({"black": compare(os.path.join(tmp, "black_a.ppm"), os.path.join(tmp, "black_b.ppm"))},
+                              Args(), "")
+            finally:
+                sys.stdout = stdout
+                quiet.close()
+            expect(strict and not fails and lenient and not black, f"{engine}: thresholds and the picture check")
+            np = saved
+    for f in failures:
+        print("FAILED:", f)
+    print("frame_diff selftest:", "all checks passed" if not failures else f"{len(failures)} failed")
+    return 1 if failures else 0
+
+
 def main():
+    if "--selftest" in sys.argv[1:]:
+        return selftest()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("a", nargs="?", help="a PPM file or a folder of them")
     ap.add_argument("b", nargs="?", help="the PPM file or folder to compare it with")
