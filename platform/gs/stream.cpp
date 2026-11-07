@@ -199,6 +199,7 @@ void GraphicsStream::records(const uint8_t* data, size_t bytes) {
                 break;
             }
             ++counters.sceneRecords;
+            sceneDecoder_.record(payload, h.bytes());
             gs.scene(payload, h.bytes());
             break;
         case gfx::kTexSet: {
@@ -267,7 +268,9 @@ void GraphicsStream::records(const uint8_t* data, size_t bytes) {
                 break;
             }
             std::memcpy(&r, payload, sizeof r);
+            if (sceneDecoder_.seen()) sceneDecoder_.batchRun();   // its jobs may belong to an instance (tagged in the sink)
             vif1.batchRun(r.entry, r.itop);
+            if (sceneDecoder_.seen()) sceneDecoder_.runEnd();     // (a later MSCAL from VIF codes belongs to nobody)
             break;
         }
         case gfx::kRead:

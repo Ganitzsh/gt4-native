@@ -1,7 +1,9 @@
 // The scene decoder (platform/scene/scene_decoder.h; docs/modern/CONTRACTS.md a.5, a.7): synthetic record streams.
 // A well-formed frame leaves every error counter at 0, tags its instances' jobs and passes the matrix, viewport,
 // guard and camera checks; each counter then moves in a test of its own.
+#include "gt4/link/protocol.h"
 #include "scene_decoder.h"
+#include "stream.h"
 
 #include <cmath>
 #include <cstdio>
@@ -494,6 +496,44 @@ void moreCounters() {
     check(f && f->views[0].lightCount == 1 && f->lights.size() == 1 && f->vehicles.size() == 1, "kept in the frame");
 }
 
+// One frame through GraphicsStream: the decoder must see the first frame's runs (seen() from the first record).
+class NullTarget : public gt4::ps2::GsTarget {
+public:
+    void gif(uint32_t, const uint8_t*, size_t) override {}
+    void display(const gt4::gfx::DisplayRecord&) override {}
+    void vsync(uint32_t, uint32_t) override {}
+    void readTransfer(void* out, uint32_t qwc) override { std::memset(out, 0, size_t(qwc) * 16); }
+};
+void appendRecord(std::vector<uint8_t>& block, uint32_t type, const void* payload, uint32_t bytes) {
+    const gt4::gfx::Header h = gt4::gfx::header(type, bytes);
+    const size_t at = block.size();
+    block.resize(at + size_t(gt4::gfx::recordQwords(bytes)) * 16, 0);
+    std::memcpy(block.data() + at, &h, sizeof h);
+    if (bytes) std::memcpy(block.data() + at + sizeof h, payload, bytes);
+}
+template <class T>
+void appendScene(std::vector<uint8_t>& block, const T& r) { appendRecord(block, gt4::gfx::kScene, &r, sizeof r); }
+void throughStream() {
+    NullTarget target;
+    gt4::ps2::GraphicsStream gs(target);
+    std::vector<uint8_t> block;
+    appendScene(block, frameBegin(1));
+    appendScene(block, projection(1, 0));
+    appendScene(block, viewBegin(1, 1));
+    appendScene(block, instance(1, 1, worldToView(), 2, rec::kInstCourse));
+    const gt4::gfx::BatchRun run{0, 0xFFFFFFFFu};
+    appendRecord(block, gt4::gfx::kBatchRun, &run, sizeof run);
+    appendRecord(block, gt4::gfx::kBatchRun, &run, sizeof run);
+    appendScene(block, viewEnd(1, 1));
+    appendScene(block, frameEnd(1, 1, 1, 1));
+    Gt4LinkRecord h{};
+    h.type = GT4_REC_GFX;
+    h.size = static_cast<uint32_t>(block.size());
+    gs.record(h, block.data());
+    auto f = gs.takeSceneFrame();
+    check(f && f->instances.size() == 1 && f->instances[0].runs == 2, "stream: the first frame's runs reach the decoder");
+    check(gs.sceneDecoder().totals().itemsMismatch == 0 && gs.sceneDecoder().totals().errorFree(), "stream: no itemsMismatch");
+}
 }  // namespace
 
 int main() {
@@ -506,6 +546,7 @@ int main() {
     robustness();
     history();
     moreCounters();
+    throughStream();
     if (failures) std::fprintf(stderr, "%d failure(s)\n", failures);
     else std::printf("scene_decoder: all checks passed\n");
     return failures ? 1 : 0;

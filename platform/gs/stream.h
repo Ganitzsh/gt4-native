@@ -6,6 +6,7 @@
 #include "gt4/gfx.h"
 #include "gt4/link/protocol.h"
 #include "renderers3d.h"
+#include "scene_decoder.h"
 #include "vif1.h"
 
 #include <array>
@@ -90,6 +91,9 @@ public:
         uint64_t uploads = 0, uploadsWithoutData = 0, draws = 0;
     };
     const Stats& stats() const { return counters; }
+    // The scene records' decoder (ticket A10): its counters, and the frame its last FrameEnd closed.
+    const scene::SceneDecoder& sceneDecoder() const { return sceneDecoder_; }
+    std::unique_ptr<scene::SceneFrame> takeSceneFrame() { return sceneDecoder_.takeFrame(); }
     const Vif1::Stats& vifStats() const { return vif1.stats; }
     const Renderers3d::Stats& rendererStats() const { return renderers.stats; }
     std::string describe() const;
@@ -124,7 +128,13 @@ private:
         bool models() const override { return owner->gs.models(); }
         void model(const gfx::ModelJob& job, const uint32_t* words) override {
             ++owner->counters.modelBatches;
-            owner->gs.model(job, words);
+            if (!owner->sceneDecoder_.seen()) {   // no scene records (the option off): the job as it always was
+                owner->gs.model(job, words);
+                return;
+            }
+            gfx::ModelJob tagged = job;   // pad[0] = its instance's position + 1 (CONTRACTS.md a.5 3), checked against it
+            owner->sceneDecoder_.job(tagged);
+            owner->gs.model(tagged, words);
         }
     };
     void runBatch(const Batch3d& batch);
@@ -211,6 +221,7 @@ private:
     std::deque<bool> readsAsync;   // the read records not yet asked for by GT4_REC_GS_READ: gfx::kReadAsync each
     AudioWriter audioWriter;
     Stats counters;
+    scene::SceneDecoder sceneDecoder_;   // the kScene records (docs/modern/CONTRACTS.md a.5, a.7; ticket A10)
     std::vector<uint8_t> scratch;
     // PATH3 data that arrived while VIF1 had PATH3 masked (MSKPATH3): sent when it is unmasked, as the
     // GIF arbiter would, or at the next VSYNC if the mask is never lifted.
