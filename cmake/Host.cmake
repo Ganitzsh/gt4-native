@@ -373,10 +373,28 @@ if(BUILD_TESTING)
   endif()
   add_test(NAME light_list COMMAND gt4_light_list_test)
   set_tests_properties(light_list PROPERTIES SKIP_RETURN_CODE 77)
+  # The cluster build (ticket F1), standalone until the render graph: GPU result against the CPU reference.
+  # Its shader is compiled for the test only until a host pass uses it. Needs a Vulkan 1.3 GPU; skipped (77) without.
+  add_custom_command(OUTPUT ${GT4_SHADER_OUT}/spv_lights_cluster.h
+      COMMAND glslang-standalone -V --target-env vulkan1.3 -S comp -I${GT4_SHADER_SOURCE}
+              --vn spv_lights_cluster -o ${GT4_SHADER_OUT}/spv_lights_cluster.h ${GT4_SHADER_SOURCE}/lights_cluster.comp
+      DEPENDS ${GT4_SHADER_SOURCE}/lights_cluster.comp ${GT4_SHADER_SOURCE}/light_list.glsl
+      COMMENT "Compiling shader lights_cluster")
+  add_executable(gt4_lights_cluster_test tests/lights_cluster.cpp platform/render/modern/lights_cluster.cpp
+      platform/render/vk.cpp platform/render/pipeline_cache_file.cpp ${GT4_SHADER_OUT}/spv_lights_cluster.h)
+  target_include_directories(gt4_lights_cluster_test PRIVATE ${GT4_SHADER_OUT} ${CMAKE_CURRENT_SOURCE_DIR}/include
+      platform/render platform/render/modern third_party)
+  target_compile_definitions(gt4_lights_cluster_test PRIVATE VK_NO_PROTOTYPES GT4_LIGHTS_CLUSTER_GPU=1)
+  target_link_libraries(gt4_lights_cluster_test PRIVATE Vulkan::Headers ${GT4_VOLK} ${GT4_VOLK_HEADERS})
+  if(UNIX AND NOT APPLE)
+    target_link_libraries(gt4_lights_cluster_test PRIVATE ${CMAKE_DL_LIBS})
+  endif()
+  add_test(NAME lights_cluster COMMAND gt4_lights_cluster_test)
+  set_tests_properties(lights_cluster PROPERTIES SKIP_RETURN_CODE 77)
   # The game runtime's whole-range test for game memory (runtime/guest.h).
   add_executable(gt4_guest_ram_test tests/guest_ram.cpp)
   add_test(NAME guest_ram COMMAND gt4_guest_ram_test)
-  foreach(test_target IN ITEMS gt4_ps2gfx_test gt4_gs_host_test gt4_gs_memory_test gt4_guest_ram_test gt4_light_list_test ${gt4_vu1_tests} ${gt4_gs_reference_tests})
+  foreach(test_target IN ITEMS gt4_ps2gfx_test gt4_gs_host_test gt4_gs_memory_test gt4_guest_ram_test gt4_light_list_test gt4_lights_cluster_test ${gt4_vu1_tests} ${gt4_gs_reference_tests})
     if(MSVC)
       target_compile_options(${test_target} PRIVATE /UNDEBUG /W4)
     else()

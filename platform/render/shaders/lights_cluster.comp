@@ -1,0 +1,70 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+// The cluster build (ticket F1; platform/render/modern/lights_cluster.h): per froxel, the lights whose sphere of
+// `range` meets its view-space box, in ascending light index, at fixed room per cell. One invocation per cell.
+// Same operations in the same order as buildClustersCpu, all 'precise' (no contraction), so the result equals
+// the CPU reference bit for bit.
+#include "light_list.glsl"
+layout(local_size_x = 64) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer Header { LightListHeader header; };
+layout(std430, set = 0, binding = 1) readonly buffer Lights { GpuLight lights[]; };
+layout(std430, set = 0, binding = 2) readonly buffer Grid { float grid[]; };   // ClusterGrid
+layout(std430, set = 0, binding = 3) writeonly buffer Cells { ClusterCell cells[]; };
+layout(std430, set = 0, binding = 4) writeonly buffer Indices { uint indices[]; };
+layout(std430, set = 0, binding = 5) buffer Stats { uint overflow, maxCount, pairs, pad; } stats;
+
+const uint kGridSlopeX = 0u, kGridSlopeY = kClusterX + 1u, kGridDepth = kGridSlopeY + kClusterY + 1u;
+
+// The lights are read once per workgroup into shared memory, 64 at a time: (x, y, d, range), range < 0 for a
+// directional light (skipped).
+shared vec4 sLights[64];
+
+void main() {
+    const uint cell = gl_GlobalInvocationID.x;
+    const bool inGrid = cell < kClusterCount;
+    const uint c0 = min(cell, kClusterCount - 1u);
+    const uint tx = c0 % kClusterX, ty = (c0 / kClusterX) % kClusterY, s = c0 / (kClusterX * kClusterY);
+    precise float sx0 = min(grid[kGridSlopeX + tx], grid[kGridSlopeX + tx + 1u]);
+    precise float sx1 = max(grid[kGridSlopeX + tx], grid[kGridSlopeX + tx + 1u]);
+    precise float sy0 = min(grid[kGridSlopeY + ty], grid[kGridSlopeY + ty + 1u]);
+    precise float sy1 = max(grid[kGridSlopeY + ty], grid[kGridSlopeY + ty + 1u]);
+    const float d0 = grid[kGridDepth + s], d1 = grid[kGridDepth + s + 1u];
+    precise vec3 lo = vec3(min(sx0 * d0, sx0 * d1), min(sy0 * d0, sy0 * d1), d0);
+    precise vec3 hi = vec3(max(sx1 * d0, sx1 * d1), max(sy1 * d0, sy1 * d1), d1);
+
+    const uint count = min(header.count, kMaxLights);
+    const uint first = min(header.directionalCount, count);
+    const uint base = c0 * kMaxLightsPerCluster;
+    uint n = 0u;
+    for (uint chunk = first; chunk < count; chunk += 64u) {
+        const uint j = chunk + gl_LocalInvocationIndex;
+        if (j < count) {
+            const GpuLight l = lights[j];
+            sLights[gl_LocalInvocationIndex] =
+                vec4(l.position.x, l.position.y, -l.position.z, l.type == kDirectional || !(l.range >= 0.0) ? -1.0 : l.range);
+        }
+        barrier();
+        const uint end = min(64u, count - chunk);
+        for (uint k = 0u; k < end; ++k) {
+            const vec4 l = sLights[k];
+            if (l.w < 0.0) continue;
+            precise float d2 = 0.0;
+            for (int a = 0; a < 3; ++a) {
+                precise float e = max(max(lo[a] - l[a], 0.0), l[a] - hi[a]);
+                d2 = d2 + e * e;
+            }
+            precise float r2 = l.w * l.w;
+            if (d2 > r2) continue;
+            if (inGrid && n < kMaxLightsPerCluster) indices[base + n] = chunk + k;
+            ++n;
+        }
+        barrier();
+    }
+    if (!inGrid) return;
+    const uint kept = min(n, kMaxLightsPerCluster);
+    cells[cell] = ClusterCell(base, kept);
+    if (kept > 0u) atomicAdd(stats.pairs, kept);
+    if (n > kept) atomicAdd(stats.overflow, n - kept);
+    atomicMax(stats.maxCount, n);
+}
