@@ -424,8 +424,9 @@ Where each record is sent (tickets in PLAN.md):
      auxiliary target as an input to the substituted view and never drops its producer.
    - **Split.** A view is split (`viewSplitTargets`, by reason) and never substituted when any tagged draw of it:
      (1) builds a second scene: the view's tagged draws into a second target both test and write its depth
-     buffer (one of its own; some draw tests it and some writes it, not necessarily the same one). A pass that only tests against a depth buffer it never writes, such as the sky's
-     64 x 64 pass in the main view (A10: depth at bp 12288, tested, never written), is auxiliary;
+     buffer (one of its own; some draw tests it and some writes it, not necessarily the same one). A pass that
+     only tests against a depth buffer it never writes, such as the sky's 64 x 64 pass in the main view (A10:
+     depth at bp 12288, tested, never written), is auxiliary;
      (2) tests or writes the principal depth buffer while its colour target is another one;
      (3) writes a target whose memory (colour or depth) overlaps the principal colour or depth buffer;
      (4) samples the principal colour or depth buffer before the view's Light command (with the substitution the
