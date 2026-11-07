@@ -802,11 +802,23 @@ makes all earlier graph work on that image visible (a full barrier from its trac
 own barriers as today, and reads the image's tracked state back from `vk::Image` afterwards. The front end
 already knows which targets a range of commands touches (`Draw::target`, `Draw::depth`, `TextureSource`).
 
-A frame may hold several `FrameList`s, and targets are made or retired between them. So the GS back end makes its
-CPU decisions for every pending list before it builds the graph: the scale, `ensureTarget` for each list's
-targets, and texture staging. Its imports then stay fixed while the graph is built. Per list: an uploads pass
-(`Opaque` on new targets and textures), the 3D batch dispatch (compute, `StorageWrite` on the imported vertex
-buffer), then one segment pass per range between Light commands.
+**As B4 builds it: GS targets not imported yet.** A frame may hold several `FrameList`s. When a later list needs a
+target bigger, or of another generation, `ensureTarget` retires the image and makes a new, cleared one in place,
+after the earlier list drew into the old one (lane B, B4). So the CPU decisions can't all move ahead of the build:
+the earlier list would draw into the new image. One target can't be two images in one build either, since imports
+are keyed by `vk::Image*`.
+- In B4, each list's passes are kept passes (`keep()`) that record their own barriers from `vk::Image` state, as
+  today: `gs: uploads` (`ensureTarget`, the new-target clears and the uploads, run when the pass executes, so
+  the order is today's), `gs: 3D batches`, and one `gs: draws` per range between Light commands, with the
+  effects inside.
+- The scene stage's work images (`ao`, `lit`, `velocity`, `ssr`) are graph transients with declared uses. The
+  passes touch the GS colour and Z targets themselves.
+- No GS pass runs on `Queue::Compute` while the GS targets are not declared.
+- `Use::Opaque` imports of GS targets come with the first consumer outside the GS back end that uses them
+  inside the graph: B8's compositor (`ColorWrite` / `DepthWrite` on a bound view's target), and the display
+  target that `scene: main` samples. Then a target that changes image between lists needs one import per
+  image, with the retired image kept alive until the frame's work has finished. That is B8's design, reviewed
+  by the architect before it is built.
 
 **The synchronous read** (`GsnScene::read`) builds a second `rg::Graph` instance, with its own plan cache and
 transient heap, recorded on the uploader's command buffer. It never touches the frame's graph while that is being
@@ -865,7 +877,7 @@ public:
 | Today | In the graph |
 |---|---|
 | `FramePipeline::record` (`pipeline.cpp:972`): exposure, MSAA resolve, FSR 2 / TAA, DOF, motion blur, bloom, tone map, RCAS, FXAA / SMAA, EASU / resample, output pass, 2D overlay | `DisplayFeature` (`platform/render/display_feature.cpp`): one pass per stage, same shaders, same order. `sceneColor/Velocity/Depth` imported from the scene source (later: the modern view's outputs). TAA history, SMAA T2x's frames: `history()`. (As built in B3: the MSAA resolve stays with the scene pass in `FramePipeline`; `exposure` is an import, rewritten every frame from its state buffer, so it carries no image contents between frames.) `hdrA/B`, `ldrA/B`, `outA/B`, `dof*`, `tiles`, `neighbourMax`, `bloomDown/Up`, `smaa*`: transients. `areaTexture`, `searchTexture`: imports. FSR 2's own resources stay inside its dispatch (one pass, imports). Swapchain: import, `Present`. |
-| `GsnScene::Impl::execute` (`gsn_scene.cpp:794`) | `GsFeature`: the 3D batch dispatch (`gsn_models.comp`) as a compute pass writing the vertex buffer; then GS segments split at each Light command, each with `Use::Opaque` on its targets. |
+| `GsnScene::Impl::execute` (`gsn_scene.cpp:794`) | `GsFeature`: per list, the uploads (with `ensureTarget`), the 3D batch dispatch (`gsn_models.comp`) and GS segments split at each Light command, as kept passes that do their own barriers (b.6). `Use::Opaque` on GS targets from B8. |
 | The scene stage at a Light command (`gsn_scene.cpp:1494-1518`: motion vectors, relight, reflect, haze, temporal resolve, motion blur, focus) | `SceneStageFeature`: one pass each, between two GS segments; their work images become transients (`ao`, `lit`, `velocity`, `ssr`: each pass samples the target's colour and Z, writes its transient, then copies into the colour target in the same pass). The per-scene TAA history is **not** a `history()`. It stays as `GsnScene`'s own two images per target, imported, with today's rules: valid only if used the frame before, and a new copy at each resolve. A target can resolve twice in a frame (two lists, or a Light resolving the same scene again), and targets are made and retired between lists. `history()` gives one new copy a frame, swapped once, so it fits neither. |
 | (new) a modern view at a Light command | `ModernViewFeature` passes (cull, depth, G-buffer, lighting, transparents...), then the `Compositor` pass: `ColorWrite` on the GS colour target's scene rectangle and `DepthWrite` on its Z target (GS Z = what GT4's own projection and viewport give at each pixel, from the projection of the instance that drew it (`Instance::projection`: the course's two depth ranges and the depth-biased objects give different GS Z, R1), stored as `z / 2^32`, `gsn_common.glsl:50-53`), then the next GS segment with the view's tagged draws skipped. |
 | GPU profile in `gsn_scene.cpp:270-316` and `renderer.cpp:216, 774` | graph timestamps (b.7) |

@@ -194,9 +194,10 @@ decode time and memory reported. **Day one.**
 (`platform/render/display_feature.cpp`), CONTRACTS.md b.9. Depends: B1. Acceptance: `PRESETS`; `VAL`; `PERF(GPU
 +-3 %)`; transient memory with aliasing reported, lower than today's.
 
-**B4: GS back end on the graph (L).** `gsn_scene.cpp`: 3D batch dispatch as a pass, GS segments split at Light
-commands and markers (`Use::Opaque`), the scene stage as `SceneStageFeature` passes; timestamps move into the
-graph. Depends: B3. Acceptance: `PRESETS`; `VAL`; `PERF(GPU and render thread +-3 %)`.
+**B4: GS back end on the graph (L).** `gsn_scene.cpp`: per list, uploads, 3D batch dispatch and GS segments split
+at Light commands and markers as kept passes with their own barriers (GS targets imported from B8, CONTRACTS b.6),
+the scene stage as `SceneStageFeature` passes; timestamps move into the graph. Depends: B3. Acceptance: `PRESETS`;
+`VAL`; `PERF(GPU and render thread +-3 %)`.
 
 **B2b: PipelineCache class (M).** `platform/render/pipeline_cache.{h,cpp}`: description map, `request()` on
 workers, key list `pipeline_cache.keys`, `prewarm()`, save every 64 new pipelines. Depends: B2, C7. Acceptance:
