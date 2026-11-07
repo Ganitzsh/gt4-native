@@ -48,6 +48,22 @@ def run(cmd, **kw):
     return r.stdout
 
 
+def chunked(items, path=lambda x: x, most=150, chars=24000):
+    """items in lists of at most `most`, each list's paths at most `chars` characters together: a Windows command line
+    holds 32,767, and 150 objects of a checkout in a long folder went past it (WinError 206)."""
+    out, current, length = [], [], 0
+    for item in items:
+        n = len(path(item)) + 3   # (a space and quotes)
+        if current and (len(current) >= most or length + n > chars):
+            out.append(current)
+            current, length = [], 0
+        current.append(item)
+        length += n
+    if current:
+        out.append(current)
+    return out
+
+
 def mingw_env():
     env = dict(os.environ)
     env["PATH"] = MINGW + os.pathsep + env.get("PATH", "")
@@ -186,7 +202,7 @@ def nm_objects(objs):
             result[o] = (c[1], c[2])
         else:
             todo.append((o, m))
-    chunks = [todo[i:i + 150] for i in range(0, len(todo), 150)]
+    chunks = chunked(todo, path=lambda t: t[0])
 
     def one(chunk):
         paths = [o for o, _ in chunk]
@@ -408,7 +424,7 @@ def export_extra_functions(out, game_objs):
     if not want:
         return game_objs
     found = {}
-    chunks = [game_objs[i:i + 150] for i in range(0, len(game_objs), 150)]
+    chunks = chunked(game_objs)
     for chunk in chunks:
         r = run([tool("nm"), "-A", "--defined-only"] + chunk, env=mingw_env())
         for line in r.splitlines():
