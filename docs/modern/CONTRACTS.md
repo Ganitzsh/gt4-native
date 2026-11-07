@@ -451,7 +451,8 @@ Where each record is sent (tickets in PLAN.md):
 | `cameraChecked`, `cameraMismatch` | course instances (`kInstCourse`) whose `objectToView` differs from their view's `worldToView` (R1: they are equal) | 0 |
 | `jobsUntaggedInView` | untagged model jobs into a bound view's target between its `ViewBegin` and the Light command | reported; the substitution keeps drawing them on the GS path |
 | `viewSplitTargets`, `viewsUnbound` | binding | 0 for main views |
-| `cuts`, `viewsCut` | partial `FrameList`s drawn at a synchronous read inside the frame's list; views with tagged draws in one, never substituted (a.8) | reported (main views: 0 in race frames, unless R9 names a synchronous reader there) |
+| `cuts`, `viewsCut` | partial `FrameList`s drawn at a read (synchronous or asynchronous) inside the frame's list, by kind; views still open at a cut, not substituted in that frame (a.8) | reported (main views: 0 in race frames, unless R9 names a reader inside the main view) |
+| `viewsSubstitutedFrameInvalid` | views substituted in a partial list (validated at their `ViewEnd`) whose frame then failed a frame-level check (a.8) | 0 |
 | `viewFallbacks` (by reason: not bound, mesh pending, pipeline pending, validation, read pending) | modern views drawn by the GS path | reported; 0 after warm-up for `mesh pending` and `pipeline pending` |
 | `meshesNew`, `meshesPending`, `materialsNew` | scene cache | reported |
 
@@ -494,6 +495,7 @@ struct ViewData {
     Mat4 previousWorldToView;                     // matched by role + pass from the last frame
     uint32_t target = 0, depth = 0;               // GS target ids, bound by the front end
     uint32_t firstInstance = 0, instanceCount = 0, firstLight = 0, lightCount = 0;
+    bool valid = false;                           // the view's own checks passed at its ViewEnd (cuts, below)
 };
 struct InstanceData {
     uint16_t view; uint16_t flags; uint32_t serial;
@@ -526,17 +528,56 @@ struct SceneFrame {                               // one per kicked list (a.5.1)
 whose `FrameEnd` arrived while that `FrameList` was being built) and
 `Draw` gains `uint16_t view = 0`. `recycleFrameList` resets them.
 
-**Cuts at a synchronous read.** A synchronous read inside a list (`GsHost::readTransfer`, `gs_host.cpp:251`)
-draws the `FrameList` so far as a partial list. So one kicked list can be drawn as several `FrameList`s: partial
-ones at each read, then the one that receives `FrameEnd`.
+**Cuts at a read.** A read of drawn pixels inside a list draws the `FrameList` so far as a partial list. That
+holds for both kinds: synchronous (`GsHost::readTransfer`, `gs_host.cpp:251`) and asynchronous
+(`NativeTarget::readLater`, `gs_host.cpp:80-90`, which puts the readback on the partial list for the render
+thread). Only the waiting differs. So one kicked list can be drawn as several `FrameList`s: partial ones at each
+read, then the one that receives `FrameEnd`. (Race route: 38 reads in about 4900 frames.)
 - The scene decoder works in stream order, independent of `FrameList`s. Its open frame, view and instance, and
   the jobs' tags, carry across a cut.
 - The front end (A10) keeps each `Draw::view` across the cut. The `SceneFrame` goes on the last list only.
-- A partial list is drawn before its frame's `FrameEnd` has arrived and been validated. So a view with tagged
-  draws in a partial list is not substituted in that frame. It is counted as `viewsCut` and drawn as original.
-- Which reads matter, and whether a reader may see the modern image, is R9's question. The flare read is
-  asynchronous and makes no cut.
-- A3's SCENE run counts cuts per frame.
+- **Closed views travel on their own.** At each `ViewEnd`, the stream hands the target a `SceneView` package, in
+  stream order. The front end puts it on the `FrameList` being built, so a partial list carries the views it can
+  substitute. `FrameList::scene` still arrives at `FrameEnd`, on the last list, for the frame-level checks.
+  ```cpp
+  struct SceneView {                              // platform/scene/scene_frame.h
+      ViewData view;                              // view.valid: the verdict at ViewEnd (below)
+      std::vector<InstanceData> instances;        // copies, in arrival order
+      std::vector<ProjectionData> projections;    // the ones the view and its instances name
+      std::vector<gfx::scene::Light> lights;      // the view's (a.5.4)
+      std::vector<gfx::scene::Emitter> emitters;  // frame-wide records that arrived before this ViewEnd
+      std::vector<gfx::scene::Vehicle> vehicles;  //   (later ones are not available to a partial substitution)
+  };
+  // FrameList gains: std::vector<std::shared_ptr<const SceneView>> views;   (SceneViews pooled, below)
+  ```
+  - `ViewData` gains `bool valid`. The decoder keeps per-view error counts and sets it at `ViewEnd`: the
+    instances match `ViewEnd::instances`, and the view has no item, matrix, viewport or `projectionUnknown`
+    errors. Every job of the view has been checked by then, because `job()` runs before the target sees the
+    job. `viewSplitTargets` is the front end's own check, made when the view is bound.
+  - The copies cost about 80 KB per main view per frame (about 260 instances), tens of microseconds on the GS
+    thread. A lazy copy is not possible, since the decoder runs ahead of the front end. `SceneView` objects are
+    pooled: `recycleFrameList` returns the ones no one else still holds (`use_count() == 1`, so the render thread
+    is done with them). The stream reuses them at `ViewEnd` and keeps their vectors' capacity, so a steady frame
+    allocates nothing once the pool has warmed.
+  - `SceneFrame` stays as it is (instances indexed by `ModelJob::pad[0]`). The package is a copy, not a second
+    owner.
+  - Emitters and vehicles may come anywhere in a frame (a.5.4). A view substituted in a partial list sees only
+    those that arrived before its `ViewEnd`. A8 and A9 send them before the main view's `ViewEnd` where they can.
+- A partial list is drawn before its frame's `FrameEnd` has arrived. So a view in a partial list is validated on
+  its own, at its `ViewEnd`, not at `FrameEnd`.
+  - **A view whose `ViewEnd` arrived before the cut** can be substituted in the partial list, at its Light
+    command as usual, if its own checks pass: `ViewEnd::instances` against the instances that arrived,
+    `itemsMismatch`, `matrixMismatch`, `viewportMismatch`, `projectionUnknown` for its instances,
+    `viewSplitTargets`. Most reads come after the main view (post effects, flare), so this keeps such frames
+    substitutable.
+  - **A view still open at the cut** (tagged draws on both sides of it) is not substituted in that frame. It is
+    counted as `viewsCut` and drawn as original.
+  - If the frame then fails a frame-level check (`countsMismatch`, `framesUnclosed`), views already substituted
+    in a partial list stay drawn. That is counted as `viewsSubstitutedFrameInvalid`. It means a stream fault,
+    and the gate is 0.
+- Which reads matter, and what a reader gets from a target whose view was substituted, are R9's questions.
+- The A10 SCENE run counts cuts per frame, by kind (synchronous or asynchronous), with the reader's destination,
+  for R9.
 
 ---
 
