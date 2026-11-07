@@ -105,8 +105,9 @@ private:
 
 // The pipelines' cache, kept in a file (the host: pipeline_cache.bin beside settings.ini): a pipeline compiled once
 // is not compiled again in a later run (6 at a race's first frame took 840 ms on the desktop; more on a handheld,
-// whose driver cache may be off under Proton). Data from another GPU or driver is left out (its header). An empty
-// path: in memory only.
+// whose driver cache may be off under Proton). Data from another GPU or driver is left out (its header), and so is
+// data another build of the host saved (drivers key entries by the executable: kept, they only grow the file;
+// pipeline_cache_file.h). An empty path: in memory only.
 void openPipelineCache(Device& device, const std::string& path);
 void savePipelineCache(const Device& device, const std::string& path);   // (written whole, then renamed over the old)
 void closePipelineCache(Device& device);

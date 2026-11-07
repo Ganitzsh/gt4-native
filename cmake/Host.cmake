@@ -283,7 +283,7 @@ if(BUILD_TESTING)
 
   # The pipeline cache's file: Vulkan's header checked against the GPU, the save replacing the old file (no GPU).
   add_executable(gt4_pipeline_cache_file_test tests/pipeline_cache_file.cpp platform/render/pipeline_cache_file.cpp)
-  target_include_directories(gt4_pipeline_cache_file_test PRIVATE platform/render)
+  target_include_directories(gt4_pipeline_cache_file_test PRIVATE platform/render third_party)
   if(MSVC)
     target_compile_options(gt4_pipeline_cache_file_test PRIVATE /W4 /utf-8)
   else()

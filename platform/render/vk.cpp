@@ -28,8 +28,17 @@ uint32_t Device::maxSamples(uint32_t requested) const {
     return samples;
 }
 
+namespace {
+uint64_t buildStamp() {   // this build of the host (pipeline_cache_file.h): another build's cache is dropped
+    static const uint64_t stamp = executableStamp();
+    return stamp;
+}
+}  // namespace
+
 void openPipelineCache(Device& device, const std::string& path) {
-    std::vector<char> data = readCacheFile(path);
+    std::string why;
+    std::vector<char> data = readCacheFile(path, buildStamp(), &why);
+    if (!why.empty()) std::printf("Pipeline cache %s: %s, not used\n", path.c_str(), why.c_str());
     if (!data.empty()) {
         // Vulkan's header names the GPU and driver that made the data: another one's is not used
         PipelineCacheIdentity identity;
@@ -64,7 +73,7 @@ void savePipelineCache(const Device& device, const std::string& path) {
     if (vkGetPipelineCacheData(device.device, device.pipelineCache, &size, nullptr) != VK_SUCCESS || !size) return;
     std::vector<char> data(size);
     if (vkGetPipelineCacheData(device.device, device.pipelineCache, &size, data.data()) != VK_SUCCESS) return;
-    if (!writeCacheFile(path, data.data(), size)) std::printf("Pipeline cache %s: not saved\n", path.c_str());
+    if (!writeCacheFile(path, buildStamp(), data.data(), size)) std::printf("Pipeline cache %s: not saved\n", path.c_str());
 }
 
 void closePipelineCache(Device& device) {

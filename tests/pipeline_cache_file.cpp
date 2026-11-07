@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -78,23 +79,42 @@ int main(int argc, char** argv) {
         std::filesystem::path temporary = folder / "pipeline_cache.bin";
         temporary += ".new";
 
-        check(readCacheFile(path).empty(), "a missing file reads as nothing");
-        check(readCacheFile("").empty(), "no path reads as nothing");
-        check(!writeCacheFile("", "a", 1), "no path is not written");
+        const uint64_t build = 0x1234567890ABCDEFull, otherBuild = build + 1;
+        std::string why;
+        check(readCacheFile(path, build, &why).empty() && why.empty(), "a missing file reads as nothing, no reason given");
+        check(readCacheFile("", build).empty(), "no path reads as nothing");
+        check(!writeCacheFile("", build, "a", 1), "no path is not written");
 
         const std::vector<char> first = cache(32, 1, gpu, 70000);
-        check(writeCacheFile(path, first.data(), first.size()), "a new file is written");
-        check(readCacheFile(path) == first, "the new file reads back whole");
+        check(writeCacheFile(path, build, first.data(), first.size()), "a new file is written");
+        check(readCacheFile(path, build, &why) == first && why.empty(), "the new file reads back whole for the same build");
+        check(std::filesystem::file_size(folder / "pipeline_cache.bin") == first.size() + 32, "our 32-byte header, then the data");
+
+        // Another build's data is dropped (drivers key their entries by the executable: kept, they only grow).
+        check(readCacheFile(path, otherBuild, &why).empty() && why == "made by another build", "another build's file: not used");
+        check(readCacheFile(path, 0, &why).empty(), "an unknown build (stamp 0) uses no file");
 
         const std::vector<char> second = cache(32, 1, gpu, 10);
-        check(writeCacheFile(path, second.data(), second.size()), "an existing file is replaced");
-        check(readCacheFile(path) == second, "the replaced file holds the new data only");
+        check(writeCacheFile(path, build, second.data(), second.size()), "an existing file is replaced");
+        check(readCacheFile(path, build) == second, "the replaced file holds the new data only");
         check(!std::filesystem::exists(temporary), "no .new file is left behind");
+
+        // Files that are not ours, or not whole.
+        {
+            std::ofstream(folder / "raw.bin", std::ios::binary).write(first.data(), static_cast<std::streamsize>(first.size()));   // Vulkan's data alone
+            check(readCacheFile(utf8(folder / "raw.bin"), build, &why).empty() && why == "not a cache file of this format",
+                  "a file without our header: not used");
+            std::filesystem::copy_file(folder / "pipeline_cache.bin", folder / "short.bin");
+            std::filesystem::resize_file(folder / "short.bin", 32 + 5);
+            check(readCacheFile(utf8(folder / "short.bin"), build, &why).empty() && why == "cut short or padded", "a file cut short: not used");
+        }
+        check(!writeCacheFile(path, build, first.data(), kCacheFileLimit + 1), "data over the limit is not saved");
+        check(readCacheFile(path, build) == second, "and the file stays as it was");
 
         // A target that cannot be replaced (a folder): the old content stays and no .new is left.
         const std::string blocked = utf8(folder / "blocked");
         std::filesystem::create_directories(folder / "blocked" / "inside");
-        check(!writeCacheFile(blocked, second.data(), second.size()), "a folder in the way is not replaced");
+        check(!writeCacheFile(blocked, build, second.data(), second.size()), "a folder in the way is not replaced");
         check(std::filesystem::is_directory(folder / "blocked" / "inside"), "the folder in the way is kept");
         check(!std::filesystem::exists(folder / "blocked.new"), "no .new left after a failed move");
 
