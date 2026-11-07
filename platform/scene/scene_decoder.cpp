@@ -68,7 +68,8 @@ void SceneCounters::add(const SceneCounters& o) {
     countsMismatch += o.countsMismatch; framesTruncated += o.framesTruncated; begins += o.begins; views += o.views; viewsNested += o.viewsNested;
     viewEndWithoutBegin += o.viewEndWithoutBegin; viewsUnclosed += o.viewsUnclosed; projections += o.projections; projectionUnknown += o.projectionUnknown;
     instances += o.instances; instancesWithoutView += o.instancesWithoutView; itemsMismatch += o.itemsMismatch;
-    jobsTagged += o.jobsTagged; jobsUntaggedInView += o.jobsUntaggedInView; matrixChecked += o.matrixChecked;
+    jobsTagged += o.jobsTagged; jobsUntaggedInView += o.jobsUntaggedInView; runsAfterInstance += o.runsAfterInstance;
+    runsAfterSameMatrix += o.runsAfterSameMatrix; matrixChecked += o.matrixChecked;
     matrixMismatch += o.matrixMismatch; matrixMaxError = std::max(matrixMaxError, o.matrixMaxError);
     viewportMismatch += o.viewportMismatch; guardUnexpected += o.guardUnexpected; cameraChecked += o.cameraChecked;
     cameraMismatch += o.cameraMismatch; lights += o.lights; emitters += o.emitters; markers += o.markers;
@@ -166,7 +167,7 @@ void SceneDecoder::finish() {
     frame_.reset();
     cameras_.clear();
     objects_.clear();
-    view_ = instance_ = runInstance_ = -1;
+    view_ = instance_ = runInstance_ = closed_ = -1;
 }
 
 void SceneDecoder::beginFrame(const rec::FrameBegin& r) {
@@ -179,7 +180,7 @@ void SceneDecoder::beginFrame(const rec::FrameBegin& r) {
     frame_->vblank = r.vblank;
     frame_->flags = r.flags;
     frame_->counters.frames = 1;
-    view_ = instance_ = runInstance_ = -1;
+    view_ = instance_ = runInstance_ = closed_ = -1;
     occurrences_.clear();
 }
 
@@ -202,7 +203,7 @@ void SceneDecoder::endFrame(bool closed) {
     }
     cameras_.clear();
     objects_.clear();
-    view_ = instance_ = runInstance_ = -1;
+    view_ = instance_ = runInstance_ = closed_ = -1;
 }
 
 void SceneDecoder::projection(const rec::Projection& r) {
@@ -323,10 +324,11 @@ void SceneDecoder::instance(const rec::Instance& r) {
 void SceneDecoder::closeInstance() {
     if (instance_ < 0 || !frame_) {
         instance_ = -1;
+        closed_ = -1;
         return;
     }
     const InstanceData& d = frame_->instances[instance_];
-    if (d.runs != d.items) {   // exactly `items` kBatchRun records follow (a.5 3)
+    if (d.runs < d.items) {   // its `items` kBatchRun records follow it (a.5 3): fewer before the next Instance, ViewEnd, Marker
         ++frame_->counters.itemsMismatch;
         // GT4_SCENE_DEBUG=1 (debugging): the first few, with the Cmd and its view
         static const bool debug = [] { const char* e = std::getenv("GT4_SCENE_DEBUG"); return e && e[0] == '1'; }();
@@ -340,6 +342,7 @@ void SceneDecoder::closeInstance() {
     }
     instance_ = -1;
     runInstance_ = -1;
+    closed_ = -1;
 }
 
 void SceneDecoder::marker(const rec::Marker& r) {
@@ -350,13 +353,44 @@ void SceneDecoder::marker(const rec::Marker& r) {
 
 void SceneDecoder::batchRun() {
     runInstance_ = -1;
-    if (!frame_ || instance_ < 0) return;
-    InstanceData& d = frame_->instances[instance_];
-    if (d.runs < d.items) runInstance_ = instance_;   // one more beyond `items` is the instance's mistake: untagged
-    ++d.runs;
+    afterRun_ = afterRunSame_ = false;
+    if (!frame_) return;
+    if (instance_ >= 0 && frame_->instances[instance_].runs >= frame_->instances[instance_].items) {   // (items 0: complete)
+        const int done = instance_;
+        closeInstance();
+        closed_ = done;
+    }
+    if (instance_ < 0) {   // after an instance that closed with its runs: another draw path's (a.5.3), untagged
+        if (closed_ >= 0) {
+            afterRun_ = true;
+            ++frame_->counters.runsAfterInstance;
+        }
+        return;
+    }
+    runInstance_ = instance_;
+    ++frame_->instances[instance_].runs;
 }
 
-void SceneDecoder::runEnd() { runInstance_ = -1; }
+void SceneDecoder::runEnd() {
+    runInstance_ = -1;
+    afterRun_ = afterRunSame_ = false;
+    // the instance closes once its `items` runs have arrived (a.5.3); runs after it belong to no instance
+    if (frame_ && instance_ >= 0 && frame_->instances[instance_].runs >= frame_->instances[instance_].items) {
+        const int done = instance_;
+        closeInstance();
+        closed_ = done;
+    }
+}
+
+bool SceneDecoder::expectedMatrix(const InstanceData& d, Mat4& out) const {
+    if (d.projection == 0 || d.projection > frame_->projections.size()) return false;
+    // ModelJob::matrix = diag(axisScale * k, 1) * objectToView * viewToClip, k = shapeScale or 1 when 0 (R1)
+    Mat4 scale;
+    const float k = d.shapeScale != 0.0f ? d.shapeScale : 1.0f;
+    for (int i = 0; i < 3; ++i) scale.m[i][i] = d.axisScale[i] * k;
+    out = scale * d.objectToView * frame_->projections[d.projection - 1].viewToClip;
+    return true;
+}
 
 void SceneDecoder::job(gfx::ModelJob& job) {
     // the tag is the instance's position + 1, never the record's serial: a bad serial is counted, not trusted
@@ -365,19 +399,26 @@ void SceneDecoder::job(gfx::ModelJob& job) {
     SceneCounters& c = frame_->counters;
     if (runInstance_ < 0) {
         if (view_ >= 0) ++c.jobsUntaggedInView;   // (also a job from a VIF-code MSCAL inside an open view)
+        // a run after a closed instance whose job carries that instance's matrix: its own run displaced by an item
+        // callback's (a.5.3's blind spot), counted once per run
+        Mat4 expected;
+        if (afterRun_ && !afterRunSame_ && closed_ >= 0 && expectedMatrix(frame_->instances[closed_], expected)) {
+            const Mat4 got = Mat4::from(job.matrix);
+            const float difference = largestDifference(expected, got), size = largest(got);
+            if (std::isfinite(difference) && std::isfinite(size) && difference / std::max(size, 1e-30f) <= kMatrixTolerance) {
+                afterRunSame_ = true;
+                ++c.runsAfterSameMatrix;
+            }
+        }
         return;
     }
     ++c.jobsTagged;
     InstanceData& d = frame_->instances[static_cast<size_t>(runInstance_)];
     ++d.jobCount;
     if (job.guard[0] != 0.5f || job.guard[1] != 0.5f || job.guard[2] != 1.0f || job.guard[3] != 1.0f) ++c.guardUnexpected;
-    if (d.projection == 0 || d.projection > frame_->projections.size()) return;   // (counted as projectionUnknown)
+    Mat4 expected;
+    if (!expectedMatrix(d, expected)) return;   // (counted as projectionUnknown)
     const ProjectionData& p = frame_->projections[d.projection - 1];
-    // ModelJob::matrix = diag(axisScale * k, 1) * objectToView * viewToClip, k = shapeScale or 1 when 0 (R1)
-    Mat4 scale;
-    const float k = d.shapeScale != 0.0f ? d.shapeScale : 1.0f;
-    for (int i = 0; i < 3; ++i) scale.m[i][i] = d.axisScale[i] * k;
-    const Mat4 expected = scale * d.objectToView * p.viewToClip;
     const Mat4 got = Mat4::from(job.matrix);
     ++c.matrixChecked;
     // a non-finite entry on either side is a mismatch: inf / inf would be NaN, which compares false with anything

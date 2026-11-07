@@ -317,23 +317,66 @@ void instances() {
         put(d, frameEnd(1, 0, 1, 1));
         check(d.totals().instancesWithoutView == 1, "instancesWithoutView");
     }
-    {   // fewer runs than items, then more
+    {   // fewer runs than items; then a run after an instance that closed with its runs (a.5.3: another draw path's)
         SceneDecoder d;
         put(d, frameBegin(1));
         put(d, projection(1, 0));
         put(d, viewBegin(1, 1));
         put(d, instance(1, 1, worldToView(), 2));
         d.batchRun();
+        d.runEnd();
         put(d, instance(2, 1, worldToView(), 1));
         d.batchRun();
+        d.runEnd();   // its one run: it closes
         gt4::gfx::ModelJob j{};
         j.pad[0] = 0xFFFFFFFFu;
-        d.batchRun();   // a run beyond its items: untagged
+        d.batchRun();   // another draw path's run: untagged, not the instance's mistake
         d.job(j);
+        d.runEnd();
         put(d, viewEnd(1, 2));
         put(d, frameEnd(1, 1, 2, 1));
-        check(d.totals().itemsMismatch == 2, "itemsMismatch: fewer and more runs than items");
-        check(j.pad[0] == 0 && d.totals().jobsUntaggedInView == 1, "a run beyond the items stays untagged");
+        check(d.totals().itemsMismatch == 1, "itemsMismatch: an instance closed with fewer runs than items");
+        check(j.pad[0] == 0 && d.totals().jobsUntaggedInView == 1, "a run after a closed instance stays untagged");
+        check(d.totals().runsAfterInstance == 1 && d.totals().runsAfterSameMatrix == 0, "runsAfterInstance: counted, other matrix");
+    }
+    {   // a displaced own run (an item callback drew): the run after the instance carries its matrix
+        SceneDecoder d;
+        put(d, frameBegin(1));
+        put(d, projection(1, 0));
+        put(d, viewBegin(1, 1));
+        const auto car = instance(1, 1, translate(1.0f, 0.0f, 5.0f) * worldToView(), 1);
+        put(d, car);
+        d.batchRun();
+        gt4::gfx::ModelJob other = jobFor(instance(9, 1, translate(4.0f, 0.0f, 9.0f) * worldToView(), 1));
+        d.job(other);   // the callback's run took the slot
+        d.runEnd();
+        d.batchRun();   // the Cmd's own run, now after the instance
+        gt4::gfx::ModelJob own = jobFor(car);
+        own.pad[0] = 0xFFFFFFFFu;
+        d.job(own);
+        d.job(own);   // (counted once per run)
+        d.runEnd();
+        put(d, viewEnd(1, 1));
+        put(d, frameEnd(1, 1, 1, 1));
+        check(own.pad[0] == 0 && d.totals().runsAfterInstance == 1 && d.totals().runsAfterSameMatrix == 1,
+              "runsAfterSameMatrix: a displaced own run");
+        check(d.totals().matrixMismatch == 1, "the callback's job under the instance's tag: matrixMismatch");
+        check(d.totals().itemsMismatch == 0, "a displaced own run: the instance had its runs (no itemsMismatch)");
+    }
+    {   // an instance with no items: the next run is after it, untagged
+        SceneDecoder d;
+        put(d, frameBegin(1));
+        put(d, projection(1, 0));
+        put(d, viewBegin(1, 1));
+        put(d, instance(1, 1, worldToView(), 0));
+        gt4::gfx::ModelJob j{};
+        j.pad[0] = 0xFFFFFFFFu;
+        d.batchRun();
+        d.job(j);
+        d.runEnd();
+        put(d, viewEnd(1, 1));
+        put(d, frameEnd(1, 1, 1, 1));
+        check(j.pad[0] == 0 && d.totals().itemsMismatch == 0 && d.totals().runsAfterInstance == 1, "items 0: no tag, no mismatch");
     }
 }
 

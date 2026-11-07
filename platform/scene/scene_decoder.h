@@ -54,6 +54,10 @@ private:
     int view_ = -1;                          // the open view's index in frame_->views, -1 none
     int instance_ = -1;                      // the open instance's index, -1 none
     int runInstance_ = -1;                   // the instance the current run's jobs belong to, -1 none
+    int closed_ = -1;                        // the instance that closed with its `items` runs, until the next Instance,
+                                             // ViewBegin / ViewEnd, Marker or frame (-1 none): runs after it are a.5.3's
+    bool afterRun_ = false, afterRunSame_ = false;   // the current run came after closed_; one of its jobs had its matrix
+    bool expectedMatrix(const InstanceData& d, Mat4& out) const;   // diag(axisScale * k, 1) * objectToView * viewToClip
     // last frame's cameras by role + pass, and instances' objectToWorld by Cmd address and its occurrence in the frame
     // (a Cmd drawn twice: each copy keeps its own; the previous* fields)
     std::unordered_map<uint64_t, Mat4> lastCameras_, cameras_;

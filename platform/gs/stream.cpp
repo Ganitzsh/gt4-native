@@ -822,7 +822,8 @@ std::string GraphicsStream::describe() const {
             << s.viewEndWithoutBegin << " ends without begin, " << s.viewsUnclosed << " unclosed), " << s.projections
             << " projections (" << s.projectionUnknown << " unknown), " << s.instances << " instances ("
             << s.instancesWithoutView << " without a view, " << s.itemsMismatch << " items mismatched), " << s.jobsTagged
-            << " jobs tagged (" << s.jobsUntaggedInView << " untagged in a view), matrices " << s.matrixChecked << " checked, "
+            << " jobs tagged (" << s.jobsUntaggedInView << " untagged in a view), " << s.runsAfterInstance
+            << " runs after an instance (" << s.runsAfterSameMatrix << " with its matrix), matrices " << s.matrixChecked << " checked, "
             << s.matrixMismatch << " mismatched (largest " << s.matrixMaxError << "), " << s.viewportMismatch
             << " viewports mismatched, " << s.guardUnexpected << " guards unexpected, cameras " << s.cameraChecked
             << " checked, " << s.cameraMismatch << " mismatched; " << s.bad << " bad, " << s.versionUnknown << " version unknown, "

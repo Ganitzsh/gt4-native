@@ -78,6 +78,9 @@ struct SceneCounters {
     // instances and their batches
     uint64_t instances = 0, instancesWithoutView = 0, itemsMismatch = 0;
     uint64_t jobsTagged = 0, jobsUntaggedInView = 0;
+    // runs after an instance closed with its `items` runs, before the next Instance / ViewEnd / Marker (a.5.3: other draw
+    // paths), and those of them whose jobs carry the closed instance's matrix (a displaced own run): reported
+    uint64_t runsAfterInstance = 0, runsAfterSameMatrix = 0;
     uint64_t matrixChecked = 0, matrixMismatch = 0;
     float matrixMaxError = 0.0f;   // largest relative difference seen
     uint64_t viewportMismatch = 0, guardUnexpected = 0;
