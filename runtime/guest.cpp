@@ -3,6 +3,7 @@
 
 #include <windows.h>
 
+#include <cstdio>
 #include <cstdlib>
 
 extern "C" unsigned char gt4_guest_ram[];
@@ -66,19 +67,31 @@ bool guest_memory_init() {
                   kGuestSectionStart);
         return false;
     }
-    // The shared section would also be shared with a second running copy of this executable.
-    CreateMutexW(nullptr, TRUE, L"Local\\gt4_game_guest_ram");
-    if (GetLastError() == ERROR_ALREADY_EXISTS) {
-        log_error("another gt4_game is running; its guest memory would be shared with this one");
-        return false;
-    }
     wchar_t path[MAX_PATH];
     GetModuleFileNameW(nullptr, path, MAX_PATH);
     HANDLE file = CreateFileW(path, GENERIC_READ | GENERIC_EXECUTE, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr,
                               OPEN_EXISTING, 0, nullptr);
-    HANDLE section =
-        file == INVALID_HANDLE_VALUE ? nullptr
-                                     : CreateFileMappingW(file, nullptr, PAGE_EXECUTE_WRITECOPY | SEC_IMAGE, 0, 0, nullptr);
+    // The shared section is shared by every process running this executable file: Windows keeps one image section
+    // per file. A second copy of the same file is refused; a gt4_game.exe in another folder (another checkout's
+    // build) has its own section and runs beside it. The mutex is named after the file itself (its volume and file
+    // index), so every path that reaches it (another spelling, a short name, a hard link) counts as the same file.
+    // (It was one name for the whole machine: two checkouts could not run their games at once.)
+    BY_HANDLE_FILE_INFORMATION identity{};
+    if (file == INVALID_HANDLE_VALUE || !GetFileInformationByHandle(file, &identity)) {
+        log_error("cannot open the executable image (Windows error %lu)", GetLastError());
+        return false;
+    }
+    char mutexName[80];
+    std::snprintf(mutexName, sizeof mutexName, "Local\\gt4_game_guest_ram_%08lx_%08lx%08lx",
+                  identity.dwVolumeSerialNumber, identity.nFileIndexHigh, identity.nFileIndexLow);
+    CreateMutexA(nullptr, TRUE, mutexName);
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        char shown[MAX_PATH * 3] = "";
+        WideCharToMultiByte(CP_UTF8, 0, path, -1, shown, sizeof shown, nullptr, nullptr);
+        log_error("another gt4_game is running from %s; its guest memory would be shared with this one", shown);
+        return false;
+    }
+    HANDLE section = CreateFileMappingW(file, nullptr, PAGE_EXECUTE_WRITECOPY | SEC_IMAGE, 0, 0, nullptr);
     if (!section) {
         log_error("cannot open the executable image for the RAM mirrors (Windows error %lu)", GetLastError());
         return false;
