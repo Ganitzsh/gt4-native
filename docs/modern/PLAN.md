@@ -316,6 +316,14 @@ halfway leaves the old save whole; backups rotate); a session saves and loads in
 
 **D4: Narration (S).** `runtime/iop.cpp:253-257` (`voic()` plays the Speex PCM). Depends: none. Acceptance: a
 session's `audio.wav` has the narration where the game speaks; no audio drop in the host summary. **Day one.**
+**Not applicable to SCUS-97328** (2026-11-07): `narration.inf` sets the enable flag to 0 (`D_0084688C`), so the
+game never opens `VOIC`. `BGM__narrationEnable()` returns `D_0084688C`, word `+0xC` of the 16-byte header that
+`func_00460580` loads at boot from `/narration/<lang>/narration.inf` into `D_00846880`. Every narration path checks it
+first (`RaceFreeRun::setDescriptionVoicePlay`, `::soundToggle`, `::initialize`, and the BGM narration play and pause).
+A live boot on an empty save showed the game's file loader writing the 16 bytes once at start-up (`GT4_WATCH_WRITE`),
+and nothing writing them after. A guest-RAM snapshot at VBlank 2400 (`GT4_SNAPSHOT`) read `NARR`, version 1, `0`,
+`0`. `voic()` stays the stub; the code for a disc with narration is parked as a patch in lane D's clone and is not
+on main.
 
 **D2: Rumble (S).** `iop.cpp:572-576` profile and motor bytes, `GT4_REC_RUMBLE` in `protocol.h`, SDL rumble.
 Depends: A1 (protocol.h). Acceptance: session test reads the rumble record values; a pad rumbles in a race (manual).
