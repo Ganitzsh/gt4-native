@@ -274,6 +274,9 @@ struct Graph::Physical {
         bool timed = false;
         std::vector<PassTiming> timings;
         std::vector<uint64_t> stamps;      // (timings' query results, kept to not allocate each frame)
+        // The timestamps, copied by the GPU at the end of the frame into host-cached memory: timings() reads them
+        // there (vkGetQueryPoolResults cost about 24 us a frame on the render thread, B4's CPU gate).
+        vk::Buffer results;
         // What the slot's last full realise bound to the transients (index = id - 1), and the plan it did it for
         // (Cache::generation): a frame using that plan again binds the same objects without searching for them.
         uint64_t generation = 0;
@@ -1569,6 +1572,26 @@ void Graph::execute(VkCommandBuffer command, VkQueue computeQueue) {
         image.access = e.access;
     }
     slot.timed = ph.timestamps && queries > 0;
+    if (slot.timed) {
+        const VkDeviceSize bytes = VkDeviceSize(queries) * sizeof(uint64_t);
+        if (slot.results.size < bytes) {   // (the slot's last frame is done: its buffer is free)
+            vk::destroy(*device, slot.results);
+            slot.results = vk::createBuffer(*device, std::max<VkDeviceSize>(bytes, 64 * sizeof(uint64_t)), VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, true);
+        }
+        vkCmdCopyQueryPoolResults(command, slot.queries, 0, queries, slot.results.buffer, 0, sizeof(uint64_t),
+                                  VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+        VkMemoryBarrier2 toHost{};
+        toHost.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+        toHost.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+        toHost.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        toHost.dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT;
+        toHost.dstAccessMask = VK_ACCESS_2_HOST_READ_BIT;
+        VkDependencyInfo dependency{};
+        dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        dependency.memoryBarrierCount = 1;
+        dependency.pMemoryBarriers = &toHost;
+        vkCmdPipelineBarrier2(command, &dependency);
+    }
     for (auto& [name, h] : ph.histories)
         if (h.written) {
             h.previous = 1 - h.previous;
@@ -1582,9 +1605,9 @@ const std::vector<PassTiming>& Graph::timings(uint32_t slotIndex) {
     Physical::Slot& slot = physical->slots[slotIndex % 2];
     std::vector<uint64_t>& stamps = slot.stamps;
     stamps.assign(slot.names.size() * 2, 0);
-    const bool gpu = slot.timed && !stamps.empty() &&
-                     vkGetQueryPoolResults(device->device, slot.queries, 0, static_cast<uint32_t>(stamps.size()), stamps.size() * sizeof(uint64_t),
-                                           stamps.data(), sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) == VK_SUCCESS;
+    // (the copy the frame's command buffer made: its fence has signalled, so it is complete)
+    const bool gpu = slot.timed && !stamps.empty() && slot.results.mapped && slot.results.size >= stamps.size() * sizeof(uint64_t);
+    if (gpu) std::memcpy(stamps.data(), slot.results.mapped, stamps.size() * sizeof(uint64_t));
     slot.timings.resize(slot.names.size());   // (the names assigned in place: no allocation once they fit)
     for (size_t i = 0; i < slot.names.size(); ++i) {
         PassTiming& t = slot.timings[i];
@@ -1606,6 +1629,7 @@ void Graph::destroy() {
         for (auto& c : slot.buffers) if (c.buffer) vkDestroyBuffer(device->device, c.buffer, nullptr);
         for (auto& a : slot.arenas) if (a.memory) vkFreeMemory(device->device, a.memory, nullptr);
         vk::destroy(*device, slot.ring);
+        vk::destroy(*device, slot.results);
         if (slot.queries) vkDestroyQueryPool(device->device, slot.queries, nullptr);
         slot = Physical::Slot{};
     }

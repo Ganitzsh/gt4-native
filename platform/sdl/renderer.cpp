@@ -817,7 +817,10 @@ struct Renderer::Impl {
             check(vkWaitForFences(device.device, 1, &frame.fence, VK_TRUE, UINT64_MAX), "vkWaitForFences");
         }
         readTimestamps(frame, slot);
-        if (pipeline && passTimingWanted) passTimes = pipeline->passTimings(slot);   // (its fence has signalled)
+        if (pipeline && passTimingWanted) {   // (its fence has signalled)
+            GT4_STAGE_SCOPE("render: the render graph's timings (--profile-json)");
+            passTimes = pipeline->passTimings(slot);
+        }
         // The game's asynchronous reads copied in frames the GPU has finished (this slot's, and the other's if done).
         if (gsnScene)
             for (uint32_t k = 0; k < kFramesInFlight; ++k)
