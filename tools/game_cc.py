@@ -693,8 +693,9 @@ COMPILE_CATEGORIES = [
                                    r"|can't find a register in class|invalid `asm'|Output constraint|register constraint"
                                    r"|invalid register name")),
     ("128-bit/MMI types", re.compile(r"__gt4_[us]128|\b[us]128\b|U?TItype|mode `TI'|vu_u128")),
-    ("compiler crash", re.compile(r"Internal (compiler )?error|internal error|Segmentation|confused by earlier errors"
-                                  r"|Abort|abort\(\)|killed")),
+    ("compiler crash", re.compile(r"[Ii]nternal (compiler )?error|Segmentation|confused by earlier errors"
+                                  r"|Abort|abort\(\)|killed|virtual memory exhausted|Cannot allocate memory"
+                                  r"|fatal signal|out of memory")),
     ("frontend: parse error", re.compile(r"parse error|syntax error")),
     ("frontend: unknown builtin or attribute", re.compile(r"__builtin_\w+' undeclared|attribute directive ignored"
                                                          r"|`__builtin_\w+' was not declared")),
@@ -704,6 +705,13 @@ COMPILE_CATEGORIES = [
     ("frontend: types and conversions", re.compile(r"conver|cast|incompatible|invalid operands|lvalue|pointer"
                                                   r"|initializ|ambiguous|no match")),
 ]
+
+
+# A failure that may not happen again: the compiler crashed or was killed, or memory ran out (the gcc driver reports an
+# OOM kill of cc1 itself, with its own exit code). Never kept as a refusal in the object cache: it would skip a source
+# that compiles fine in every later build. A deterministic internal error just compiles again each time.
+TRANSIENT = re.compile(r"Internal (compiler )?error|internal error|Segmentation|[Kk]illed|Abort|abort\(\)"
+                       r"|virtual memory exhausted|Cannot allocate memory|fatal signal|out of memory")
 
 
 def classify_compile(rc, msg):
@@ -1009,7 +1017,8 @@ def main():
                 rec["category"] = classify_compile(rc, rec["first_error"] or "")
                 os.makedirs(os.path.dirname(s_path), exist_ok=True)
                 open(s_path + ".err", "w", encoding="utf-8", newline="\n").write(err)
-                if cache and rc not in (124, 137, -1):   # (refused by the compiler: kept; killed or lost: not)
+                # (refused by the compiler: kept; killed, crashed, out of memory or lost: not)
+                if cache and rc not in (124, 137, -1) and not TRANSIENT.search(err or ""):
                     cache.put_refused(keys[i], rec, err)
             else:
                 os.makedirs(os.path.dirname(s_path), exist_ok=True)

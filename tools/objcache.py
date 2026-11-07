@@ -8,9 +8,14 @@ and renamed into place, so a reader sees a whole entry or none, and any number o
 once; two writers of one key write the same bytes.
 
 The folder: GT4_OBJ_CACHE, else %LOCALAPPDATA%/gt4-native/objcache (~/.cache/gt4-native/objcache elsewhere).
-GT4_OBJ_CACHE=0 (or --no-cache) builds without it. Kept: objects that compiled and assembled, and the sources the
-compiler refused (their census record and error output: the same inputs fail the same way). A compile killed
-for its time or an assembler failure is not kept: tried again each time.
+GT4_OBJ_CACHE=0 (or --no-cache) builds without it. Nothing is ever evicted: a change to the compiler, the tools,
+include/ or compat/ changes every key, and the next build writes a new set of about 32,000 entries (about 150 MB)
+beside the old ones. Deleting the folder, or any part of it, is always safe: what is missing is compiled again.
+
+Kept: objects that compiled and assembled, and the sources the compiler refused (their census record and error
+output: the same inputs fail the same way). Not kept, so tried again each time: a compile killed for its time, a
+compiler that crashed, was killed or ran out of memory (game_cc.TRANSIENT: the gcc driver reports an OOM kill of
+cc1 with its own exit code), and an assembler failure.
 """
 import hashlib
 import json
