@@ -43,7 +43,9 @@ mostly the field lines, which the native renderer does not jitter.
 In the game's 16:9 mode the menus' 2D keeps GT4's own layout, or a centred 4:3 area with aspect.hud = centered (game-side,
 WIDESCREEN.md). GT4's Z24 pass (Photo Travel's depth of field: white drawn into the Z buffer as a frame, (Cs - Cd),
 inverts its depths in place) is kept as a state of the Z buffer: the draws tested against it get max - Z and the
-opposite compare (`Target::inverted`, `Draw::depthInverted`). Open: COLCLAMP = 0 (wrapping), other Z formats as frames, Z
+opposite compare (`Target::inverted`, `Draw::depthInverted`). One run of the pass's primitives is one inversion, and a
+run that draws its first primitive again is a second one (the replay's Dive view draws the pass twice in a row, which
+leaves the depths as they were). The 3D batches (`GsFrontend::model`) do not turn their Z round. Open: COLCLAMP = 0 (wrapping), other Z formats as frames, Z
 read back by the game (served from memory), dithering, the GPU cost of the colour grading (one dispatch per batch would do). GT mode's map is
 broken in the game port itself (paraLLEl-GS shows the same shards): a game-side bug.
 

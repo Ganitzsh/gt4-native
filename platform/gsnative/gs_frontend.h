@@ -432,6 +432,8 @@ private:
     // targets once while it stays.
     uint64_t stateSerial = 0;
     uint32_t invertRun = 0;   // the Z buffer the primitives just before inverted (one inversion per run of them)
+    float invertFirst[6] = {};   // the run's first primitive (x, y of its vertices): drawn again, a second pass
+    uint32_t invertFirstCount = 0;
     struct EmitCache {
         bool valid = false;
         uint32_t prim = 0;

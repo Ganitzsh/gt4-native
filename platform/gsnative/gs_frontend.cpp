@@ -627,7 +627,20 @@ void GsFrontend::emit(const Vertex* v, uint32_t n, Topology topology) {
         if (inverts) {
             for (Target& t : targets) {
                 if (!t.depth || t.bp != s.c.colorBase || t.bw != s.c.colorWidth || (t.psm & 2) != (f & 2)) continue;
-                if (invertRun != t.id) t.inverted = !t.inverted;
+                // The run's first primitive drawn again starts a second pass: every pixel it covers turned round
+                // twice, as on the GS (the replay's Dive view draws the pass twice in a row at the end of each frame;
+                // counted once, the Z buffer was left inverted for its next scene, whose 3D draws do not turn their Z
+                // round: every other pair of frames lost its whole scene).
+                bool again = invertRun == t.id && invertFirstCount == n;
+                for (uint32_t k = 0; again && k < n; ++k) again = invertFirst[2 * k] == out[k].x && invertFirst[2 * k + 1] == out[k].y;
+                if (invertRun != t.id) {
+                    invertFirstCount = n;
+                    for (uint32_t k = 0; k < n; ++k) {
+                        invertFirst[2 * k] = out[k].x;
+                        invertFirst[2 * k + 1] = out[k].y;
+                    }
+                }
+                if (invertRun != t.id || again) t.inverted = !t.inverted;
                 invertRun = t.id;
                 ++stats.draws;
                 return;
