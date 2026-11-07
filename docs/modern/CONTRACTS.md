@@ -313,23 +313,35 @@ Where each record is sent (tickets in PLAN.md):
    - The first `FrameBegin` since the last kick opens the frame. The runtime drops any later one until the kick
      and counts it in `FrameEnd::begins`, so the opening one's `flags` stand.
    - The kick (004A11F8) sends `FrameEnd` after `walk(list)` when a frame is open. It goes as a `GT4_REC_GFX` block
-     of its own from the kick's thread, with nothing sent on the link between the list's first block and it. So the
-     whole list and its `FrameEnd` land in one host `FrameList` (the host closes `FrameList`s at `GT4_REC_VSYNC`).
+     of its own from the kick's thread. Between the list's first block and `FrameEnd` no record that ends a host
+     `FrameList` is sent: no `GT4_REC_VSYNC` and no `GT4_REC_DISPLAY` (which goes with it). Other records keep
+     their stream order, as on the PS2: `audio_frame`'s records at the tick, uploads from the game's interrupt
+     handlers delivered on the kick thread mid-list (`gt4_gfx_upload_now`), read replies. So the whole list and
+     its `FrameEnd` land in one host `FrameList`.
+   - **Capture edges.** A game-side capture's window (`--capture`, `GT4_CAPTURE_FROM` / `FRAMES`) is decided per
+     record by VBlank count (`link_send`, `link_capture_window`, `link.cpp:215`), so a capture's first and last
+     lists can be partial. `GT4_REC_STATE` never goes on the link: the host's recorder writes it when a host
+     capture starts (`gs_host.cpp:650`).
+     - At a capture's start, records before the first `FrameBegin` count as `outsideFrame` (not gated).
+     - A frame still open when the stream ends counts as `framesTruncated` (reported), not `framesUnclosed`.
+     - So the edges cost nothing at the gates, and captures stay as `link.cpp` writes them.
    - **Ticks during a walk are deferred.** The frame clock's tick (`on_frame`, `runtime/gs.cpp`, on the clock's
      thread under `g_lock`) could send `GT4_REC_VSYNC` between any two blocks of a walk (A3 found it), splitting a
      list across two `FrameList`s.
      - `frame.cpp` keeps a mutex, a `walking` flag and a queue of ticks. A tick during a walk queues its records
-       (DISPLAY as the registers stand at the tick, then `{field, count}`). It also queues its capture-window
-       change, so a capture never opens or closes inside a list. It sends nothing.
+       (DISPLAY as the registers stand at the tick, then `{field, count}`), including the DISPLAY resend
+       `on_frame` makes when the capture window changes. It sends nothing.
      - `audio_frame` and `link_poll` stay at the tick.
      - After `FrameEnd`, the kick drains the queue in order with the flag still set: lock, pop one, unlock, send,
        until the queue is empty; then it clears the flag under the lock. So a new tick can't overtake a queued one.
      - Neither side holds the mutex across a `link_send` from a guest thread. A guest thread takes `g_lock` after
        each send, and the clock holds `g_lock`.
-     - **Only while scene records are on** (`gt4_scene_on()`). With them off, `on_frame` and the timing are
-       byte-identical to today at every preset: `original` and the GS path don't change timing for a feature they
-       don't use, and the records-off path stays a clean baseline. With records on, the game's VBlank count and
-       interrupts are unchanged; only where `GT4_REC_VSYNC` falls in the stream moves, by at most one walk.
+     - The tick's queue is a fixed ring under an SRWLOCK: nothing is allocated on the clock thread.
+     - **Only while scene records are on** (`gt4_scene_on()`, latched at the kick's start and held through the
+       drain, so a change of the option mid-walk can't strand queued ticks). With them off, `on_frame` and the
+       timing are byte-identical to today at every preset: `original` and the GS path don't change timing for a
+       feature they don't use, and the records-off path stays a clean baseline. With records on, the game's VBlank
+       count and interrupts are unchanged; only where `GT4_REC_VSYNC` falls in the stream moves, by at most one walk.
      - A synchronous read inside a walk (`link_read_image`) does not wait for a VSync. `GsHost::readTransfer`
        (`gs_host.cpp:251`) serves it at once: it draws the `FrameList` so far as a partial list and reads back
        (A3 checked). So deferred ticks need no flush before a read. The cut this makes is covered in a.8.
@@ -341,16 +353,24 @@ Where each record is sent (tickets in PLAN.md):
    - The runtime counts each scene record per kind as `gt4_gfx_scene` appends it to the open frame. That is what
      `FrameEnd`'s counts carry, and `countsMismatch` compares them with what arrived.
    - A display list recorded for later calls (`call` / `ret` in `walk`) would send its scene records once per
-     call. So `gt4_gfx_scene` must not append while pgl records such a list: it drops the record and logs once.
+     call. pgl has no recording state to test at append time: recorded blocks go through the same cursor (+0x1F8).
+     So **the walker drops a `kScene` block found at call depth > 0** and logs it once per session.
+     - The frame's counts then disagree on purpose. They were counted at append time, possibly in an earlier
+       frame, so `FrameEnd` / `ViewEnd` count records the host never gets, and a dropped `Projection` leaves an
+       id gap.
+     - The host sees `countsMismatch` (and maybe `projectionUnknown`), so that frame is never substituted. A
+       record lost this way shows as a fault; the counts are not patched.
+     - A3 measured none in the SCENE race (2750 frames). The menus have not been measured yet.
    - At the host, a `FrameBegin` before a `FrameEnd` is a new frame (the old one is counted as `framesUnclosed`
      and dropped). With the runtime closing every open frame at its kick, that means a `FrameEnd` was lost.
 
    A3 checks:
    - frame-open state, `gt4_gfx_scene` and the kick all run on the game thread, and list N+1 is not built
      before kick N returns;
-   - with the deferral, no `GT4_REC_VSYNC` falls inside a list or between it and `FrameEnd`; no other thread
-     sends records during a walk (uploads, reads);
-   - whether pgl records display lists on paths that send scene records;
+   - with the deferral, no `GT4_REC_VSYNC` or `GT4_REC_DISPLAY` falls inside a list or between it and
+     `FrameEnd`, and no `FrameList` holds two frames (SCENE race: 0 and 0, with 51 ticks deferred);
+   - no `kScene` block at call depth > 0 on the race and menu routes (the Home garage, showroom, event screens):
+     the race is measured (none); the menus are still to do;
    - no kick in a race has a menu `FrameBegin` before `render_world`'s (its flags would stand).
 2. `ViewBegin` / `ViewEnd` pairs do not nest. Instances and lights appear only inside a view.
 3. An `Instance` is followed by exactly `items` `kBatchRun` records (with the `kBatchWrite`, `kBatchModel`,
@@ -400,6 +420,7 @@ Where each record is sent (tickets in PLAN.md):
 |---|---|---|
 | `records`, `bad`, `versionUnknown`, `unknownKind`, `outsideFrame` | decoding | `bad == versionUnknown == unknownKind == 0` |
 | `framesUnclosed`, `countsMismatch` | `FrameEnd`'s counts differ from what arrived | 0 |
+| `framesTruncated` | a frame still open when the stream ends (a capture's last list, a.5.1) | reported |
 | `viewsNested`, `viewEndWithoutBegin`, `viewsUnclosed` | pairing (`viewsUnclosed`: a view still open at `FrameEnd`) | 0 |
 | `instances`, `instancesWithoutView` | | `instancesWithoutView == 0` in race frames (the HUD widget is inside the frame, in its `kViewHud` view) |
 | `begins` | `FrameEnd::begins`: the `FrameBegin`s the runtime merged into one frame (render_world plus each 00217058 call) | reported |
