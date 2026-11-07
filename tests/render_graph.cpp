@@ -655,6 +655,25 @@ int main() {
         check(hasError(g.plan(), "mip 1 is read before it is written"), "history: reading a new copy's unwritten mip is an error");
     }
 
+    // A history's previous copy (version 0) can be read after this frame's copy is written (SMAA T2x's resolve).
+    {
+        Graph g(backend);
+        g.begin(frameInfo());
+        const Texture previous = g.history("frames", colour("frames"));
+        Texture current;
+        g.pass("blend", [&](PassBuilder& b) { current = b.use(previous, Use::ColorWrite, kOut); }, nothing);
+        g.pass("resolve", [&](PassBuilder& b) {
+            b.use(current, Use::Sampled, kComp);
+            b.use(previous, Use::Sampled, kComp);
+            b.keep();
+        }, nothing);
+        g.compile();
+        const PlanPass* resolve = find(g.plan(), "resolve");
+        bool copies = false;
+        if (resolve && resolve->barriers.size() == 2) copies = resolve->barriers[0].copy != resolve->barriers[1].copy;
+        check(g.plan().ok() && copies, "history: the previous copy read after the new one was written, each its own image");
+    }
+
     // History validity: a compile-only graph has no previous frame.
     {
         Graph g(backend);

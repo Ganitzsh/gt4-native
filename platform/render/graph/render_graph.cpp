@@ -458,7 +458,10 @@ Texture Graph::useTexture(uint32_t p, Texture t, Use use, VkPipelineStageFlags2 
     }
     Resource& r = resources[t.id - 1];
     const std::string what = where + ": " + useName(use) + " of '" + r.name + "'";
-    if (t.version != r.version) {
+    // A history's version 0 is the previous frame's image: reading it stays valid after this frame's copy is written
+    // (it is another image, and nothing writes it this frame).
+    const bool previousCopy = r.kind == Resource::Kind::History && t.version == 0 && !writes(use);
+    if (t.version != r.version && !previousCopy) {
         if (writes(use) && t.version + 1 < r.producers.size() && r.producers[t.version + 1] != kNone)
             error(what + " writes version " + std::to_string(t.version) + ", which pass '" + passes[r.producers[t.version + 1]]->name +
                   "' already wrote (current version " + std::to_string(r.version) + ")");
