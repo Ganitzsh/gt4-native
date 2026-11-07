@@ -221,7 +221,9 @@ struct Instance {
             colourSpaces |= std::strcmp(p.extensionName, VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME) == 0;
         }
         if (debugUtils) extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-        if (colourSpaces) extensions.push_back(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);   // HDR10 swapchains (display.hdr)
+        // HDR10 swapchains (display.hdr): windowed only, with SDL's surface extensions (it needs VK_KHR_surface;
+        // headless runs enable none: VUID-vkCreateInstance-ppEnabledExtensionNames-01388).
+        if (colourSpaces && windowed) extensions.push_back(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
         VkApplicationInfo app{};
         app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
         app.pApplicationName = "GT4 native host";
