@@ -572,6 +572,25 @@ int main() {
         check(hasError(bad.plan(), "must cover every mip"), "opaque: a partial range is an error");
     }
 
+    // Opaque on an import nothing has written yet (UNDEFINED, its first frame): no barrier (none to UNDEFINED is
+    // allowed, and there is nothing to wait for); the pass takes it as it is and the next use starts from vk::Image.
+    {
+        Graph g(backend);
+        g.begin(frameInfo());
+        vk::Image fresh = importable(VK_IMAGE_LAYOUT_UNDEFINED);
+        fresh.stage = VK_PIPELINE_STAGE_2_NONE;
+        fresh.access = VK_ACCESS_2_NONE;
+        Texture t = g.import(fresh, "scene colour, first frame");
+        g.pass("scene", [&](PassBuilder& b) { t = b.use(t, Use::Opaque, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT); }, nothing);
+        g.pass("read it", [&](PassBuilder& b) { b.use(t, Use::Sampled, kComp); b.keep(); }, nothing);
+        g.compile();
+        const Plan& p = g.plan();
+        const PlanPass* scene = find(p, "scene");
+        const PlanPass* read = find(p, "read it");
+        check(p.ok() && scene && scene->barriers.empty(), "opaque: a never-written import gets no barrier before the pass");
+        check(read && read->barriers.size() == 1 && read->barriers[0].fromImage, "opaque: the next use starts from what the pass left");
+    }
+
     // Buffers: the access counts, not only the stage; an imported buffer waits for everything before the graph.
     {
         Graph g(backend);

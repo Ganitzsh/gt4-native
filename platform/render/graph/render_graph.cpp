@@ -817,6 +817,16 @@ void Graph::planBarriers() {
                     fail(node, r, "has no contents for an Opaque use");
                     return;
                 }
+                // Opaque on an image nothing has written yet (an import still UNDEFINED, its first frame): nothing to
+                // wait for and no layout to keep (a barrier to UNDEFINED is not allowed); the pass takes it as it is.
+                if (opaque && !s.fromImage && s.layout == VK_IMAGE_LAYOUT_UNDEFINED && s.lastPass != step.pass) {
+                    afterWrite(s, stages, access);
+                    s.fromImage = true;
+                    s.lastPass = step.pass;
+                    s.lastPassLayout = layout;
+                    s.lastBarrier = SIZE_MAX;
+                    continue;
+                }
                 const bool discard = !opaque && (s.fresh || u.use == Use::ColorWrite || u.use == Use::DepthWrite);
                 const bool unwritten = r.kind == Resource::Kind::Transient || (r.kind == Resource::Kind::History && copy == 1);
                 if (reads(u.use) && !opaque && s.fresh && unwritten) {
@@ -1311,6 +1321,7 @@ void Graph::execute(VkCommandBuffer command, VkQueue computeQueue) {
             barrier.oldLayout = b.fromImage ? was.layout : b.oldLayout;
             // UNDEFINED as the new layout: keep the image's (an Opaque use after another one).
             barrier.newLayout = b.newLayout == VK_IMAGE_LAYOUT_UNDEFINED ? barrier.oldLayout : b.newLayout;
+            if (barrier.newLayout == VK_IMAGE_LAYOUT_UNDEFINED) continue;   // (kept, and never written: nothing to order)
             barrier.dstStageMask = b.dstStage;
             barrier.dstAccessMask = b.dstAccess;
             barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
