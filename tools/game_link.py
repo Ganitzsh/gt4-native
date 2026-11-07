@@ -58,6 +58,9 @@ def compile_runtime(out):
     rt = os.path.join(ROOT, "runtime")
     objdir = os.path.join(out, "runtime")
     os.makedirs(objdir, exist_ok=True)
+    # The checkout's path stays out of the objects (debug info: file and directory names), so the same commits give
+    # the same exe in any folder (tools/release_game.py). Both spellings: the paths gcc sees use either slash.
+    prefix_map = [f"-ffile-prefix-map={p}=gt4-native" for p in sorted({ROOT, ROOT.replace("\\", "/")})]
     jobs = []
     files = []
     for dirpath, _, names in os.walk(rt):  # runtime/ and its subdirectories (runtime/native/...)
@@ -69,11 +72,11 @@ def compile_runtime(out):
         if name.endswith(".cpp"):
             # -mstackrealign: game code (gcc 2.9) calls into the runtime with a 4-byte aligned stack
             cmd = [tool("g++"), "-c", "-std=c++20", "-O2", "-g", "-msse2", "-mfpmath=sse", "-mstackrealign", "-Wall",
-                   "-Wextra", "-I", rt, "-I", os.path.join(ROOT, "include"), "-I", os.path.join(FFMPEG, "include"),
-                   src, "-o", obj]
+                   "-Wextra"] + prefix_map + ["-I", rt, "-I", os.path.join(ROOT, "include"), "-I",
+                                              os.path.join(FFMPEG, "include"), src, "-o", obj]
         elif name.endswith(".c"):
-            cmd = [tool("gcc"), "-c", "-std=gnu11", "-O2", "-g", "-msse2", "-mfpmath=sse", "-Wall", "-I", rt,
-                   "-I", os.path.join(ROOT, "include"), src, "-o", obj]
+            cmd = [tool("gcc"), "-c", "-std=gnu11", "-O2", "-g", "-msse2", "-mfpmath=sse", "-Wall"] + prefix_map + [
+                   "-I", rt, "-I", os.path.join(ROOT, "include"), src, "-o", obj]
         elif name.endswith(".s"):
             cmd = [tool("as"), "--32", src, "-o", obj]
         else:
@@ -84,7 +87,7 @@ def compile_runtime(out):
         cmd, obj, src = job
         if os.path.exists(obj) and os.path.getmtime(obj) >= os.path.getmtime(src) and not name_newer_headers(rt, obj):
             return obj
-        run(cmd, env=mingw_env())
+        run(cmd, env=mingw_env(), cwd=ROOT)   # the debug info's directory is ROOT too, which the prefix map covers
         return obj
 
     with ThreadPoolExecutor(8) as ex:
@@ -645,6 +648,8 @@ def main():
     ap.add_argument("--out", default=os.path.join(ROOT, "build", "game"))
     ap.add_argument("--eeorig", default="", help="eerecomp's output (tools/eeref/build.cmd: build/eeref/gen): link the "
                     "original code, translated, for GT4_ORIG (tools/eeref/orig_bridge.cpp)")
+    ap.add_argument("--strict-drafts", action="store_true", help="stop, instead of leaving it out, on a provisional "
+                    "draft at an address a matched source provides (tools/release_game.py)")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     nm_cache_load(a.out)
@@ -671,13 +676,33 @@ def main():
         if replaced_objs:
             print(f"{len(replaced_objs)} objects replaced by curated native sources (game_src/)")
             game_objs = [o for o in game_objs if o not in replaced_objs]
-    # Provisional drafts (tools/draft_natives.py) give way to a compiled source of the same function.
+    # Provisional drafts (tools/draft_natives.py) give way to any other native code of the same function. "The
+    # same" is by address: the other may define it under its own name only (the runtime's __floatdisf is
+    # 0057F480), and a gt4fn_ alias outranks a name in the address table, so a check of the aliases alone let the
+    # draft take the address.
     drafts = [o for o in game_objs if "native_drafts" in o.replace("\\", "/")]
     if drafts:
-        regular_defined, _ = nm_symbols([o for o in game_objs if o not in drafts])
-        draft_defined, _ = nm_symbols(drafts)
-        taken = {n for n in regular_defined if n.startswith("_gt4fn_")}
-        stale = {p for n, p in draft_defined.items() if n.startswith("_gt4fn_") and n in taken}
+        syms = read_symbol_addrs(a.decomp)
+
+        def function_addresses(objs):
+            per = nm_objects(objs)
+            found = collections.defaultdict(set)
+            for o in objs:
+                for kind, name in per[o][0]:
+                    r = resolve(name, syms) if kind == "T" else None
+                    if r and r[1] == "func":
+                        found[o].add(r[0])
+            return found
+
+        # the runtime's own versions count too (runtime/fpret.s: gt4g___floatdisf), not only matched sources
+        regular = function_addresses([o for o in game_objs if o not in drafts] + rt_objs)
+        taken = set().union(*regular.values()) if regular else set()
+        stale = {o: sorted(addrs & taken) for o, addrs in function_addresses(drafts).items() if addrs & taken}
+        if stale and a.strict_drafts:
+            raise SystemExit(f"{len(stale)} provisional drafts are at addresses a matched source provides (stage the "
+                             f"drafts again: tools/draft_natives.py):\n  " + "\n  ".join(
+                                 f"{os.path.basename(o)}: {' '.join(f'{x:08X}' for x in xs)}"
+                                 for o, xs in sorted(stale.items())))
         if stale:
             print(f"{len(stale)} provisional drafts left out: their functions now compile from source")
             game_objs = [o for o in game_objs if o not in stale]

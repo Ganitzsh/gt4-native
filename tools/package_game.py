@@ -160,7 +160,8 @@ def checked_game_build(build, decomp, root):
     for repo, commit, paths, what in ((decomp, stamp["decomp_commit"], ["src", "include", "config", "project.toml"],
                                        "gt4-decomp"),
                                       (root, stamp["native_commit"], ["game_src", "compat", "runtime", "include",
-                                       "tools/game_cc.py", "tools/game_link.py", "tools/game_toolchain"], "gt4-native")):
+                                       "tools/game_cc.py", "tools/game_link.py", "tools/draft_natives.py",
+                                       "tools/game_toolchain"], "gt4-native")):
         changed = subprocess.run(["git", "-C", repo, "diff", "--name-only", commit, "--"] + paths,
                                  capture_output=True, text=True, check=True).stdout.split()
         untracked = subprocess.run(["git", "-C", repo, "ls-files", "-o", "--exclude-standard", "--"] + paths,
@@ -187,10 +188,10 @@ empty build folder; BUILD-STAMP.json lists every input's SHA-256).
 - native_drafts/: provisional sources for {drafts} functions the decompilation has not matched yet, chosen by
   gt4-native's tools/draft_natives.py from the decompilation's draft store (where each came from: DRAFTS.txt).
 
-To rebuild: check out gt4-decomp at that commit and gt4-native at {native}, put native_drafts/ under the decomp's
-build/ folder, and run in gt4-native:
-  py tools/release_game.py --decomp DECOMP --drafts DECOMP/build/native_drafts
-The exe's SHA-256 must then be {sha}.
+To rebuild: check out gt4-decomp at that commit and gt4-native at {native}, and run in gt4-native, with this
+folder's native_drafts/ and DRAFTS.txt (the set's SHA-256: {drafts_set}):
+  py tools/release_game.py --decomp DECOMP --drafts native_drafts --draft-list DRAFTS.txt
+The exe's SHA-256 must then be {sha}, in any folder.
 """
 
 
@@ -214,7 +215,7 @@ def game_sources_zip(path, stamp, build, decomp, version):
         z.writestr(f"{top}/DRAFTS.txt", "\n".join(stamp.get("draft_list") or ["(no list)"]) + "\n")
         z.writestr(f"{top}/SOURCES-FOR-GT4-NATIVE-{version}.txt", SOURCES_NOTE.format(
             version=version, decomp=stamp["decomp_commit"], native=stamp["native_commit"],
-            drafts=len(stamp["drafts"]), sha=stamp["game_sha256"]))
+            drafts=len(stamp["drafts"]), sha=stamp["game_sha256"], drafts_set=stamp.get("drafts_set_sha256", "?")))
         bad = [n for n in z.namelist() if n.lower().endswith((".iso", ".elf", ".ps2", ".psu", ".bin", ".gt4"))
                or "/orig/" in n]
     if bad:
@@ -241,7 +242,9 @@ def release(a):
             f"  gt4-decomp commit (the game's sources): {stamp['decomp_commit']}",
             f"  gt4-native commit (game_src/, the runtime): {stamp['native_commit']}",
             f"  {len(stamp['curated'])} native corrections (game_src/), {len(stamp['drafts'])} provisional drafts "
-            f"(listed below; sources in the game-sources zip)"]
+            f"(listed below; sources in the game-sources zip)",
+            f"  drafts staged {stamp.get('drafts_staged', 'from a folder staged before the build (not checked)')}",
+            f"  draft set SHA-256: {stamp.get('drafts_set_sha256', '(not recorded)')}"]
     elf = os.path.join(a.decomp, "orig", "SCUS-97328", "CORE.GT4.elf")
     for exe in (host, game):
         hits = original_blocks(exe, elf)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build gt4_game.exe for a release: from an empty folder, from committed sources only, with a stamp of every input.
 
-    py tools/release_game.py --decomp C:\\path\\to\\gt4-decomp [--drafts DIR] [--draft-list FILE]
+    py tools/release_game.py --decomp C:\\path\\to\\gt4-decomp [--drafts DIR [--draft-list FILE]]
                              [--out build/game_release]
 
 An incremental build folder (build/game) keeps objects of sources that have changed since, and misses sources
@@ -11,13 +11,20 @@ changed. A release game is therefore always built here, from nothing:
   1. refuses uncommitted or untracked changes in the inputs: the decomp's src/, include/, config/, project.toml
      and this repository's game_src/, compat/, runtime/, include/ and the compile/link tools;
   2. empties OUT, compiles every decomp source (game_cc.py --all), stages game_src/ afresh as
-     DECOMP/build/native_curated_release and the provisional drafts (--drafts, default DECOMP/build/native_drafts:
-     the folder tools/draft_natives.py staged for the tested builds) as DECOMP/build/native_drafts_release,
-     compiles both and links (game_link.py: no time stamp in the file, so the same inputs give the same exe);
-  3. copies the curated and draft sources it compiled to OUT/sources/ and writes OUT/BUILD-STAMP.json: both
-     commits, the SHA-256 of every curated and draft source, the drafts list (--draft-list, default
-     build/game/draft_natives.txt: where each draft came from), the sources that did not compile, and the exe's
-     SHA-256.
+     DECOMP/build/native_curated_release and compiles it;
+  3. stages the provisional drafts for this build itself: links once without drafts, so the functions without
+     native code are the ones these commits leave, and runs tools/draft_natives.py on that link into an empty
+     DECOMP/build/native_drafts_release. A folder staged earlier holds drafts of functions matched since
+     (rc-0.1.1c and d took 417 from 2026-10-31's staging: 58 were left out at the link, and one took the address
+     of the runtime's __floatdisf). --drafts DIR takes a given set instead (a release's sources/native_drafts, to
+     rebuild it). The drafts come from the decomp's draft store (drafts/, build/swarm/), which git does not
+     version, so the stamp records the set and its hash;
+  4. links with --strict-drafts: a draft at an address that a matched source or the runtime provides stops the
+     build. Neither a time stamp nor the checkout's path ends up in the file (game_link.py), so the same inputs
+     give the same exe in any folder;
+  5. copies the curated and draft sources it compiled to OUT/sources/ and writes OUT/BUILD-STAMP.json: both
+     commits, the SHA-256 of every curated and draft source, the draft set's SHA-256 and how it was staged, the
+     drafts list (where each draft came from), the sources that did not compile, and the exe's SHA-256.
 
 tools/package_game.py --release takes the game from OUT only, and refuses it when the stamp does not match the exe
 or the trees have changed since (BUILD-INFO.txt and the game-sources zip are made from the stamp).
@@ -34,7 +41,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DECOMP_INPUTS = ["src", "include", "config", "project.toml"]
 NATIVE_INPUTS = ["game_src", "compat", "runtime", "include", "tools/game_cc.py", "tools/game_link.py",
-                 "tools/game_toolchain"]
+                 "tools/draft_natives.py", "tools/game_toolchain"]
 
 
 def git(repo, *args):
@@ -79,22 +86,22 @@ def failed_sources(census):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--decomp", required=True)
-    ap.add_argument("--drafts", help="the staged provisional drafts (default DECOMP/build/native_drafts)")
-    ap.add_argument("--draft-list", default=os.path.join(ROOT, "build", "game", "draft_natives.txt"),
-                    help="draft_natives.py's list of the staged drafts (where each came from)")
+    ap.add_argument("--drafts", help="a given set of provisional drafts (a release's sources/native_drafts) instead "
+                    "of staging them from the draft store for these commits")
+    ap.add_argument("--draft-list", help="with --drafts: draft_natives.py's list of them (a release's DRAFTS.txt)")
     ap.add_argument("--out", default=os.path.join(ROOT, "build", "game_release"))
     ap.add_argument("--jobs", default="8")
     a = ap.parse_args()
     decomp = os.path.abspath(a.decomp)
     out = os.path.abspath(a.out)
-    drafts = os.path.abspath(a.drafts or os.path.join(decomp, "build", "native_drafts"))
+    drafts = os.path.abspath(a.drafts) if a.drafts else None
 
     problems = [f"gt4-decomp: {l}" for l in dirty(decomp, DECOMP_INPUTS)]
     problems += [f"gt4-native: {l}" for l in dirty(ROOT, NATIVE_INPUTS)]
     if problems:
         raise SystemExit("uncommitted changes in the game's inputs (commit or remove them first):\n  "
                          + "\n  ".join(problems[:40]))
-    if not os.path.isdir(drafts):
+    if drafts and not os.path.isdir(drafts):
         raise SystemExit(f"no drafts folder {drafts}")
     if os.path.normcase(out) in (os.path.normcase(os.path.join(ROOT, "build", "game")), os.path.normcase(ROOT)):
         raise SystemExit(f"refusing to empty {out}")
@@ -113,24 +120,48 @@ def main():
     curated_dir = os.path.join(decomp, "build", "native_curated_release")
     drafts_dir = os.path.join(decomp, "build", "native_drafts_release")
     curated = stage(os.path.join(ROOT, "game_src"), curated_dir)
-    draft_names = stage(drafts, drafts_dir)
     listing = os.path.join(out, "extra.txt")
     with open(listing, "w", newline="\n") as f:
         for n in curated:
             f.write(f"build/native_curated_release/{n}\n")
-        for n in draft_names:
-            f.write(f"build/native_drafts_release/{n}\n")
+    link = [sys.executable, "tools/game_link.py", "--decomp", decomp, "--objs", os.path.join(out, "obj"), "--out", out]
+    draft_list = os.path.join(out, "draft_natives.txt")
+    shutil.rmtree(drafts_dir, ignore_errors=True)
+    if drafts:
+        draft_names = stage(drafts, drafts_dir)
+        with open(listing, "a", newline="\n") as f:
+            for n in draft_names:
+                f.write(f"build/native_drafts_release/{n}\n")
+        if a.draft_list:
+            shutil.copy(a.draft_list, draft_list)
+        stamp["drafts_staged"] = f"given: {drafts}"
     run([sys.executable, "tools/game_cc.py", "--decomp", decomp, "--out", out, "--list", listing, "--jobs", a.jobs])
     os.replace(os.path.join(out, "census.jsonl"), os.path.join(out, "census_extra.jsonl"))
-    run([sys.executable, "tools/game_link.py", "--decomp", decomp, "--objs", os.path.join(out, "obj"), "--out", out])
+    if not drafts:
+        run(link)   # without drafts: the functions these commits leave without native code
+        run([sys.executable, "tools/draft_natives.py", "--decomp", decomp, "--game", out, "--stage-suffix", "_release"])
+        # a candidate that did not compile stays staged without an object: not part of the build
+        objs = os.path.join(out, "obj", "build", "native_drafts_release")
+        draft_names = []
+        for n in sorted(os.listdir(drafts_dir)):
+            if os.path.isfile(os.path.join(objs, n + ".o")):
+                draft_names.append(n)
+            else:
+                os.remove(os.path.join(drafts_dir, n))
+        stamp["drafts_staged"] = ("by tools/draft_natives.py for these commits, from the decomp's draft store "
+                                  "(drafts/, build/swarm/: not versioned)")
+    run(link + ["--strict-drafts"])
 
     snap = os.path.join(out, "sources")
     shutil.copytree(curated_dir, os.path.join(snap, "native_curated"))
     shutil.copytree(drafts_dir, os.path.join(snap, "native_drafts"))
     stamp["curated"] = {n: sha256(os.path.join(curated_dir, n)) for n in curated}
     stamp["drafts"] = {n: sha256(os.path.join(drafts_dir, n)) for n in draft_names}
-    stamp["draft_list"] = (open(a.draft_list, encoding="utf-8").read().splitlines()
-                           if os.path.isfile(a.draft_list) else None)
+    # the set in one hash ("name sha" lines, sorted): two builds took the same drafts when it is equal
+    stamp["drafts_set_sha256"] = hashlib.sha256("".join(
+        f"{n} {d}\n" for n, d in sorted(stamp["drafts"].items())).encode()).hexdigest()
+    stamp["draft_list"] = (open(draft_list, encoding="utf-8").read().splitlines()
+                           if os.path.isfile(draft_list) else None)
     stamp["not_compiled"] = failed_sources(os.path.join(out, "census_src.jsonl")) + \
         failed_sources(os.path.join(out, "census_extra.jsonl"))
     stamp["game_sha256"] = sha256(os.path.join(out, "gt4_game.exe"))
