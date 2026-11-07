@@ -423,7 +423,9 @@ Where each record is sent (tickets in PLAN.md):
      (`viewAuxiliaryReads`) and named in the binding (a.8 `ViewOnList::auxReads`), so a consumer (B7) treats that
      auxiliary target as an input to the substituted view and never drops its producer.
    - **Split.** A view is split (`viewSplitTargets`, by reason) and never substituted when any tagged draw of it:
-     (1) is depth-tested on a second target with a depth buffer of its own (two depth-tested targets);
+     (1) builds a second scene: the view's tagged draws into a second target both test and write its depth
+     buffer (one of its own; some draw tests it and some writes it, not necessarily the same one). A pass that only tests against a depth buffer it never writes, such as the sky's
+     64 x 64 pass in the main view (A10: depth at bp 12288, tested, never written), is auxiliary;
      (2) tests or writes the principal depth buffer while its colour target is another one;
      (3) writes a target whose memory (colour or depth) overlaps the principal colour or depth buffer;
      (4) samples the principal colour or depth buffer before the view's Light command (with the substitution the
