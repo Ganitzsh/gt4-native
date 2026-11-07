@@ -14,7 +14,8 @@ in order:
   3. the workers' kept drafts (<decomp>/build/swarm/*/ADDR_best.c|cpp, newest first);
   4. any other judged draft of the store, closest first.
 The first candidate is staged as <decomp>/build/native_drafts/func_ADDR.ext (with its compiler
-marker) and compiled with tools/game_cc.py into build/game/obj; when it does not compile, the
+marker; with --stage DIR as DIR/native_drafts/func_ADDR.ext, still named build/native_drafts/...:
+tools/game_cc.py --stage) and compiled with tools/game_cc.py into build/game/obj; when it does not compile, the
 next candidate is tried (up to 4 rounds). tools/game_link.py then uses the objects, and leaves out
 any draft whose function also compiles from a matched source.
 
@@ -82,8 +83,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--decomp", required=True)
     ap.add_argument("--game", default=os.path.join(ROOT, "build", "game"))
+    ap.add_argument("--stage", help="stage in DIR/native_drafts<SUFFIX> and DIR/native_curated<SUFFIX> instead of the "
+                    "decomp's build/ (tools/game_cc.py --stage): a checkout's own folder, which no other build touches")
     ap.add_argument("--stage-suffix", default="", help="stage in <decomp>/build/native_drafts<SUFFIX> and native_curated<SUFFIX>, so a second checkout's build (a release worktree) leaves the other's staging alone")
     a = ap.parse_args()
+    stage_root = os.path.abspath(a.stage) if a.stage else os.path.join(a.decomp, "build")
+    cc_stage = ["--stage", stage_root] if a.stage else []
     gen = os.path.join(a.game, "gen")
     image = re.findall(r"\{0x([0-9A-F]{8}),\d+\}", open(os.path.join(gen, "guest_functions.c")).read())
     natives = set(re.findall(r"\{0x([0-9A-F]{8}),&gt4_n", open(os.path.join(gen, "native_functions.c")).read()))
@@ -108,8 +113,8 @@ def main():
             if m:
                 curated[m.group(1).lower()] = os.path.join(gs, n)
     drafts_dir, curated_dir = "native_drafts" + a.stage_suffix, "native_curated" + a.stage_suffix
-    stage = os.path.join(a.decomp, "build", drafts_dir)
-    for d in (stage, os.path.join(a.decomp, "build", curated_dir)):
+    stage = os.path.join(stage_root, drafts_dir)
+    for d in (stage, os.path.join(stage_root, curated_dir)):
         if os.path.isdir(d):
             shutil.rmtree(d)
         os.makedirs(d)
@@ -121,7 +126,7 @@ def main():
     # tools/game_link.py lets them replace any other object defining the function (native-only
     # corrections of matched sources, docs/NATIVE_GAME.md).
     if curated:
-        cstage = os.path.join(a.decomp, "build", curated_dir)
+        cstage = os.path.join(stage_root, curated_dir)
         crels = []
         for addr, path in sorted(curated.items()):
             shutil.copy(path, os.path.join(cstage, os.path.basename(path)))
@@ -130,7 +135,7 @@ def main():
         with open(lst, "w") as f:
             f.write("\n".join(crels) + "\n")
         subprocess.run([sys.executable, os.path.join(ROOT, "tools", "game_cc.py"), "--decomp", a.decomp,
-                        "--out", a.game, "--list", lst], check=False, stdout=subprocess.DEVNULL)
+                        "--out", a.game, "--list", lst] + cc_stage, check=False, stdout=subprocess.DEVNULL)
         print(f"{len(crels)} curated sources compiled (game_src/)")
         # A curated source that does not compile would silently leave its function to a draft or the
         # matched source: report it, and fail at the end.
@@ -172,7 +177,7 @@ def main():
         with open(lst, "w") as f:
             f.write("\n".join(rels) + "\n")
         subprocess.run([sys.executable, os.path.join(ROOT, "tools", "game_cc.py"), "--decomp", a.decomp,
-                        "--out", a.game, "--list", lst], check=False, stdout=subprocess.DEVNULL)
+                        "--out", a.game, "--list", lst] + cc_stage, check=False, stdout=subprocess.DEVNULL)
         failed = set()
         for line in open(census, encoding="utf-8"):
             r = json.loads(line)

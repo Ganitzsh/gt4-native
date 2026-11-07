@@ -19,7 +19,12 @@ on Windows:
 
   py tools/game_cc.py --decomp C:/Users/julie/gt4-decomp --out build/game [--all | FILE... |
                       --list FILE] [--jobs 8] [--timeout 60] [--batch 1500] [--keep-s]
-                      [--export own|all]
+                      [--export own|all] [--stage DIR]
+
+Staged sources (tools/draft_natives.py, tools/release_game.py) are named as if they were in the decomp's
+build/ folder (build/native_curated_release/func_ADDR.cpp): that name is the object's path, the census entry and
+what tools/game_link.py sorts them by. With --stage DIR they are read from DIR instead (DIR/native_curated_release/
+func_ADDR.cpp), so a checkout can stage in its own build folder and leave the shared decomp alone.
 
 Each object exports only its own function (--export own, the decomp build's policy): sources
 repeat their neighbours' definitions so that each compiles alone, and every such copy becomes a
@@ -519,6 +524,13 @@ def list_sources(decomp, args):
     return sorted(set(files))
 
 
+def source_path(decomp, stage, rel):
+    """Where a source named rel (relative to the decomp) is read: staged ones (build/...) from --stage when given."""
+    if stage and rel.startswith("build/"):
+        return os.path.join(stage, rel[len("build/"):])
+    return os.path.join(decomp, rel)
+
+
 RECOVERED = "recovered/"
 
 
@@ -885,6 +897,8 @@ def main():
     ap.add_argument("--jobs", type=int, default=8, help="parallel compiles in WSL and assemblies on Windows")
     ap.add_argument("--timeout", type=int, default=60, help="seconds per compile before it is killed")
     ap.add_argument("--batch", type=int, default=1500, help="sources per WSL call")
+    ap.add_argument("--stage", help="the folder that stands for the decomp's build/ for staged sources: a source "
+                    "named build/X is read from DIR/X (its name, object path and census entry stay build/X)")
     ap.add_argument("--keep-s", action="store_true", help="keep the .s of sources that assembled")
     ap.add_argument("--export", choices=("own", "all"), default="own",
                     help="own: each object exports only its function, as the decomp's build does "
@@ -914,7 +928,7 @@ def main():
         chunk = files[b:b + args.batch]
         batch = []
         for rel in chunk:
-            data = recovered[rel][1] if rel in recovered else open(os.path.join(decomp, rel), "rb").read()
+            data = recovered[rel][1] if rel in recovered else open(source_path(decomp, args.stage, rel), "rb").read()
             prof = profile_of(data[:200])
             if prof not in profiles:
                 prof = None
