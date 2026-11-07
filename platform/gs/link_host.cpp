@@ -241,10 +241,14 @@ bool GameLink::running() const { return impl->running; }
 double GameLink::processSeconds() const {
     // what the game reports of itself (a game that predates that: the process's times read from here)
     if (impl->header && impl->header->game_cpu_ms) return impl->header->game_cpu_ms / 1000.0;
+#ifdef _WIN32
     FILETIME created, exited, kernel, user;
     if (!impl->process || !GetProcessTimes(impl->process, &created, &exited, &kernel, &user)) return 0.0;
     auto seconds = [](const FILETIME& t) { return double((uint64_t(t.dwHighDateTime) << 32) | t.dwLowDateTime) * 1e-7; };
     return seconds(kernel) + seconds(user);
+#else
+    return 0.0;   // (no game process here: GameLink::start is Windows-only until the POSIX link, PLAN.md C9)
+#endif
 }
 
 int GameLink::exitCode() const { return impl->exitCode; }
