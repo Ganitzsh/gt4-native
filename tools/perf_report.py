@@ -66,6 +66,20 @@ def stage_summary(rows):
     return {k: {"mean": sum(v) / len(v) if v else 0.0, "p95": percentile(v, 95)} for k, v in stage_series(rows).items()}
 
 
+def stage_summary_runs(runs):
+    """Several runs of one build: each stage's mean is the median of the runs' means (a run slowed by the machine's
+    other work does not move it), its 95th percentile that of all the runs' frames together."""
+    per_run = [stage_summary(rows) for rows in runs]
+    pooled = stage_summary([r for rows in runs for r in rows])
+    out = {}
+    for k in pooled:
+        means = sorted(s[k]["mean"] if k in s else 0.0 for s in per_run)
+        mid = len(means) // 2
+        median = means[mid] if len(means) % 2 else (means[mid - 1] + means[mid]) / 2
+        out[k] = {"mean": median, "p95": pooled[k]["p95"]}
+    return out
+
+
 def summary(rows, period, tolerance):
     out = {"frames": len(rows), "skipped": sum(r.get("skipped", 0) for r in rows)}
     for field in FIELDS:
@@ -89,8 +103,9 @@ def show(name, s):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("run")
-    ap.add_argument("--baseline")
+    ap.add_argument("run", nargs="+", help="one or more --profile-json files of the build measured (several runs: "
+                    "each stage's mean is the median of the runs' means)")
+    ap.add_argument("--baseline", nargs="+", help="one or more files of the baseline build")
     ap.add_argument("--skip", type=int, default=60, help="frames left out at the start (default 60)")
     ap.add_argument("--period", type=float, default=1000.0 / 60.0, help="the display period in ms (default 16.667)")
     ap.add_argument("--tolerance", type=float, default=1.0, help="ms off the period that counts (default 1)")
@@ -100,17 +115,19 @@ def main():
     ap.add_argument("--min-us", type=float, default=50.0,
                     help="stages under this mean (microseconds) in the baseline are listed but not held to --max-change")
     a = ap.parse_args()
-    run_rows = load(a.run, a.skip)
+    run_runs = [load(p, a.skip) for p in a.run]
+    run_rows = [r for rows in run_runs for r in rows]
     run = summary(run_rows, a.period, a.tolerance)
-    show(a.run, run)
+    show(" + ".join(a.run), run)
     report, ok = {"run": run}, True
-    run_stages = stage_summary(run_rows)
+    run_stages = stage_summary_runs(run_runs)
     if a.baseline:
-        base_rows = load(a.baseline, a.skip)
+        base_runs = [load(p, a.skip) for p in a.baseline]
+        base_rows = [r for rows in base_runs for r in rows]
         base = summary(base_rows, a.period, a.tolerance)
-        show(a.baseline, base)
+        show(" + ".join(a.baseline), base)
         report["baseline"] = base
-        base_stages = stage_summary(base_rows)
+        base_stages = stage_summary_runs(base_runs)
         keys = sorted(set(run_stages) | set(base_stages),
                       key=lambda k: -max(run_stages.get(k, {"mean": 0})["mean"], base_stages.get(k, {"mean": 0})["mean"]))
         print("stages (microseconds a frame: baseline -> run, change):")
