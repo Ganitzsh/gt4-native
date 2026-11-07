@@ -168,6 +168,12 @@ private:
     // A reference to a content not kept (never in a live run unless the two ends diverged): the set is not stored, and
     // the game is asked to send every content again (contentsLost; the host's GT4_REC_HOST_CMD 5 until its mark).
     bool contentsLost = false, contentsAsked = false;
+    // A capture that starts mid-run, from its saved state to its first VBlank: the recorder's restoration (the kept
+    // upload contents, then the front end's sets with their bytes, then the model contents). The sets' uploads do
+    // not go into uploadHashes there: the kept contents alone rebuild it in the live order, and a set the front end
+    // still held but whose content the runtime had dropped would add an entry the runtime does not have, so the
+    // two ends' FIFOs part and a later reference names a content this end evicted (garbage textures in replays).
+    bool restoring = false;
 public:
     // GT4_TEST_FORGET_UPLOADS=VBLANK (testing the recovery): the kept upload bytes dropped, as if the ends diverged.
     void forgetUploadsForTest() { uploadBytes.clear(); }

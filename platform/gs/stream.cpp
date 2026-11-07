@@ -245,7 +245,7 @@ void GraphicsStream::records(const uint8_t* data, size_t bytes) {
                     }
                     blob.insert(blob.end(), bytes->begin(), bytes->begin() + std::min(n, bytes->size()));
                     if (bytes->size() < n) blob.resize(blob.size() + n - bytes->size(), 0);
-                    if (!it->reference) keepUpload(gfx::contentHash(it->bytes.data(), it->bytes.size()), std::move(it->bytes));
+                    if (!it->reference && !restoring) keepUpload(gfx::contentHash(it->bytes.data(), it->bytes.size()), std::move(it->bytes));
                     recordData.erase(it);
                 }
             }
@@ -724,12 +724,14 @@ void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload)
     }
     case GT4_REC_STATE:
         restoreState(payload, size);
+        restoring = true;   // (until the first VBlank: the recorder's restoration records)
         break;
     case GT4_REC_VSYNC: {
         uint32_t field = 0, count = 0;
         if (size >= 4) std::memcpy(&field, payload, 4);
         if (size >= 8) std::memcpy(&count, payload + 4, 4);
         ++counters.vsyncs;
+        restoring = false;
         lastVblank = count;
         if (sceneDecoder_.seen()) {   // a scene frame is one kicked list in one FrameList (CONTRACTS.md a.5.1)
             if (sceneDecoder_.frameOpen()) ++sceneVsyncsInFrame_;              // a VSync split a kicked list
