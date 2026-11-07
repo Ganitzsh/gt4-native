@@ -3,7 +3,8 @@
 Status: answered statically (ticket D1), 2026-11-07, on `main` e673e2e. Read from the decompilation and, read-only,
 from `CORE.GT4.elf` (SCUS-97328 v1.01). The DualShock 2 apply step (0043BBC0) and the channel builder (00564C10)
 have no C file, so I read them in a disassembly. The name tables, the DS2 defaults and the pressure constants were
-checked twice. Nothing was measured live yet (see Open). Questions, from the architect: GT4's default race bindings
+checked twice. Then measured live, 2026-11-07, on a release game and host from empty folders (2af64b4): GT4's own
+controller screen, and a trigger sweep in a race (below). Questions, from the architect: GT4's default race bindings
 (L1/R1/L2/R2 included), whether accelerate and brake can be put on R2/L2, and whether pressure is read.
 
 ## Answers
@@ -11,7 +12,7 @@ checked twice. Nothing was measured live yet (see Open). Questions, from the arc
 | # | Question | Answer |
 |---|---|---|
 | 1 | Default DualShock 2 race bindings | Left stick X: steer. Right stick up / down: accelerate / brake (analog). Cross: accelerate. Square: brake. Circle: handbrake. Triangle: reverse gear. **R2 / L2: shift up / down. L1: back view. R1: `SPECIAL`.** Select: change view. Start: pause. R3: the licence best line. D-pad left / right: steer; up: ghost; down and L3: none. One default layout (below). |
-| 2 | Can accelerate and brake be put on R2 / L2? | **Yes, as far as the engine goes.** Each of the 16 buttons holds any of the 18 button functions, and each of the 12 stick keys any of the 7 analog functions. The setter checks only the key index. Not checked: whether the Options screen (a script, not decompiled) offers every pair. |
+| 2 | Can accelerate and brake be put on R2 / L2? | **Yes, as far as the engine goes.** Each of the 16 buttons holds any of the 18 button functions, and each of the 12 stick keys any of the 7 analog functions. The setter checks only the key index. **And GT4's own screen offers it** (seen live: Options > Controllers > DUALSHOCK 2 button config 1P; Gas and Brake each list ○ ✕ △ □ R1 R2 L1 L2, Select, up, down, none and the left stick's halves, and a clash is flagged in orange). That screen shows the defaults of answer 1, with L1 named Rear View. |
 | 3 | Is pressure read? | **Yes, for accelerate, brake, handbrake and reverse, on any of the 12 pressure buttons** (R2 and L2 included), when the pad reports DualShock 2 pressure mode. Our host always reports it (`iop.cpp:569`). The game's curve is steep: accelerate is full from pressure 45 of 255, brake from 84. D-pad pressure always steers. |
 | 4 | Wheels and presets | Separate configs per port for the DualShock 2, the GT Force (046d:c293), the Driving Force / EX (c294) and the Driving Force Pro (c298), each with its own buttons and defaults. Only the Driving Force Pro has presets (3: lever up/down shifts, the lever reversed, the lever as handbrake/reverse); the DualShock 2 has one. |
 
@@ -64,33 +65,56 @@ same way for the sticks. `MOption__clearButtonFunction` and `MOption__unsetButto
 
 ## What it means for D1
 
-- **`original` as it stands:** our triggers drive the L2 / R2 pressures, and GT4 binds L2 / R2 to shifting. A gamepad
-  driver therefore shifts on the triggers and accelerates on Cross, which is digital on a modern pad (pressure 255 or
-  0). That is the PS2 behaviour and stays as it is.
-- **A player can already get analog trigger pedals inside GT4:** Options, controller: accelerate to R2, brake to L2,
-  shifting to two other buttons. The engine allows it (answer 2) and the triggers already carry pressure. It is kept
-  in the game's save. Whether the screen offers these pairs is the first open check.
-- **`input.pedals = triggers`** (efb568e) puts the right trigger on Cross's pressure and the left on Square's, so the
-  defaults reach accelerate and brake with no change in GT4. Two things follow from the code above:
-  1. **Fixed with this spike:** it took the trigger axes off L2 / R2, and on a gamepad those axes are L2 / R2's only
-     binding. With GT4's defaults the player had no shift up or down, so a manual gearbox couldn't be driven. Now
-     `triggers` moves the gamepad buttons on the throttle and brake buttons (south and west) to R2 / L2, which swaps
-     them with the triggers. `tests/input_map.cpp` checks it.
-  2. **The game's curve uses only the first part of the travel:** with the trigger linear on 0..255, accelerate is
-     full at 18 % of the travel and brake at 33 %, as it was on the DualShock 2. A `triggers` option could scale the
-     right trigger to pressure 0..45 and the left to 0..84, so the full travel is used. GT4 has only that many steps
-     anyway. This works only while the throttle and brake buttons keep GT4's defaults: the host doesn't know the
-     game's binding. It would be a setting outside `original`; the decision is the architect's.
-- **Port 2** has its own full set (the split-screen menu), so D1's "both ports sent" needs nothing else from the game.
+- **The host keeps the PS2 mapping** (decision, architect, 2026-11-07). The triggers drive the L2 / R2 pressures, as
+  they always did; GT4 binds L2 / R2 to shifting and Cross / Square to accelerate and brake. To drive on the
+  triggers, the player sets Gas = R2 and Brake = L2 (and moves the shifts) in GT4's own screen (answer 2), which the
+  game keeps in its save. The host does not remap buttons.
+- **Why not `input.pedals = triggers`** (efb568e, then 87a9657, both removed): any host remap makes GT4's controller
+  screen and its button prompts disagree with what happens. The first version put the right trigger on Cross's
+  pressure, so pulling a trigger in a menu confirmed. The second also moved the gamepad's south and west buttons to
+  R2 / L2 so that a manual gearbox kept its shifts. That made south press R2, so ✕ no longer confirmed: the pre-race
+  screen would not start a race (seen live). The options were never in a release; an old settings file that has
+  them still loads, with one warning for the unknown key.
+- **`input.trigger_travel = game | full`** (default `game` in every preset) is what the host adds. GT4's curve uses
+  only the first part of a trigger's travel: with the trigger linear on 0..255, accelerate is full at 18 % and brake
+  at 33 %, as on the DualShock 2. With `full`, the game's `scePad2Read` rescales the pressure bytes of the buttons
+  GT4's live assignment has accelerate and brake on, to 0..45 and 0..84, with 255 at full travel. The pressed bits
+  are left alone. The assignment is read where the race reads it: the ports at `*0x00622F4C + 0x39E80`, `0xB8`
+  bytes each from `+4`, each port's DUALSHOCK 2 config at `+0x18`, checked by its vtable word `0x00688210` at
+  `+0xC`. A boot snapshot showed both ports there with the default layout, and two more DUALSHOCK 2 objects at
+  `0x009A71xx` (the Options screen's working copy). **Where the assignment can't be read** (early in the boot, or a
+  port whose config isn't a DUALSHOCK 2 one), nothing is scaled: the game's own behaviour, logged as "assignment
+  unknown: not scaled" with `GT4_TRACE_PAD=pedals`. The mode is a live game option (`kOptionTriggerTravel`, 6).
+- **The sweep, the acceptance** (2026-11-08: live race, Nürburgring, Ford Ka; a release game and a host from empty
+  folders at d752981, the PS2 mapping). Gas = R2, Brake = L2 and the shifts on ✕ / □ were set in GT4's own DUALSHOCK 2
+  button config, then the triggers were swept. The pressure sent against the travel comes from
+  `GT4_TRACE_PAD=pedals`. Every line read "game's assignment" with accelerate on key 11 (R2) and brake on key 10
+  (L2): the scaling followed GT4's live assignment. (An earlier run through the since-removed host remap, on Cross
+  and Square, gave the same numbers.)
 
-## Open (to check live, in a race on a copy of the approved save)
+  | Travel | `game` | `full`, accelerate (R2) | `full`, brake (L2) |
+  |---|---|---|---|
+  | 18 % | 46 | 8 | 15 |
+  | 50 % | 127 | 22 | 42 |
+  | 90 % | 229 | 40 | 75 |
+  | 98 % | 250 | 44 (GT4's full: 45) | 82 (84) |
+  | 99 % | 252 | 44 | 83 |
+  | 100 % | 255 | 255 | 255 |
 
-1. Whether the Options controller screen offers accelerate on R2 and brake on L2 (its script isn't decompiled).
-2. Whether full right stick (half-axis peak 127, about 2040 of 4096 after the `>> 3` in `func_004386F0`) is full
-   throttle, or whether a later stage rescales it.
-3. The device names of the pad types 1..5. They are inferred from the order of the `getDevice` name checks.
-4. A trigger sweep with `input.pedals=triggers`: the throttle the game shows (or the car's speed) against the trigger
-   position, which would confirm the K = 35 knee at 18 %.
+  With `full`, accelerate and brake reach GT4's maximum only at the end of the travel (the `pad_pedals` ctest: from
+  99.2 % and 99.6 %). With `game` the pressure is the travel, as before.
+- **Port 2's socket** (found while setting the controls live): GT4 creates its two pad sockets with the port in the
+  request's second word, and the runtime took it from the first, so both sockets read pad 1. The game's pad update
+  reads both ports every VBlank, so a menu that takes either pad (the Options grid, the button-config rows) saw each
+  press twice and moved two items, and some rows (Gas, OK) could not be reached. Fixed separately (`fix(pad)`); port
+  2 now reads its own, neutral, pad. Reporting port 2 as unplugged is D1's remaining part.
+
+## Open
+
+1. Whether full right stick (half-axis peak 127, about 2040 of 4096 after the `>> 3` in `func_004386F0`) is full
+   throttle, or whether a later stage rescales it. It needs the game's computed accelerate value; no decision until
+   measured.
+2. The device names of the pad types 1..5. They are inferred from the order of the `getDevice` name checks.
 
 ## Method
 
