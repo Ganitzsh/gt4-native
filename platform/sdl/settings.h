@@ -143,6 +143,9 @@ const char* name(TextureFilter);
 const char* name(HudLayout);
 const char* name(AiCatchUp);
 const char* name(SceneRenderer);
+// Whether the game should send its scene records (runtime kOptionSceneRecords; docs/modern/CONTRACTS.md a.1):
+// GT4_HOST_RECORD_SCENE=1, or a render.scene other than original (settings_scene.cpp, the one place that reads them).
+bool sceneRecordsWanted(const Settings& settings);
 
 // Content aspect ratio (width / height), or 0 for "match the window".
 float aspectValue(AspectRatio ratio);

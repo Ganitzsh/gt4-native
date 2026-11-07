@@ -963,6 +963,7 @@ int run(const Options& options) {
                 gs->setGameOption(1, static_cast<uint32_t>(settings.mirror));      // kOptionMirrorDetail
                 gs->setGameOption(2, static_cast<uint32_t>(settings.modelDetail)); // kOptionModelDetail
                 gs->setGameOption(3, static_cast<uint32_t>(settings.raceFrames));  // kOptionRaceFrames
+                gs->setGameOption(5, gt4::sceneRecordsWanted(settings) ? 1u : 0u);  // kOptionSceneRecords
                 {   // kOptionAspect: the content's shape now (aspect.ratio, or the window's)
                     const VkExtent2D e = renderer->drawableExtent();
                     const float a = settings.aspect == gt4::AspectRatio::Window ? (e.height ? float(e.width) / float(e.height) : 0.0f)

@@ -24,3 +24,17 @@ void sceneOptions(std::vector<Option>& o) {
 }
 
 }  // namespace gt4::settings_table
+
+namespace gt4 {
+
+// The game sends scene records (kOptionSceneRecords) when a capture wants them (GT4_HOST_RECORD_SCENE=1, CONTRACTS.md
+// a.1 and docs/modern/CAPTURES.md) or a modern renderer draws the scene. Read here only, once.
+bool sceneRecordsWanted(const Settings& settings) {
+    static const bool record = [] {
+        const char* e = std::getenv("GT4_HOST_RECORD_SCENE");
+        return e && e[0] == '1' && e[1] == '\0';
+    }();
+    return record || settings.scene != SceneRenderer::Original;
+}
+
+}  // namespace gt4
