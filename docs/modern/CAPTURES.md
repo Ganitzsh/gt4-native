@@ -32,6 +32,7 @@ exits, on failure too). Do not start one under 8 GB available, free plus standby
 |---|---|---|
 | `C:/Users/julie/locks/gt4-decomp-release` | game builds (`tools/release_game.py`, `tools/game_cc.py`): one at a time | `--jobs 4` |
 | `C:/Users/julie/locks/heavy-1`, `heavy-2` | host builds, live game runs, replays: two at a time | `cmake --build --parallel 6` |
+| `C:/Users/julie/locks/live-game` | a live game run, taken with its heavy slot: one at a time | until one running `gt4_game` per executable (`runtime/guest.cpp`) is on main |
 
 A replay takes one heavy slot whatever its capture's size: `gt4_host --replay` reads the capture one frame at a time
 and, on Windows, without the system's file cache (about 0.5 GB for the host; a replay of a 14.5 GB capture through
