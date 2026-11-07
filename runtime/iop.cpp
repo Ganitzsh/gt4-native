@@ -502,8 +502,10 @@ extern "C" int gt4_replace_scePad2Init(int) {
 }
 extern "C" int gt4_replace_scePad2End() { return 1; }
 extern "C" int gt4_replace_scePad2CreateSocket(const uint8_t *param, uint32_t) {
-    // scePad2SocketParam: option, port, slot, number (one byte each in libpad2)
-    return param ? param[1] & 1 : 0;
+    // The request is four words, option, port, slot, number (docs/IOP_SERVICES.md, 00551810: {2, 0 / 1, 0, 0}):
+    // the socket id is the port, so each port reads its own pad. (Byte 1, the option word's, was 0 for both: port 2
+    // read pad 1, and a menu that takes either pad saw every press twice.)
+    return param ? static_cast<int>(rd32(param + 4) & 1) : 0;
 }
 extern "C" int gt4_replace_scePad2DeleteSocket(int) { return 1; }
 extern "C" int gt4_replace_scePad2GetState(int) { return 1; }  // stable
