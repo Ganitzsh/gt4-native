@@ -3,6 +3,7 @@
 // calls (reboot, module loads: all succeed), libcdvd's init, the pad (libpad2/libvib/libdbc) and the
 // memory card (libmc), and the SDK's DelayThread / GetTimerSystemTime / iWakeupThread.
 #include "audio.h"
+#include "pad_pedals.h"
 #include "guest.h"
 #include "image.h"
 #include "kernel.h"
@@ -22,6 +23,8 @@
 #include <vector>
 
 using namespace gt4::rt;
+
+extern "C" int gt4_game_option(int id);   // runtime/sdk.cpp: the host's gameplay options
 
 namespace {
 
@@ -542,10 +545,64 @@ int pressure_index(int bit) {
         if (order[k] == bit) return k;
     return -1;
 }
+
+// GT4's DualShock 2 assignment of a port where its race reads it (RaceSolitaire's constructor: *0x00622F4C +
+// 0x39E80, the ports, 0xB8 bytes each from +4; the DualShock 2 config at +0x18, its vtable 0x00688210 at +0xC, the
+// 16 buttons at +0x1D). False when that isn't there (early in the boot, or not a DualShock 2 config).
+bool ds2_buttons(int port, int8_t out[16]) {
+    const uint32_t game = rd32(gp(0x00622F4C));
+    const uint32_t ds2 = game + 0x39E80 + 4 + static_cast<uint32_t>(port) * 0xB8 + 0x18;
+    if ((game & 3) || game < kGuestSectionStart || !in_guest_ram(ds2, 0x2D)) return false;
+    if (rd32(gp(ds2 + 0xC)) != 0x00688210) return false;
+    std::memcpy(out, gp(ds2 + 0x1D), 16);
+    return true;
+}
+
+// input.trigger_travel = full (the host's kOptionTriggerTravel, live; GT4_TRIGGER_TRAVEL=game|full overrides it for
+// tests): the pedals' pressures rescaled to GT4's range (runtime/pad_pedals.h), on the buttons GT4's assignment has
+// accelerate and brake on. Where the assignment can't be read (early in the boot, or a config that isn't a DUALSHOCK 2
+// one) nothing is scaled: the game's own behaviour. GT4_TRACE_PAD=pedals logs the pressures when they change.
+void scale_pedals(int port, uint8_t *data) {
+    static const int forced = [] {
+        const char *e = std::getenv("GT4_TRIGGER_TRAVEL");
+        if (!e || !*e) return -1;
+        if (!std::strcmp(e, "full")) return 1;
+        if (std::strcmp(e, "game")) log_warn("GT4_TRIGGER_TRAVEL=%s: expected game or full", e);
+        return 0;
+    }();
+    const bool full = forced >= 0 ? forced == 1 : gt4_game_option(static_cast<int>(kOptionTriggerTravel)) == 1;
+    static const bool trace = std::getenv("GT4_TRACE_PAD") && !std::strcmp(std::getenv("GT4_TRACE_PAD"), "pedals");
+    if (!full && !trace) return;
+    int8_t buttons[16];
+    const bool read = ds2_buttons(port, buttons);
+    uint8_t before[18];
+    std::memcpy(before, data, 18);
+    if (full && read) pad::rescale_pedals(data, buttons);
+    if (trace) {
+        static uint8_t last[2][12] = {};
+        if (std::memcmp(last[port], data + 6, 12)) {
+            std::memcpy(last[port], data + 6, 12);
+            if (!read) {
+                log_info("pad: pedals, port %d: assignment unknown: not scaled", port);
+                return;
+            }
+            char line[160];
+            int n = 0;
+            for (int key = 0; key < 12; ++key)
+                if (buttons[key] == pad::kAccelerate || buttons[key] == pad::kBrake) {
+                    const int k = pad::kPressureOf[key];
+                    n += std::snprintf(line + n, sizeof line - n, " %s key %d: %u -> %u", buttons[key] == pad::kAccelerate
+                                       ? "accelerate" : "brake", key, before[6 + k], data[6 + k]);
+                }
+            log_info("pad: pedals, port %d (game's assignment, travel %s):%s", port, full ? "full" : "game", line);
+        }
+    }
+}
 }  // namespace
 
 extern "C" int gt4_replace_scePad2Read(int id, uint8_t *data) {
     if (!link_pad(id & 1, data)) std::memcpy(data, g_pad[id & 1], 18);
+    scale_pedals(id & 1, data);
     static const std::vector<ScriptedPress> script = pad_script();
     // GT4_TRACE_PAD=all: every read of pad 1, with its VBlank (how often a screen polls the pad)
     static const bool every = std::getenv("GT4_TRACE_PAD") && !std::strcmp(std::getenv("GT4_TRACE_PAD"), "all");

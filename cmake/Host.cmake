@@ -394,6 +394,16 @@ if(BUILD_TESTING)
     target_compile_options(gt4_memcard_test PRIVATE -Wall -Wextra -Wpedantic)
   endif()
   add_test(NAME memcard COMMAND gt4_memcard_test ${CMAKE_CURRENT_BINARY_DIR}/memcard_test)
+  # input.trigger_travel = full: the game's pedal pressures rescaled (runtime/pad_pedals.h, header only).
+  add_executable(gt4_pad_pedals_test tests/pad_pedals.cpp)
+  target_include_directories(gt4_pad_pedals_test PRIVATE runtime)
+  target_compile_features(gt4_pad_pedals_test PRIVATE cxx_std_20)
+  if(MSVC)
+    target_compile_options(gt4_pad_pedals_test PRIVATE /W4)
+  else()
+    target_compile_options(gt4_pad_pedals_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  add_test(NAME pad_pedals COMMAND gt4_pad_pedals_test)
 
   # PS2 graphics on the CPU: VIF1, GT4's 3D renderers, stream records, replay, pad (no GPU needed).
   add_executable(gt4_ps2gfx_test tests/ps2gfx.cpp)
