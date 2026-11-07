@@ -69,6 +69,10 @@ public:
     // Temporal anti-aliasing of the 3D scenes in the scene stage (render.aa = taa, or FSR 2): jittered draws,
     // motion vectors from the 3D renderers, a resolve against each scene's history (docs/NATIVE_RENDERER.md).
     void setTemporal(bool on);
+    // How the two fields of an interlaced screen (GT4's menus) are shown (display.field_mode): false = blended half and
+    // half (the PS2's picture without the bob); true = clean: the lower field's extra last line (the line a TV hides) is
+    // not shown, and where the fields differ (something moved between them) the current field is shown alone.
+    void setFieldMode(bool clean);
     // The GPU's time per labelled stage (the GT4_GPU_PROFILE labels), for gt4_host --profile-json: on, the frames
     // are timestamped as with GT4_GPU_PROFILE=1 without its reports; lastFrameStages() gives the last finished frame's
     // stages and milliseconds (empty when off, or before a frame finished). Both on the thread that records this scene

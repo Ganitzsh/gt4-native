@@ -352,6 +352,8 @@ struct GsnScene::Impl {
     uint32_t lastFieldTarget = 0, lastFieldY = 0, blendTarget = 0;
     float otherFieldRect[4] = {0, 0, 1, 1};
     float fieldBlend = 0.0f;
+    float fieldLine = 0.0f;    // one GS line of the displayed rectangle, normalised (the clean field mode)
+    bool fieldClean = false;   // display.field_mode = clean (setFieldMode)
     bool warnedBlend = false;
 
     Impl(const vk::Device& d, VkCommandPool p) : device(d), pool(p) {
@@ -1980,6 +1982,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
             std::copy(displayRect, displayRect + 4, otherFieldRect);
             otherFieldRect[1] = lastFieldY / th;
             fieldBlend = 0.5f;
+            fieldLine = 1.0f / th;
             blendTarget = lastFieldTarget;
             vk::toSampled(b, other->second.image, vk::kFragment);
         }
@@ -2266,6 +2269,7 @@ void GsnScene::setScale(uint32_t scale) { impl->scaleSetting = scale; }
 void GsnScene::setAnisotropy(int anisotropy) { impl->makeMipSamplers(static_cast<float>(anisotropy)); }
 
 void GsnScene::setTemporal(bool on) { impl->temporal = on; }
+void GsnScene::setFieldMode(bool clean) { impl->fieldClean = clean; }
 void GsnScene::setStageTiming(bool on) {
     Impl::Profile& p = impl->profile;
     if (on && !p.on) {
@@ -2720,6 +2724,8 @@ void GsnScene::recordMain(VkCommandBuffer command, const SceneView& view) {
     std::copy(s.displayRect, s.displayRect + 4, constants);
     std::copy(s.otherFieldRect, s.otherFieldRect + 4, constants + 4);
     constants[8] = other != s.targets.end() ? s.fieldBlend : 0.0f;
+    constants[9] = s.fieldClean ? 1.0f : 0.0f;
+    constants[10] = s.fieldLine;
     vk::pushConstants(command, s.display, constants, sizeof constants);
     vkCmdDraw(command, 3, 1, 0, 0);
 }

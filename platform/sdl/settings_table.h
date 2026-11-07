@@ -166,6 +166,7 @@ inline const std::vector<const char*> kLighting{"original", "enhanced"};
 inline const std::vector<const char*> kMirror{"original", "high"};
 inline const std::vector<const char*> kModelDetail{"original", "high", "ultra"};
 inline const std::vector<const char*> kRaceFrames{"fields", "progressive"};
+inline const std::vector<const char*> kFieldModes{"blend", "clean"};
 
 // The parts, in the table's order (settings.cpp options()).
 void displayOptions(std::vector<Option>& o);    // settings_display.cpp

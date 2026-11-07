@@ -33,6 +33,9 @@ enum class LightingMode : uint8_t { Original, Enhanced };
 enum class MirrorDetail : uint8_t { Original, High };
 enum class ModelDetail : uint8_t { Original, High, Ultra };
 enum class RaceFrames : uint8_t { Fields, Progressive };
+// How the two fields of an interlaced screen (the menus) are shown: blend = half and half (the PS2's picture without
+// the bob), clean = without the line a TV hides and without the doubled copy of what moves between them.
+enum class FieldMode : uint8_t { Blend, Clean };
 enum class Preset : uint8_t { Original, Low, Medium, High, Ultra, Custom };
 // The AI's catch-up (GT4's "slow car boost": cars behind sped up, cars ahead slowed down, by event).
 enum class AiCatchUp : uint8_t { Original, Reduced, Off };
@@ -55,6 +58,7 @@ struct Settings {
     bool hdr = false;                 // HDR10 output (PQ, BT.2020) where the display offers it
     float hdrPaperWhite = 200.0f;     // HDR: the nits of SDR white
     float hdrPeak = 1000.0f;          // HDR: the display's peak, nits (highlights expand towards it)
+    FieldMode fieldMode = FieldMode::Clean;   // display.field_mode (GsnScene::setFieldMode)
 
     // [aspect]
     AspectRatio aspect = AspectRatio::Window;
@@ -143,6 +147,7 @@ const char* name(TextureFilter);
 const char* name(HudLayout);
 const char* name(AiCatchUp);
 const char* name(SceneRenderer);
+const char* name(FieldMode);
 // Whether the game should send its scene records (runtime kOptionSceneRecords; docs/modern/CONTRACTS.md a.1):
 // GT4_HOST_RECORD_SCENE=1, or a render.scene other than original (settings_scene.cpp, the one place that reads them).
 bool sceneRecordsWanted(const Settings& settings);

@@ -57,7 +57,7 @@ const PresetTable& presetValues(Preset preset) {
     // render.scene: original in the original preset; low to ultra take hybrid when it lands (PLAN.md B8,
     // ARCHITECTURE.md section 7) and leave it as it is until then.
     static const PresetTable original{
-        {"render.scene", "original"}, {"render.gs", "original"}, {"render.quality", "native"}, {"render.upscaler", "bilinear"}, {"render.sharpness", "0"},
+        {"render.scene", "original"}, {"render.gs", "original"}, {"display.field_mode", "blend"}, {"render.quality", "native"}, {"render.upscaler", "bilinear"}, {"render.sharpness", "0"},
         {"render.aa", "off"}, {"render.msaa", "1"}, {"texture.filter", "bilinear"}, {"texture.anisotropy", "1"},
         {"texture.lod_bias", "0"}, {"effects.shadows", "original"}, {"effects.reflections", "original"},
         {"effects.bloom", "original"}, {"effects.dof", "original"}, {"effects.motion_blur", "original"},
@@ -67,25 +67,25 @@ const PresetTable& presetValues(Preset preset) {
         {"post.exposure", "0"}, {"post.film_grain", "0"}, {"post.vignette", "0"},
         {"post.chromatic_aberration", "0"}, {"post.dither", "off"}};
     static const PresetTable low{
-        {"render.gs", "native"}, {"render.quality", "performance"}, {"render.upscaler", "fsr1"}, {"render.sharpness", "0.3"},
+        {"render.gs", "native"}, {"display.field_mode", "clean"}, {"render.quality", "performance"}, {"render.upscaler", "fsr1"}, {"render.sharpness", "0.3"},
         {"render.aa", "fxaa"}, {"render.msaa", "1"}, {"texture.filter", "trilinear"}, {"texture.anisotropy", "4"},
         {"effects.shadows", "low"}, {"effects.reflections", "low"}, {"effects.bloom", "low"},
         {"effects.heat_haze", "low"}, {"effects.particles", "low"}, {"effects.sky_fog", "low"},
         {"effects.ambient_occlusion", "off"}, {"effects.model_detail", "original"}, {"display.race_frames", "progressive"}, {"post.tonemapper", "agx_punchy"}, {"post.auto_exposure", "on"}};
     static const PresetTable medium{
-        {"render.gs", "native"}, {"render.quality", "quality"}, {"render.upscaler", "fsr2"}, {"render.sharpness", "0.25"},
+        {"render.gs", "native"}, {"display.field_mode", "clean"}, {"render.quality", "quality"}, {"render.upscaler", "fsr2"}, {"render.sharpness", "0.25"},
         {"render.aa", "taa"}, {"render.msaa", "1"}, {"texture.filter", "trilinear"}, {"texture.anisotropy", "8"},
         {"effects.shadows", "medium"}, {"effects.reflections", "medium"}, {"effects.bloom", "medium"},
         {"effects.heat_haze", "medium"}, {"effects.particles", "medium"}, {"effects.sky_fog", "medium"},
         {"effects.ambient_occlusion", "low"}, {"effects.model_detail", "high"}, {"display.race_frames", "progressive"}, {"post.tonemapper", "agx_punchy"}, {"post.auto_exposure", "on"}};
     static const PresetTable high{
-        {"render.gs", "native"}, {"render.quality", "native"}, {"render.upscaler", "fsr1"}, {"render.sharpness", "0.2"},
+        {"render.gs", "native"}, {"display.field_mode", "clean"}, {"render.quality", "native"}, {"render.upscaler", "fsr1"}, {"render.sharpness", "0.2"},
         {"render.aa", "taa"}, {"render.msaa", "1"}, {"texture.filter", "trilinear"}, {"texture.anisotropy", "16"},
         {"effects.shadows", "high"}, {"effects.reflections", "high"}, {"effects.bloom", "high"},
         {"effects.heat_haze", "high"}, {"effects.particles", "high"}, {"effects.sky_fog", "high"},
         {"effects.ambient_occlusion", "medium"}, {"effects.model_detail", "high"}, {"display.race_frames", "progressive"}, {"post.tonemapper", "agx_punchy"}, {"post.auto_exposure", "on"}};
     static const PresetTable ultra{
-        {"render.gs", "native"}, {"render.quality", "native"}, {"render.upscaler", "fsr2"}, {"render.sharpness", "0.15"},
+        {"render.gs", "native"}, {"display.field_mode", "clean"}, {"render.quality", "native"}, {"render.upscaler", "fsr2"}, {"render.sharpness", "0.15"},
         {"render.aa", "taa"}, {"render.msaa", "1"}, {"texture.filter", "trilinear"}, {"texture.anisotropy", "16"},
         {"effects.shadows", "ultra"}, {"effects.reflections", "ultra"}, {"effects.bloom", "ultra"},
         {"effects.heat_haze", "ultra"}, {"effects.particles", "ultra"}, {"effects.sky_fog", "ultra"},
@@ -148,6 +148,7 @@ const char* name(TextureFilter v) { return kFilters[static_cast<size_t>(v)]; }
 const char* name(HudLayout v) { return kHud[static_cast<size_t>(v)]; }
 const char* name(AiCatchUp v) { return kCatchUp[static_cast<size_t>(v)]; }
 const char* name(SceneRenderer v) { return kSceneRenderers[static_cast<size_t>(v)]; }
+const char* name(FieldMode v) { return kFieldModes[static_cast<size_t>(v)]; }
 
 float aspectValue(AspectRatio ratio) {
     switch (ratio) {

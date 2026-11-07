@@ -87,6 +87,21 @@ int main() {
         check(detectPreset(t) == preset, "every preset is detected after applying it");
     }
 
+    // display.field_mode: the PS2's blend in the original preset, clean from low up.
+    {
+        check(original.fieldMode == FieldMode::Blend && getOption(original, "display.field_mode") == "blend",
+              "the original preset blends the two fields as before");
+        for (Preset preset : {Preset::Low, Preset::Medium, Preset::High, Preset::Ultra}) {
+            Settings t;
+            applyPreset(t, preset);
+            check(t.fieldMode == FieldMode::Clean, "low to ultra show interlaced screens clean");
+        }
+        Settings f;
+        applyPreset(f, Preset::High);
+        check(setOption(f, "display.field_mode", "blend").empty() && f.preset == Preset::Custom, "field_mode is a preset member");
+        check(!setOption(f, "display.field_mode", "bob").empty(), "an unknown field mode is refused");
+    }
+
     // render.scene (settings_scene.cpp): only the GS path until the modern renderer draws a view.
     {
         Settings r;

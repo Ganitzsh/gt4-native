@@ -41,6 +41,10 @@ void displayOptions(std::vector<Option>& o) {
     o.push_back(boolOption("display.hdr", &Settings::hdr,
         "HDR10 output (PQ, BT.2020) where the display offers it: the game's picture at display.hdr_paper_white, its "
         "highlights expanded towards display.hdr_peak. Off, or a display without HDR: SDR."));
+    o.push_back(enumOption("display.field_mode", &Settings::fieldMode, kFieldModes,
+        "Interlaced screens (the menus: each field drawn half a line from the other): blend = the two fields half and "
+        "half, the PS2's picture without its bob (a faint line below the picture and doubled copies of what moves); "
+        "clean = without the line a TV hides, and where something moved between the fields only the newer field."));
     o.push_back(enumOption("aspect.ratio", &Settings::aspect, kAspects,
         "Content aspect ratio. Other window shapes get black bars (letterbox or pillarbox). 3D is Hor+: the "
         "vertical field of view stays fixed and wider ratios see more to the sides."));
