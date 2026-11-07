@@ -16,6 +16,12 @@ Three metrics, one per Route 5 night artefact (docs/modern/ARCHITECTURE.md secti
   64 x 36 log-luminance image) correlates with the previous frame's below `cut_correlation` (default 0.5), or a
   frame the notes list in `cuts`. Reported: every step, the largest change, and the change at each crossing
   frame the notes list (`crossings`, +-`crossing_window` frames).
+  On a real night drive, lamps passing change the mean by several per cent from frame to frame all the time, so
+  the step rule above flags far more than the section steps (270 frames in 60 s on Route 5). The step metric
+  therefore also reports level shifts: the median of the `level_window` (15) frames after a frame against the
+  15 before, above `level_threshold` (3 %), with at least `level_share` (70 %) of the change over three frames
+  and both windows steady (spread under `level_steady`, half the change). The crossings are measured both ways
+  (`change` frame to frame, `level` as a level shift).
 - bands: for each entry of the notes' `bands` (a band rectangle and a rectangle of the road beside it, from
   R11), per frame the ratio of the band's mean Y to the road's mean Y. Reported: per band, the largest ratio and
   the frame of it.
@@ -58,6 +64,10 @@ DEFAULTS = {
     "crossing_window": 3,
     "lamp_radius": 0.08,
     "tint_periods": 2,
+    "level_window": 15,
+    "level_threshold": 0.03,
+    "level_share": 0.7,
+    "level_steady": 0.5,
 }
 
 
@@ -226,16 +236,75 @@ def step_metric(rows, notes, cfg):
         if change > cfg["step_threshold"] and not cut:
             steps.append({"frame": row["frame"], "change": round(change, 5)})
     clean = [c for c in changes if not c["cut"]]
+    sizes = level_shift_sizes(rows, cuts, cfg)   # once: O(frames * level_window)
+    levels = level_shifts(sizes, cfg)
     crossings = []
     for f in notes.get("crossings", []):
         near = [c for c in clean if abs(c["frame"] - f) <= cfg["crossing_window"]]
-        if near:
-            top = max(near, key=lambda c: c["change"])
-            crossings.append({"crossing": f, "frame": top["frame"], "change": round(top["change"], 5)})
+        # `level`: the largest median-window change near the crossing, whether or not it passes the abrupt and
+        # steady tests (a crossing's size is wanted even where the level-shift list leaves it out)
+        lv = [s for s in sizes if abs(s["frame"] - f) <= cfg["crossing_window"]]
+        if near or lv:
+            entry = {"crossing": f}
+            if near:
+                top = max(near, key=lambda c: c["change"])
+                entry.update(frame=top["frame"], change=round(top["change"], 5))
+            if lv:
+                big = max(lv, key=lambda s: s["size"])
+                entry.update(level_frame=big["frame"], level=round(big["size"], 5))
+            crossings.append(entry)
     top = max(clean, key=lambda c: c["change"]) if clean else None
     return {"frames": len(rows), "cuts": [c["frame"] for c in changes if c["cut"]],
             "steps": steps, "max": ({"frame": top["frame"], "change": round(top["change"], 5)} if top else None),
-            "crossings": crossings}
+            "level_shifts": levels, "crossings": crossings}
+
+
+def level_shift_sizes(rows, cuts, cfg):
+    """Per frame t (away from cuts), the size of the change between the median log Y of the `level_window`
+    frames before t and of those from t on, as exp(|d|) - 1, and the share of it that is abrupt: the median of the
+    3 frames from t on against the 3 before, over d. Signed: a three-frame change against the shift is negative.
+    The 3-frame medians keep a single-frame flash or dip (a lamp) from passing as the abrupt part."""
+    x = [r["logY"] for r in rows]
+    k = cfg["level_window"]
+    cut_at = {i for i, r in enumerate(rows) if r["frame"] in cuts or r["corr"] < cfg["cut_correlation"]}
+    out = []
+    for t in range(1, len(x) - 1):
+        if any(j in cut_at for j in range(t - 2, t + 3)):
+            continue
+        # the windows stop at the nearest cuts: a cut's other side is another picture
+        lo = max([0, t - k] + [j for j in cut_at if j < t])
+        hi = min([len(x), t + k] + [j for j in cut_at if j > t])
+        if t - lo < 5 or hi - t < 5:
+            continue
+        before, after = x[lo:t], x[t:hi]
+        d = float(np.median(after) - np.median(before))
+        two = float(np.median(x[t:t + 3]) - np.median(x[max(0, t - 3):t]))
+        steady = max(float(np.std(before)), float(np.std(after)))
+        out.append({"frame": rows[t]["frame"], "size": math.exp(abs(d)) - 1.0, "d": d,
+                    "share": two / d if d else 0.0, "steady": steady})
+    return out
+
+
+def level_shifts(sizes, cfg):
+    """Abrupt level shifts: the median log Y of the `level_window` frames after t differs from the one before
+    by more than `level_threshold`, at least `level_share` of that, in the same direction, is abrupt (the 3-frame
+    medians around t: level_shift_sizes), and neither window varies by more than `level_steady` of it. This is
+    what a section step looks like on a night drive, where lamps passing make frame-to-frame changes of several
+    per cent all the time (the plain `step_threshold` rule flags those). Neighbouring hits within 3 frames are
+    merged into the largest."""
+    found = []
+    for s in sizes:
+        d = s["d"]
+        if (abs(d) > math.log1p(cfg["level_threshold"]) and s["share"] > cfg["level_share"]
+                and s["steady"] < cfg["level_steady"] * abs(d)):
+            hit = {"frame": s["frame"], "change": round(s["size"], 5), "direction": "up" if d > 0 else "down"}
+            # (compared with the last kept hit: a run of hits a frame apart slides along, kept as one)
+            if found and s["frame"] - found[-1]["frame"] <= 3:
+                if s["size"] > found[-1]["change"]:
+                    found[-1] = hit
+            else:
+                found.append(hit)
+    return found
 
 
 def bands_metric(rows, notes):
@@ -379,6 +448,34 @@ def selftest():
         expect(r["crossings"] and r["crossings"][0]["frame"] == 20, "the crossing's change reported at frame 20")
         r2 = measure(d, {"crossings": [20]}, "step", cfg)["step"]
         expect(len(r2["steps"]) > 5, "without the HUD mask the blinking HUD counts as steps")
+
+        # lamps passing: a +-10 % ripple every 10 frames, and one real 8 % step at frame 50; the frame-to-frame
+        # rule flags the ripple, the level-shift test finds the step alone (its size under the ripple is an
+        # estimate: the medians of 15 frames see 1.5 ripple periods)
+        d = os.path.join(tmp, "ripple")
+        os.makedirs(d)
+        for i in range(100):
+            gain = (1.0 + 0.10 * math.sin(2 * math.pi * i / 10.0)) * (1.08 if i >= 50 else 1.0)
+            write_ppm(os.path.join(d, f"f_{i:06d}.ppm"), to8(base * gain))
+        r = measure(d, {"crossings": [50]}, "step", cfg)["step"]
+        expect(len(r["steps"]) > 10, f"the ripple trips the frame-to-frame rule ({len(r['steps'])} steps)")
+        # (frames 50 and 51 both see the whole step in their 3-frame medians; the ripple picks the larger)
+        expect(len(r["level_shifts"]) == 1 and r["level_shifts"][0]["frame"] in (49, 50, 51)
+               and 0.04 < r["level_shifts"][0]["change"] < 0.3,
+               f"the level-shift test finds the 8 % step at frame 50 (+-1) only (got {r['level_shifts']})")
+        expect(r["crossings"] and 0.04 < r["crossings"][0].get("level", 0) < 0.3,
+               f"the crossing is measured as a level shift (got {r['crossings']})")
+
+        # a slow rise (0.4 % a frame from frame 30 to 70) with a one-frame 15 % dip at frame 50, a lamp's
+        # shadow: the windows' medians differ by more than 3 %, but nothing about it is abrupt, so no level
+        # shift anywhere (neither the dip nor its recovery)
+        d = os.path.join(tmp, "dip")
+        os.makedirs(d)
+        for i in range(100):
+            gain = 1.004 ** min(max(i - 30, 0), 40) * (0.85 if i == 50 else 1.0)
+            write_ppm(os.path.join(d, f"f_{i:06d}.ppm"), to8(base * gain))
+        r = measure(d, {}, "step", cfg)["step"]
+        expect(r["level_shifts"] == [], f"a slow rise with a one-frame dip has no level shift (got {r['level_shifts']})")
 
         # bands: a band at 2.5x the road beside it, on frames 5..9 only
         d = os.path.join(tmp, "bands")
