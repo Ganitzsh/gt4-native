@@ -32,6 +32,9 @@ from concurrent.futures import ThreadPoolExecutor
 # rule, docs/modern/CAPTURES.md).
 NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import objcache  # noqa: E402
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # FFmpeg (static, i686) for movies (runtime/native/movie.cpp): tools/build_ffmpeg.sh builds it here
 # (absolute and normalised once: the -I flag and the prefix map in compile_runtime must see the same string)
@@ -202,6 +205,59 @@ def nm_cache_save():
             json.dump(_NM_CACHE, f)
 
 
+_NM_CONTENT = None   # objcache.NmCache (machine-wide, by object content), False when turned off
+_SHA = {}            # object path -> (mtime, size, SHA-256)
+
+
+def nm_content():
+    global _NM_CONTENT
+    if _NM_CONTENT is None:
+        root = objcache.folder()
+        _NM_CONTENT = objcache.NmCache(root, tool("nm")) if root else False
+    return _NM_CONTENT or None
+
+
+def object_sha(o):
+    st = os.stat(o)
+    known = _SHA.get(o)
+    if not known or known[:2] != (st.st_mtime, st.st_size):
+        known = _SHA[o] = (st.st_mtime, st.st_size, objcache.sha256_file(o))
+    return known[2]
+
+
+def nm_lines(objs, args):
+    """{object: the lines `nm -A ARGS` printed for it, each without the object's path}. From the machine-wide
+    cache by the object's content (tools/objcache.py: a release build's objects are new files each time, but
+    mostly the same bytes), else nm on the rest, in chunks on 8 threads."""
+    cache = nm_content()
+    result, todo = {}, []
+    for o in objs:
+        key = cache.key(object_sha(o), args) if cache else None
+        lines = cache.get(key) if cache else None
+        if lines is None:
+            todo.append((o, key))
+        else:
+            result[o] = lines
+
+    def one(chunk):
+        return chunk, run([tool("nm"), "-A"] + list(args) + [o for o, _ in chunk], env=mingw_env())
+
+    with ThreadPoolExecutor(8) as ex:
+        for chunk, text in ex.map(one, chunked(todo, path=lambda t: t[0])):
+            found = {o: [] for o, _ in chunk}
+            index = {os.path.normcase(os.path.normpath(o)): o for o, _ in chunk}
+            for line in text.splitlines():
+                path, _, rest = line.rpartition(":")
+                o = index.get(os.path.normcase(os.path.normpath(path)))
+                if o:
+                    found[o].append(rest)
+            for o, key in chunk:
+                result[o] = found[o]
+                if cache:
+                    cache.put(key, found[o])
+    return result
+
+
 def nm_objects(objs):
     """{object: (defined [(type, name)], undefined [name])}, from the cache or nm."""
     result, todo = {}, []
@@ -212,31 +268,14 @@ def nm_objects(objs):
             result[o] = (c[1], c[2])
         else:
             todo.append((o, m))
-    chunks = chunked(todo, path=lambda t: t[0])
-
-    def one(chunk):
-        paths = [o for o, _ in chunk]
-        return chunk, run([tool("nm"), "-A", "--defined-only", "-g"] + paths, env=mingw_env()),             run([tool("nm"), "-A", "-u"] + paths, env=mingw_env())
-
-    with ThreadPoolExecutor(8) as ex:
-        for chunk, d_out, u_out in ex.map(one, chunks):
-            found = {o: ([], []) for o, _ in chunk}
-            key = {os.path.normcase(os.path.normpath(o)): o for o, _ in chunk}
-            for line in d_out.splitlines():
-                path, _, rest = line.rpartition(":")
-                parts = rest.split()
-                path = key.get(os.path.normcase(os.path.normpath(path)))
-                if len(parts) == 3 and parts[1] in "TDBRCV" and path:
-                    found[path][0].append([parts[1], parts[2]])
-            for line in u_out.splitlines():
-                path, _, rest = line.rpartition(":")
-                parts = rest.split()
-                path = key.get(os.path.normcase(os.path.normpath(path)))
-                if parts and parts[0] == "U" and path:
-                    found[path][1].append(parts[1])
-            for o, m in chunk:
-                result[o] = found[o]
-                _NM_CACHE[o] = [m, found[o][0], found[o][1]]
+    if todo:
+        paths = [o for o, _ in todo]
+        defined, undefined = nm_lines(paths, ("--defined-only", "-g")), nm_lines(paths, ("-u",))
+        for o, m in todo:
+            d = [[p[1], p[2]] for p in (l.split() for l in defined[o]) if len(p) == 3 and p[1] in "TDBRCV"]
+            u = [p[1] for p in (l.split() for l in undefined[o]) if p and p[0] == "U"]
+            result[o] = (d, u)
+            _NM_CACHE[o] = [m, d, u]
     return result
 
 
@@ -434,14 +473,12 @@ def export_extra_functions(out, game_objs):
     if not want:
         return game_objs
     found = {}
-    chunks = chunked(game_objs)
-    for chunk in chunks:
-        r = run([tool("nm"), "-A", "--defined-only"] + chunk, env=mingw_env())
-        for line in r.splitlines():
-            path, _, rest = line.rpartition(":")
+    lines = nm_lines(game_objs, ("--defined-only",))
+    for o in game_objs:   # (the first object in link order that defines it, as nm listed them)
+        for rest in lines[o]:
             parts = rest.split()
             if len(parts) == 3 and parts[1] == "t" and parts[2] in want and parts[2] not in found:
-                found[parts[2]] = path
+                found[parts[2]] = o
     rdir = os.path.join(out, "gen", "exported")
     result = list(game_objs)
     index = {os.path.normcase(os.path.normpath(p)): i for i, p in enumerate(result)}
@@ -783,6 +820,9 @@ def main():
     if a.eeorig:  # the translated code's RAM and scratchpad are the guest's, at their PS2 addresses
         cmd += ["-Wl,--defsym,__ZN3ps25g_ramE=0", "-Wl,--defsym,__ZN3ps25g_sprE=0x70000000"]
     nm_cache_save()
+    if nm_content():   # (tools/release_game.py adds these up for its stamp)
+        with open(os.path.join(a.out, "object_cache.jsonl"), "a", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps({"nm_from_cache": nm_content().hits, "nm_run": nm_content().runs}) + "\n")
     run(cmd, env=mingw_env())
     with open(os.path.join(a.out, "LINK_REPORT.txt"), "w") as f:
         f.write(f"game objects: {len(game_objs)} ({len(dropped)} left out for runtime replacements)\n")

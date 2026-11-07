@@ -54,7 +54,9 @@ import time
 NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "game_toolchain"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import asm_translate  # noqa: E402
+import objcache  # noqa: E402
 
 try:
     import tomllib
@@ -888,6 +890,33 @@ def main_function(asm, own):
     return pick[0], pick[1]
 
 
+def compiler_digest():
+    """SHA-256 of the compiler's whole installation in WSL (driver, cc1, cc1plus, its own headers and libraries)."""
+    script = ('set -e; g="%s"; d=$(dirname "$(dirname "$g")"); cd "$d"; '
+              'find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum' % GCC)
+    p = subprocess.run(["wsl", "-e", "bash", "-c", script], capture_output=True, text=True)
+    if p.returncode != 0 or len(p.stdout.split()[0]) != 64:
+        raise SystemExit(f"cannot hash the compiler in WSL for the object cache: {p.stderr.strip()[-500:]} "
+                         "(--no-cache builds without it)")
+    return p.stdout.split()[0]
+
+
+def open_cache(static, args):
+    """The object cache (tools/objcache.py), keyed beyond each source by everything else that decides an object:
+    the compiler, the assembler, these tools, the include tree as sent (include/ and compat/, transformed: every
+    header a source can reach is in it) and the export policy. None with --no-cache, GT4_OBJ_CACHE=0 or --keep-s."""
+    root = objcache.folder()
+    if args.no_cache or args.keep_s or not root:
+        return None
+    tools = [os.path.join(HERE, "game_cc.py")] + sorted(
+        os.path.join(HERE, "game_toolchain", n) for n in os.listdir(os.path.join(HERE, "game_toolchain")) if n.endswith(".py"))
+    base = objcache.digest(
+        "gcc", GCC, compiler_digest(), "as", objcache.sha256_file(AS_EXE),
+        "tools", [[os.path.basename(t), open(t, "rb").read()] for t in tools],
+        "include", [[rel, data] for rel, data in static], "export", args.export)
+    return objcache.ObjectCache(root, base)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("files", nargs="*", help="sources, relative to the decomp root (src/...)")
@@ -903,7 +932,9 @@ def main():
     ap.add_argument("--batch", type=int, default=1500, help="sources per WSL call")
     ap.add_argument("--stage", help="the folder that stands for the decomp's build/ for staged sources: a source "
                     "named build/X is read from DIR/X (its name, object path and census entry stay build/X)")
-    ap.add_argument("--keep-s", action="store_true", help="keep the .s of sources that assembled")
+    ap.add_argument("--keep-s", action="store_true", help="keep the .s of sources that assembled (no object cache)")
+    ap.add_argument("--no-cache", action="store_true", help="compile every source, without the object cache "
+                    "(tools/objcache.py; GT4_OBJ_CACHE=0 too)")
     ap.add_argument("--export", choices=("own", "all"), default="own",
                     help="own: each object exports only its function, as the decomp's build does "
                          "(default); all: every global the compiler emitted")
@@ -927,17 +958,27 @@ def main():
     census = open(census_path, "w", encoding="utf-8", newline="\n")
     counts = collections.Counter()
     t0 = time.time()
+    cache = open_cache(static, args)
     pool = concurrent.futures.ThreadPoolExecutor(args.jobs)
     for b in range(0, len(files), args.batch):
         chunk = files[b:b + args.batch]
-        batch = []
+        batch, keys, kept = [], [], {}
         for rel in chunk:
             data = recovered[rel][1] if rel in recovered else open(source_path(decomp, args.stage, rel), "rb").read()
             prof = profile_of(data[:200])
             if prof not in profiles:
                 prof = None
+            o_path = os.path.join(out, "obj", rel + ".o")
+            if os.path.exists(o_path):
+                os.remove(o_path)
+            key = cache.key(rel, data, profiles[prof], addresses.get(rel) or stem_address(rel)) if cache else None
+            rec = cache.get(key, o_path) if cache else None
+            if rec is not None:   # (compiled before from the same inputs: its object is written to o_path)
+                kept[rel] = dict(rec, cached=True)
+                continue
             batch.append((rel, prof, data))
-        res = run_batch(decomp, batch, profiles, static, args)
+            keys.append(key)
+        res = run_batch(decomp, batch, profiles, static, args) if batch else {}
         records = []
         asm_jobs = {}
         for i, (rel, prof, _) in enumerate(batch):
@@ -972,16 +1013,23 @@ def main():
                 rec["ok"] = True
                 if not args.keep_s:
                     os.remove(s_path)
+                if cache:
+                    cache.put(keys[i], os.path.join(out, "obj", rec["file"] + ".o"), rec)
             else:
                 rec["stage"], rec["first_error"], rec["category"] = "assemble", msg, cat
-        for rec in records:
+        compiled = {rec["file"]: rec for rec in records}
+        for rel in chunk:   # (in the order of the sources, kept or compiled)
+            rec = kept.get(rel) or compiled[rel]
             census.write(json.dumps(rec) + "\n")
             counts["ok" if rec["ok"] else rec["category"]] += 1
         census.flush()
         done = b + len(chunk)
-        print(f"[{done}/{len(files)}] {time.time() - t0:.0f}s ok={counts['ok']} failed={done - counts['ok']}",
-              flush=True)
+        print(f"[{done}/{len(files)}] {time.time() - t0:.0f}s ok={counts['ok']} failed={done - counts['ok']}"
+              + (f" from the object cache={cache.hits}" if cache else ""), flush=True)
     census.close()
+    if cache:   # (one line per run: tools/release_game.py adds them up for its stamp)
+        with open(os.path.join(out, "object_cache.jsonl"), "a", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps({"sources": len(files), "from_cache": cache.hits, "stored": cache.stored}) + "\n")
     total = sum(counts.values())
     lines = [f"{total} sources, {counts['ok']} compiled and assembled ({100 * counts['ok'] / total:.1f}%)"]
     for k, v in counts.most_common():

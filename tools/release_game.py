@@ -26,7 +26,12 @@ changed. A release game is therefore always built here, from nothing:
      give the same exe in any folder;
   5. copies the curated and draft sources it compiled to OUT/sources/ and writes OUT/BUILD-STAMP.json: both
      commits, the SHA-256 of every curated and draft source, the draft set's SHA-256 and how it was staged, the
-     drafts list (where each draft came from), the sources that did not compile, and the exe's SHA-256.
+     drafts list (where each draft came from), the sources that did not compile, the exe's SHA-256, and what the
+     object cache gave (object_cache: objects compiled or taken from it, nm listings run or taken).
+
+Objects and nm's listings of them come from a machine-wide content-addressed cache when the same inputs made them
+before (tools/objcache.py: GT4_OBJ_CACHE=DIR, or =0 to build without it), so a build of commits that change a
+handful of sources compiles only those. The exe is the same with or without the cache.
 
 tools/package_game.py --release takes the game from OUT only, and refuses it when the stamp does not match the exe
 or the trees have changed since (BUILD-INFO.txt and the game-sources zip are made from the stamp).
@@ -47,7 +52,7 @@ NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" el
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DECOMP_INPUTS = ["src", "include", "config", "project.toml"]
 NATIVE_INPUTS = ["game_src", "compat", "runtime", "include", "tools/game_cc.py", "tools/game_link.py",
-                 "tools/draft_natives.py", "tools/game_toolchain"]
+                 "tools/draft_natives.py", "tools/game_toolchain", "tools/objcache.py"]
 
 
 def git(repo, *args):
@@ -87,6 +92,18 @@ def failed_sources(census):
         if not r.get("ok"):
             out.append(r["file"])
     return sorted(out)
+
+
+def cache_summary(path):
+    """What tools/objcache.py gave this build (game_cc.py's and game_link.py's lines in OUT/object_cache.jsonl):
+    objects compiled or taken from the cache, nm listings run or taken. None when the cache was off."""
+    if not os.path.isfile(path):
+        return None
+    total = {}
+    for line in open(path, encoding="utf-8"):
+        for k, v in json.loads(line).items():
+            total[k] = total.get(k, 0) + v
+    return total
 
 
 def main():
@@ -175,6 +192,7 @@ def main():
     stamp["not_compiled"] = failed_sources(os.path.join(out, "census_src.jsonl")) + \
         failed_sources(os.path.join(out, "census_extra.jsonl"))
     stamp["game_sha256"] = sha256(os.path.join(out, "gt4_game.exe"))
+    stamp["object_cache"] = cache_summary(os.path.join(out, "object_cache.jsonl"))
     with open(os.path.join(out, "BUILD-STAMP.json"), "w", newline="\n") as f:
         json.dump(stamp, f, indent=1)
         f.write("\n")
