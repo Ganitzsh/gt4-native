@@ -937,6 +937,11 @@ void GsHost::answerRead(uint32_t id, uint32_t qwc, const std::vector<uint8_t>& p
     impl->link->write(GT4_REC_GS_IMAGE, record.data(), static_cast<uint32_t>(record.size()));
 }
 
+bool GsHost::readRequested() const {
+    std::lock_guard<std::mutex> lock(impl->readMutex);
+    return impl->readTaken != impl->readAsked;
+}
+
 void GsHost::completeRead(bool ok, std::vector<uint8_t>&& pixels) {
     {
         std::lock_guard<std::mutex> lock(impl->readMutex);

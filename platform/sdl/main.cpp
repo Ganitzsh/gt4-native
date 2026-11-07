@@ -1270,8 +1270,27 @@ int run(const Options& options) {
             const Uint64 interval = settings.fpsLimit > 0 ? 1000000000ull / static_cast<Uint64>(settings.fpsLimit) : 16666667ull;
             nextFrame += interval;
             const Uint64 current = SDL_GetTicksNS();
-            if (nextFrame > current) SDL_DelayPrecise(nextFrame - current);
-            else nextFrame = current;
+            if (nextFrame > current) {
+                // A read the game waits for ends the wait: it is taken at once (above, in the next pass), not after the
+                // rest of the frame's interval (the game asks its reads one after another: the race's 6 car icons, 12 in
+                // one list, waited about 6 ms each here). The presentation's pace goes on from nextFrame.
+                // Cut into 1 ms sleeps while more than 2 ms remain; the tail is one SDL_DelayPrecise, so its own
+                // compensation for the timer's overshoot keeps the present on time (a read then waits 2 ms at most).
+                // A pass woken by a read presents once more in that interval (without a window nothing is shown: one
+                // draw of GPU time); the next wait then reaches nextFrame + interval, so the rate stays 60 a second.
+                if (gs && gs->live()) {
+                    Uint64 now = current;
+                    while (nextFrame > now && nextFrame - now > 2000000ull && !gs->readRequested()) {
+                        SDL_DelayPrecise(1000000ull);
+                        now = SDL_GetTicksNS();
+                    }
+                    if (nextFrame > now && !gs->readRequested()) SDL_DelayPrecise(nextFrame - now);
+                } else {
+                    SDL_DelayPrecise(nextFrame - current);
+                }
+            } else {
+                nextFrame = current;
+            }
         }
     }
     if (gamepad) SDL_CloseGamepad(gamepad);

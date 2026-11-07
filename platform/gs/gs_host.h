@@ -44,6 +44,8 @@ public:
     // rectangle back and answers with completeRead (ok = false: the game gets the memory model's bytes).
     bool takeReadRequest(gsn::ReadRequest& request);
     void completeRead(bool ok, std::vector<uint8_t>&& pixels);
+    // Whether a read request waits to be taken (the render thread's pacing wait ends for it: the game waits meanwhile).
+    bool readRequested() const;
     // An asynchronous read's pixels (gsn::FrameList::readbacks, packed as the GS keeps them) to the game, which did not
     // wait for them: GS_IMAGE `id`, `qwc` qwords.
     void answerRead(uint32_t id, uint32_t qwc, const std::vector<uint8_t>& pixels);
