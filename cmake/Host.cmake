@@ -182,13 +182,14 @@ add_library(gt4_ps2gfx STATIC
     platform/gs/vif1.cpp
     platform/gs/renderers3d.cpp
     platform/gs/stream.cpp
-    platform/gs/link_host.cpp)
+    platform/gs/link_host.cpp
+    platform/scene/scene_decoder.cpp)
 if(GT4_VU1_INTERPRETER)
   target_sources(gt4_ps2gfx PRIVATE tools/vu1ref/vu1.cpp tools/vu1ref/vu1_exact.cpp tools/vu1ref/vu1_ref.cpp
       tools/vu1ref/vu1_inventory.cpp tools/vu1ref/vu1_reference.cpp)
   target_include_directories(gt4_ps2gfx PUBLIC tools/vu1ref)
 endif()
-target_include_directories(gt4_ps2gfx PUBLIC platform/gs)
+target_include_directories(gt4_ps2gfx PUBLIC platform/gs platform/scene)
 target_link_libraries(gt4_ps2gfx PUBLIC gt4_guest_abi Threads::Threads)
 target_compile_definitions(gt4_ps2gfx PUBLIC GT4_VU1_INTERPRETER=$<BOOL:${GT4_VU1_INTERPRETER}>
     $<$<BOOL:${WIN32}>:_CRT_SECURE_NO_WARNINGS>)
@@ -342,6 +343,12 @@ if(BUILD_TESTING)
   target_include_directories(gt4_scene_records_test PRIVATE compat/game)
   target_link_libraries(gt4_scene_records_test PRIVATE gt4_ps2gfx)
   add_test(NAME scene_records COMMAND gt4_scene_records_test)
+
+  # The scene decoder (platform/scene/scene_decoder.h, CONTRACTS.md a.5, a.7): synthetic record streams, one test per
+  # counter; a well-formed frame leaves every error counter at 0.
+  add_executable(gt4_scene_decoder_test tests/scene_decoder.cpp)
+  target_link_libraries(gt4_scene_decoder_test PRIVATE gt4_ps2gfx)
+  add_test(NAME scene_decoder COMMAND gt4_scene_decoder_test)
 
   # The render graph (platform/render/graph): compile on the CPU with a fake backend (no GPU), and a few frames
   # on a GPU with validation and synchronization validation when the layer is installed (skipped (77) without one).

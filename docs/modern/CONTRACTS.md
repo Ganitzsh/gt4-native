@@ -312,7 +312,8 @@ Where each record is sent (tickets in PLAN.md):
 2. `ViewBegin` / `ViewEnd` pairs do not nest. Instances and lights appear only inside a view.
 3. An `Instance` is followed by exactly `items` `kBatchRun` records (with the `kBatchWrite`, `kBatchModel`,
    `kState`, `kTexSet` records its items and callbacks send), before the next `Instance`, `ViewEnd` or `Marker`.
-   The decoder tags those `items` runs' `ModelJob`s with the instance (`ModelJob::pad[0] = serial`, 0 for none).
+   The decoder tags those `items` runs' `ModelJob`s with the instance (`ModelJob::pad[0]` = its position in
+   `SceneFrame::instances` + 1, which is its `serial` in a well-formed stream; 0 for none).
    Batches outside any instance (immediate-mode glows and billboards: 0049BBF0, 0049C2A8...) stay untagged.
 4. `Light` comes inside the view whose space it uses. `Emitter` and `Vehicle` come anywhere between
    `FrameBegin` and `FrameEnd`.
@@ -352,10 +353,10 @@ Where each record is sent (tickets in PLAN.md):
 |---|---|---|
 | `records`, `bad`, `versionUnknown`, `unknownKind`, `outsideFrame` | decoding | `bad == versionUnknown == unknownKind == 0` |
 | `framesUnclosed`, `countsMismatch` | `FrameEnd`'s counts differ from what arrived | 0 |
-| `viewsNested`, `viewEndWithoutBegin` | pairing | 0 |
+| `viewsNested`, `viewEndWithoutBegin`, `viewsUnclosed` | pairing (`viewsUnclosed`: a view still open at `FrameEnd`) | 0 |
 | `instances`, `instancesWithoutView` | | `instancesWithoutView == 0` in race frames (the HUD widget has its `kViewHud`) |
 | `itemsMismatch` | an instance followed by more or fewer `kBatchRun` than `items` | 0 |
-| `projections`, `projectionUnknown` | an `Instance` or `ViewBegin` naming an id not sent this frame | `projectionUnknown == 0` |
+| `projections`, `projectionUnknown` | an `Instance` or `ViewBegin` naming an id not sent this frame, or an `Instance` with items and projection 0 (its jobs could not be checked) | `projectionUnknown == 0` |
 | `matrixChecked`, `matrixMismatch`, `matrixMaxError` | per tagged job: `diag(axisScale·k, 1) · objectToView · projection.viewToClip` (k = shapeScale, or 1 when 0) against `ModelJob::matrix`; mismatch when the largest difference exceeds `1e-5 · max |entry|` (R1: 0 of 270,515, largest 2.3e-7) | `matrixMismatch == 0` |
 | `viewportMismatch` | per tagged job: the instance's `projection.viewportScale / viewportOffset / clamp` against `ModelJob::scale / offset / clamp` | 0 |
 | `guardUnexpected` | tagged jobs whose guard (qword 200, the clipping renderers' clip flags) is not (0.5, 0.5, 1, 1), the only value R1 saw | reported |
