@@ -1162,10 +1162,33 @@ int run(const Options& options) {
                 const Uint64 now = SDL_GetPerformanceCounter();
                 const uint64_t skipped = renderer->sceneCounters().framesSkipped;
                 if (profile) {
-                    std::fprintf(profile, "{\"frame\":%u,\"present_ms\":%.3f,\"draw_ms\":%.3f,\"gpu_ms\":%.3f,\"skipped\":%llu}\n",
+                    // the host's CPU stages since the last present (GT4_STAGE_SCOPE; GT4_CPU_SCOPE with GT4_CPU_PROFILE=1)
+                    static std::vector<uint64_t> cpuLast;
+                    std::string stages;
+                    gt4::cpuprofile::since(cpuLast, [&](const char* label, uint64_t ns) {
+                        std::string name;
+                        for (const char* c = label; *c; ++c) name += (*c == '"' || *c == '\\') ? '\'' : *c;
+                        char item[160];
+                        std::snprintf(item, sizeof item, "%s{\"name\":\"%s\",\"cpu_us\":%.1f}", stages.empty() ? "" : ",",
+                                      name.c_str(), static_cast<double>(ns) / 1000.0);
+                        stages += item;
+                    });
+                    // the GS back end's GPU stages of its last finished frame (the GT4_GPU_PROFILE labels)
+                    renderer->setStageTiming(true);
+                    std::string gsPasses;
+                    for (const auto& [label, ms] : renderer->gsStages()) {
+                        std::string name;
+                        for (char c : label) name += (c == '"' || c == '\\') ? '\'' : c;
+                        char item[200];
+                        std::snprintf(item, sizeof item, "%s{\"name\":\"%s\",\"gpu_us\":%.1f}", gsPasses.empty() ? "" : ",",
+                                      name.c_str(), ms * 1000.0);
+                        gsPasses += item;
+                    }
+                    std::fprintf(profile, "{\"frame\":%u,\"present_ms\":%.3f,\"draw_ms\":%.3f,\"gpu_ms\":%.3f,\"skipped\":%llu,"
+                                          "\"gs_passes\":[%s],\"cpu_stages\":[%s]}\n",
                                  frames, lastPresent ? static_cast<double>(now - lastPresent) * 1000.0 / frequency : 0.0,
                                  static_cast<double>(now - frameStarted) * 1000.0 / frequency, renderer->gpuMilliseconds(),
-                                 static_cast<unsigned long long>(skipped - lastSkipped));
+                                 static_cast<unsigned long long>(skipped - lastSkipped), gsPasses.c_str(), stages.c_str());
                     std::fflush(profile);
                 }
                 lastPresent = now;

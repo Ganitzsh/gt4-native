@@ -36,6 +36,36 @@ def percentile(values, p):
     return s[lo] + (s[hi] - s[lo]) * (k - lo)
 
 
+STAGE_ARRAYS = ("passes", "gs_passes", "cpu_stages")   # [{"name", "gpu_us" and/or "cpu_us"}], per frame
+
+
+def stage_series(rows):
+    """{(array, name, metric): [value per frame]}: a stage absent from a frame counts 0 there (it did not run);
+    a gpu_us of -1 (no timestamp) is left out."""
+    keys = set()
+    for r in rows:
+        for array in STAGE_ARRAYS:
+            for s in r.get(array, []):
+                for metric in ("gpu_us", "cpu_us"):
+                    if metric in s:
+                        keys.add((array, s["name"], metric))
+    series = {k: [] for k in keys}
+    for r in rows:
+        present = {}
+        for array in STAGE_ARRAYS:
+            for s in r.get(array, []):
+                for metric in ("gpu_us", "cpu_us"):
+                    if metric in s and s[metric] >= 0:
+                        present[(array, s["name"], metric)] = present.get((array, s["name"], metric), 0.0) + s[metric]
+        for k in keys:
+            series[k].append(present.get(k, 0.0))
+    return series
+
+
+def stage_summary(rows):
+    return {k: {"mean": sum(v) / len(v) if v else 0.0, "p95": percentile(v, 95)} for k, v in stage_series(rows).items()}
+
+
 def summary(rows, period, tolerance):
     out = {"frames": len(rows), "skipped": sum(r.get("skipped", 0) for r in rows)}
     for field in FIELDS:
@@ -66,14 +96,40 @@ def main():
     ap.add_argument("--tolerance", type=float, default=1.0, help="ms off the period that counts (default 1)")
     ap.add_argument("--max-change", type=float, help="percent a mean or 95th percentile may grow over the baseline")
     ap.add_argument("--json", help="write the summaries to this file")
+    ap.add_argument("--stages", type=int, default=20, help="stages listed (the dearest first; default 20)")
+    ap.add_argument("--min-us", type=float, default=50.0,
+                    help="stages under this mean (microseconds) in the baseline are listed but not held to --max-change")
     a = ap.parse_args()
-    run = summary(load(a.run, a.skip), a.period, a.tolerance)
+    run_rows = load(a.run, a.skip)
+    run = summary(run_rows, a.period, a.tolerance)
     show(a.run, run)
     report, ok = {"run": run}, True
+    run_stages = stage_summary(run_rows)
     if a.baseline:
-        base = summary(load(a.baseline, a.skip), a.period, a.tolerance)
+        base_rows = load(a.baseline, a.skip)
+        base = summary(base_rows, a.period, a.tolerance)
         show(a.baseline, base)
         report["baseline"] = base
+        base_stages = stage_summary(base_rows)
+        keys = sorted(set(run_stages) | set(base_stages),
+                      key=lambda k: -max(run_stages.get(k, {"mean": 0})["mean"], base_stages.get(k, {"mean": 0})["mean"]))
+        print("stages (microseconds a frame: baseline -> run, change):")
+        for k in keys[:a.stages]:
+            b, r = base_stages.get(k, {"mean": 0.0, "p95": 0.0}), run_stages.get(k, {"mean": 0.0, "p95": 0.0})
+            parts = []
+            for stat in ("mean", "p95"):
+                change = 100.0 * (r[stat] - b[stat]) / b[stat] if b[stat] else 0.0
+                parts.append(f"{stat} {b[stat]:9.1f} -> {r[stat]:9.1f} ({change:+.1f} %)")
+                if a.max_change is not None and b["mean"] >= a.min_us and change > a.max_change:
+                    ok = False
+            print(f"  {k[0]}/{k[1]} {k[2]}: " + "  ".join(parts))
+        report["stages"] = {f"{k[0]}/{k[1]}/{k[2]}": {"baseline": base_stages.get(k), "run": run_stages.get(k)} for k in keys}
+    elif run_stages:
+        print("stages (microseconds a frame):")
+        for k in sorted(run_stages, key=lambda k: -run_stages[k]["mean"])[:a.stages]:
+            print(f"  {k[0]}/{k[1]} {k[2]}: mean {run_stages[k]['mean']:9.1f}  p95 {run_stages[k]['p95']:9.1f}")
+        report["stages"] = {f"{k[0]}/{k[1]}/{k[2]}": v for k, v in run_stages.items()}
+    if a.baseline:
         print("change against the baseline:")
         for field in FIELDS:
             parts = []

@@ -87,6 +87,20 @@ private:
     int64_t start = 0;
 };
 
+// Each scope's time since the last call (the caller keeps `last`, indexed as the registry), for the scopes that ran:
+// a frame's stages for gt4_host --profile-json (GT4_STAGE_SCOPE; every GT4_CPU_SCOPE with GT4_CPU_PROFILE=1).
+template <typename Out>
+inline void since(std::vector<uint64_t>& last, Out&& out) {
+    std::lock_guard<std::mutex> lock(registryMutex());
+    auto& slots = registry();
+    last.resize(slots.size(), 0);
+    for (size_t i = 0; i < slots.size(); ++i) {
+        const uint64_t now = slots[i]->nanoseconds.load(std::memory_order_relaxed);
+        if (now != last[i]) out(slots[i]->label, now - last[i]);
+        last[i] = now;
+    }
+}
+
 // The stages that took the most time since the last call (the caller keeps `last`), as "label 812.4 ms (3 calls,
 // longest 790.1 ms)", those of at least minMs, at most `count`; a call still running counts up to now, marked "running".
 inline std::string busiest(std::vector<uint64_t>& last, double minMs, size_t count) {
