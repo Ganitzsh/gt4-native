@@ -278,7 +278,7 @@ struct GsnScene::Impl {
         std::vector<std::pair<std::string, double>> last;   // the last finished frame's labels and milliseconds
     } profile;
     void tally(const char* what, uint64_t n = 1) {
-        if (profile.on) profile.counts[what] += n;
+        if (profile.on && !profile.quiet) profile.counts[what] += n;   // (only printed: not counted for --profile-json)
     }
     int markSlot = -1;   // the slot of the frame being profiled (-1: none, e.g. a read's own submission)
     void mark(VkCommandBuffer command, const char* label) {
@@ -2273,6 +2273,8 @@ void GsnScene::setStageTiming(bool on) {
         p.quiet = true;   // (GT4_GPU_PROFILE prints its reports; this only keeps the frames' stages)
     } else if (!on && p.quiet) {
         p.on = false;
+        for (auto& slotLabels : p.labels) slotLabels.clear();   // (turned on again: no stale queries read)
+        p.last.clear();
     }
 }
 std::vector<std::pair<std::string, double>> GsnScene::lastFrameStages() const { return impl->profile.last; }

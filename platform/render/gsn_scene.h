@@ -71,7 +71,8 @@ public:
     void setTemporal(bool on);
     // The GPU's time per labelled stage (the GT4_GPU_PROFILE labels), for gt4_host --profile-json: on, the frames
     // are timestamped as with GT4_GPU_PROFILE=1 without its reports; lastFrameStages() gives the last finished frame's
-    // stages and milliseconds (empty when off, or before a frame finished).
+    // stages and milliseconds (empty when off, or before a frame finished). Both on the thread that records this scene
+    // (Renderer::draw: gt4_host's main loop), as profileFrame writes the stages while it records.
     void setStageTiming(bool on);
     std::vector<std::pair<std::string, double>> lastFrameStages() const;
     // Presentation decoupled from the game's 60 Hz: at each display refresh between two game frames, the last one

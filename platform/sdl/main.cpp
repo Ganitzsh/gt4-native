@@ -70,7 +70,9 @@ const char* kUsage =
     "                       DIR/frame_000600.ppm (with --frames and --capture-dir DIR); a fixed-step replay draws\n"
     "                       one VBlank a frame, so frame N is the capture's N-th VBlank\n"
     "  --profile-json PATH  one JSON line per presented frame: the time since the last present, the draw's CPU\n"
-    "                       time, the GPU time of the last finished frame, frames skipped (tools/perf_report.py)\n"
+    "                       time, the GPU time of the last finished frame, frames skipped, and the GS back end's GPU\n"
+    "                       stages and the host's CPU stages (tools/perf_report.py); measure with\n"
+    "                       display.frame_interpolation=off (an interpolated present repeats the last GS frame's)\n"
     "  --session-dir PATH   attach a virtual gamepad, process commands, record frames/audio/events\n"
     "  --no-audio           disable playback and WAV capture for a session\n"
     "  --fixed-step         advance exactly one 60 Hz tick per frame (default for headless and sessions)\n"
@@ -1165,25 +1167,21 @@ int run(const Options& options) {
                     // the host's CPU stages since the last present (GT4_STAGE_SCOPE; GT4_CPU_SCOPE with GT4_CPU_PROFILE=1)
                     static std::vector<uint64_t> cpuLast;
                     std::string stages;
+                    // (labels of any length, quotes and backslashes made plain: the line stays one JSON object)
+                    auto item = [](std::string& list, const char* label, const char* field, double value) {
+                        char number[32];
+                        std::snprintf(number, sizeof number, "%.1f", value);
+                        list += list.empty() ? "{\"name\":\"" : ",{\"name\":\"";
+                        for (const char* c = label; *c; ++c) list += (*c == '"' || *c == '\\') ? '\'' : *c;
+                        list += std::string("\",\"") + field + "\":" + number + "}";
+                    };
                     gt4::cpuprofile::since(cpuLast, [&](const char* label, uint64_t ns) {
-                        std::string name;
-                        for (const char* c = label; *c; ++c) name += (*c == '"' || *c == '\\') ? '\'' : *c;
-                        char item[160];
-                        std::snprintf(item, sizeof item, "%s{\"name\":\"%s\",\"cpu_us\":%.1f}", stages.empty() ? "" : ",",
-                                      name.c_str(), static_cast<double>(ns) / 1000.0);
-                        stages += item;
+                        item(stages, label, "cpu_us", static_cast<double>(ns) / 1000.0);
                     });
                     // the GS back end's GPU stages of its last finished frame (the GT4_GPU_PROFILE labels)
                     renderer->setStageTiming(true);
                     std::string gsPasses;
-                    for (const auto& [label, ms] : renderer->gsStages()) {
-                        std::string name;
-                        for (char c : label) name += (c == '"' || c == '\\') ? '\'' : c;
-                        char item[200];
-                        std::snprintf(item, sizeof item, "%s{\"name\":\"%s\",\"gpu_us\":%.1f}", gsPasses.empty() ? "" : ",",
-                                      name.c_str(), ms * 1000.0);
-                        gsPasses += item;
-                    }
+                    for (const auto& [label, ms] : renderer->gsStages()) item(gsPasses, label.c_str(), "gpu_us", ms * 1000.0);
                     std::fprintf(profile, "{\"frame\":%u,\"present_ms\":%.3f,\"draw_ms\":%.3f,\"gpu_ms\":%.3f,\"skipped\":%llu,"
                                           "\"gs_passes\":[%s],\"cpu_stages\":[%s]}\n",
                                  frames, lastPresent ? static_cast<double>(now - lastPresent) * 1000.0 / frequency : 0.0,

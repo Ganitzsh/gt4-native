@@ -92,6 +92,26 @@ def summary(rows, period, tolerance):
     return out
 
 
+def median(values):
+    s = sorted(values)
+    mid = len(s) // 2
+    return s[mid] if len(s) % 2 else (s[mid - 1] + s[mid]) / 2
+
+
+def summary_runs(runs, period, tolerance):
+    """Several runs of one build: the frame fields' mean, p50, p95 and p99 are the median of the runs' (a run slowed by
+    the machine's other work does not move them), the maximum and the presents off the period those of all frames."""
+    pooled = summary([r for rows in runs for r in rows], period, tolerance)
+    if len(runs) < 2:
+        return pooled
+    per_run = [summary(rows, period, tolerance) for rows in runs]
+    for field in FIELDS:
+        for stat in ("mean", "p50", "p95", "p99"):
+            pooled[field][stat] = median([s[field][stat] for s in per_run])
+    pooled["runs"] = len(runs)
+    return pooled
+
+
 def show(name, s):
     print(f"{name}: {s['frames']} frames, {s['skipped']} skipped, {s['off_period']['count']} presents off the period "
           f"({100 * s['off_period']['share']:.1f} %)")
@@ -116,15 +136,13 @@ def main():
                     help="stages under this mean (microseconds) in the baseline are listed but not held to --max-change")
     a = ap.parse_args()
     run_runs = [load(p, a.skip) for p in a.run]
-    run_rows = [r for rows in run_runs for r in rows]
-    run = summary(run_rows, a.period, a.tolerance)
+    run = summary_runs(run_runs, a.period, a.tolerance)
     show(" + ".join(a.run), run)
     report, ok = {"run": run}, True
     run_stages = stage_summary_runs(run_runs)
     if a.baseline:
         base_runs = [load(p, a.skip) for p in a.baseline]
-        base_rows = [r for rows in base_runs for r in rows]
-        base = summary(base_rows, a.period, a.tolerance)
+        base = summary_runs(base_runs, a.period, a.tolerance)
         show(" + ".join(a.baseline), base)
         report["baseline"] = base
         base_stages = stage_summary_runs(base_runs)

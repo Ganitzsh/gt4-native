@@ -44,11 +44,13 @@ def read_ppm(path):
         data = f.read()
     fields, pos = [], 0
     while len(fields) < 4:   # magic, width, height, max, separated by whitespace (comments are not written)
-        while data[pos:pos + 1].isspace():
+        while pos < len(data) and data[pos:pos + 1].isspace():
             pos += 1
         start = pos
-        while not data[pos:pos + 1].isspace():
+        while pos < len(data) and not data[pos:pos + 1].isspace():
             pos += 1
+        if start == pos:   # (a file cut short: a capture of a host that was stopped)
+            raise ValueError(f"{path}: truncated header")
         fields.append(data[start:pos])
     if fields[0] != b"P6" or int(fields[3]) != 255:
         raise ValueError(f"{path}: not an 8-bit binary PPM")
@@ -157,7 +159,10 @@ def baseline(args):
     for kv in args.set or []:
         key, _, value = kv.partition("=")
         sets = [(k, v) for k, v in sets if k != key] + [(key, value)]
-    last = max(int(p.split("/")[0].split("-")[-1]) for p in args.frames.split(",") if not p.startswith("every:"))
+    ends = [int(p.split("/")[0].split("-")[-1]) for p in args.frames.split(",") if p and not p.startswith("every:")]
+    if not ends:
+        raise SystemExit("--frames needs a last frame for the replay (every:N alone has none): add one, e.g. every:10,1-600")
+    last = max(ends)
     ok, report = True, {}
     for capture in args.captures.split(","):
         cname = os.path.splitext(os.path.basename(capture))[0]
@@ -303,8 +308,16 @@ def main():
     else:
         ap.error("give two frames or folders, or --baseline OLD_HOST NEW_HOST --captures ...")
     if args.json:
+        def finite(v):   # (PSNR of identical frames is infinite: null in the file, which stays strict JSON)
+            if isinstance(v, float) and not math.isfinite(v):
+                return None
+            if isinstance(v, dict):
+                return {k: finite(x) for k, x in v.items()}
+            if isinstance(v, list):
+                return [finite(x) for x in v]
+            return v
         with open(args.json, "w", encoding="utf-8") as f:
-            json.dump(report, f, indent=1, default=lambda v: None if v == math.inf else v)
+            json.dump(finite(report), f, indent=1, allow_nan=False)
     return 0 if ok else 1
 
 
