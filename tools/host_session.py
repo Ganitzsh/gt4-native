@@ -258,6 +258,36 @@ def run(args):
         print('Controller, resize/reset framebuffer, and tone checks passed')
 
 
+def step(directory, commands, capture=None, timeout=300.0):
+    """One step of a live session: its commands queued at once (in order, so `button X 1`, `vwait 6`, `button X 0`
+    holds X for exactly 6 VBlanks, which one `send` per command does not: each costs a process start), then,
+    with a capture, waits for the screenshot the host writes at the end of the step and returns its path."""
+    pending = directory / 'commands'
+    pending.mkdir(parents=True, exist_ok=True)
+    queue = list(commands) + ([f'capture {capture}'] if capture else [])
+    for command in queue:
+        if not command.strip() or '\n' in command or '\r' in command:
+            raise ValueError('Send one nonempty command at a time')
+    base = time.time_ns()
+    for index, command in enumerate(queue):
+        name = f'{base:020d}-{index:04d}'
+        temporary = pending / (name + '.tmp')
+        temporary.write_text(command + '\n', encoding='utf-8')
+        temporary.rename(pending / (name + '.cmd'))
+    if not capture:
+        return None
+    target = directory / 'frames' / (capture + '.ppm')
+    deadline = time.monotonic() + timeout
+    size = -1
+    while True:   # (until the file is there and its size stays the same: written completely)
+        if target.exists() and target.stat().st_size == size and size > 0:
+            return target
+        size = target.stat().st_size if target.exists() else -1
+        if time.monotonic() > deadline:
+            raise RuntimeError(f'no {target.name} after {timeout:.0f} s (is the host running on {directory}?)')
+        time.sleep(0.2)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='action', required=True)
@@ -271,6 +301,12 @@ def main():
                         help='extra gt4_host argument, repeatable; use the = form: --host-arg=--headless')
     control = commands.add_parser('send', help='Send a command to an active session')
     control.add_argument('session', type=Path); control.add_argument('command', nargs='+')
+    stepping = commands.add_parser('step', help="Queue one step's commands at once and wait for its capture, e.g. "
+                                   "step DIR --capture menu 'button start 1' 'vwait 6' 'button start 0' 'vwait 600'")
+    stepping.add_argument('session', type=Path)
+    stepping.add_argument('--capture', help='screenshot name taken after the commands; the step waits for it')
+    stepping.add_argument('--timeout', type=float, default=300.0, help='seconds to wait for the capture')
+    stepping.add_argument('commands', nargs='+', help='one session command per argument')
     analyze = commands.add_parser('inspect', help='Create PNGs and an HTML/WAV playtest report')
     analyze.add_argument('session', type=Path)
     comparison = commands.add_parser('compare', help='Compare matching screenshot names and audio metrics')
@@ -279,6 +315,10 @@ def main():
     try:
         if args.action == 'run': run(args)
         elif args.action == 'send': print(send(args.session, ' '.join(args.command)))
+        elif args.action == 'step':
+            shot = step(args.session, args.commands, args.capture, args.timeout)
+            if shot:   # (a PNG beside it, to look at)
+                print(png(shot)['file'])
         elif args.action == 'inspect': print(json.dumps(inspect(args.session), indent=2))
         else: print(json.dumps(compare(args.current, args.baseline), indent=2))
     except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as error:
