@@ -2552,6 +2552,9 @@ void GsnScene::recordPrepass(VkCommandBuffer command, const SceneView& view) {
     s.modelTPrevious = s.modelT;
     s.modelT = t;
     vk::beginLabel(command, "gsn frame again");
+    // (its own slot's timestamps: the marks of the last executePending point at that frame's slot, maybe still in flight)
+    s.markSlot = s.profile.on ? static_cast<int>(view.slot % kSlots) : -1;
+    if (s.markSlot >= 0) s.profileFrame(command, view.slot);
     s.execute(command, view.slot);
     if (auto it = s.targets.find(s.displayTarget); it != s.targets.end() && it->second.image.valid() && !it->second.depth) {
         vk::Barriers b;
