@@ -274,6 +274,7 @@ add_executable(gt4_host
     platform/sdl/display.cpp
     platform/render/vk.cpp
     platform/render/pipeline_cache_file.cpp
+    platform/render/graph/render_graph.cpp
     platform/render/pipeline.cpp
     platform/render/test_scene.cpp
     platform/render/gsn_scene.cpp
@@ -282,7 +283,7 @@ add_executable(gt4_host
     platform/render/smaa_textures.cpp
     ${GT4_SHADER_OUT}/gt4_shaders.cpp
     ${GT4_SHADER_HEADERS})
-target_include_directories(gt4_host PRIVATE platform/sdl platform/render ${GT4_SHADER_OUT}
+target_include_directories(gt4_host PRIVATE platform/sdl platform/render platform/render/graph ${GT4_SHADER_OUT}
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party
     ${GT4_FSR2_DIR})
 target_compile_definitions(gt4_host PRIVATE VK_NO_PROTOTYPES FFX_GCC)
@@ -334,6 +335,23 @@ if(BUILD_TESTING)
   target_link_libraries(gt4_mesh_cache_test PRIVATE gt4_mesh_cache gt4_ps2gfx)
   add_test(NAME mesh_cache COMMAND gt4_mesh_cache_test ${GT4_MESH_CAPTURES})
   set_tests_properties(mesh_cache PROPERTIES SKIP_RETURN_CODE 77)
+
+  # The render graph (platform/render/graph): compile on the CPU with a fake backend (no GPU).
+  add_library(gt4_render_graph_testlib STATIC platform/render/graph/render_graph.cpp platform/render/vk.cpp
+      platform/render/pipeline_cache_file.cpp)
+  target_include_directories(gt4_render_graph_testlib PUBLIC platform/render platform/render/graph platform/gs third_party)
+  target_compile_definitions(gt4_render_graph_testlib PUBLIC VK_NO_PROTOTYPES $<$<BOOL:${WIN32}>:_CRT_SECURE_NO_WARNINGS>)
+  target_link_libraries(gt4_render_graph_testlib PUBLIC Vulkan::Headers ${GT4_VOLK} ${GT4_VOLK_HEADERS})
+  add_executable(gt4_render_graph_test tests/render_graph.cpp)
+  foreach(t gt4_render_graph_testlib gt4_render_graph_test)
+    if(MSVC)
+      target_compile_options(${t} PRIVATE /W4)
+    else()
+      target_compile_options(${t} PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+  endforeach()
+  target_link_libraries(gt4_render_graph_test PRIVATE gt4_render_graph_testlib)
+  add_test(NAME render_graph COMMAND gt4_render_graph_test)
 
   # Saves from memory card images, .psu exports and folder cards (built here; no game data).
   add_executable(gt4_save_import_test tests/save_import.cpp)

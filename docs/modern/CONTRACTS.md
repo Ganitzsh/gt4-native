@@ -508,6 +508,17 @@ public:
 }  // namespace gt4::rg
 ```
 
+**Additions in the code (ticket B1, agreed in its review).** `Graph::begin(const FrameInfo&)` starts a frame (it
+sizes Render / Output textures). `Graph(Backend&)` compiles without a GPU, for the CPU tests (`Backend` gives memory
+requirements and whether a compute-only queue is used). `Graph::plan()` returns the compiled plan: live passes and their
+barriers, culled passes, placements, async edges, errors. `Graph::historyValid(Texture)` tells a feature whether a
+history's version 0 holds the last frame's contents (false on its first frame and after it is made again).
+`PassContext::pipelines` is a pointer until the `PipelineCache` class lands (B2b). A history's version 0 is the
+previous frame's copy; its first write goes to the other copy and must not read; a pass writing from version 0
+gets the new copy for that handle. Async compute: the plan has its edges and lifetimes, but execution stays in order
+on the graphics queue until B21. `Plan::exports` gives what each import and history copy ends the frame in (the layout,
+and the stages and accesses of its last write and every read since), written to its `vk::Image` after `execute()`.
+
 ### b.3 Semantics
 
 - **Order.** Passes run in the order added. Compile removes passes that are culled and adds barriers; it never
@@ -519,9 +530,11 @@ public:
   writes at the same version, or reading a transient before any write is a compile error (debug: abort with the
   pass names; release: the view falls back).
 - **Barriers.** Per resource and range, from the previous use to the next: layout from `Use`, stage from the
-  declared stages, access from `Use`. Built with `vk::Barriers` (`vk.h:115`) and flushed once at the start of
-  each pass. Read after read in the same layout: none. Write after read: execution dependency only. Imports start
-  from and end in `vk::Image`'s tracked state, so code outside the graph keeps working during the migration.
+  declared stages, access from `Use`. Planned by the graph (synchronization2) and flushed once at the start of
+  each pass. Read after read in the same layout: none when the stages that saw the last write cover the new read,
+  else a barrier from that write (a fragment read, then a compute read). Write after read: execution dependency
+  only. Imports start from and end in `vk::Image`'s tracked state, so code outside the graph keeps working during
+  the migration.
 - **Ranges.** v1 tracks whole images when `Range` is default and per mip when a pass gives one (bloom chains,
   HiZ). Layers per range from v2.
 
