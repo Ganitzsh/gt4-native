@@ -230,6 +230,17 @@ add_library(gt4_saves STATIC platform/saves/save_import.cpp)
 target_include_directories(gt4_saves PUBLIC platform/saves)
 target_compile_features(gt4_saves PUBLIC cxx_std_20)
 
+# The game's pads from the keyboard and gamepads through an action map (platform/input; no SDL calls, its headers).
+add_library(gt4_input STATIC platform/input/input_map.cpp)
+target_include_directories(gt4_input PUBLIC platform/input platform/gs)
+target_link_libraries(gt4_input PUBLIC SDL3::Headers)
+target_compile_features(gt4_input PUBLIC cxx_std_20)
+if(MSVC)
+  target_compile_options(gt4_input PRIVATE /W4)
+else()
+  target_compile_options(gt4_input PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 add_executable(gt4_host
     platform/sdl/main.cpp
     platform/sdl/disc_setup.cpp
@@ -295,6 +306,11 @@ if(BUILD_TESTING)
   add_executable(gt4_save_import_test tests/save_import.cpp)
   target_link_libraries(gt4_save_import_test PRIVATE gt4_saves)
   add_test(NAME save_import COMMAND gt4_save_import_test)
+
+  # The input action map: the original map against the host's mapping before it, for every input.
+  add_executable(gt4_input_map_test tests/input_map.cpp)
+  target_link_libraries(gt4_input_map_test PRIVATE gt4_input)
+  add_test(NAME input_map COMMAND gt4_input_map_test)
 
   # PS2 graphics on the CPU: VIF1, GT4's 3D renderers, stream records, replay, pad (no GPU needed).
   add_executable(gt4_ps2gfx_test tests/ps2gfx.cpp)
