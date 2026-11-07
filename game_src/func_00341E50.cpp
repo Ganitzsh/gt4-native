@@ -5,6 +5,8 @@
  * forcing the lowest texture level, and the cars at the detail their distance gives (as the main view)
  * instead of level 2. Original otherwise. (The main view's list, course + 8, holds only what is ahead: the
  * mirror lost the stands and gantries behind the car with it.) */
+#include "gt4_gfx.h"
+#include "spr.h"
 typedef int s32;
 struct V { short d,i; void *fn; };
 struct Buf { int v[15]; };
@@ -88,6 +90,7 @@ extern "C" void RacePS2Base__render_back_mirror(char *self,void *out,int flag) {
  func_004A7890(1.0f,1.0f,-1.0f);
  V *e18=(V *)(P(cam,0)+0x18);
  ((Act)e18->fn)(cam+e18->d,0.0f);
+ gt4_scene_view_begin(spr_base(),2,6,0);   /* kViewMirror; kViewInset, kViewCameraKnown: its camera (flipped) is set 0 now */
  func_00397CE0(scene);
  func_00397DA0(scene+0xA90,1.0f);
  func_00397DF8(scene);
@@ -123,6 +126,7 @@ extern "C" void RacePS2Base__render_back_mirror(char *self,void *out,int flag) {
  func_004A6AF8(width,0,0,0);
  func_004A1638(5); func_004A3088(0.0f);
  func_004A3230(2); func_004A3088(1.0f);
+ gt4_scene_view_end(spr_base());
  RaceEntryCar__update(1); func_004A5400();
  RaceEntryCar__update(0); func_004A5400();
  pglFrontFace(0); func_004A5688();

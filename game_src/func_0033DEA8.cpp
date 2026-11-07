@@ -1,4 +1,6 @@
 #include "types.h"
+#include "gt4_gfx.h"
+#include "spr.h"
 struct V { short d, i; void *fn; };
 struct Buf { int v[15]; };
 struct Global { Buf b[2]; int cur; };
@@ -49,6 +51,7 @@ void func_004AB040(int);
 }
 extern "C" void RacePS2Base__render_world(char *self, Buf *out,float t) {
  Buf b; Buf aux;
+ gt4_scene_frame_begin(spr_base(),0);   /* opens the scene records' frame, which the kick closes (docs/modern/CONTRACTS.md a.5.1) */
  char *cam=cameraT(self,t);
  char *scene=P(P(P(P(self,0x6C),0x80),4),0x80);
  func_0033E8E0(self);
