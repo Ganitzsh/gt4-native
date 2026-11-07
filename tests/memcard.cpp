@@ -208,6 +208,36 @@ int main(int argc, char **argv) {
         }
     }
 
+    {   // the host's separators and drive letters are not card names: nothing leaves the card through them
+        Cards cards;
+        cards.insert(0, card, 0);
+        expect(cards.open(0, "/BASCUS-97328GAMEDATA\\..\\..\\outside", kOpenWrite | kOpenCreate) == kNoEntry,
+               "a backslash in a card path is refused");
+        expect(cards.open(0, "C:/Windows/win.ini", kOpenRead) == kNoEntry && cards.mkdir(0, "/D:x") == kNoEntry,
+               "a colon in a card path is refused");
+        expect(!fs::exists(work / "outside"), "nothing written outside the card");
+    }
+
+    {   // the clock went back since the last backups (a time step): the new backup's name sorts first, and it stays
+        const fs::path dir = card / ".backup";
+        fs::remove_all(dir);
+        for (const char *later : {"99991231-235958", "99991231-235959"}) {
+            fs::create_directories(dir / later / kSave);
+            writeFile(dir / later / kSave / kSave, "later");
+        }
+        Cards cards;
+        cards.insert(0, card, 2);
+        expect(writeWhole(cards, 0, kFile, save("after the step")) == 0, "a save after the clock went back");
+        const fs::path b = cards.sessionBackup(0);
+        expect(!b.empty() && fs::exists(b) && readFile(b / kSave / kSave) == save("session 3b"),
+               "the session's backup is kept although its name sorts before the others");
+        const std::vector<fs::path> kept = backups(card);
+        expect(kept.size() == 2 && kept.back().filename() == "99991231-235959",
+               "the rotation keeps the new one and the newest other");
+        fs::remove_all(dir);
+        writeFile(card / kSave / kSave, save("session 3b"));
+    }
+
     {   // the second slot: empty unless a folder is given
         Cards cards;
         cards.insert(0, card, 0);

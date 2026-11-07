@@ -184,9 +184,12 @@ int Cards::freeClusters(int port) {
     return static_cast<int>(std::max<int64_t>(0, kCardClusters - static_cast<int64_t>(kb)));
 }
 
-// a card path ("/DIR/FILE", "FILE" relative to the current directory); "" if it names something hidden
+// a card path ("/DIR/FILE", "FILE" relative to the current directory); "" if it names something hidden, or holds a
+// backslash or a colon (the host's separators and drive letters: hostPath would join them, and they could leave
+// the card; a PS2 card name never has them)
 std::string Cards::cardPath(const Card &c, const char *name) const {
     std::string p = name ? name : "";
+    if (p.find_first_of("\\:") != std::string::npos) return "";
     if (p.empty() || p[0] != '/') p = c.cwd + (c.cwd.back() == '/' ? "" : "/") + p;
     std::vector<std::string> parts;
     size_t i = 0;
@@ -254,8 +257,11 @@ void Cards::backUp(int port) {
     for (const auto &e : fs::directory_iterator(dir, ec))
         if (e.is_directory(ec) && std::isdigit(static_cast<unsigned char>(text(e.path().filename())[0])))
             all.push_back(e.path());  // session backups only: the saves an import replaced (imports/) stay
-    std::sort(all.begin(), all.end());  // the names are their times
-    for (size_t k = 0; k + static_cast<size_t>(c.backups) < all.size(); ++k) fs::remove_all(all[k], ec);
+    // The oldest go, by name (the names are their times); never the one just made, even when the clock has gone back
+    // since an earlier backup (a time step, DST) and its name sorts first.
+    std::erase_if(all, [&](const fs::path &p) { return p == dest; });
+    std::sort(all.begin(), all.end());
+    for (size_t k = 0; k + static_cast<size_t>(c.backups) < all.size() + 1; ++k) fs::remove_all(all[k], ec);
 }
 
 int Cards::open(int port, const char *name, int mode) {
@@ -385,7 +391,7 @@ int Cards::getdir(int port, const char *name, unsigned mode, int maxent, McDirEn
             c.listing.push_back(e);
         }
         for (const auto &it : fs::directory_iterator(hp, ec)) {
-            const std::string n = it.path().filename().string();
+            const std::string n = text(it.path().filename());  // UTF-8, as every other name here
             if (!hidden(n) && match(pattern.empty() ? "*" : pattern.c_str(), n.c_str())) {
                 fill_entry(e, n, it.path());
                 c.listing.push_back(e);
