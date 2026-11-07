@@ -42,6 +42,7 @@ Every ticket's acceptance uses these names.
 | `PERF(x)` | `tools/perf_report.py` on `--profile-json` of the REF captures against the baseline build | the named stages within x |
 | `REL` | game from `tools/release_game.py`; `tools/hook_lint.py` | builds, lint clean |
 | `SCENE` | scene-decoder counters (CONTRACTS.md a.7) on REF captures recorded with scene records | the gates in that table |
+| `STREAM` | the same scripted live session (boot from the approved save, 1,800 host frames) twice with the base build and once with the new one; the host summary's `GS:` line | with scene records off, the summary's `scene` count is 0 (exact: nothing new on the wire); stream counts per VSync within 2 % of the base runs' mean; 0 bad records, 0 unknown codes (raw counts differ run to run: the game runs on its own clock beside the host, about 1.7 % between two base runs) |
 | `R5` | the Route 5 night metrics (`tools/frame_metrics.py`, ticket N1) on the N0 captures | as each ticket states |
 
 **REF captures** (local, `build/caps/REF.txt` lists them): `race7.cap` (race, 100 frames); from C10, recorded
@@ -91,8 +92,7 @@ struct and static_assert of CONTRACTS.md a.4); `compat/game/gt4_scene.h` (C copi
 (`kOptionSceneRecords = 5`); `include/gt4/link/protocol.h:22` (version 3); `platform/gs/stream.cpp` (`case
 gfx::kScene`), `stream.h` (`GsTarget::scene`, no-op default), `gs_host.cpp` (QueuedTarget forwards);
 `tests/scene_records.cpp` (layouts: `sizeof`/`offsetof` of both headers). Depends: CONTRACTS.md reviewed.
-Acceptance: `CTEST` (new `scene_records`); `ORIG`; `REL`; a scripted session (`tools/host_session.py`, boot to the
-main menu, 1,800 frames) with the option off gives the same stream counts in the host summary as a80cfca. **Day one
+Acceptance: `CTEST` (new `scene_records`); `ORIG`; `REL`; `STREAM` with the option off. **Day one
 (after the contract review).**
 
 **A10: Scene decoder and draw linkage on the host (M).** `platform/scene/scene_decoder.{h,cpp}`,
