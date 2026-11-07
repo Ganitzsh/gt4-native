@@ -1856,6 +1856,13 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
                 }
                 recorded.stencilMode = stencilMode;
             }
+            // Alpha bit 7 into the stencil (mode 3): gsn.frag's export variant writes the value itself
+            // (gl_FragStencilRefARB, every fragment), but Vulkan still wants a reference set for the draw
+            // (VUID-vkCmdDraw-None-07839): 0, which the export overrides, so no pixel changes.
+            if (stencilMode == 3 && recorded.reference < 0) {
+                vkCmdSetStencilReference(command, VK_STENCIL_FACE_FRONT_AND_BACK, 0);
+                recorded.reference = 0;
+            }
             vk::Pipeline& p = pipeline(blendKey, ps.mask, hasDepth, d.topology, stencilMode == 3);
             if (p.pipeline != boundPipeline) {
                 tally("pipeline binds");
