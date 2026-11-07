@@ -268,6 +268,9 @@ def step(directory, commands, capture=None, timeout=300.0):
     for command in queue:
         if not command.strip() or '\n' in command or '\r' in command:
             raise ValueError('Send one nonempty command at a time')
+    target = directory / 'frames' / (capture + '.ppm') if capture else None
+    if target is not None and target.exists():
+        target.unlink()   # (a capture of that name from an earlier step or run would be taken for this one)
     base = time.time_ns()
     for index, command in enumerate(queue):
         name = f'{base:020d}-{index:04d}'
@@ -276,7 +279,6 @@ def step(directory, commands, capture=None, timeout=300.0):
         temporary.rename(pending / (name + '.cmd'))
     if not capture:
         return None
-    target = directory / 'frames' / (capture + '.ppm')
     deadline = time.monotonic() + timeout
     size = -1
     while True:   # (until the file is there and its size stays the same: written completely)
