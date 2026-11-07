@@ -3,6 +3,7 @@
 #include "chord_guard.h"
 #include "settings.h"
 #include "settings_menu.h"
+#include "temp_path.h"
 #include "vecmath.h"
 
 #include <cmath>
@@ -99,7 +100,7 @@ int main() {
     check(near(upscaleRatio(q), 0.5f), "render scale 200 % is 2x supersampling");
 
     // File round trip, unknown keys and newer versions.
-    const auto path = (std::filesystem::temp_directory_path() / "gt4_host_settings_test.ini").string();
+    const auto path = gt4::test::uniqueTempPath("gt4_host_settings_test", ".ini").string();
     Settings saved;
     applyPreset(saved, Preset::Ultra);
     setOption(saved, "render.sharpness", "0.35");

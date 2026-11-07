@@ -6,6 +6,7 @@
 #include "ps2_pad.h"
 #include "renderers3d.h"
 #include "stream.h"
+#include "temp_path.h"
 #include "vif1.h"
 #if GT4_VU1_INTERPRETER
 #include "vu1.h"
@@ -483,7 +484,7 @@ void testPath3Mask() {
 }
 
 void testReplay() {
-    const std::string path = (std::filesystem::temp_directory_path() / "gt4_ps2gfx_test.cap").string();
+    const std::string path = gt4::test::uniqueTempPath("gt4_ps2gfx_test", ".cap").string();
     {
         gt4::ps2::CaptureWriter writer(path);
         expect(writer.ok(), "capture file opens");

@@ -1,6 +1,7 @@
 // platform/saves/save_import.cpp on a small memory card image built here (with and without ECC), on a .psu export
 // and on a folder card: the GT4 save comes out with its files, others are left.
 #include "save_import.h"
+#include "temp_path.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -99,7 +100,7 @@ std::vector<unsigned char> readFile(const fs::path& p) {
 }  // namespace
 
 int main() {
-    const fs::path dir = fs::temp_directory_path() / "gt4_save_import_test";
+    const fs::path dir = gt4::test::uniqueTempPath("gt4_save_import_test");
     std::error_code ec;
     fs::remove_all(dir, ec);
     fs::create_directories(dir);

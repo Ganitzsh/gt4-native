@@ -10,6 +10,7 @@
 #include "gs_packets.h"
 #include "link_host.h"
 #include "stream.h"
+#include "temp_path.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -148,7 +149,7 @@ int main(int argc, char** argv) {
 
     // 3. A capture replayed through GsHost (no game: reads stay in memory): one displayed list per VBlank.
     {
-        const std::filesystem::path dir = outputDir.empty() ? std::filesystem::temp_directory_path() : std::filesystem::path(outputDir);
+        const std::filesystem::path dir = outputDir.empty() ? gt4::test::uniqueTempPath("gt4_gs_host_test") : std::filesystem::path(outputDir);
         std::filesystem::create_directories(dir);
         const std::string capture = (dir / "replay.cap").string();
         writeReplay(capture);
@@ -172,7 +173,7 @@ int main(int argc, char** argv) {
             expect(draws >= 2, "each field's sprites drawn (one batch: they share their state)");
             expect(host->finished(), "the replay ends");
         }
-        if (outputDir.empty()) std::filesystem::remove(capture);
+        if (outputDir.empty()) std::filesystem::remove_all(dir);
     }
 
     if (failures) {
