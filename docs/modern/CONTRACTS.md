@@ -48,7 +48,8 @@ unsigned int gt4_scene_on(void);   /* gt4_game_option(kOptionSceneRecords) */
   includes both and checks `sizeof` and every `offsetof`.
 - **No 8-byte members**, so the layout is the same under gcc 2.9 i386 (8-byte types 4-aligned) and MSVC x64.
 - Arguments are pointers and `int`; no `long`, no float arguments or results. `tools/hook_lint.py` must pass.
-- The runtime fills in nothing except `FrameBegin::frame` and `FrameBegin::vblank`.
+- The runtime fills in `FrameBegin::frame` and `FrameBegin::vblank`, drops a `FrameBegin` while a frame is open, and
+  sends `FrameEnd` itself at the frame's kick (a.5.1). The game never sends `FrameEnd`.
 
 ### a.3 Conventions for every record
 
@@ -95,12 +96,13 @@ struct FrameBegin {
 };
 static_assert(sizeof(FrameBegin) == 16);
 
-struct FrameEnd {
+struct FrameEnd {                 // sent by the runtime at the frame's kick, never by the game (a.5.1)
     Prefix prefix;
     uint32_t frame;               // as its FrameBegin
-    uint16_t views, instances;    // what the game sent this frame (the host checks its counts)
+    uint16_t views, instances;    // what gt4_gfx_scene appended this frame (the host checks its counts)
     uint16_t lights, emitters;
-    uint16_t projections, reserved;
+    uint16_t projections;
+    uint16_t begins;              // FrameBegins asked for this frame, the opening one included (>= 1); 0: not counted
 };
 static_assert(sizeof(FrameEnd) == 20);
 
@@ -294,7 +296,8 @@ Where each record is sent (tickets in PLAN.md):
 
 | Record | Sent by | Ticket |
 |---|---|---|
-| `FrameBegin` / `FrameEnd` | start and end of `render_world` (`game_src/func_0033DEA8.cpp`; the 3 env-map passes come first inside it); menus: mRenderContextPS2::virtual_64 (00217058) | A3 |
+| `FrameBegin` | start of `render_world` (`game_src/func_0033DEA8.cpp`; the 3 env-map passes come first inside it); menus: mRenderContextPS2::virtual_64 (00217058). The first since the last kick opens the frame; the runtime drops the others (a.5.1) | A3 |
+| `FrameEnd` | the runtime, at the frame's kick (004A11F8, `runtime/frame.cpp`), after `walk(list)`, when a frame is open | A3 |
 | `ViewBegin` / `ViewEnd` | main: after 0033EAB8's camera load (a `game_src` copy of 0033EAB8, or a hook at the camera's +0x18 call), `ViewEnd` before `render_back_mirror`; mirror: `game_src/func_00341E50.cpp` (after every main-view instance, so views never nest); env-map passes 0044E660 (before the main view); menus 00217058 (`kViewMenu`); the HUD's 3D widget 003BE3C8 (`kViewHud`); showroom and Photo Travel per R6 | A3, A6 |
 | `Projection` | `game_src/func_0049D328.cpp`, before the `Instance`, when set 1 (as 0049E480 picks it) or the viewport / clamp the batch holds (the runtime's copy of the last qwords 197..199 written by 0049E548) differ from the last `Projection` sent this frame (a 64 + 48-byte compare); also for each view's camera load, before its `ViewBegin` | A2, A3 |
 | `Instance` | `game_src/func_0049D328.cpp`, after 0049E480 / 0049E548, before the item loop; A and B read as 0049E480 picks them (by `s->current`) even when it does not run (R1: it recomposed for 16 % of the Cmds) | A2 |
@@ -306,9 +309,30 @@ Where each record is sent (tickets in PLAN.md):
 
 ### a.5 Ordering within a frame, and against the existing records
 
-1. `FrameBegin` is the first scene record of a frame and `FrameEnd` the last. Both are in the same pgl packet as
-   the frame's batches, so in the same host `FrameList`. A `FrameBegin` before a `FrameEnd` is a new frame (the
-   old one is counted as `framesUnclosed` and dropped).
+1. **A scene frame is one kicked list.** `FrameBegin` is its first scene record and `FrameEnd` its last.
+   - The first `FrameBegin` since the last kick opens the frame. The runtime drops any later one until the kick
+     and counts it in `FrameEnd::begins`, so the opening one's `flags` stand.
+   - The kick (004A11F8) sends `FrameEnd` after `walk(list)` when a frame is open. It goes as a `GT4_REC_GFX` block
+     of its own from the kick's thread, with nothing sent on the link between the list's last block and it. So it
+     lands in the same host `FrameList` as the frame's batches.
+   - The frame therefore holds everything drawn from its `FrameBegin` to the kick: the env-map passes, the main
+     view, the mirror, the post effects, the HUD's 3D widget (003BE3C8, `kViewHud`, drawn after `render_world`
+     returns) and the menus' car views (00217058, `kViewMenu`). The HUD view is never substituted. It is recorded
+     so the output-resolution 2D layer (ARCHITECTURE.md section 4, step 6) can lift the HUD later.
+   - The runtime counts each scene record per kind as `gt4_gfx_scene` appends it to the open frame. That is what
+     `FrameEnd`'s counts carry, and `countsMismatch` compares them with what arrived.
+   - A display list recorded for later calls (`call` / `ret` in `walk`) would send its scene records once per
+     call. So `gt4_gfx_scene` must not append while pgl records such a list: it drops the record and logs once.
+   - At the host, a `FrameBegin` before a `FrameEnd` is a new frame (the old one is counted as `framesUnclosed`
+     and dropped). With the runtime closing every open frame at its kick, that means a `FrameEnd` was lost.
+
+   A3 checks:
+   - frame-open state, `gt4_gfx_scene` and the kick all run on the game thread, and list N+1 is not built
+     before kick N returns;
+   - no other sender (VBlank, display, uploads from another thread) can put a record between the list's last
+     block and `FrameEnd`; if one can, the kick holds the link's send order across both;
+   - whether pgl records display lists on paths that send scene records;
+   - no kick in a race has a menu `FrameBegin` before `render_world`'s (its flags would stand).
 2. `ViewBegin` / `ViewEnd` pairs do not nest. Instances and lights appear only inside a view.
 3. An `Instance` is followed by exactly `items` `kBatchRun` records (with the `kBatchWrite`, `kBatchModel`,
    `kState`, `kTexSet` records its items and callbacks send), before the next `Instance`, `ViewEnd` or `Marker`.
@@ -321,19 +345,23 @@ Where each record is sent (tickets in PLAN.md):
    `Instance::projection`); ids are per frame and never reused within it. A `Projection` may come outside a view
    (`view` 0): the env-map passes' come before the main view opens.
 5. `kMarkPostBegin` follows the main view's `ViewEnd`; `kMarkHudBegin` follows `kMarkPostEnd`.
-6. Scene records outside a frame are counted (`outsideFrame`) and dropped.
+6. Scene records sent while no frame is open (e.g. a HUD view in a kick without `render_world`) are dropped by
+   the runtime and never reach the host. At the host, `outsideFrame` counts any that do (a stream fault) and drops
+   them.
 7. **Relation to the Light command.** The front end still decides where the Light command goes (`sceneRead`,
    `gs_frontend.cpp:821`). The host binds a view to a GS target as the colour target of the view's first tagged
    model draw. A view whose tagged draws go to two targets is counted (`viewSplitTargets`) and never substituted.
    A Light command on a target with a bound view substitutes that view.
 8. **Field frames.** With `display.race_frames = fields`, each field is its own frame (`kFrameField`, odd field
-   flagged); views and instances are per field.
+   flagged); views and instances are per field. With a.5.1 this needs one kick per field. A3 confirms the race
+   kicks once per field in that mode; if it kicks once per frame, this rule comes back to the architect.
 
 ### a.6 Versioning
 
 - Each record carries its kind's layout version. This release: all kinds at 1 (`kVersion`). The R1 changes
   (`ViewBegin`, `Projection`, `Instance::projection`, `FrameEnd`) came before any code landed, so they stay at
-  version 1.
+  version 1. So does `FrameEnd::begins`, which replaced a reserved field before any `FrameEnd` was sent.
+  Its 0 reads as "not counted".
 - A layout change adds fields at the end, bumps that kind's version, and keeps the old version decodable for one
   release (old captures). Never reorder or resize fields in place.
 - The host accepts a record when `version <= the version it knows` and `bytes >= sizeof(that version's
@@ -354,7 +382,8 @@ Where each record is sent (tickets in PLAN.md):
 | `records`, `bad`, `versionUnknown`, `unknownKind`, `outsideFrame` | decoding | `bad == versionUnknown == unknownKind == 0` |
 | `framesUnclosed`, `countsMismatch` | `FrameEnd`'s counts differ from what arrived | 0 |
 | `viewsNested`, `viewEndWithoutBegin`, `viewsUnclosed` | pairing (`viewsUnclosed`: a view still open at `FrameEnd`) | 0 |
-| `instances`, `instancesWithoutView` | | `instancesWithoutView == 0` in race frames (the HUD widget has its `kViewHud`) |
+| `instances`, `instancesWithoutView` | | `instancesWithoutView == 0` in race frames (the HUD widget is inside the frame, in its `kViewHud` view) |
+| `begins` | `FrameEnd::begins`: the `FrameBegin`s the runtime merged into one frame (render_world plus each 00217058 call) | reported |
 | `itemsMismatch` | an instance followed by more or fewer `kBatchRun` than `items` | 0 |
 | `projections`, `projectionUnknown` | an `Instance` or `ViewBegin` naming an id not sent this frame, or an `Instance` with items and projection 0 (its jobs could not be checked) | `projectionUnknown == 0` |
 | `matrixChecked`, `matrixMismatch`, `matrixMaxError` | per tagged job: `diag(axisScale·k, 1) · objectToView · projection.viewToClip` (k = shapeScale, or 1 when 0) against `ModelJob::matrix`; mismatch when the largest difference exceeds `1e-5 · max |entry|` (R1: 0 of 270,515, largest 2.3e-7) | `matrixMismatch == 0` |
@@ -416,8 +445,9 @@ struct InstanceData {
     MeshId mesh = 0; MaterialId materials[4] = {};   // per item when they differ (rare); more: split
     uint32_t entrant = 0xFFFFFFFF;
 };
-struct SceneFrame {
+struct SceneFrame {                               // one per kicked list (a.5.1)
     uint32_t frame = 0, vblank = 0, flags = 0;
+    uint16_t begins = 0;                          // FrameEnd::begins
     std::vector<ProjectionData> projections;      // by id - 1
     std::vector<ViewData> views;
     std::vector<InstanceData> instances;
@@ -432,7 +462,8 @@ struct SceneFrame {
 }
 ```
 
-`FrameList` (`gs_frontend.h:145`) gains `std::unique_ptr<scene::SceneFrame> scene` (null without records) and
+`FrameList` (`gs_frontend.h:145`) gains `std::unique_ptr<scene::SceneFrame> scene` (null without records: the frame
+whose `FrameEnd` arrived while that `FrameList` was being built, which a.5.1 makes the one holding its batches) and
 `Draw` gains `uint16_t view = 0`. `recycleFrameList` resets them.
 
 ---

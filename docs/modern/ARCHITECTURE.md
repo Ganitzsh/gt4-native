@@ -120,8 +120,10 @@ Four more facts from the code that shape the design:
    by 0049D328 sends one `Instance` (object-to-view, scales, item count, object identity from 00455708's
    context) **before** its `BatchModel` / `BatchRun` records. The mirror view (`render_back_mirror` 00341E50)
    and the environment-map passes get their own `ViewBegin` / `ViewEnd`. Lights, emitters and the vehicle
-   record go in where the game computes them. `Marker` records bracket GT4's post effects and the HUD.
-   `FrameEnd` closes the frame. All of it goes through pgl's packet, in issue order.
+   record go in where the game computes them. `Marker` records bracket GT4's post effects and the HUD. The HUD's
+   3D widget and the menus' car views, drawn after `render_world` returns, get their own views in the same frame.
+   All of it goes through pgl's packet, in issue order. The runtime closes the frame at its kick (004A11F8): it
+   sends `FrameEnd` right after the walked list (CONTRACTS.md a.5.1).
 2. **Frame walker (game thread).** Sends the record blocks as today (`frame.cpp:183-246`); `kScene` records
    carry values, not guest pointers, so the walker sends them as they are.
 3. **GS stream thread (host).** `GraphicsStream::records` hands `kScene` payloads to the `SceneDecoder`,

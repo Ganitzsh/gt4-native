@@ -111,7 +111,9 @@ loop, one `Instance` from the scratchpad (`current`, set 0 as used, `scale` when
 capture with records: `SCENE` (`matrixMismatch == 0`, `itemsMismatch == 0`); game CPU per frame up by less than
 0.2 ms (host summary "CPU a frame: game").
 
-**A3: Frame and view records (M).** `game_src/func_0033DEA8.cpp` (`FrameBegin`/`FrameEnd`, the main view);
+**A3: Frame and view records (M).** `game_src/func_0033DEA8.cpp` (`FrameBegin`, the main view); `FrameEnd` from
+the runtime at the kick (`runtime/frame.cpp`, `runtime/native/pgl.cpp`'s per-frame counts; CONTRACTS a.5.1 and its checks);
+the HUD widget's view (003BE3C8, `kViewHud`);
 `game_src/func_00341E50.cpp` (mirror, `kViewInset`); the camera as A0 found it (set 0 at its stack base);
 menus' 3D entry for the showroom and event screen (A0 names it). Depends: A1, A0. Acceptance: `REL`; `ORIG`;
 `SCENE` (`viewsNested == 0`, `countsMismatch == 0`, `instancesWithoutView == 0` in race frames, `cameraMismatch == 0`
