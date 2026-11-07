@@ -46,6 +46,17 @@ A fresh clone also needs the static 32-bit FFmpeg the game links for its movies,
 
 ---
 
+## Reference captures (REF)
+
+Kept in each clone's `build/caps/` (never committed), listed in `build/caps/REF.txt`. Every comparison on them
+says how many of its frames show a picture: a capture that replays black proves nothing.
+
+| Capture | VBlanks | What it shows | Notes |
+|---|---|---|---|
+| `race7.cap` | 100 | a race | **A fields-mode race** (recorded at `display.race_frames = fields`): its frames are interlaced and the field blend applies, so `display.field_mode = clean` changes it (98 of 100 frames at ultra). Do not use it as a progressive race. 99 of 100 frames lit at `original`. |
+| `menus_boot.cap` | 18,931 | from boot: the title menu over its attract video, Arcade > Time Trial > Original Circuits and City Courses, browsed | Recorded live from boot (14.5 GB) with a copy of `C:/Users/julie/gt4-native-game/build/r5_saves`, `--preset original`, interpolation and texture pack off. Windows (host frames, within a few VBlanks): title menu 6,450-8,050; Original Circuits row 12,900-15,050 (taps at about 13,600, 13,730, 13,860, 13,985, 14,110); City Courses row 17,200-18,700. Over 2 GB: a replay of it takes both heavy slots. |
+| `race.cap`, `event.cap` (gt4-native-game/build/refcap) | 200, 85 | race-start flyover, event screen | **Replay black** (no display records): not usable until re-recorded (C10). |
+
 ## Scripting a live session
 
 A scripted session runs the host with `--session-dir DIR`: it attaches a virtual pad and runs the commands it
