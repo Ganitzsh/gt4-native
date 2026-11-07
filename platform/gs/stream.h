@@ -43,6 +43,13 @@ public:
     // A scene record (gfx::kScene: gfx::scene::Prefix, then that kind's struct), in order with the batches.
     // Nothing by default (docs/modern/CONTRACTS.md (a): the scene decoder takes them, ticket A10).
     virtual void scene(const uint8_t* payload, size_t bytes) { (void)payload; (void)bytes; }
+    // The scene frame a FrameEnd just closed (after that record's scene()), for the target to take (move from it) and
+    // put on the FrameList being built (CONTRACTS.md a.8). Left in the decoder (takeSceneFrame) by default.
+    virtual void sceneFrame(std::unique_ptr<scene::SceneFrame>& frame) { (void)frame; }
+    // A view's package at its ViewEnd (CONTRACTS.md a.8), for the FrameList being built (a partial one may substitute it).
+    // Made only for a target that wants them.
+    virtual bool wantsSceneViews() const { return false; }
+    virtual void sceneView(std::shared_ptr<const scene::SceneView> view) { (void)view; }
     // A 3D batch for the GPU (docs/NATIVE_V2.md, step 2; PrimitiveSink::model), when the target takes them.
     virtual bool models() const { return false; }
     virtual void model(const gfx::ModelJob& job, const uint32_t* words) { (void)job; (void)words; }

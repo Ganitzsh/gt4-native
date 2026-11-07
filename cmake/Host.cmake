@@ -196,7 +196,7 @@ target_compile_definitions(gt4_ps2gfx PUBLIC GT4_VU1_INTERPRETER=$<BOOL:${GT4_VU
 # The native renderer (docs/NATIVE_RENDERER.md): the GS memory model and front end on the CPU.
 add_library(gt4_gsnative STATIC platform/gsnative/gs_memory.cpp platform/gsnative/gs_frontend.cpp
     platform/gsnative/texture_name.cpp platform/gsnative/texture_pack.cpp)
-target_include_directories(gt4_gsnative PUBLIC platform/gsnative include)
+target_include_directories(gt4_gsnative PUBLIC platform/gsnative platform/scene include)   # (scene_frame.h: FrameList::scene, A10)
 # stb_image and xxHash (texture packs: their PNG files, their names)
 target_include_directories(gt4_gsnative PRIVATE third_party/stb third_party/xxhash)
 target_link_libraries(gt4_gsnative PUBLIC Threads::Threads)

@@ -72,6 +72,9 @@ void FrameList::clear() {
     displayed = false;
     dump = false;
     readbacks.clear();
+    scene.reset();
+    for (ViewOnList& v : views) scene::sceneViewToPool(v.package);
+    views.clear();
 }
 
 namespace {
@@ -95,6 +98,12 @@ FrameList spareFrameList() {
     return list;
 }
 
+namespace {
+std::atomic<uint64_t> skippedWithScene{0};   // lists the renderer skipped with a scene frame or view packages (a.8)
+}  // namespace
+
+uint64_t listsSkippedWithScene() { return skippedWithScene.load(); }
+
 void carryOver(FrameList& dropped, FrameList& into) {
     into.dump = into.dump || dropped.dump;
     // Its asynchronous reads are never dropped (the game would wait for them): copied after the next list, the target
@@ -116,6 +125,16 @@ void carryOver(FrameList& dropped, FrameList& into) {
     into.resetTextures = into.resetTextures || dropped.resetTextures;
     dropped.textures.clear();
     dropped.retiredTextures.clear();
+    // Its scene frame and views' packages go with it, never drawn (the next list's draws are not theirs): counted.
+    if (dropped.scene || !dropped.views.empty()) {
+        const uint64_t total = ++skippedWithScene;
+        if (total <= 10 || total % 100 == 0)
+            std::printf("gsn: a skipped list's scene frame or view packages dropped with it (%llu so far)\n",
+                        static_cast<unsigned long long>(total));
+        dropped.scene.reset();
+        for (FrameList::ViewOnList& v : dropped.views) scene::sceneViewToPool(v.package);
+        dropped.views.clear();
+    }
 }
 
 GsFrontend::GsFrontend() : pages(512), pageGeneration(512, 0) {
@@ -471,7 +490,16 @@ void GsFrontend::setReadData(std::vector<uint8_t> data) {
     readPos = 0;
 }
 
-void GsFrontend::cut(FrameList& out) {
+void GsFrontend::cut(FrameList& out, bool async) {
+    lastModelView = 0;   // (the split's draws: a new list starts its runs)
+    if (sceneOpen) {   // a partial list inside a scene frame (a.8): its views with tagged draws are cut
+        ++sceneCuts;
+        if (async) ++sceneCutsAsync;
+        for (ViewBinding& v : viewBindings) {   // (a view that ended before the cut is not: its package is on the list)
+            if (v.inList && !v.ended) v.cut = true;
+            v.inList = false;
+        }
+    }
     lastReinterpretation = {};
     lastTexture.valid = false;
     lastMemoryReinterpretation = {};
@@ -1824,14 +1852,29 @@ void GsFrontend::model(const gfx::ModelJob& in, const uint32_t* words) {
     if (texture.kind == TextureSource::Kind::Target && texture.id != colour) sceneRead(texture.id);
     noteDraw(colour, depth, texture);
     const bool moving = (in.flags & 4) != 0;
+    // its scene view (CONTRACTS.md a.5 7, a.8: the stream's decoder put its instance in pad[0], that instance's view in
+    // pad[1]): the view is bound to the colour target of its first tagged draw, and counted split if another follows
+    const uint16_t view = static_cast<uint16_t>(in.pad[0] ? in.pad[1] : 0);
+    if (view > kViews && sceneOpen) ++stats.viewsPastLimit;   // (not bound: counted apart from viewsUnbound)
+    if (view && view <= kViews && sceneOpen) {
+        if (viewBindings.size() < view) viewBindings.resize(view);
+        ViewBinding& b = viewBindings[view - 1u];
+        bindDraw(b, colour, depth, s.c.depthTest && s.c.depthFunc != 1, depth && s.c.depthWrite, texture);
+        b.inList = true;
+    }
+    const uint16_t drawView = sceneSplit ? view : 0;
     Draw* batch = nullptr;
     if (!frame.commands.empty() && frame.commands.back().kind == FrameList::Command::Kind::Draw) {
         Draw& last = frame.draws[frame.commands.back().index];
         if (last.modeled && last.topology == Topology::Triangles && last.state == s && last.target == colour && last.depth == depth &&
             last.texture.kind == texture.kind && last.texture.id == texture.id && last.texture.version == texture.version &&
-            last.first + last.count == frame.modelVertices)
-            batch = &last;
+            last.first + last.count == frame.modelVertices) {
+            // a view change inside a run that merges: the split makes it a new draw (split off: what it would add)
+            if (view != lastModelView) ++stats.sceneSplitDraws;
+            if (last.view == drawView) batch = &last;
+        }
     }
+    lastModelView = view;
     if (!batch) {
         Draw d;
         d.state = s;
@@ -1841,6 +1884,7 @@ void GsFrontend::model(const gfx::ModelJob& in, const uint32_t* words) {
         d.depth = depth;
         d.texture = texture;
         d.modeled = true;
+        d.view = drawView;
         frame.commands.push_back({FrameList::Command::Kind::Draw, static_cast<uint32_t>(frame.draws.size())});
         frame.draws.push_back(d);
         ++stats.draws;
@@ -2137,8 +2181,283 @@ void GsFrontend::resetTextures() {
     frame.resetTextures = true;
 }
 
+// Two targets' GS memory overlaps (the same target included): their block ranges (FBP in pages of 32 blocks; 32-bit
+// formats 32 rows a page, 16-bit ones 64; the height drawn so far), wrapping at 4 MiB (16384 blocks).
+bool GsFrontend::overlaps(uint32_t a, uint32_t b) const {
+    if (a == b) return a != 0;
+    const Target *ta = nullptr, *tb = nullptr;
+    for (const Target& t : targets) {
+        if (t.id == a) ta = &t;
+        if (t.id == b) tb = &t;
+    }
+    if (!ta || !tb) return false;
+    constexpr uint32_t kBlocks = 16384;
+    auto span = [](const Target& t) {
+        const bool sixteen = (t.psm & 0x0F) >= 2;   // PSMCT16/16S, PSMZ16/16S
+        const uint32_t rows = sixteen ? 64u : 32u;
+        const uint32_t pages = std::max<uint32_t>(t.bw, 1u) * ((std::max<uint32_t>(t.height, 1u) + rows - 1) / rows);
+        return std::make_pair(t.bp % kBlocks, std::min<uint32_t>(pages * 32u, kBlocks));
+    };
+    const auto [a0, an] = span(*ta);
+    const auto [b0, bn] = span(*tb);
+    auto inside = [&](uint32_t x0, uint32_t xn, uint32_t y0, uint32_t yn) {   // [x0, x0 + xn) meets [y0, y0 + yn), mod kBlocks
+        for (int wx = 0; wx < 2; ++wx)
+            for (int wy = 0; wy < 2; ++wy) {
+                const uint64_t xs = x0 + uint64_t(wx) * kBlocks, ys = y0 + uint64_t(wy) * kBlocks;
+                if (xs < ys + yn && ys < xs + xn) return true;
+            }
+        return false;
+    };
+    return inside(a0, an, b0, bn);
+}
+
+// One tagged draw of a view (CONTRACTS.md a.5.7): summarised per colour target, decided at ViewEnd (finishBinding). A
+// sample remembers the view's target overlapping it that was written before it (an auxiliary read, once that target
+// turns out auxiliary), counted in draws.
+void GsFrontend::bindDraw(ViewBinding& b, uint32_t colour, uint32_t depth, bool depthTested, bool writesDepth, const TextureSource& texture) {
+    b.bound = true;
+    const uint32_t seq = ++b.seq;
+    TargetUse* u = nullptr;
+    for (uint32_t i = 0; i < b.useCount; ++i)
+        if (b.uses[i].colour == colour) u = &b.uses[i];
+    // its sample, against what the view wrote before this draw
+    uint32_t writtenBefore = 0, writtenSeq = 0;   // (the latest first-written of the targets overlapping it)
+    if (texture.kind == TextureSource::Kind::Target)
+        for (uint32_t i = 0; i < b.useCount; ++i)
+            if (b.uses[i].colour != colour && b.uses[i].firstSeq > writtenSeq && overlaps(b.uses[i].colour, texture.id)) {
+                writtenBefore = b.uses[i].colour;
+                writtenSeq = b.uses[i].firstSeq;
+            }
+    if (!u) {
+        if (b.useCount == kTargets) {
+            b.overflow = true;
+            return;
+        }
+        u = &b.uses[b.useCount++];
+        *u = TargetUse{};
+        u->colour = colour;
+        u->firstSeq = seq;
+    }
+    ++u->draws;
+    if (depthTested && !u->tested) {
+        u->tested = true;
+        u->testedSeq = seq;
+    }
+    if (depth && (depthTested || writesDepth)) {
+        uint32_t k = 0;
+        while (k < u->depthCount && u->depths[k].target != depth) ++k;
+        if (k == u->depthCount) {
+            if (k == 2) {
+                b.overflow = true;
+            } else {
+                u->depths[u->depthCount++].target = depth;
+            }
+        }
+        if (k < 2) {
+            DepthUse& d = u->depths[k];
+            if (depthTested && !d.tested) d.firstTestedSeq = seq;
+            d.tested = d.tested || depthTested;
+            d.written = d.written || writesDepth;
+        }
+    }
+    if (texture.kind == TextureSource::Kind::Target) {
+        uint32_t k = 0;
+        while (k < u->sampledCount && u->sampled[k].target != texture.id) ++k;
+        if (k == u->sampledCount) {
+            if (k == 8) {
+                b.overflow = true;
+                return;
+            }
+            u->sampled[u->sampledCount++].target = texture.id;
+        }
+        SampleUse& smp = u->sampled[k];
+        ++smp.draws;
+        if (writtenBefore) {
+            if (!smp.written) smp.written = writtenBefore;
+            ++smp.drawsAfterWrite;
+        }
+    }
+}
+
+// At the view's ViewEnd (or its frame's end, if it never came): the principal, the auxiliary targets, the split reasons
+// (1) a second scene: another target whose own depth buffer the view's draws both test and write (a test-only pass, the
+// sky's 64 x 64 one, is auxiliary), (2) another colour target testing or writing memory of the principal depth, (3) another
+// target (or a depth it writes) overlapping the principal's memory, (4) the principal colour or depth sampled (every draw
+// of the view comes before its Light command), (5) a fifth auxiliary target; a full summary splits it too (counted apart);
+// and the auxiliary targets a principal draw sampled after a write overlapping them, in draws. All by memory.
+void GsFrontend::finishBinding(ViewBinding& b) {
+    if (b.decided || !b.bound || !b.useCount) return;
+    b.decided = true;
+    auto split = [&](int reason, uint32_t other) {
+        if (!(b.reasons & (1u << reason))) {
+            b.reasons |= static_cast<uint8_t>(1u << reason);
+            if (reason <= 5) ++stats.splitByReason[reason];
+            else ++stats.splitSummaryFull;
+        }
+        if (!b.split) b.other = other;
+        b.split = true;
+    };
+    const TargetUse* p = &b.uses[0];   // the first written, unless a depth-tested one came
+    for (uint32_t i = 0; i < b.useCount; ++i)
+        if (b.uses[i].tested && (!p->tested || b.uses[i].testedSeq < p->testedSeq)) p = &b.uses[i];
+    b.target = p->colour;
+    b.depth = 0;
+    uint32_t first = 0;   // the principal's depth: that of its first depth-tested draw
+    for (uint32_t k = 0; k < p->depthCount; ++k)
+        if (p->depths[k].tested && (!first || p->depths[k].firstTestedSeq < first)) {
+            first = p->depths[k].firstTestedSeq;
+            b.depth = p->depths[k].target;
+        }
+    if (b.overflow) split(6, 0);
+    auto principal = [&](uint32_t t) { return overlaps(t, b.target) || (b.depth && overlaps(t, b.depth)); };
+    for (uint32_t i = 0; i < b.useCount; ++i) {
+        const TargetUse& u = b.uses[i];
+        for (uint32_t k = 0; k < u.sampledCount; ++k)   // rule 4: the principal sampled by any draw of the view
+            if (principal(u.sampled[k].target)) split(4, u.sampled[k].target);
+        if (&u == p) continue;
+        b.auxDraws += u.draws;
+        if (b.auxCount == 4) split(5, u.colour);
+        else b.aux[b.auxCount++] = u.colour;
+        for (uint32_t k = 0; k < u.depthCount; ++k) {
+            const DepthUse& d = u.depths[k];
+            const bool onPrincipalDepth = b.depth && overlaps(d.target, b.depth);
+            if (d.tested && d.written && !onPrincipalDepth) split(1, u.colour);                     // rule 1: a second scene
+            if (onPrincipalDepth && (d.tested || d.written)) split(2, u.colour);                    // rule 2
+            if (d.written && overlaps(d.target, b.target)) split(3, d.target);                      // rule 3 (its depth)
+        }
+        if (principal(u.colour)) split(3, u.colour);                                                // rule 3
+    }
+    for (uint32_t k = 0; k < p->sampledCount; ++k) {   // auxiliary reads: principal draws sampling one after its write
+        const SampleUse& smp = p->sampled[k];
+        if (!smp.written) continue;
+        for (uint8_t i = 0; i < b.auxCount; ++i)
+            if (b.aux[i] == smp.written) {
+                b.auxReads |= static_cast<uint8_t>(1u << i);
+                b.auxReadDraws += smp.drawsAfterWrite;
+            }
+    }
+}
+
+void GsFrontend::sceneRecord(const uint8_t* payload, size_t bytes) {
+    gfx::scene::Prefix prefix;
+    if (bytes < sizeof prefix) return;
+    std::memcpy(&prefix, payload, sizeof prefix);
+    if (prefix.kind == gfx::scene::kFrameBegin) {   // (a FrameBegin before the last one's end: that one is dropped, as the decoder does)
+        sceneOpen = true;
+        viewBindings.clear();
+        sceneCuts = sceneCutsAsync = 0;
+    } else if (prefix.kind == gfx::scene::kViewEnd && bytes >= sizeof(gfx::scene::ViewEnd) && sceneOpen) {
+        gfx::scene::ViewEnd end;
+        std::memcpy(&end, payload, sizeof end);
+        if (end.view && end.view <= kViews) {
+            if (viewBindings.size() < end.view) viewBindings.resize(end.view);
+            viewBindings[end.view - 1u].ended = true;
+            finishBinding(viewBindings[end.view - 1u]);   // (a.5.7: decided at ViewEnd, against the final principal)
+        }
+    }
+}
+
+void GsFrontend::sceneView(std::shared_ptr<const scene::SceneView> view) {
+    if (!view) return;
+    FrameList::ViewOnList v;   // with its binding as it stands at its ViewEnd (every tagged draw of it has come)
+    const uint16_t id = view->view.id;
+    if (id && id <= viewBindings.size() && viewBindings[id - 1u].bound) {
+        const ViewBinding& b = viewBindings[id - 1u];
+        v.target = b.target;
+        v.depth = b.depth;
+        v.splitTargets = b.split;
+        v.auxCount = b.auxCount;
+        for (uint8_t i = 0; i < b.auxCount; ++i) v.auxTargets[i] = b.aux[i];
+        v.auxReads = b.auxReads;
+        v.auxDraws = static_cast<uint16_t>(std::min<uint32_t>(b.auxDraws, 0xFFFF));
+    }
+    v.package = std::move(view);
+    frame.views.push_back(std::move(v));
+    ++stats.scenePackages;
+}
+
+void GsFrontend::sceneFrame(std::unique_ptr<scene::SceneFrame> f) {
+    if (!f) return;
+    scene::SceneCounters& c = f->counters;
+    for (ViewBinding& b : viewBindings) finishBinding(b);   // (views whose ViewEnd never came)
+    for (scene::ViewData& v : f->views) {
+        const ViewBinding* b = v.id && v.id <= viewBindings.size() ? &viewBindings[v.id - 1u] : nullptr;
+        if (b && b->bound) {
+            v.target = b->target;
+            v.depth = b->depth;
+            v.splitTargets = b->split;
+            v.cut = b->cut;
+            if (b->split) ++c.viewSplitTargets, ++stats.splitByRole[v.role & 15];
+            c.viewAuxiliaryDraws += b->auxDraws;
+            c.viewAuxiliaryReads += b->auxReadDraws;
+            stats.auxDrawsByRole[v.role & 15] += b->auxDraws;
+            stats.auxReadsByRole[v.role & 15] += b->auxReadDraws;
+            // GT4_SCENE_DEBUG=1: the first test-only auxiliary depth of each role (tested, never written: auxiliary by rule 1;
+            // were it to move into the principal, rules 2 and 3 split the view)
+            static const bool debugAux = [] { const char* e = std::getenv("GT4_SCENE_DEBUG"); return e && e[0] == '1'; }();
+            static bool shownAux[16] = {};
+            if (debugAux && !shownAux[v.role & 15])
+                for (uint32_t i = 0; i < b->useCount; ++i) {
+                    const TargetUse& u = b->uses[i];
+                    if (u.colour == b->target) continue;
+                    for (uint32_t k = 0; k < u.depthCount; ++k)
+                        if (u.depths[k].tested && !u.depths[k].written && !shownAux[v.role & 15]) {
+                            shownAux[v.role & 15] = true;
+                            const Target* zt = nullptr;
+                            for (const Target& t : targets)
+                                if (t.id == u.depths[k].target) zt = &t;
+                            std::printf("scene: view %u role %u: auxiliary target %u tests depth %u (ZBP %u), never writes it\n", v.id,
+                                        v.role, u.colour, u.depths[k].target, zt ? zt->bp : 0u);
+                        }
+                }
+            // GT4_SCENE_DEBUG=1: the first split of each role, with both targets (bp, width, format, height)
+            static const bool debug = [] { const char* e = std::getenv("GT4_SCENE_DEBUG"); return e && e[0] == '1'; }();
+            static bool shown[16] = {};
+            if (debug && b->split && !shown[v.role & 15]) {
+                shown[v.role & 15] = true;
+                auto describe = [&](uint32_t id) {
+                    for (const Target& t : targets)
+                        if (t.id == id) return std::to_string(id) + " (bp " + std::to_string(t.bp) + " bw " + std::to_string(t.bw) + " psm " +
+                                               std::to_string(t.psm) + " h " + std::to_string(t.height) + ")";
+                    return std::to_string(id);
+                };
+                std::string uses;
+                for (uint32_t i = 0; i < b->useCount; ++i) {
+                    const TargetUse& u = b->uses[i];
+                    uses += " [" + describe(u.colour) + " draws " + std::to_string(u.draws) + (u.tested ? " tested" : "") + " depths";
+                    for (uint32_t k = 0; k < u.depthCount; ++k)
+                        uses += " " + describe(u.depths[k].target) + (u.depths[k].tested ? "t" : "") + (u.depths[k].written ? "w" : "");
+                    uses += " samples";
+                    for (uint32_t k = 0; k < u.sampledCount; ++k) uses += " " + std::to_string(u.sampled[k].target);
+                    uses += "]";
+                }
+                std::printf("scene: view %u role %u split (reasons %x): principal %s depth %s, then %s; uses%s\n", v.id, v.role,
+                            b->reasons, describe(b->target).c_str(), describe(b->depth).c_str(), describe(b->other).c_str(), uses.c_str());
+            }
+            if (b->cut) ++c.viewsCut, ++stats.cutByRole[v.role & 15];
+        } else {
+            ++c.viewsUnbound;   // no tagged draw in it
+            ++stats.unboundByRole[v.role & 15];
+        }
+    }
+    c.cuts = sceneCuts;
+    c.cutsAsync = sceneCutsAsync;
+    ++stats.sceneFrames;
+    stats.viewSplitTargets += c.viewSplitTargets;
+    stats.viewsUnbound += c.viewsUnbound;
+    stats.cuts += c.cuts;
+    stats.cutsAsync += c.cutsAsync;
+    stats.viewsCut += c.viewsCut;
+    frame.scene = std::move(f);   // (two in one list: the newer stands; the stream counts that case)
+    sceneOpen = false;
+    viewBindings.clear();
+    sceneCuts = sceneCutsAsync = 0;
+}
+
 void GsFrontend::vsync(uint64_t vblank, FrameList& out) {
     packetsThisFrame = 0;
+    lastModelView = 0;
+    for (ViewBinding& v : viewBindings) v.inList = false;
     scenes.clear();
     // The texture pack switched on or off: every texture decodes again, with or without its replacement.
     const bool wanted = replacementsWanted.load() && texturePack && texturePack->isOpen();

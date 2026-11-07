@@ -199,8 +199,11 @@ void GraphicsStream::records(const uint8_t* data, size_t bytes) {
                 break;
             }
             ++counters.sceneRecords;
+            sceneDecoder_.setViewPackages(gs.wantsSceneViews());
             sceneDecoder_.record(payload, h.bytes());
             gs.scene(payload, h.bytes());
+            if (auto view = sceneDecoder_.takeClosedView()) gs.sceneView(std::move(view));   // (a ViewEnd closed one)
+            if (sceneDecoder_.doneFrame()) gs.sceneFrame(sceneDecoder_.doneFrame());   // (a FrameEnd closed one)
             break;
         case gfx::kTexSet: {
             gfx::TexSetRecord r;

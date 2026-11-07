@@ -63,6 +63,9 @@ public:
         // GT4_GSN=stats prints a line per frame.
         const char* mode = std::getenv("GT4_GSN");
         stats = mode && !std::strcmp(mode, "stats");
+        // GT4_GSN_SCENE_SPLIT=1 (A10, testing until the modern renderer turns it on): Draw::view set, merging stopped at a
+        // view change (the pixels are the same either way)
+        if (const char* split = std::getenv("GT4_GSN_SCENE_SPLIT"); split && split[0] == '1') native->setSceneSplit(true);
     }
     void setEventSink(gsn::GsFrontend::EventSink sink) { native->setEventSink(std::move(sink)); }
     // A live game's asynchronous reads (gfx::kReadAsync): the list cut at the read goes to the render thread with the
@@ -80,7 +83,7 @@ public:
         gsn::ReadRequest request;
         if (native->takeGpuRead(request) && request.async) {
             gsn::FrameList partial;
-            native->cut(partial);
+            native->cut(partial, true);   // (an asynchronous read cuts the list too: CONTRACTS.md a.8)
             partial.readbacks.push_back({request, id, qwc});
             native->readTransfer(pixels.data(), qwc);   // (the front end's read consumed; its memory model's pixels unused)
             queueLater(partial);
@@ -105,6 +108,12 @@ public:
     }
     void model(const gfx::ModelJob& job, const uint32_t* words) override { native->model(job, words); }
     void effect(const gfx::EffectRecord& r) override { native->effect(r); }
+    // Scene records (CONTRACTS.md a.8): the front end follows the frames (cuts inside one), binds views to targets and
+    // puts each closed frame on the FrameList that receives its FrameEnd.
+    void scene(const uint8_t* payload, size_t bytes) override { native->sceneRecord(payload, bytes); }
+    void sceneFrame(std::unique_ptr<scene::SceneFrame>& frame) override { native->sceneFrame(std::move(frame)); }
+    bool wantsSceneViews() const override { return native->sceneSplitOn(); }   // (packages only for the split's consumer)
+    void sceneView(std::shared_ptr<const scene::SceneView> view) override { native->sceneView(std::move(view)); }
     void primitives(const ps2::GsPrimitives& p) override {
         GT4_CPU_SCOPE("front end: the renderers' primitives");
         if (p.setPrim) native->setPrim(p.prim);
@@ -327,6 +336,19 @@ public:
     bool models() const override { return inner.models(); }
     void effect(const gfx::EffectRecord& r) override { put(Op::Effect, 0, 0, &r, sizeof r); }
     void scene(const uint8_t* payload, size_t bytes) override { put(Op::Scene, 0, 0, payload, bytes); }
+    void sceneFrame(std::unique_ptr<scene::SceneFrame>& frame) override {   // (the pointer travels; the front thread owns it)
+        if (!frame) return;
+        scene::SceneFrame* raw = frame.release();
+        put(Op::SceneFrame, 0, 0, &raw, sizeof raw);
+    }
+    bool wantsSceneViews() const override { return inner.wantsSceneViews(); }
+    void sceneView(std::shared_ptr<const scene::SceneView> view) override {   // (in a FIFO beside the queue: no allocation)
+        {
+            std::lock_guard<std::mutex> lock(viewsMutex);
+            views.push_back(std::move(view));
+        }
+        put(Op::SceneView, 0, 0, nullptr, 0);
+    }
     void model(const gfx::ModelJob& job, const uint32_t* words) override {
         put(Op::Model, 0, 0, &job, sizeof job, words, gfx::kModelWords * 4);
     }
@@ -363,7 +385,11 @@ public:
     }
 
 private:
-    enum class Op : uint32_t { Gif, Primitives, Display, State, Upload, Read, Draw, Vsync, TexSet, Model, Effect, ReadLater, Scene };
+    enum class Op : uint32_t { Gif, Primitives, Display, State, Upload, Read, Draw, Vsync, TexSet, Model, Effect, ReadLater, Scene,
+                               SceneFrame, SceneView };
+    std::mutex viewsMutex;   // the views' FIFO: Op::SceneView takes the oldest
+    std::vector<std::shared_ptr<const scene::SceneView>> views;
+    size_t viewsHead = 0;
     struct Entry {
         Op op;
         uint32_t a, b;
@@ -449,6 +475,26 @@ private:
             case Op::Vsync: inner.vsync(e.a, e.b); break;
             case Op::TexSet: inner.texSet(first, e.first); break;
             case Op::Scene: inner.scene(first, e.first); break;
+            case Op::SceneView: {
+                std::shared_ptr<const scene::SceneView> view;
+                {
+                    std::lock_guard<std::mutex> lock(viewsMutex);
+                    if (viewsHead < views.size()) view = std::move(views[viewsHead++]);
+                    if (viewsHead == views.size()) {
+                        views.clear();
+                        viewsHead = 0;
+                    }
+                }
+                inner.sceneView(std::move(view));
+                break;
+            }
+            case Op::SceneFrame: {
+                scene::SceneFrame* raw = nullptr;
+                std::memcpy(&raw, first, sizeof raw);
+                std::unique_ptr<scene::SceneFrame> frame(raw);
+                inner.sceneFrame(frame);
+                break;
+            }
             case Op::Effect: {
                 gfx::EffectRecord r;
                 std::memcpy(&r, first, sizeof r);
@@ -1060,6 +1106,30 @@ std::string GsHost::summary() const {
     }
     if (h.target && (h.target->gpuReads || h.target->staleReads))
         out << "; " << h.target->gpuReads << " reads of drawn pixels from the GPU, " << h.target->staleReads << " from GS memory";
+    if (h.target && h.target->frontend().stats.sceneFrames) {   // the front end's scene linkage (CONTRACTS.md a.7, a.8; A10)
+        const auto& s = h.target->frontend().stats;
+        out << "; scene front end: " << s.sceneFrames << " frames on lists, split " << (h.target->frontend().sceneSplitOn() ? "on" : "off")
+            << " (" << s.sceneSplitDraws << " draws it adds), " << s.viewSplitTargets << " views split across targets, "
+            << s.viewsUnbound << " unbound, " << s.cuts << " cuts in a frame (" << s.cutsAsync << " asynchronous), " << s.viewsCut
+            << " views cut, " << s.scenePackages << " view packages, " << gsn::listsSkippedWithScene() << " lists skipped with their scene";
+        auto byRole = [&](const char* what, const uint64_t (&n)[16]) {   // (role: count, where any)
+            std::string list;
+            for (int r = 0; r < 16; ++r)
+                if (n[r]) list += (list.empty() ? "" : " ") + std::to_string(r) + ":" + std::to_string(n[r]);
+            if (!list.empty()) out << "; " << what << " by role " << list;
+        };
+        byRole("split", s.splitByRole);
+        byRole("auxiliary draws", s.auxDrawsByRole);
+        byRole("auxiliary reads", s.auxReadsByRole);
+        std::string reasons;
+        for (int r = 1; r <= 5; ++r)
+            if (s.splitByReason[r]) reasons += (reasons.empty() ? "" : " ") + std::to_string(r) + ":" + std::to_string(s.splitByReason[r]);
+        if (!reasons.empty()) out << "; split by reason " << reasons;
+        if (s.splitSummaryFull) out << "; split with a full binding summary " << s.splitSummaryFull;
+        if (s.viewsPastLimit) out << "; " << s.viewsPastLimit << " tagged draws naming a view past the limit";
+        byRole("unbound", s.unboundByRole);
+        byRole("cut", s.cutByRole);
+    }
     return out.str();
 }
 
