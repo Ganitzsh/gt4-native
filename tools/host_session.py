@@ -235,7 +235,13 @@ def run(args):
                 raise RuntimeError(f'Native app exited with code {code}; see process.log')
         finally:
             if process.poll() is None:
-                process.terminate()
+                if os.name == 'nt':
+                    # The host and what it started (gt4_game.exe): a game left running holds the game's
+                    # single-run lock for its executable, and the next session with that game refuses to start.
+                    subprocess.run(['taskkill', '/T', '/F', '/PID', str(process.pid)], capture_output=True,
+                                   creationflags=subprocess.CREATE_NO_WINDOW)
+                else:
+                    process.terminate()
                 try:
                     process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
