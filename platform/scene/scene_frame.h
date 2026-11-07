@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 namespace gt4::scene {
@@ -89,6 +90,7 @@ struct SceneCounters {
     uint64_t lights = 0, emitters = 0, markers = 0, vehicles = 0;
     // filled by the front end and the renderer (A10's front-end half, B lane)
     uint64_t viewSplitTargets = 0, viewsUnbound = 0;
+    uint64_t cuts = 0, cutsAsync = 0, viewsCut = 0;   // partial FrameLists in a frame (a.8; async: readLater's), views cut
     uint64_t fallbackNotBound = 0, fallbackMeshPending = 0, fallbackPipelinePending = 0, fallbackValidation = 0,
              fallbackReadPending = 0;
     uint64_t meshesNew = 0, meshesPending = 0, materialsNew = 0;
@@ -117,8 +119,12 @@ struct ViewData {
     bool previousKnown = false;
     uint16_t scissor[4] = {};
     uint32_t target = 0, depth = 0;               // GS target ids, bound by the front end
+    bool splitTargets = false;                    // its tagged draws went to two colour targets (never substituted)
+    bool cut = false;                             // it had tagged draws in a partial FrameList (viewsCut: never substituted)
     uint32_t firstInstance = 0, instanceCount = 0, firstLight = 0, lightCount = 0;
     bool closed = false;                          // its ViewEnd arrived (false: nested or left open at FrameEnd)
+    bool valid = false;                           // its own checks passed at its ViewEnd (a.8): instances, items, matrices,
+                                                  // viewports, projections (viewSplitTargets is the front end's)
 };
 struct InstanceData {
     uint16_t view = 0, flags = 0;
@@ -149,5 +155,54 @@ struct SceneFrame {
     SceneCounters counters;                       // this frame's
     bool complete = false;                        // FrameEnd arrived and its counts match
 };
+
+// One view's package at its ViewEnd (CONTRACTS.md a.8, cuts at a read): what a partial FrameList needs to substitute
+// the view. Copies (SceneFrame keeps its own; ModelJob::pad[0] indexes that). Pooled: sceneViewFromPool() takes one
+// (its vectors emptied, their capacity kept), sceneViewsToPool() gives back those no one else holds, so a steady
+// frame allocates none.
+struct SceneView {
+    ViewData view;                                // view.valid: the verdict at ViewEnd
+    std::vector<InstanceData> instances;          // copies, in arrival order
+    std::vector<ProjectionData> projections;      // the ones the view and its instances name
+    std::vector<gfx::scene::Light> lights;        // the view's (a.5.4)
+    std::vector<gfx::scene::Emitter> emitters;    // frame-wide records that arrived before this ViewEnd
+    std::vector<gfx::scene::Vehicle> vehicles;    //   (later ones are not available to a partial substitution)
+};
+namespace detail {
+inline std::mutex& sceneViewPoolMutex() {
+    static std::mutex m;
+    return m;
+}
+inline std::vector<std::shared_ptr<SceneView>>& sceneViewPool() {
+    static std::vector<std::shared_ptr<SceneView>> pool;
+    return pool;
+}
+}  // namespace detail
+inline std::shared_ptr<SceneView> sceneViewFromPool() {
+    std::shared_ptr<SceneView> v;
+    {
+        std::lock_guard<std::mutex> lock(detail::sceneViewPoolMutex());
+        auto& pool = detail::sceneViewPool();
+        if (!pool.empty()) {
+            v = std::move(pool.back());
+            pool.pop_back();
+        }
+    }
+    if (!v) return std::make_shared<SceneView>();
+    v->view = ViewData{};
+    v->instances.clear();
+    v->projections.clear();
+    v->lights.clear();
+    v->emitters.clear();
+    v->vehicles.clear();
+    return v;
+}
+inline void sceneViewsToPool(std::vector<std::shared_ptr<const SceneView>>& views) {
+    std::lock_guard<std::mutex> lock(detail::sceneViewPoolMutex());
+    auto& pool = detail::sceneViewPool();
+    for (auto& v : views)
+        if (v && v.use_count() == 1 && pool.size() < 64) pool.push_back(std::const_pointer_cast<SceneView>(std::move(v)));
+    views.clear();
+}
 
 }  // namespace gt4::scene

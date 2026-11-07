@@ -26,6 +26,10 @@ public:
     void job(gfx::ModelJob& job);
     // The frame FrameEnd closed, or null (then none since the last call). Older closed frames are dropped.
     std::unique_ptr<SceneFrame> takeFrame();
+    std::unique_ptr<SceneFrame>& doneFrame() { return done_; }   // the last closed one, for the stream's target to take
+    // The views' packages at their ViewEnd (CONTRACTS.md a.8), made only while asked for (a target that takes them).
+    void setViewPackages(bool on) { packages_ = on; }
+    std::shared_ptr<SceneView> takeClosedView() { return std::move(closedView_); }
     // Running totals of the frames finished so far (closed or dropped) and of records outside any frame.
     const SceneCounters& totals() const { return totals_; }
     bool seen() const { return seen_; }   // any scene record so far (the stream consults the decoder from then on)
@@ -54,10 +58,14 @@ private:
     int view_ = -1;                          // the open view's index in frame_->views, -1 none
     int instance_ = -1;                      // the open instance's index, -1 none
     int runInstance_ = -1;                   // the instance the current run's jobs belong to, -1 none
+    uint32_t viewErrors_ = 0;                // the open view's own errors so far (its verdict at ViewEnd: a.8)
+    bool packages_ = false;
+    std::shared_ptr<SceneView> closedView_;  // the package of the view that just ended, until the stream takes it
     int closed_ = -1;                        // the instance that closed with its `items` runs, until the next Instance,
                                              // ViewBegin / ViewEnd, Marker or frame (-1 none): runs after it are a.5.3's
     bool afterRun_ = false, afterRunSame_ = false;   // the current run came after closed_; one of its jobs had its matrix
-    bool expectedMatrix(const InstanceData& d, Mat4& out) const;   // diag(axisScale * k, 1) * objectToView * viewToClip
+    bool expectedMatrix(const InstanceData& d, Mat4& out) const;
+    void package(const ViewData& v);         // the view's SceneView into closedView_   // diag(axisScale * k, 1) * objectToView * viewToClip
     // last frame's cameras by role + pass, and instances' objectToWorld by Cmd address and its occurrence in the frame
     // (a Cmd drawn twice: each copy keeps its own; the previous* fields)
     std::unordered_map<uint64_t, Mat4> lastCameras_, cameras_;
