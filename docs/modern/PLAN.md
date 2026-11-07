@@ -103,7 +103,8 @@ split is on, view-to-target binding); counters in `GT4_GSN=stats` (`gs_host.cpp:
 (same file). Acceptance: `CTEST` (decoder tests on synthetic streams: each counter moves in its own test, a
 well-formed stream leaves every error counter at 0); `ORIG` and `PRESETS` with the split off; with the split on and
 a capture with records, frames identical to the split off (merging does not change pixels); draws added by the
-split reported.
+split reported; on a race capture, `viewSplitTargets == 0` for main views, with `viewAuxiliaryDraws` and
+`viewAuxiliaryReads` reported by view role (CONTRACTS a.5.7).
 
 **A2: Instance records at 0049D328 (M).** `game_src/func_0049D328.cpp`: after 0049E480 / 0049E548, before the item
 loop, one `Instance` from the scratchpad (`current`, set 0 as used, `scale` when +0xE, `cmd->value`, `count`,

@@ -406,9 +406,34 @@ Where each record is sent (tickets in PLAN.md):
    the runtime and never reach the host. At the host, `outsideFrame` counts any that do (a stream fault) and drops
    them.
 7. **Relation to the Light command.** The front end still decides where the Light command goes (`sceneRead`,
-   `gs_frontend.cpp:821`). The host binds a view to a GS target as the colour target of the view's first tagged
-   model draw. A view whose tagged draws go to two targets is counted (`viewSplitTargets`) and never substituted.
-   A Light command on a target with a bound view substitutes that view.
+   `gs_frontend.cpp:821`). A Light command on a target with a bound view substitutes that view.
+   - **Principal target.** The host binds a view to its principal target: the colour target (FBP, FBW, PSM) and
+     depth buffer (ZBP) of the view's first tagged model draw with a depth test (ZTE on, ZTST not ALWAYS). A view
+     with no such draw binds to its first tagged draw's colour target, as before (the HUD view never binds to a
+     model draw, a.7 `viewsUnbound`). The sky's pass comes first in the main view (R1), so the principal is
+     provisional: set from the first tagged draw, and replaced when the first depth-tested tagged draw arrives on
+     another target. The provisional target and its draws then become auxiliary. The split reasons and auxiliary
+     reads below are decided at `ViewEnd` against the final principal, whatever order the draws came in.
+   - **Auxiliary draws.** A tagged draw into any other colour target is auxiliary: a small pass inside the view,
+     such as the sky's 32 x 32 pass (00396B80, R1) in the main view, or an env face's composite into the env map.
+     Auxiliary draws stay on the GS path in stream order, before the view's Light command, and a substitution
+     never touches them. They are counted per view (`viewAuxiliaryDraws`), with the auxiliary targets they write.
+   - **Auxiliary reads.** A draw into the principal target, inside the view, whose texture overlaps an auxiliary
+     target written earlier in the view (the main view sampling the sky's pass) reads it. That is counted
+     (`viewAuxiliaryReads`) and named in the binding (a.8 `ViewOnList::auxReads`), so a consumer (B7) treats that
+     auxiliary target as an input to the substituted view and never drops its producer.
+   - **Split.** A view is split (`viewSplitTargets`, by reason) and never substituted when any tagged draw of it:
+     (1) is depth-tested on a second target with a depth buffer of its own (two depth-tested targets);
+     (2) tests or writes the principal depth buffer while its colour target is another one;
+     (3) writes a target whose memory (colour or depth) overlaps the principal colour or depth buffer;
+     (4) samples the principal colour or depth buffer before the view's Light command (with the substitution the
+     principal holds none of the view's draws yet, so the read would see a different image); or
+     (5) writes a fifth auxiliary target (the binding keeps four, a.8).
+     Rules (2) to (4) mean no pass the substitution leaves on the GS path can overwrite or read the substituted
+     image unnoticed. Untagged draws into the principal target are unchanged: `jobsUntaggedInView`, drawn on the
+     GS path.
+   - A separate view for an env face's composite (`kViewOther`, in 0044E660) is added when B7 needs the face's
+     write into the map as its own view, not before. The sky's pass needs no view of its own.
 8. **Field frames.** With `display.race_frames = fields`, each field is its own frame (`kFrameField`, odd field
    flagged); views and instances are per field. With a.5.1 this needs one kick per field. A3 confirms the race
    kicks once per field in that mode; if it kicks once per frame, this rule comes back to the architect.
@@ -450,7 +475,8 @@ Where each record is sent (tickets in PLAN.md):
 | `guardUnexpected` | tagged jobs whose guard (qword 200, the clipping renderers' clip flags) is not (0.5, 0.5, 1, 1), the only value R1 saw | reported |
 | `cameraChecked`, `cameraMismatch` | course instances (`kInstCourse`) whose `objectToView` differs from their view's `worldToView` (R1: they are equal) | 0 |
 | `jobsUntaggedInView` | untagged model jobs into a bound view's target between its `ViewBegin` and the Light command | reported; the substitution keeps drawing them on the GS path |
-| `viewSplitTargets`, `viewsUnbound` | binding | 0 for main views |
+| `viewSplitTargets` (by reason, a.5.7), `viewsUnbound` | binding | 0 for main views |
+| `viewAuxiliaryDraws`, `viewAuxiliaryReads` | tagged draws into a view's auxiliary targets; principal draws sampling one (a.5.7), by view role | reported |
 | `cuts`, `viewsCut` | partial `FrameList`s drawn at a read (synchronous or asynchronous) inside the frame's list, by kind; views still open at a cut, not substituted in that frame (a.8) | reported (main views: 0 in race frames, unless R9 names a reader inside the main view) |
 | `viewsSubstitutedFrameInvalid` | views substituted in a partial list (validated at their `ViewEnd`) whose frame then failed a frame-level check (a.8) | 0 |
 | `viewFallbacks` (by reason: not bound, mesh pending, pipeline pending, validation, read pending) | modern views drawn by the GS path | reported; 0 after warm-up for `mesh pending` and `pipeline pending` |
@@ -550,8 +576,13 @@ read, then the one that receives `FrameEnd`. (Race route: 38 reads in about 4900
   };
   struct FrameList::ViewOnList {                  // nested, platform/gsnative/gs_frontend.h
       std::shared_ptr<const SceneView> package;   // made by the decoder at ViewEnd; const once shared
-      uint32_t target = 0, depth = 0;             // the front end's binding, filled when the package arrives
-      bool splitTargets = false;                  //   (after its ViewEnd, so every tagged draw is bound)
+      uint32_t target = 0, depth = 0;             // the front end's binding (the principal target, a.5.7),
+      bool splitTargets = false;                  //   filled when the package arrives (after its ViewEnd,
+                                                  //   so every tagged draw is bound); split: the reason in stats
+      uint32_t auxTargets[4] = {};                // auxiliary colour targets, in first-write order
+      uint8_t auxCount = 0;                       // a fifth is split (a.5.7 rule 5), so no allocation
+      uint8_t auxReads = 0;                       // bit i: a principal draw samples auxTargets[i]
+      uint16_t auxDraws = 0;                      // tagged draws into the auxiliary targets
   };
   // FrameList gains: std::vector<ViewOnList> views;   (SceneViews pooled, below)
   ```
@@ -563,7 +594,7 @@ read, then the one that receives `FrameEnd`. (Race route: 38 reads in about 4900
   - `ViewData` gains `bool valid`. The decoder keeps per-view error counts and sets it at `ViewEnd`: the
     instances match `ViewEnd::instances`, and the view has no item, matrix, viewport or `projectionUnknown`
     errors. Every job of the view has been checked by then, because `job()` runs before the target sees the
-    job. `viewSplitTargets` is the front end's own check (`ViewOnList::splitTargets`).
+    job. `viewSplitTargets` is the front end's own check (`ViewOnList::splitTargets`, a.5.7).
   - The copies cost about 80 KB per main view per frame (about 260 instances), tens of microseconds on the GS
     thread. A lazy copy is not possible, since the decoder runs ahead of the front end. `SceneView` objects are
     pooled: `recycleFrameList` returns the ones no one else still holds (`use_count() == 1`, so the render thread
