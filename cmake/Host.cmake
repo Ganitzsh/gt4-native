@@ -427,7 +427,7 @@ if(BUILD_TESTING)
   # The light list contract (docs/modern/CONTRACTS.md (c)): the C++ and GLSL layouts and functions agree, checked
   # by a compute shader that is not part of the host. Needs a Vulkan GPU; skipped (77) without one.
   add_custom_command(OUTPUT ${GT4_SHADER_OUT}/spv_light_list_test.h
-      COMMAND glslang-standalone -V --target-env vulkan1.2 -S comp -I${GT4_SHADER_SOURCE}
+      COMMAND ${GT4_GLSLANG} -V --target-env vulkan1.2 -S comp -I${GT4_SHADER_SOURCE}
               --vn spv_light_list_test -o ${GT4_SHADER_OUT}/spv_light_list_test.h
               ${CMAKE_CURRENT_SOURCE_DIR}/tests/shaders/light_list_test.comp
       DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/shaders/light_list_test.comp ${GT4_SHADER_SOURCE}/light_list.glsl
@@ -444,7 +444,7 @@ if(BUILD_TESTING)
   # The cluster build (ticket F1), standalone until the render graph: GPU result against the CPU reference.
   # Its shader is compiled for the test only until a host pass uses it. Needs a Vulkan 1.3 GPU; skipped (77) without.
   add_custom_command(OUTPUT ${GT4_SHADER_OUT}/spv_lights_cluster.h
-      COMMAND glslang-standalone -V --target-env vulkan1.3 -S comp -I${GT4_SHADER_SOURCE}
+      COMMAND ${GT4_GLSLANG} -V --target-env vulkan1.3 -S comp -I${GT4_SHADER_SOURCE}
               --vn spv_lights_cluster -o ${GT4_SHADER_OUT}/spv_lights_cluster.h ${GT4_SHADER_SOURCE}/lights_cluster.comp
       DEPENDS ${GT4_SHADER_SOURCE}/lights_cluster.comp ${GT4_SHADER_SOURCE}/light_list.glsl
       COMMENT "Compiling shader lights_cluster")
