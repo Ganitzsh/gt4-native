@@ -73,7 +73,8 @@ public:
     std::vector<std::pair<std::string, double>> gsStages() const;
     double averageGpuMilliseconds() const;   // mean GPU time over every timed frame so far
     // The display pipeline's render graph passes in the last finished frame (names, GPU and CPU microseconds, GPU -1
-    // when not timed; docs/modern/CONTRACTS.md b.7), and its transient memory: for --profile-json.
+    // when not timed; docs/modern/CONTRACTS.md b.7), and its transient memory: for --profile-json. The first call
+    // turns the per-frame copy on (empty until the next frame finishes).
     const std::vector<gt4::rg::PassTiming>& passTimings() const;
     uint64_t transientBytes() const;
     std::string pipelineDescription() const;

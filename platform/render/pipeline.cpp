@@ -408,10 +408,12 @@ struct FramePipeline::Impl {
                 for (const std::string& error : graph->plan().errors)
                     std::fprintf(stderr, "render graph: the display pipeline did not compile: %s\n", error.c_str());
             told = true;
+            display.endFrame();
             return false;
         }
         display.reportTransients(graph->plan());
         graph->execute(command, VK_NULL_HANDLE);
+        display.endFrame();
         return true;
     }
 

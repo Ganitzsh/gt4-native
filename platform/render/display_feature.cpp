@@ -972,6 +972,10 @@ void DisplayFeature::setHdr(float paperWhite, float peak) {
     impl->hdrPeak = peak;
 }
 void DisplayFeature::resetExposure() { impl->exposureReset = true; }
+void DisplayFeature::endFrame() {
+    impl->inputs = DisplayInputs{};
+    impl->current = Impl::GraphFrame{};
+}
 VkSampler DisplayFeature::pointSampler() const { return impl->pointClamp; }
 
 }  // namespace gt4

@@ -68,6 +68,7 @@ public:
     void prepareOutput(VkFormat format, bool srgbFormat, uint32_t outputBits);
     void setHdr(float paperWhite, float peak);
     void resetExposure();
+    void endFrame();   // after the graph executed (or failed to compile): drops this frame's inputs (its pointers)
     VkSampler pointSampler() const;                // nearest, clamped (also FramePipeline's MSAA resolve's)
 
 private:
