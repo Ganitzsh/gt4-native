@@ -66,6 +66,9 @@ const char* kUsage =
     "  --settings PATH      settings file to read (interactive runs also save to it)\n"
     "  --capture PATH       write the last frame to PATH (PPM) before exiting (with --frames)\n"
     "  --capture-every N    also write every Nth frame, numbered (PATH_000600.ppm)\n"
+    "  --capture-frames LIST  write these frames (from 1; N, A-B, A-B/STEP or every:N, comma-separated) as\n"
+    "                       DIR/frame_000600.ppm (with --frames and --capture-dir DIR); a fixed-step replay draws\n"
+    "                       one VBlank a frame, so frame N is the capture's N-th VBlank\n"
     "  --session-dir PATH   attach a virtual gamepad, process commands, record frames/audio/events\n"
     "  --no-audio           disable playback and WAV capture for a session\n"
     "  --fixed-step         advance exactly one 60 Hz tick per frame (default for headless and sessions)\n"
@@ -85,6 +88,51 @@ const char* kUsage =
     "- = sharpness, G grain, V vignette, C aberration, P pause, arrows/left stick camera, Space action;\n"
     "Shift reverses a cycle.";
 
+// --capture-frames LIST: frame numbers from 1 (the frame drawn N-th; a replay with --fixed-step draws one VBlank a
+// frame), comma-separated: N, A-B, A-B/STEP, or every:N.
+struct FrameList {
+    struct Range { uint32_t first, last, step; };
+    std::vector<Range> ranges;
+    bool empty() const { return ranges.empty(); }
+    bool contains(uint32_t frame) const {
+        for (const Range& r : ranges)
+            if (frame >= r.first && frame <= r.last && (frame - r.first) % r.step == 0) return true;
+        return false;
+    }
+};
+
+FrameList parseFrameList(const std::string& text) {
+    FrameList list;
+    auto number = [&](const std::string& s) {
+        uint32_t v = 0;
+        const auto parsed = std::from_chars(s.data(), s.data() + s.size(), v);
+        if (s.empty() || parsed.ec != std::errc{} || parsed.ptr != s.data() + s.size() || v == 0)
+            throw std::invalid_argument("--capture-frames: '" + s + "' is not a frame number (from 1)");
+        return v;
+    };
+    size_t at = 0;
+    while (at <= text.size()) {
+        const size_t comma = std::min(text.find(',', at), text.size());
+        std::string item = text.substr(at, comma - at);
+        at = comma + 1;
+        if (item.rfind("every:", 0) == 0) {
+            list.ranges.push_back({number(item.substr(6)), UINT32_MAX, number(item.substr(6))});
+            continue;
+        }
+        uint32_t step = 1;
+        if (const auto slash = item.find('/'); slash != std::string::npos) {
+            step = number(item.substr(slash + 1));
+            item.resize(slash);
+        }
+        const auto dash = item.find('-');
+        const uint32_t first = number(item.substr(0, dash));
+        const uint32_t last = dash == std::string::npos ? first : number(item.substr(dash + 1));
+        if (last < first) throw std::invalid_argument("--capture-frames: a range ends before it starts: " + item);
+        list.ranges.push_back({first, last, step});
+    }
+    return list;
+}
+
 struct Options {
     bool probe = false, smoke = false, headless = false, listGpus = false, listDisplays = false, listOptions = false;
     bool fixedStep = false, audio = true, replayLoop = false, realtime = false;
@@ -92,6 +140,8 @@ struct Options {
     std::vector<std::string> gameArgs;
     uint32_t frames = 0;
     uint32_t captureEvery = 0;  // --capture-every: also every N frames, numbered
+    FrameList captureFrames;    // --capture-frames: the frames written to --capture-dir
+    std::string captureDir;
     VkExtent2D size{0, 0};   // headless output; 0 = the window size setting
     std::string gpu, settingsPath, sessionDirectory, capture, importSave, saves;
     std::vector<std::pair<std::string, std::string>> sets;
@@ -147,6 +197,8 @@ Options parse(int argc, char** argv) {
         else if (a == "--capture-every") {
             if (!parseUnsigned(value(i), o.captureEvery) || o.captureEvery == 0) throw std::invalid_argument("--capture-every requires a positive integer");
         }
+        else if (a == "--capture-frames") o.captureFrames = parseFrameList(value(i));
+        else if (a == "--capture-dir") o.captureDir = value(i);
         else if (a == "--game") o.game = value(i);
         else if (a == "--game-args") o.gameArgs = splitArguments(value(i));
         else if (a == "--replay") o.replay = value(i);
@@ -177,6 +229,8 @@ Options parse(int argc, char** argv) {
     if (o.headless && (o.smoke || o.probe)) throw std::invalid_argument("--smoke-test and --probe need a window");
     if (!o.game.empty() && !o.replay.empty()) throw std::invalid_argument("Choose one of --game and --replay");
     if (!o.capture.empty() && !o.frames) throw std::invalid_argument("--capture needs --frames");
+    if (!o.captureFrames.empty() && o.captureDir.empty()) throw std::invalid_argument("--capture-frames needs --capture-dir");
+    if (!o.captureFrames.empty() && !o.frames) throw std::invalid_argument("--capture-frames needs --frames");
     if (o.smoke) o.frames = 180;
     if ((o.headless || !o.sessionDirectory.empty()) && !o.realtime) o.fixedStep = true;
     return o;
@@ -1067,6 +1121,11 @@ int run(const Options& options) {
             renderer->capture(dot == std::string::npos ? options.capture + number
                                                        : options.capture.substr(0, dot) + number + options.capture.substr(dot));
         }
+        if (!options.captureFrames.empty() && options.captureFrames.contains(frames + 1)) {
+            char name[32];
+            std::snprintf(name, sizeof name, "frame_%06u.ppm", frames + 1);
+            renderer->capture((std::filesystem::path(options.captureDir) / name).string());
+        }
 
         const Uint64 frameStarted = SDL_GetPerformanceCounter();
         bool presented = false;
@@ -1255,6 +1314,7 @@ void usePackagedGame(Options& o) {
 int main(int argc, char** argv) {
     try {
         Options options = parse(argc, argv);
+        if (!options.captureDir.empty()) std::filesystem::create_directories(options.captureDir);
         usePackagedGame(options);
         return run(options);
     } catch (const std::invalid_argument& error) {
