@@ -6,7 +6,9 @@
 
 Per run: frames, and for present_ms (the time between two presents: the pacing), draw_ms and gpu_ms the mean,
 median, 95th and 99th percentile and maximum; frames skipped; and the presents off the display period by more
-than --tolerance ms (PLAN.md E4: "presented frame times within 1 ms of 16.7 ms"). --skip leaves out the first N
+than --tolerance ms (PLAN.md E4: "presented frame times within 1 ms of 16.7 ms"); the render graph's transient
+memory (the most a frame held). Per stage (the render graph's passes, the GS back end's GPU stages, the host's CPU
+stages; same-named entries in a frame added up): the mean and 95th percentile in microseconds. --skip leaves out the first N
 frames (start-up: shaders, the first textures). With --baseline, each statistic's change in percent; the exit code
 is 1 when a mean or a 95th percentile grew by more than --max-change percent (PERF(x) in PLAN.md section 2).
 """
@@ -47,7 +49,7 @@ def stage_series(rows):
         for array in STAGE_ARRAYS:
             for s in r.get(array, []):
                 for metric in ("gpu_us", "cpu_us"):
-                    if metric in s:
+                    if metric in s and s[metric] >= 0:
                         keys.add((array, s["name"], metric))
     series = {k: [] for k in keys}
     for r in rows:
@@ -89,6 +91,9 @@ def summary(rows, period, tolerance):
     presents = [r["present_ms"] for r in rows if r.get("present_ms", 0.0) > 0.0]
     off = [r["frame"] for r in rows if r.get("present_ms", 0.0) > 0.0 and abs(r["present_ms"] - period) > tolerance]
     out["off_period"] = {"count": len(off), "share": len(off) / len(presents) if presents else 0.0, "frames": off[:50]}
+    transient = [r["transient_bytes"] for r in rows if "transient_bytes" in r]
+    if transient:   # the render graph's transient images (B3): the most a frame held
+        out["transient_bytes"] = max(transient)
     return out
 
 
@@ -114,7 +119,8 @@ def summary_runs(runs, period, tolerance):
 
 def show(name, s):
     print(f"{name}: {s['frames']} frames, {s['skipped']} skipped, {s['off_period']['count']} presents off the period "
-          f"({100 * s['off_period']['share']:.1f} %)")
+          f"({100 * s['off_period']['share']:.1f} %)"
+          + (f", render graph transients {s['transient_bytes'] / 1048576:.1f} MiB" if "transient_bytes" in s else ""))
     for field in FIELDS:
         d = s[field]
         print(f"  {field:11s} mean {d['mean']:8.3f}  p50 {d['p50']:8.3f}  p95 {d['p95']:8.3f}  p99 {d['p99']:8.3f}  "
@@ -175,6 +181,9 @@ def main():
                 if a.max_change is not None and stat in ("mean", "p95") and change > a.max_change:
                     ok = False
             print(f"  {field:11s} " + "  ".join(parts))
+        if "transient_bytes" in base and "transient_bytes" in run:
+            b, r = base["transient_bytes"], run["transient_bytes"]
+            print(f"  transients  {b / 1048576:.1f} -> {r / 1048576:.1f} MiB ({100.0 * (r - b) / b if b else 0.0:+.1f} %)")
     if a.json:
         with open(a.json, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=1)

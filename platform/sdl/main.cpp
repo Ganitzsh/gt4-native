@@ -70,8 +70,9 @@ const char* kUsage =
     "                       DIR/frame_000600.ppm (with --frames and --capture-dir DIR); a fixed-step replay draws\n"
     "                       one VBlank a frame, so frame N is the capture's N-th VBlank\n"
     "  --profile-json PATH  one JSON line per presented frame: the time since the last present, the draw's CPU\n"
-    "                       time, the GPU time of the last finished frame, frames skipped, and the GS back end's GPU\n"
-    "                       stages and the host's CPU stages (tools/perf_report.py); measure with\n"
+    "                       time, the GPU time of the last finished frame, frames skipped, the render graph's\n"
+    "                       passes (GPU and CPU) and transient memory, the GS back end's GPU stages and the host's\n"
+    "                       CPU stages (tools/perf_report.py); measure with\n"
     "                       display.frame_interpolation=off (an interpolated present repeats the last GS frame's)\n"
     "  --session-dir PATH   attach a virtual gamepad, process commands, record frames/audio/events\n"
     "  --no-audio           disable playback and WAV capture for a session\n"
@@ -1168,12 +1169,18 @@ int run(const Options& options) {
                     static std::vector<uint64_t> cpuLast;
                     std::string stages;
                     // (labels of any length, quotes and backslashes made plain: the line stays one JSON object)
-                    auto item = [](std::string& list, const char* label, const char* field, double value) {
+                    auto item = [](std::string& list, const char* label, const char* field, double value,
+                                   const char* field2 = nullptr, double value2 = 0.0) {
                         char number[32];
-                        std::snprintf(number, sizeof number, "%.1f", value);
                         list += list.empty() ? "{\"name\":\"" : ",{\"name\":\"";
                         for (const char* c = label; *c; ++c) list += (*c == '"' || *c == '\\') ? '\'' : *c;
-                        list += std::string("\",\"") + field + "\":" + number + "}";
+                        list += '"';
+                        for (const auto& [f, v] : {std::pair{field, value}, std::pair{field2, value2}}) {
+                            if (!f) continue;
+                            std::snprintf(number, sizeof number, "%.1f", v);
+                            list += std::string(",\"") + f + "\":" + number;
+                        }
+                        list += '}';
                     };
                     gt4::cpuprofile::since(cpuLast, [&](const char* label, uint64_t ns) {
                         item(stages, label, "cpu_us", static_cast<double>(ns) / 1000.0);
@@ -1182,11 +1189,17 @@ int run(const Options& options) {
                     renderer->setStageTiming(true);
                     std::string gsPasses;
                     for (const auto& [label, ms] : renderer->gsStages()) item(gsPasses, label.c_str(), "gpu_us", ms * 1000.0);
+                    // the display pipeline's render graph passes in its last finished frame (CONTRACTS b.7): GPU -1 when
+                    // not timed; several passes can share a name (bloom: one a mip), perf_report.py adds them up
+                    std::string passes;
+                    for (const auto& p : renderer->passTimings())
+                        item(passes, p.name.c_str(), "gpu_us", p.gpuMicroseconds, "cpu_us", p.cpuMicroseconds);
                     std::fprintf(profile, "{\"frame\":%u,\"present_ms\":%.3f,\"draw_ms\":%.3f,\"gpu_ms\":%.3f,\"skipped\":%llu,"
-                                          "\"gs_passes\":[%s],\"cpu_stages\":[%s]}\n",
+                                          "\"passes\":[%s],\"transient_bytes\":%llu,\"gs_passes\":[%s],\"cpu_stages\":[%s]}\n",
                                  frames, lastPresent ? static_cast<double>(now - lastPresent) * 1000.0 / frequency : 0.0,
                                  static_cast<double>(now - frameStarted) * 1000.0 / frequency, renderer->gpuMilliseconds(),
-                                 static_cast<unsigned long long>(skipped - lastSkipped), gsPasses.c_str(), stages.c_str());
+                                 static_cast<unsigned long long>(skipped - lastSkipped), passes.c_str(),
+                                 static_cast<unsigned long long>(renderer->transientBytes()), gsPasses.c_str(), stages.c_str());
                     std::fflush(profile);
                 }
                 lastPresent = now;
