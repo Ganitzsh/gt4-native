@@ -10,6 +10,7 @@
 // Lighting, culling and the projection are per frame and stay out: a mesh keeps what they read (normals or the
 // given colours, the renderer's culling side, the chain's body), not their results.
 #include "gt4/gfx.h"
+#include "scene_frame.h"   // MeshKey, MeshKeyHash, MeshId (docs/modern/CONTRACTS.md a.8)
 
 #include <atomic>
 #include <condition_variable>
@@ -23,18 +24,6 @@
 #include <vector>
 
 namespace gt4::scene {
-
-// A Cmd's geometry (docs/modern/CONTRACTS.md a.8; moves to scene_frame.h when that lands).
-struct MeshKey {
-    uint64_t packets = 0;      // hash of the items' batch contents, in order
-    uint32_t mask = 0, entry = 0;   // the first item's renderer and lighting chain (the decode depends on them)
-    uint32_t chainUnpack = 0;  // the first item's decompression routine (the normals' format)
-    bool operator==(const MeshKey& o) const { return packets == o.packets && mask == o.mask && entry == o.entry && chainUnpack == o.chainUnpack; }
-};
-struct MeshKeyHash {
-    size_t operator()(const MeshKey& k) const { return static_cast<size_t>(k.packets ^ (uint64_t(k.mask) << 32) ^ k.entry ^ (uint64_t(k.chainUnpack) << 48)); }
-};
-using MeshId = uint32_t;   // 0 = none
 
 // One vertex in object space.
 struct MeshVertex {

@@ -188,8 +188,8 @@ MeshKey meshKey(const std::vector<BatchCopy>& items) {
     }
     key.packets = XXH3_64bits_digest(&state);
     if (!items.empty()) {
-        key.mask = items[0].job.renderer;
-        key.entry = items[0].job.chain;
+        key.renderer = items[0].job.renderer;
+        key.chain = items[0].job.chain;
         key.chainUnpack = unpackOf(items[0].job);
     }
     return key;

@@ -375,10 +375,10 @@ Not on the link; listed so lanes B, E and F agree on them.
 ```cpp
 namespace gt4::scene {
 struct MeshKey {             // a Cmd's geometry: welded once
-    uint64_t packets;        // hash of the items' model-packet content hashes, in order
-    uint32_t mask, entry;    // lane mask and renderer entry of the first item (decode depends on them)
+    uint64_t packets;        // hash of the items' batch contents (qwords 0..192 and the job's geometry fields), in order
+    uint32_t renderer, chain;   // the first item's ModelJob::renderer and ::chain (the decode depends on them)
     uint32_t chainUnpack;    // lighting chain's decompression routine (normals' format)
-};
+};                           // (platform/scene/scene_frame.h; B5 named renderer / chain `mask` / `entry`)
 struct MaterialKey {         // GT4's material: what the batch's pixels depend on besides geometry
     uint64_t texture;        // texture set content hash ^ texture index; 0 untextured
     uint32_t palette;        // CLUT source id/version
