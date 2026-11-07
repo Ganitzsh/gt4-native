@@ -277,6 +277,7 @@ add_executable(gt4_host
     platform/render/pipeline_cache_file.cpp
     platform/render/graph/render_graph.cpp
     platform/render/pipeline.cpp
+    platform/render/display_feature.cpp
     platform/render/test_scene.cpp
     platform/render/gsn_scene.cpp
     platform/render/overlay.cpp
