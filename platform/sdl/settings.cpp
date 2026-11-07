@@ -480,10 +480,19 @@ std::string getOption(const Settings& settings, std::string_view key) {
     return option ? option->get(settings) : std::string();
 }
 
+std::string unusedReason(const Settings& settings, std::string_view key) {
+    // (platform/render/pipeline.cpp: SceneSource::drawsOriginalEffects turns these off for the native GS's frames)
+    if (settings.gsRenderer == GsRenderer::Native &&
+        (key == "effects.bloom" || key == "post.bloom_intensity" || key == "post.tonemapper" || key == "post.auto_exposure"))
+        return "not used with render.gs = native: the game's frames carry its own glare and colour grade";
+    return {};
+}
+
 std::vector<OptionInfo> describe(const Settings& settings) {
     std::vector<OptionInfo> result;
     for (const auto& option : options())
-        result.push_back({option.key, option.get(settings), option.allowed, option.help, option.persistent});
+        result.push_back({option.key, option.get(settings), option.allowed, option.help, option.persistent,
+                          unusedReason(settings, option.key)});
     return result;
 }
 
@@ -502,7 +511,9 @@ std::string formatSettings(const Settings& settings) {
         const auto dot = key.find('.');
         const auto current = key.substr(0, dot);
         if (current != section) { section = current; out << "\n[" << section << "]\n"; }
-        out << "# " << option.allowed << "\n" << key.substr(dot + 1) << " = " << option.get(settings) << "\n";
+        out << "# " << option.allowed << "\n";
+        if (const std::string unused = unusedReason(settings, key); !unused.empty()) out << "# (" << unused << ")\n";
+        out << key.substr(dot + 1) << " = " << option.get(settings) << "\n";
     }
     return out.str();
 }

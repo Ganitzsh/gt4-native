@@ -151,8 +151,12 @@ Preset detectPreset(const Settings& settings);
 std::string setOption(Settings& settings, std::string_view key, std::string_view value);
 std::string getOption(const Settings& settings, std::string_view key);
 // Every option: key, current value, allowed values and help, in file order.
-struct OptionInfo { std::string key, value, allowed, help; bool persistent; };
+// `unused`: why the option has no effect with the other values (empty when it has one).
+struct OptionInfo { std::string key, value, allowed, help; bool persistent; std::string unused; };
 std::vector<OptionInfo> describe(const Settings& settings);
+// Why `key` does nothing with these settings, or empty: with render.gs = native the game's frames carry its own
+// glare and colour grade, and the post chain adds no tone mapping, automatic exposure or bloom to them.
+std::string unusedReason(const Settings& settings, std::string_view key);
 
 // INI file I/O. load() returns warnings (unknown keys, bad values) and keeps defaults for those.
 std::vector<std::string> loadSettings(Settings& settings, const std::string& path);

@@ -508,8 +508,10 @@ int run(const Options& options) {
     }
     if (!options.gpu.empty()) settings.gpu = options.gpu;
     if (options.listOptions) {
-        for (const auto& o : gt4::describe(settings))
+        for (const auto& o : gt4::describe(settings)) {
             std::printf("%s = %s\n    %s\n    %s\n", o.key.c_str(), o.value.c_str(), o.allowed.c_str(), o.help.c_str());
+            if (!o.unused.empty()) std::printf("    (%s)\n", o.unused.c_str());
+        }
         return 0;
     }
     if (interactive && !settingsPath.empty() && !std::filesystem::exists(settingsPath)) gt4::saveSettings(settings, settingsPath);

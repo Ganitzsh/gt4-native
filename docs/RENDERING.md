@@ -262,6 +262,10 @@ punchy is the default look), `pbr_neutral` (Khronos PBR Neutral: accurate base c
 `post.vignette` (cos^4 falloff), `post.chromatic_aberration` (lateral), `post.dither` (triangular PDF,
 Gjoel 2016).
 
+With `render.gs = native` (the default) the frames are the game's own, already carrying its glare and colour
+grade: `effects.bloom`, `post.bloom_intensity`, `post.tonemapper` and `post.auto_exposure` are not used
+(`SceneSource::drawsOriginalEffects`). `--list-options` and the settings file say so next to them.
+
 ### Aspect ratio and the 2D layer
 
 `aspect.ratio` (`window`, 4:3, 16:9, 16:10, 21:9, 32:9) defines the content rectangle; other window shapes get

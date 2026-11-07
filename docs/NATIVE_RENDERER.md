@@ -38,7 +38,9 @@ mostly the field lines, which the native renderer does not jitter.
   studied offline: `GT4_HOST_RECORD=PATH,FROM,COUNT` (FROM = `trigger:FILE`: when FILE appears) records what the host receives over those VBlanks, with
   the VIF1 batch buffers, the 3D renderers' constants and the GS state at FROM first (captures from before
   2026-10-30 hold VU1's memory and registers instead, and still replay), and `gt4_host --replay PATH --frames N` then plays it at either
-  resolution (`--preset original` / `high`), the same frames every time.
+  resolution (`--preset original` / `high`), the same frames every time. A recording started mid-run holds the
+  texture sets then in graphics memory, not every set content the host keeps: a set first drawn after FROM
+  can replay as garbage (decoded from memory) that the live run never showed.
 
 In the game's 16:9 mode the menus' 2D keeps GT4's own layout, or a centred 4:3 area with aspect.hud = centered (game-side,
 WIDESCREEN.md). GT4's Z24 pass (Photo Travel's depth of field: white drawn into the Z buffer as a frame, (Cs - Cd),
