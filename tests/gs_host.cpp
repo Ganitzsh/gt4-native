@@ -147,6 +147,241 @@ int main(int argc, char** argv) {
         expect(words[0] == 0xABABABABu && words[7] == 0xABABABABu, "the GPU's pixels are what the read returns");
     }
 
+    // 2b. Scene views (CONTRACTS.md a.5 7, a.8; A10's front-end half): two tagged 3D batches of two views, the same
+    // state. Split off: one draw (the split's draws counted); split on: one per view, Draw::view set. The views bind to
+    // the draws' target, an asynchronous read inside the frame cuts both, and the closed frame goes on the next list.
+    for (const bool split : {false, true}) {
+        gt4::gsn::GsFrontend fe;
+        fe.setSceneSplit(split);
+        Gif g = setup();
+        fe.gif(3, static_cast<const uint8_t*>(g.data()), g.bytes());
+        std::vector<uint32_t> words(gt4::gfx::kModelWords, 0);
+        words[64 * 4 + 3] = 1;           // one strip
+        words[65 * 4 + 3] = 3 * 3;       // of 3 + 2 = 5 vertices: 3 triangles
+        gt4::gfx::ModelJob job{};
+        job.count = 5;
+        job.prim = 4;                    // triangle strip
+        gt4::gfx::scene::FrameBegin begin{};
+        begin.prefix = {gt4::gfx::scene::kFrameBegin, gt4::gfx::scene::kVersion};
+        fe.sceneRecord(reinterpret_cast<const uint8_t*>(&begin), sizeof begin);
+        job.pad[0] = 1;
+        job.pad[1] = 1;
+        fe.model(job, words.data());
+        job.pad[0] = 2;
+        job.pad[1] = 2;
+        fe.model(job, words.data());
+        gt4::gfx::scene::ViewEnd end1{};   // view 1 ends before the read: its package is on the list, it is not cut
+        end1.prefix = {gt4::gfx::scene::kViewEnd, gt4::gfx::scene::kVersion};
+        end1.view = 1;
+        fe.sceneRecord(reinterpret_cast<const uint8_t*>(&end1), sizeof end1);
+        {
+            auto package = std::make_shared<gt4::scene::SceneView>();
+            package->view.id = 1;
+            fe.sceneView(std::move(package));
+        }
+        job.pad[0] = 0;                  // untagged: no view
+        job.pad[1] = 0;
+        fe.model(job, words.data());
+        gt4::gsn::FrameList partial;
+        fe.cut(partial, true);
+        const std::string mode = split ? "split on: " : "split off: ";
+        if (!split) {
+            expect(partial.draws.size() == 1 && partial.draws[0].view == 0, (mode + "the views' batches merge into one draw").c_str());
+            expect(fe.stats.sceneSplitDraws == 2, (mode + "the draws the split would add are counted").c_str());
+        } else {
+            expect(partial.draws.size() == 3 && partial.draws[0].view == 1 && partial.draws[1].view == 2 && partial.draws[2].view == 0,
+                   (mode + "one draw per view, Draw::view set (0 untagged)").c_str());
+            expect(fe.stats.sceneSplitDraws == 2, (mode + "the draws the split added are counted").c_str());
+        }
+        expect(!partial.scene, (mode + "a list cut before the FrameEnd has no scene frame").c_str());
+        expect(partial.views.size() == 1 && partial.views[0].package && partial.views[0].package->view.id == 1,
+               (mode + "the partial list carries the package of the view that ended before it").c_str());
+        expect(partial.views.size() == 1 && partial.views[0].target != 0 && partial.views[0].target == partial.draws[0].target &&
+                   !partial.views[0].splitTargets,
+               (mode + "with the view's binding beside it").c_str());
+        auto frame = std::make_unique<gt4::scene::SceneFrame>();
+        for (uint16_t id = 1; id <= 3; ++id) {
+            gt4::scene::ViewData v;
+            v.id = id;
+            frame->views.push_back(v);
+        }
+        fe.sceneFrame(std::move(frame));
+        gt4::gsn::FrameList last;
+        fe.vsync(1, last);
+        expect(last.scene != nullptr, (mode + "the closed frame goes on the list that received its FrameEnd").c_str());
+        if (last.scene) {
+            const auto& v = last.scene->views;
+            const auto& c = last.scene->counters;
+            expect(v[0].target != 0 && v[0].target == partial.draws[0].target && v[1].target == v[0].target,
+                   (mode + "each view bound to its first tagged draw's target").c_str());
+            expect(!v[0].cut && v[1].cut && !v[2].cut && c.viewsCut == 1,
+                   (mode + "a view still open at the read is cut; one ended before it is not").c_str());
+            expect(c.cuts == 1 && c.cutsAsync == 1, (mode + "the asynchronous read's cut counted by kind").c_str());
+            expect(c.viewsUnbound == 1 && c.viewSplitTargets == 0, (mode + "a view with no tagged draw is unbound").c_str());
+        }
+    }
+
+    // 2c. The binding rule (CONTRACTS.md a.5.7), decided at ViewEnd: a view's first draw goes to a small target without a
+    // depth test (the sky's pass), then a depth-tested draw into the frame samples it. The principal moves to the frame,
+    // the small target is auxiliary and read, and the view is not split. A second view samples its own principal: split
+    // (rule 4).
+    {
+        gt4::gsn::GsFrontend fe;
+        fe.setSceneSplit(true);
+        Gif g = setup();
+        fe.gif(3, static_cast<const uint8_t*>(g.data()), g.bytes());
+        std::vector<uint32_t> words(gt4::gfx::kModelWords, 0);
+        words[64 * 4 + 3] = 1;
+        words[65 * 4 + 3] = 3 * 3;
+        gt4::gfx::ModelJob job{};
+        job.count = 5;
+        gt4::gfx::scene::FrameBegin begin{};
+        begin.prefix = {gt4::gfx::scene::kFrameBegin, gt4::gfx::scene::kVersion};
+        fe.sceneRecord(reinterpret_cast<const uint8_t*>(&begin), sizeof begin);
+        auto state = [&](uint32_t fbp, uint32_t fbw, bool depthTest, uint64_t tex) {
+            Gif s2;
+            s2.ad({{FRAME_1, frame(fbp, fbw, PSMCT32)}, {ZBUF_1, zbuf(0x70, PSMZ24, !depthTest)}, {TEST_1, test(true, depthTest ? 2 : 1)},
+                   {TEX0_1, tex}});
+            fe.gif(3, static_cast<const uint8_t*>(s2.data()), s2.bytes());
+        };
+        auto viewEnd = [&](uint16_t id) {
+            gt4::gfx::scene::ViewEnd e{};
+            e.prefix = {gt4::gfx::scene::kViewEnd, gt4::gfx::scene::kVersion};
+            e.view = id;
+            fe.sceneRecord(reinterpret_cast<const uint8_t*>(&e), sizeof e);
+            auto package = std::make_shared<gt4::scene::SceneView>();
+            package->view.id = id;
+            fe.sceneView(std::move(package));
+        };
+        // view 1: the sky's pass into a 64 x 64 target at page 0x100, no depth test
+        state(0x100, 1, false, 0);
+        job.prim = 4;
+        job.pad[0] = 1;
+        job.pad[1] = 1;
+        fe.model(job, words.data());
+        // then the frame, depth-tested, sampling the sky's target
+        state(0, 10, true, tex0(0x100 * 32, 1, PSMCT32, 6, 6, true, 0));
+        job.prim = 4 | (1 << 4);
+        job.pad[0] = 2;
+        fe.model(job, words.data());
+        viewEnd(1);
+        // view 2: depth-tested into the frame, sampling the frame itself (its principal): rule 4
+        state(0, 10, true, tex0(0, 10, PSMCT32, 10, 9, true, 0));
+        job.pad[0] = 3;
+        job.pad[1] = 2;
+        fe.model(job, words.data());
+        viewEnd(2);
+        // view 3, as the race draws its main view: the frame depth-tested and written, then the sky's pass depth-tested
+        // against a 64 x 64 Z of its own it never writes (rule 1: auxiliary, not a second scene): not split
+        auto stateZ = [&](uint32_t fbp, uint32_t fbw, uint32_t zbp, bool zwrite) {
+            Gif s2;
+            s2.ad({{FRAME_1, frame(fbp, fbw, PSMCT32)}, {ZBUF_1, zbuf(zbp, PSMZ24, !zwrite)}, {TEST_1, test(true, 2)}, {TEX0_1, 0}});
+            fe.gif(3, static_cast<const uint8_t*>(s2.data()), s2.bytes());
+        };
+        job.prim = 4;
+        job.pad[1] = 3;
+        stateZ(0, 10, 0x70, true);
+        job.pad[0] = 4;
+        fe.model(job, words.data());
+        stateZ(0x100, 1, 0x180, false);
+        job.pad[0] = 5;
+        fe.model(job, words.data());
+        viewEnd(3);
+        // one view per rule: each starts with the frame depth-tested and written (its principal), then
+        auto principalDraw = [&](uint16_t id, uint32_t serial, uint64_t tex) {
+            Gif s2;
+            s2.ad({{FRAME_1, frame(0, 10, PSMCT32)}, {ZBUF_1, zbuf(0x70, PSMZ24, false)}, {TEST_1, test(true, 2)}, {TEX0_1, tex}});
+            fe.gif(3, static_cast<const uint8_t*>(s2.data()), s2.bytes());
+            job.prim = tex ? (4 | (1 << 4)) : 4;
+            job.pad[0] = serial;
+            job.pad[1] = id;
+            fe.model(job, words.data());
+        };
+        auto auxDraw = [&](uint16_t id, uint32_t serial, uint32_t fbp, uint32_t zbp, bool ztest, bool zwrite) {
+            Gif s2;
+            s2.ad({{FRAME_1, frame(fbp, 1, PSMCT32)}, {ZBUF_1, zbuf(zbp, PSMZ24, !zwrite)}, {TEST_1, test(true, ztest ? 2 : 1)}, {TEX0_1, 0}});
+            fe.gif(3, static_cast<const uint8_t*>(s2.data()), s2.bytes());
+            job.prim = 4;
+            job.pad[0] = serial;
+            job.pad[1] = id;
+            fe.model(job, words.data());
+        };
+        uint32_t serial = 10;
+        principalDraw(4, ++serial, 0);   // rule 1: a second scene (another target's own depth, tested and written)
+        auxDraw(4, ++serial, 0x100, 0x180, true, true);
+        viewEnd(4);
+        principalDraw(5, ++serial, 0);   // rule 2: another colour target testing the principal's depth, as PSMZ16 (another id)
+        {
+            Gif s2;
+            s2.ad({{FRAME_1, frame(0x100, 1, PSMCT32)}, {ZBUF_1, zbuf(0x70, 0x32, true)}, {TEST_1, test(true, 2)}, {TEX0_1, 0}});
+            fe.gif(3, static_cast<const uint8_t*>(s2.data()), s2.bytes());
+            job.prim = 4;
+            job.pad[0] = ++serial;
+            job.pad[1] = 5;
+            fe.model(job, words.data());
+        }
+        viewEnd(5);
+        principalDraw(6, ++serial, 0);   // rule 3: a target inside the principal's memory (page 0x40 of the frame)
+        auxDraw(6, ++serial, 0x40, 0x70, false, false);
+        viewEnd(6);
+        principalDraw(7, ++serial, 0);   // rule 5: a fifth auxiliary target
+        for (uint32_t k = 0; k < 5; ++k) auxDraw(7, ++serial, 0x100 + 0x10 * k, 0x70, false, false);
+        viewEnd(7);
+        principalDraw(8, ++serial, 0);   // a full summary: a ninth target
+        for (uint32_t k = 0; k < 8; ++k) auxDraw(8, ++serial, 0x100 + 0x10 * k, 0x70, false, false);
+        viewEnd(8);
+        // an auxiliary read sampled before its target's first write, then after it (lane B's (1)): a read
+        const uint64_t sky = tex0(0x1C0 * 32, 1, PSMCT32, 6, 6, true, 0);   // (page 0x1C0: GS memory has 512)
+        auxDraw(0, 0, 0x1C0, 0x70, false, false);   // (untagged, before the view: the first sample resolves to that target)
+        principalDraw(9, ++serial, sky);
+        auxDraw(9, ++serial, 0x1C0, 0x70, false, false);
+        principalDraw(9, ++serial, sky);
+        viewEnd(9);
+        auto principalZ = [&](uint16_t id, uint32_t zbp, bool ztest, bool zwrite) {
+            Gif s2;
+            s2.ad({{FRAME_1, frame(0, 10, PSMCT32)}, {ZBUF_1, zbuf(zbp, PSMZ24, !zwrite)}, {TEST_1, test(true, ztest ? 2 : 1)}, {TEX0_1, 0}});
+            fe.gif(3, static_cast<const uint8_t*>(s2.data()), s2.bytes());
+            job.prim = 4;
+            job.pad[0] = ++serial;
+            job.pad[1] = id;
+            fe.model(job, words.data());
+        };
+        principalZ(10, 0x150, false, true);   // D1 (page 0x150), written, untested
+        principalZ(10, 0x1A0, true, false);   // D2 (page 0x1A0), tested
+        principalZ(10, 0x150, true, true);    // D1 tested
+        viewEnd(10);
+        principalZ(11, 0x1A0, true, false);   // D2 alone: its id
+        viewEnd(11);
+        gt4::gsn::FrameList list;
+        fe.cut(list);
+        expect(list.views.size() == 11 && !list.views[2].splitTargets && list.views[2].auxCount == 1,
+               "binding: a pass testing a depth of its own it never writes is auxiliary, not a second scene");
+        if (list.views.size() == 11) {
+            expect(list.views[9].depth != 0 && list.views[9].depth == list.views[10].depth,
+                   "binding: the principal's depth is that of its first depth-tested draw, not its first depth");
+            expect(list.views[3].splitTargets, "binding: rule 1, a second scene, splits");
+            expect(list.views[4].splitTargets, "binding: rule 2, another colour target on the principal depth, splits");
+            expect(list.views[5].splitTargets, "binding: rule 3, a target inside the principal's memory, splits");
+            expect(list.views[6].splitTargets && list.views[6].auxCount == 4, "binding: rule 5, a fifth auxiliary target, splits");
+            expect(list.views[7].splitTargets, "binding: a full summary splits");
+            expect(!list.views[8].splitTargets && list.views[8].auxReads == 1,
+                   "binding: a principal sample after the auxiliary target's write is a read, whatever came before");
+        }
+        expect(fe.stats.splitByReason[1] == 1 && fe.stats.splitByReason[2] == 1 && fe.stats.splitByReason[3] >= 1 &&
+                   fe.stats.splitByReason[5] >= 1 && fe.stats.splitSummaryFull == 1,
+               "binding: each rule counted, a full summary apart");
+        expect(list.views.size() >= 2, "binding: two views' packages on the list");
+        if (list.views.size() >= 2) {
+            const auto& v1 = list.views[0];
+            const auto& v2 = list.views[1];
+            expect(v1.target != 0 && v1.depth != 0 && v1.auxCount == 1 && v1.auxTargets[0] != v1.target && v1.auxDraws == 1,
+                   "binding: the principal moved to the depth-tested draw's target, the first one is auxiliary");
+            expect(v1.auxReads == 1 && !v1.splitTargets, "binding: the principal's sample of the auxiliary target is a read, not a split");
+            expect(v2.splitTargets && v2.target == v1.target, "binding: a view sampling its own principal is split");
+        }
+        expect(fe.stats.splitByReason[4] == 1, "binding: rule 4 counted once (the view sampling its own principal)");
+    }
+
     // 3. A capture replayed through GsHost (no game: reads stay in memory): one displayed list per VBlank.
     {
         const std::filesystem::path dir = outputDir.empty() ? gt4::test::uniqueTempPath("gt4_gs_host_test") : std::filesystem::path(outputDir);

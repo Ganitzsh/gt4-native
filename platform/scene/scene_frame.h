@@ -7,6 +7,7 @@
 // column vectors: convert explicitly where the two meet (a transpose), never by copying the floats.
 #include "gt4/gfx.h"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -90,6 +91,7 @@ struct SceneCounters {
     uint64_t lights = 0, emitters = 0, markers = 0, vehicles = 0;
     // filled by the front end and the renderer (A10's front-end half, B lane)
     uint64_t viewSplitTargets = 0, viewsUnbound = 0;
+    uint64_t viewAuxiliaryDraws = 0, viewAuxiliaryReads = 0;   // a.5.7: tagged draws into auxiliary targets; principal draws sampling one
     uint64_t cuts = 0, cutsAsync = 0, viewsCut = 0;   // partial FrameLists in a frame (a.8; async: readLater's), views cut
     uint64_t fallbackNotBound = 0, fallbackMeshPending = 0, fallbackPipelinePending = 0, fallbackValidation = 0,
              fallbackReadPending = 0;
@@ -158,7 +160,7 @@ struct SceneFrame {
 
 // One view's package at its ViewEnd (CONTRACTS.md a.8, cuts at a read): what a partial FrameList needs to substitute
 // the view. Copies (SceneFrame keeps its own; ModelJob::pad[0] indexes that). Pooled: sceneViewFromPool() takes one
-// (its vectors emptied, their capacity kept), sceneViewsToPool() gives back those no one else holds, so a steady
+// (its vectors emptied, their capacity kept), sceneViewToPool() gives back one no one else holds, so a steady
 // frame allocates none.
 struct SceneView {
     ViewData view;                                // view.valid: the verdict at ViewEnd
@@ -197,12 +199,17 @@ inline std::shared_ptr<SceneView> sceneViewFromPool() {
     v->vehicles.clear();
     return v;
 }
-inline void sceneViewsToPool(std::vector<std::shared_ptr<const SceneView>>& views) {
-    std::lock_guard<std::mutex> lock(detail::sceneViewPoolMutex());
-    auto& pool = detail::sceneViewPool();
-    for (auto& v : views)
-        if (v && v.use_count() == 1 && pool.size() < 64) pool.push_back(std::const_pointer_cast<SceneView>(std::move(v)));
-    views.clear();
+// Back to the pool when no one else holds it. (use_count() is a relaxed load: the fence orders every earlier read of
+// the package by its last other holder before the decoder reuses it, once a consumer keeps copies on another thread.)
+inline void sceneViewToPool(std::shared_ptr<const SceneView>& v) {
+    if (!v) return;
+    if (v.use_count() == 1) {
+        std::atomic_thread_fence(std::memory_order_acquire);
+        std::lock_guard<std::mutex> lock(detail::sceneViewPoolMutex());
+        auto& pool = detail::sceneViewPool();
+        if (pool.size() < 64) pool.push_back(std::const_pointer_cast<SceneView>(std::move(v)));
+    }
+    v.reset();
 }
 
 }  // namespace gt4::scene

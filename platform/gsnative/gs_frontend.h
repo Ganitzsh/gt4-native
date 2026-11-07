@@ -5,6 +5,7 @@
 // the memory model (gs_memory.h), and decides for each textured draw where its texels come from: a render
 // target drawn earlier (the pages it last wrote) or GS memory, decoded once per content. The back end
 // (Vulkan) only executes the list. See docs/NATIVE_RENDERER.md.
+#include "scene_frame.h"
 #include "gs_memory.h"
 #include "texture_pack.h"
 #include "gt4/gfx.h"
@@ -86,6 +87,9 @@ struct Draw {
     // Its Z buffer is inverted (Target::inverted): its vertices' Z are given as max - Z, and the back end tests
     // them the other way round (GEQUAL as LEQUAL, GREATER as LESS).
     bool depthInverted = false;
+    // The scene view its 3D batches belong to (CONTRACTS.md a.8; ModelJob::pad[1]): set while the scene split is on
+    // (GsFrontend::setSceneSplit), when merging stops at a view change; 0 none.
+    uint16_t view = 0;
 };
 
 // A decoded texture the back end must (re)upload: RGBA8, R in the low byte, the GS's alpha (0x80 = 1.0).
@@ -194,11 +198,30 @@ struct FrameList {
     };
     std::vector<Readback> readbacks;
     bool dump = false;   // debugging: the renderer writes this frame's targets out (GT4_GSN_TRIGGER)
+    // The scene frame whose FrameEnd arrived while this list was built (CONTRACTS.md a.8): its views bound to targets by
+    // the front end, its cuts counted; null without scene records, and on a partial list cut before its FrameEnd.
+    std::unique_ptr<scene::SceneFrame> scene;
+    // The views whose ViewEnd arrived while this list was built (CONTRACTS.md a.8): a partial list may substitute
+    // those that are valid. Each with the front end's binding beside it (the package is the decoder's, made before any
+    // draw was bound): its colour and depth targets, and whether its tagged draws went to two colour targets. The
+    // packages are pooled (scene::sceneViewToPool, at FrameList::clear).
+    struct ViewOnList {
+        std::shared_ptr<const scene::SceneView> package;
+        uint32_t target = 0, depth = 0;   // the principal target (a.5.7)
+        bool splitTargets = false;        // (the reason in GsFrontend::stats)
+        uint32_t auxTargets[4] = {};      // auxiliary colour targets, in first-write order (a fifth is split: rule 5)
+        uint8_t auxCount = 0;
+        uint8_t auxReads = 0;             // bit i: a principal draw samples auxTargets[i]
+        uint16_t auxDraws = 0;            // tagged draws into the auxiliary targets
+    };
+    std::vector<ViewOnList> views;
     void clear();
 };
 
 // A frame that will not be drawn: its texture uploads and retirements move to the next one, `into`.
 void carryOver(FrameList& dropped, FrameList& into);
+// Lists carryOver dropped with a scene frame or views' packages (CONTRACTS.md a.8 listsSkippedWithScene): the host summary.
+uint64_t listsSkippedWithScene();
 
 // Lists drawn go back for the front end's next frames, emptied with their vectors' capacity: a race frame's lists
 // hold about 10 MB (its 3D batches' words), which a fresh list grew again every frame (allocations, copies and
@@ -259,7 +282,16 @@ public:
     void setReadData(std::vector<uint8_t> data);
     // Ends the frame list at this point without a VSYNC (`out` receives it): what the GPU must draw before
     // a read. The frame goes on in a new list.
-    void cut(FrameList& out);
+    void cut(FrameList& out, bool async = false);   // `async`: for an asynchronous read (counted as such: a.8)
+    // Scene records (CONTRACTS.md a.5 7, a.8): each record as it arrives (the front end follows FrameBegin), and the
+    // frame a FrameEnd closed, which goes on the list being built with its views' targets and the frame's cuts.
+    void sceneRecord(const uint8_t* payload, size_t bytes);
+    void sceneFrame(std::unique_ptr<scene::SceneFrame> frame);
+    void sceneView(std::shared_ptr<const scene::SceneView> view);
+    // The scene split (A10): Draw::view set and 3D-batch merging stopped at a view change. Off by default; the
+    // pixels are the same either way (stats.sceneSplitDraws counts the draws it adds).
+    void setSceneSplit(bool on) { sceneSplit = on; }
+    bool sceneSplitOn() const { return sceneSplit; }
     // Replaces the whole of GS memory (4 MiB in address order: a saved state restored); every page becomes
     // memory-owned and changed.
     void restoreMemory(const void* data);
@@ -278,6 +310,17 @@ public:
         uint64_t droppedDraws = 0;   // past the target limit (targetFor)
         uint64_t targetsReused = 0;  // slots given to a new buffer at the limit
         uint64_t reads = 0, readsFromTargets = 0;   // LOCAL -> HOST transfers; those with drawn pages
+        // scene records (CONTRACTS.md a.7, a.8): frames put on a list, the draws the split added, views split across
+        // targets or unbound, cuts inside a frame (of them for asynchronous reads), views cut
+        uint64_t sceneFrames = 0, sceneSplitDraws = 0, viewSplitTargets = 0, viewsUnbound = 0, cuts = 0, cutsAsync = 0, viewsCut = 0;
+        uint64_t scenePackages = 0;   // views' packages put on lists (made only while the split is on)
+        // the same per view role (gfx::scene::ViewRole: 1 main, 2 mirror, 3 env face, 7 HUD, 8 menu, 15 other): the gates
+        // ask for main views
+        uint64_t splitByRole[16] = {}, unboundByRole[16] = {}, cutByRole[16] = {};
+        uint64_t auxDrawsByRole[16] = {}, auxReadsByRole[16] = {};   // a.5.7
+        uint64_t splitByReason[6] = {};   // views split, by a.5.7's reason (1..5; a view counts once per reason)
+        uint64_t splitSummaryFull = 0;    // views split because their binding summary was full (not a.5.7 rule 5)
+        uint64_t viewsPastLimit = 0;      // tagged draws naming a view id past kViews (a bad record: never bound)
     } stats;
 
     // The state groups of include/gt4/gfx.h: a state record from the game (the shared groups, then the
@@ -459,6 +502,51 @@ private:
 public:
     void materializeAll() { for (uint32_t page = 0; page < 512; ++page) materializePage(page); }
 private:
+    // Scene records (A10's front-end half): the frame between its FrameBegin and FrameEnd, each view's bound target (by
+    // view id - 1), whether it has tagged draws in the list being built (a cut marks those views), the frame's cuts.
+    // A view's binding (CONTRACTS.md a.5.7), decided at its ViewEnd against the final principal: during the view, a
+    // summary per colour target its tagged draws wrote (fixed size: past kTargets the view is split, rule 5); at ViewEnd
+    // the principal (colour and depth of the first depth-tested draw, else of the first draw), its auxiliary targets,
+    // why it is split (bit per reason 1..5), which auxiliary targets a principal draw sampled after their first write.
+    struct DepthUse {
+        uint32_t target = 0, firstTestedSeq = 0;   // (0: never tested)
+        bool tested = false, written = false;
+    };
+    struct SampleUse {   // a target its draws sampled
+        uint32_t target = 0, draws = 0;
+        uint32_t written = 0;            // the view's target overlapping it written before such a sample (0: none)
+        uint32_t drawsAfterWrite = 0;    // draws sampling it after that write (a.5.7 auxiliary reads, in draws)
+    };
+    struct TargetUse {
+        uint32_t colour = 0, firstSeq = 0, testedSeq = 0, draws = 0;
+        bool tested = false;
+        DepthUse depths[2];
+        uint32_t depthCount = 0;
+        SampleUse sampled[8];
+        uint32_t sampledCount = 0;
+    };
+    static constexpr uint32_t kTargets = 8;
+    static constexpr uint32_t kViews = 256;   // view ids bound beyond this are ignored (a bad record cannot grow the table)
+    struct ViewBinding {
+        TargetUse uses[kTargets];
+        uint32_t useCount = 0, seq = 0;
+        bool overflow = false;             // the summary full: a ninth target, a third depth, a ninth sampled one (split)
+        // decided at ViewEnd (finishBinding)
+        uint32_t target = 0, depth = 0;
+        bool bound = false, decided = false, split = false, inList = false, cut = false, ended = false;
+        uint8_t reasons = 0;
+        uint32_t aux[4] = {};
+        uint8_t auxCount = 0, auxReads = 0;
+        uint32_t auxDraws = 0, auxReadDraws = 0;
+        uint32_t other = 0;                // the target named by the first reason found (GT4_SCENE_DEBUG)
+    };
+    void bindDraw(ViewBinding& b, uint32_t colour, uint32_t depth, bool depthTested, bool writesDepth, const TextureSource& texture);
+    void finishBinding(ViewBinding& b);
+    bool overlaps(uint32_t a, uint32_t b) const;   // two targets' GS memory overlaps
+    bool sceneSplit = false, sceneOpen = false;
+    uint16_t lastModelView = 0;   // the last 3D batch's view (the split's draws counted either way)
+    std::vector<ViewBinding> viewBindings;
+    uint32_t sceneCuts = 0, sceneCutsAsync = 0;
     uint64_t paletteHash(const GsMemory::Tex0& t);
     struct PaletteMemo {
         uint64_t loads = ~0ull;   // clutLoads when computed
