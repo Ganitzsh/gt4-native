@@ -336,6 +336,13 @@ if(BUILD_TESTING)
   add_test(NAME mesh_cache COMMAND gt4_mesh_cache_test ${GT4_MESH_CAPTURES})
   set_tests_properties(mesh_cache PROPERTIES SKIP_RETURN_CODE 77)
 
+  # The scene records (docs/modern/CONTRACTS.md (a)): gfx.h's layouts against the game's C copy (compat/game/
+  # gt4_scene.h), and a kScene record through the graphics stream to GsTarget::scene.
+  add_executable(gt4_scene_records_test tests/scene_records.cpp)
+  target_include_directories(gt4_scene_records_test PRIVATE compat/game)
+  target_link_libraries(gt4_scene_records_test PRIVATE gt4_ps2gfx)
+  add_test(NAME scene_records COMMAND gt4_scene_records_test)
+
   # The render graph (platform/render/graph): compile on the CPU with a fake backend (no GPU), and a few frames
   # on a GPU with validation and synchronization validation when the layer is installed (skipped (77) without one).
   add_library(gt4_render_graph_testlib STATIC platform/render/graph/render_graph.cpp platform/render/vk.cpp

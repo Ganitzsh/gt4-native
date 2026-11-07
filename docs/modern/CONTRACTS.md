@@ -186,6 +186,7 @@ struct Instance {
     uint16_t matrixSet;          // s->current (+1) when it ran: 0, 1 or 2
     uint16_t section;            // course section (CourseData::render_model 0x00397188's model index), 0xFFFF none (RISKS R10)
     uint16_t projection;         // the Projection current for this Cmd (set 1 and viewport), 0 none
+    uint32_t reserved;           // 0 (the members above sum to 116 bytes; A1's compile found it: the record stays 120)
 };
 static_assert(sizeof(Instance) == 120);
 
@@ -282,6 +283,7 @@ struct Vehicle {
     uint8_t gear, lamps, pad0, pad1;        // lamps: 1 headlights, 2 brake, 4 reverse
     float steeringTorque;        // N m at the rack
     Wheel wheel[4];              // FL, FR, RL, RR
+    uint32_t reserved[2];        // 0 (the members above sum to 320 bytes; A1's compile found it: the record stays 328)
 };
 static_assert(sizeof(Vehicle) == 328);
 

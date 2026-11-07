@@ -300,6 +300,7 @@ enum RecordType : uint32_t {
     kBatchRun = 8,     // BatchRun
     kTexSet = 9,       // TexSetRecord, its uploads, its texture records (docs/NATIVE_V2.md)
     kEffect = 10,      // EffectRecord (docs/NATIVE_V2.md, step 3)
+    kScene = 11,       // scene::Prefix, then the record of that kind (docs/modern/CONTRACTS.md (a)); values only
 };
 
 struct Header {
@@ -768,3 +769,240 @@ inline DisplayRecord displayFromRegisters(uint64_t pmode, uint64_t smode2, uint6
 constexpr uint32_t recordQwords(uint32_t payload) { return (static_cast<uint32_t>(sizeof(Header)) + payload + 15) / 16; }
 
 }  // namespace gt4::gfx
+
+// --- Scene records (docs/modern/CONTRACTS.md (a); spike R1: docs/modern/spikes/R1.md) ---------------------------------
+//
+// What the game draws, described: frames, views, the projections it uses, one instance per Cmd 0049D328 draws,
+// lights, emitters, markers and vehicles. They travel as kScene records in pgl's packet, in issue order with the
+// batches, and only when the host turns them on (gt4::rt::kOptionSceneRecords). Every record starts with its Prefix;
+// the host takes a kind when its version is at most the one it knows and the record is at least that version's size
+// (a.6). The game's copies of these layouts are compat/game/gt4_scene.h (gcc 2.9, plain C), checked against these by
+// tests/scene_records.cpp. No 8-byte members: the same layout under gcc 2.9 i386 and MSVC x64.
+namespace gt4::gfx::scene {
+
+inline constexpr uint16_t kVersion = 1;   // every kind's layout version in this release
+
+enum Kind : uint16_t {
+    kFrameBegin = 1, kFrameEnd = 2, kViewBegin = 3, kViewEnd = 4, kInstance = 5,
+    kLight = 6, kEmitter = 7, kMarker = 8, kVehicle = 9, kProjection = 10,
+};
+
+struct Prefix {
+    uint16_t kind;      // Kind
+    uint16_t version;   // that kind's layout version (kVersion)
+};
+static_assert(sizeof(Prefix) == 4);
+
+// --- Frame -----------------------------------------------------------------------------------------------------------
+enum FrameFlags : uint32_t { kFrameField = 1, kFrameOddField = 2 };   // the race's 224-line fields
+struct FrameBegin {
+    Prefix prefix;
+    uint32_t frame;     // runtime: +1 per FrameBegin since the game started
+    uint32_t vblank;    // runtime: the VBlank count when it was sent
+    uint32_t flags;     // FrameFlags
+};
+static_assert(sizeof(FrameBegin) == 16);
+
+struct FrameEnd {
+    Prefix prefix;
+    uint32_t frame;               // as its FrameBegin
+    uint16_t views, instances;    // what the game sent this frame (the host checks its counts)
+    uint16_t lights, emitters;
+    uint16_t projections, reserved;
+};
+static_assert(sizeof(FrameEnd) == 20);
+
+// --- Views -----------------------------------------------------------------------------------------------------------
+enum ViewRole : uint8_t {
+    kViewMain = 1,         // render_world's main view (0033DEA8)
+    kViewMirror = 2,       // render_back_mirror (00341E50)
+    kViewEnvFace = 3,      // the car's environment map passes (0044E660 / 0044EB10); `pass` = face
+    kViewReflection = 4,   // the road reflection buffer (render_reflection 003411D0)
+    kViewShowroom = 5,     // showroom and event-screen car; `pass` = jitter pass 0..3
+    kViewPhoto = 6,        // Photo Travel / photo mode
+    kViewHud = 7,          // 3D drawn by the HUD outside render_world (RaceRoundMeterBase 003BE3C8); never substituted
+    kViewMenu = 8,         // menus' 3D (mRenderContextPS2::virtual_64 00217058)
+    kViewOther = 15,
+};
+enum ViewFlags : uint8_t {
+    kViewCut = 1,          // camera moved discontinuously: temporal history resets
+    kViewInset = 2,        // drawn inside another view's target (the race mirror)
+    kViewCameraKnown = 4,  // worldToView is the camera the view loaded; else identity and the host estimates
+};
+struct ViewBegin {
+    Prefix prefix;
+    uint16_t view;               // 1.. in this frame
+    uint8_t role;                // ViewRole
+    uint8_t flags;               // ViewFlags
+    uint32_t pass;               // role-specific, else 0
+    uint16_t projection;         // the camera's Projection (set 1 as the view loaded it), sent before this record
+    uint16_t reserved0;
+    float worldToView[4][4];     // set 0 at the stack depth the view starts with, after the camera load
+    uint16_t scissor[4];         // x0, y0, x1, y1 GS pixels, inclusive (all 0: unknown)
+};
+static_assert(sizeof(ViewBegin) == 88);
+
+struct ViewEnd {
+    Prefix prefix;
+    uint16_t view;
+    uint16_t instances;          // sent inside it
+};
+static_assert(sizeof(ViewEnd) == 8);
+
+// --- Projections: set 1 and the viewport, sent whenever either changes (about 10 a race frame, R1) ------------------
+struct Projection {
+    Prefix prefix;
+    uint16_t id;                 // 1.. per frame, in sending order, never reused within the frame
+    uint16_t view;               // the open view, 0 none (env-map passes may come before a view opens)
+    float viewToClip[4][4];      // set 1 as 0049E480 used it: a GL perspective (w' = -z)
+    // The values the batch holds (the runtime's copy of the last 0049E548 write of qwords 193..200), not SPR+0xFA0.
+    float viewportScale[4];      // qword 197: x, y in GS pixels, z to GS Z, w fog
+    float viewportOffset[4];     // qword 198
+    float clamp[4];              // qword 199: x, y, z FLT_MAX; w the fog clamp
+};
+static_assert(sizeof(Projection) == 120);
+
+// --- Instances: one per Cmd drawn by 0049D328 ------------------------------------------------------------------------
+enum InstanceFlags : uint16_t {
+    kInstLighting = 1,      // cmd->flag: a lighting chain (lit model)
+    kInstSkinned = 2,       // cmd->bits & 0x80: vertices computed per frame (0049DA60)
+    kInstObjectKnown = 4,   // set / model / lod come from 00455708's context
+    kInstCarBody = 8,       // sphere-map bodies 0x10A8 / 0x12C8 seen in the Cmd (set by the host if not known)
+    kInstWheel = 16,
+    kInstCourse = 32,
+    kInstSky = 64,
+};
+struct Instance {
+    Prefix prefix;
+    uint16_t view;               // the open view; 0: none (counted, never substituted)
+    uint16_t flags;              // InstanceFlags
+    uint32_t serial;             // 1.. per frame in emission order
+    uint32_t set;                // the model set (00455708's Set address), 0 unknown
+    uint16_t model;              // model index in the set
+    uint8_t lod, lodCount;       // detail level drawn, levels the model has
+    uint32_t cmd;                // the Cmd's address: stable for static content
+    uint32_t entrant;            // car 0..5 drawing it, 0xFFFFFFFF none or unknown
+    float objectToView[4][4];    // set 0 as 0049E480 used it
+    float axisScale[3];          // s->scale x, y, z (+0xBD0) when byte +0xE is set, else 1, 1, 1
+    float shapeScale;            // cmd->value (0049E548's scale; 0: rows not scaled)
+    uint16_t items;              // the Cmd's items: exactly this many BatchRun records follow for it
+    uint16_t matrixSet;          // s->current when it ran: 0, 1 or 2
+    uint16_t section;            // course section (CourseData::render_model 0x00397188), 0xFFFF none (RISKS R10)
+    uint16_t projection;         // the Projection current for this Cmd (set 1 and viewport), 0 none
+    uint32_t reserved;           // 0 (the members above sum to 116 bytes; the record keeps the contract's 120)
+};
+static_assert(sizeof(Instance) == 120);
+
+// --- Lights ----------------------------------------------------------------------------------------------------------
+enum LightKind : uint8_t { kLightPoint = 1, kLightSpot = 2, kLightDirectional = 3 };
+enum LightSource : uint8_t {
+    kSrcCourseGlow = 1,           // 003B8EA0 (night courses' lamps)
+    kSrcHeadlight = 2, kSrcTailLight = 3, kSrcBrakeLight = 4,
+    kSrcCarLightReflection = 5,   // render_reflection_car_lights 0x00341A30
+    kSrcSun = 6,
+    kSrcWarning = 7,              // blinking warning lamps
+    kSrcOther = 15,
+};
+struct Light {
+    Prefix prefix;
+    uint16_t view;               // the view whose space position / direction are in
+    uint8_t kind, source;        // LightKind, LightSource
+    uint32_t id;                 // the game's light object address, or entrant << 8 | lamp index
+    uint32_t entrant;            // 0xFFFFFFFF none
+    float position[3];           // view space (point, spot)
+    float width;                 // glow quad half width as the game drew it, 0 none
+    float direction[3];          // view space, unit (spot, directional)
+    float height;                // glow quad half height, 0 none
+    float colour[3];             // the game's colour, 0..1, before its clamp
+    float intensity;             // the game's intensity this frame, 1 when it has none
+    float range;                 // view units, 0 unknown
+    float cosInner, cosOuter;    // spot cone, 0 unknown
+    uint32_t reserved;
+};
+static_assert(sizeof(Light) == 80);
+
+// --- Emitters: once per emitter per simulation tick that spawns ------------------------------------------------------
+enum EmitterKind : uint8_t { kEmitSmoke = 1, kEmitDust = 2, kEmitSpark = 3, kEmitSpray = 4, kEmitExhaust = 5, kEmitOther = 15 };
+enum EmitterFlags : uint8_t { kEmitWorld = 1, kEmitBurst = 2 };
+struct Emitter {
+    Prefix prefix;
+    uint8_t kind, flags;         // EmitterKind, EmitterFlags
+    uint16_t count;              // particles the game spawned this tick (0: use rate)
+    uint32_t id;                 // emitter object address
+    uint32_t entrant;            // 0xFFFFFFFF none
+    float position[3], size;     // world space when kEmitWorld, else the view's; size in units
+    float velocity[3], rate;     // units per second; particles per second
+    float colour[4];             // 0..1 RGBA as the game sets it
+    float lifetime, spread;      // seconds; cone half-angle in radians
+    uint16_t view;               // when not kEmitWorld
+    uint16_t reserved0;
+    uint32_t reserved1;
+};
+static_assert(sizeof(Emitter) == 80);
+
+// --- Markers ---------------------------------------------------------------------------------------------------------
+enum MarkerKind : uint16_t {
+    kMarkPostBegin = 1, kMarkPostEnd = 2,             // around render_post_effect (0x0033F890)
+    kMarkHudBegin = 3, kMarkHudEnd = 4,               // around render_panel (0x0033FA40)
+    kMark2DBegin = 5, kMark2DEnd = 6,                 // menus: 2D drawn over a 3D view
+    kMarkFlareBegin = 7, kMarkFlareEnd = 8,           // the flare pass (003B8848 / 003B88C8)
+    kMarkGlareBegin = 9, kMarkGlareEnd = 10,          // glare 003BADF8
+    kMarkLampBandsBegin = 11, kMarkLampBandsEnd = 12, // the draws that make the lamp bands on the road (R11)
+};
+struct Marker {
+    Prefix prefix;
+    uint16_t marker;             // MarkerKind
+    uint16_t view;               // the view it belongs to, 0 none
+};
+static_assert(sizeof(Marker) == 8);
+
+// --- Vehicle state: one per entrant per simulation tick ---------------------------------------------------------------
+enum VehicleFields : uint16_t {
+    kVehTransform = 1, kVehVelocity = 2, kVehEngine = 4, kVehInputs = 8, kVehWheelContact = 16,
+    kVehWheelForces = 32, kVehWheelSlip = 64, kVehSteeringTorque = 128,
+};
+struct Wheel {
+    float contact[3];            // world space
+    float load;                  // N
+    float slipRatio, slipAngle;  // -, radians
+    float forceLateral, forceLongitudinal;   // N
+    float spin;                  // rad/s
+    float compression;           // 0..1
+    uint8_t surface, onGround, pad0, pad1;
+    float reserved;
+};
+static_assert(sizeof(Wheel) == 48);
+struct Vehicle {
+    Prefix prefix;
+    uint8_t entrant;             // 0..5
+    uint8_t flags;               // 1 player, 2 AI, 4 replay
+    uint16_t valid;              // VehicleFields that are filled
+    float bodyToWorld[4][4];
+    float velocity[3], speed;    // world units / s; m/s
+    float angularVelocity[3], rpm;
+    float throttle, brake, clutch, steer;   // 0..1; steer -1..1
+    uint8_t gear, lamps, pad0, pad1;        // lamps: 1 headlights, 2 brake, 4 reverse
+    float steeringTorque;        // N m at the rack
+    Wheel wheel[4];              // FL, FR, RL, RR
+    uint32_t reserved[2];        // 0 (the members above sum to 320 bytes; the record keeps the contract's 328)
+};
+static_assert(sizeof(Vehicle) == 328);
+
+// A kind's struct size at this release's version (0: an unknown kind): what the host requires of a record (a.6).
+constexpr uint32_t recordSize(uint16_t kind) {
+    switch (kind) {
+    case kFrameBegin: return sizeof(FrameBegin);
+    case kFrameEnd: return sizeof(FrameEnd);
+    case kViewBegin: return sizeof(ViewBegin);
+    case kViewEnd: return sizeof(ViewEnd);
+    case kInstance: return sizeof(Instance);
+    case kLight: return sizeof(Light);
+    case kEmitter: return sizeof(Emitter);
+    case kMarker: return sizeof(Marker);
+    case kVehicle: return sizeof(Vehicle);
+    case kProjection: return sizeof(Projection);
+    default: return 0;
+    }
+}
+
+}  // namespace gt4::gfx::scene
