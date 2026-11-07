@@ -241,12 +241,23 @@ else()
   target_compile_options(gt4_input PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# The settings: the shared table and each module's options (platform/sdl/settings_table.h).
+set(GT4_SETTINGS_SOURCES
+    platform/sdl/settings.cpp
+    platform/sdl/settings_display.cpp
+    platform/sdl/settings_render.cpp
+    platform/sdl/settings_scene.cpp
+    platform/sdl/settings_effects.cpp
+    platform/sdl/settings_lighting.cpp
+    platform/sdl/settings_input.cpp
+    platform/sdl/settings_audio.cpp)
+
 add_executable(gt4_host
     platform/sdl/main.cpp
     platform/sdl/disc_setup.cpp
     platform/sdl/renderer.cpp
     platform/sdl/session.cpp
-    platform/sdl/settings.cpp
+    ${GT4_SETTINGS_SOURCES}
     platform/sdl/settings_menu.cpp
     platform/sdl/display.cpp
     platform/render/vk.cpp
@@ -283,7 +294,7 @@ endif()
 
 # Settings and display math checks (no GPU or window needed).
 if(BUILD_TESTING)
-  add_executable(gt4_host_settings_test tests/host_settings.cpp platform/sdl/settings.cpp platform/sdl/settings_menu.cpp)
+  add_executable(gt4_host_settings_test tests/host_settings.cpp ${GT4_SETTINGS_SOURCES} platform/sdl/settings_menu.cpp)
   target_include_directories(gt4_host_settings_test PRIVATE platform/sdl platform/render platform/gs)
   if(MSVC)
     target_compile_options(gt4_host_settings_test PRIVATE /W4)

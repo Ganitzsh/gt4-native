@@ -21,6 +21,9 @@ enum class Upscaler : uint8_t { Bilinear, Bicubic, Lanczos, Fsr1, Fsr2 };
 // The resolution GT4's graphics are drawn at by the native renderer (docs/NATIVE_RENDERER.md): the PS2's own
 // (one render pixel per GS pixel, 640 x 448), or the render resolution.
 enum class GsRenderer : uint8_t { Original, Native };
+// What draws the game's 3D scenes (docs/modern/ARCHITECTURE.md 4.1): original = the GS path (the PS2's picture);
+// parity, hybrid and modern come with the modern renderer (PLAN.md B7, B8, B15): until then only original is taken.
+enum class SceneRenderer : uint8_t { Original, Parity, Hybrid, Modern };
 enum class AntiAliasing : uint8_t { Off, Fxaa, Smaa, SmaaT2x, Taa };
 enum class TextureFilter : uint8_t { Point, Bilinear, Trilinear };
 enum class Tonemapper : uint8_t { Original, Reinhard, Aces, AgX, AgXPunchy, PbrNeutral };
@@ -66,6 +69,7 @@ struct Settings {
     float sharpness = 0.2f;           // RCAS strength 0..1 (0 = off)
     AntiAliasing aa = AntiAliasing::Taa;
     int msaa = 1;                     // 1, 2, 4 or 8 samples
+    SceneRenderer scene = SceneRenderer::Original;   // render.scene (settings_scene.cpp)
 
     // [texture]
     TextureFilter textureFilter = TextureFilter::Trilinear;
@@ -138,6 +142,7 @@ const char* name(RaceFrames);
 const char* name(TextureFilter);
 const char* name(HudLayout);
 const char* name(AiCatchUp);
+const char* name(SceneRenderer);
 
 // Content aspect ratio (width / height), or 0 for "match the window".
 float aspectValue(AspectRatio ratio);

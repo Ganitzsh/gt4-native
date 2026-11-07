@@ -87,6 +87,23 @@ int main() {
         check(detectPreset(t) == preset, "every preset is detected after applying it");
     }
 
+    // render.scene (settings_scene.cpp): only the GS path until the modern renderer draws a view.
+    {
+        Settings r;
+        check(r.scene == SceneRenderer::Original && getOption(r, "render.scene") == "original", "render.scene is original by default");
+        check(original.scene == SceneRenderer::Original, "the original preset draws scenes on the GS path");
+        check(setOption(r, "render.scene", "original").empty(), "render.scene = original is taken");
+        for (const char* later : {"hybrid", "modern", "parity"}) {
+            const std::string error = setOption(r, "render.scene", later);
+            check(error.find("modern renderer") != std::string::npos && r.scene == SceneRenderer::Original,
+                  "hybrid, modern and parity are refused until the modern renderer lands, with the reason");
+        }
+        check(setOption(r, "render.scene", "bogus") == "render.scene: expected original", "a bad value names the one taken");
+        check(formatSettings(r).find("[render]") < formatSettings(r).find("\nscene = original\n") &&
+                  formatSettings(r).find("\nscene = original\n") < formatSettings(r).find("[texture]"),
+              "render.scene is written in the [render] section");
+    }
+
     // Quality modes: render scale per axis (AMD's FSR ratios).
     Settings q;
     const std::pair<const char*, float> ratios[] = {{"native", 1.0f}, {"ultra_quality", 1.3f}, {"quality", 1.5f},
@@ -123,6 +140,19 @@ int main() {
     check(future.aa == AntiAliasing::Fxaa, "known options of a newer file are read");
     check(futureWarnings.size() == 3, "newer version, unknown key and bad value are reported");
     check(future.anisotropy == Settings{}.anisotropy, "a bad value keeps the default");
+    // The file as written, read back and written again: the same bytes (each module's options in the table's order).
+    {
+        saveSettings(saved, path);
+        std::ifstream first(path, std::ios::binary);
+        const std::string a{std::istreambuf_iterator<char>(first), std::istreambuf_iterator<char>()};
+        first.close();
+        Settings again;
+        check(loadSettings(again, path).empty(), "the saved file reads back without warnings");
+        saveSettings(again, path);
+        std::ifstream second(path, std::ios::binary);
+        const std::string b{std::istreambuf_iterator<char>(second), std::istreambuf_iterator<char>()};
+        check(!a.empty() && a == b, "a saved file read back and saved again is byte for byte the same");
+    }
     std::filesystem::remove(path);
     Settings missing;
     check(loadSettings(missing, path).empty(), "a missing file is not an error");

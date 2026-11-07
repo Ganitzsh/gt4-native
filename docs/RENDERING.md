@@ -352,6 +352,7 @@ Generated from `gt4_host --list-options` (defaults are the `high` preset).
 | `render.sharpness` | `0.2` | 0..1 | Contrast-adaptive sharpening strength (AMD RCAS) after upscaling; 0 = off. |
 | `render.aa` | `taa` | off \| fxaa \| smaa \| smaa_t2x \| taa | Post-process anti-aliasing: fxaa, smaa (SMAA 1x), smaa_t2x (SMAA with 2-frame temporal supersampling) or taa (temporal AA; it also upsamples when rendering below the output). Ignored when render.upscaler = fsr2. |
 | `render.msaa` | `1` | 1 \| 2 \| 4 \| 8 | Multisample anti-aliasing samples for the 3D scene (clamped to the device). |
+| `render.scene` | `original` | original | What draws the game's 3D scenes: original = the GS path, the PS2's picture. hybrid, modern and parity (debugging) come with the modern renderer (docs/modern/ARCHITECTURE.md 4.1, PLAN.md B7, B8, B15) and are refused until then. |
 
 #### [texture]
 
