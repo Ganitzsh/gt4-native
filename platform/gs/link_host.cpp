@@ -262,74 +262,94 @@ void GameLink::gameHostWaits(uint32_t& count, uint32_t& ms) const {
 }
 uint64_t GameLink::bytesReceived() const { return impl->received; }
 
+namespace {
+
+bool seekTo(std::FILE* f, uint64_t at) {
+#ifdef _WIN32
+    return _fseeki64(f, static_cast<__int64>(at), SEEK_SET) == 0;
+#else
+    return fseeko(f, static_cast<off_t>(at), SEEK_SET) == 0;
+#endif
+}
+
+uint64_t fileSize(std::FILE* f) {
+    std::fseek(f, 0, SEEK_END);
+#ifdef _WIN32
+    const int64_t n = _ftelli64(f);
+#else
+    const int64_t n = ftello(f);
+#endif
+    std::fseek(f, 0, SEEK_SET);
+    return n > 0 ? static_cast<uint64_t>(n) : 0;
+}
+
+}  // namespace
+
 std::unique_ptr<ReplaySource> ReplaySource::open(const std::string& path, std::string& error) {
     auto source = std::make_unique<ReplaySource>();
     source->file = path;
-    size_t bytes = 0;
-#ifdef _WIN32
-    HANDLE file = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-                              FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
-    LARGE_INTEGER length{};
-    if (file == INVALID_HANDLE_VALUE || !GetFileSizeEx(file, &length)) {
-        if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+    std::FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) {
         error = "cannot open the capture " + path;
         return nullptr;
     }
-    bytes = static_cast<size_t>(length.QuadPart);
-    if (bytes) {
-        HANDLE section = CreateFileMappingA(file, nullptr, PAGE_READONLY, 0, 0, nullptr);
-        void* view = section ? MapViewOfFile(section, FILE_MAP_READ, 0, 0, 0) : nullptr;
-        if (section) CloseHandle(section);
-        if (!view) {
-            CloseHandle(file);
-            error = "cannot map the capture " + path;
-            return nullptr;
+    source->in = std::shared_ptr<std::FILE>(f, [](std::FILE* p) { std::fclose(p); });
+    std::setvbuf(f, nullptr, _IOFBF, 1 << 20);
+    const uint64_t bytes = fileSize(f);
+    // The VBlanks, from the records' headers, read in 4 MB chunks; a payload larger than what is left of a chunk is
+    // skipped by seeking. The file goes through the system's cache once and nothing of it stays in this process.
+    std::vector<uint8_t> chunk(4u << 20);
+    uint64_t at = 0;            // the start of the next record in the file
+    uint64_t chunkAt = 0;       // the file position of chunk[0]
+    size_t have = 0;            // bytes in chunk
+    while (at + sizeof(Gt4LinkRecord) <= bytes) {
+        if (at < chunkAt || at + sizeof(Gt4LinkRecord) > chunkAt + have) {   // the header is not in the chunk
+            if (!seekTo(f, at)) break;
+            chunkAt = at;
+            have = std::fread(chunk.data(), 1, chunk.size(), f);
+            if (have < sizeof(Gt4LinkRecord)) break;
         }
-        source->mapping = std::shared_ptr<void>(view, [](void* v) { UnmapViewOfFile(v); });
+        Gt4LinkRecord header;
+        std::memcpy(&header, chunk.data() + (at - chunkAt), sizeof header);
+        const uint64_t span = recordSpan(header.size);
+        if (at + span > bytes) break;   // an incomplete record at the end
+        at += span;
+        source->size = at;
+        if (header.type == GT4_REC_VSYNC) ++source->vsyncCount;
     }
-    CloseHandle(file);
-#else
-    const int fd = ::open(path.c_str(), O_RDONLY);
-    struct stat st {};
-    if (fd < 0 || fstat(fd, &st) != 0) {
-        if (fd >= 0) ::close(fd);
-        error = "cannot open the capture " + path;
-        return nullptr;
-    }
-    bytes = static_cast<size_t>(st.st_size);
-    if (bytes) {
-        void* view = mmap(nullptr, bytes, PROT_READ, MAP_PRIVATE, fd, 0);
-        if (view == MAP_FAILED) {
-            ::close(fd);
-            error = "cannot map the capture " + path;
-            return nullptr;
-        }
-        source->mapping = std::shared_ptr<void>(view, [bytes](void* v) { munmap(v, bytes); });
-    }
-    ::close(fd);
-#endif
-    source->data = static_cast<const uint8_t*>(source->mapping.get());
-    size_t used = 0;
-    if (source->data)
-        used = splitRecords(source->data, bytes, [&](const Gt4LinkRecord& r, const uint8_t*) {
-            if (r.type == GT4_REC_VSYNC) ++source->vsyncCount;
-        });
-    if (used != bytes)
-        std::fprintf(stderr, "Replay: %s ends with %zu bytes of an incomplete record (ignored)\n", path.c_str(), bytes - used);
-    source->size = used;
+    if (source->size != bytes)
+        std::fprintf(stderr, "Replay: %s ends with %llu bytes of an incomplete record (ignored)\n", path.c_str(),
+                     static_cast<unsigned long long>(bytes - source->size));
     return source;
 }
 
 bool ReplaySource::nextFrame(const RecordCallback& onRecord) {
-    while (offset + sizeof(Gt4LinkRecord) <= size) {
+    std::FILE* f = in.get();
+    if (!f || offset + sizeof(Gt4LinkRecord) > size || !seekTo(f, offset)) return false;
+    // The frame's records into one buffer first (their payloads stay valid until the next frame), then delivered.
+    frame.clear();
+    std::vector<size_t> starts;
+    bool vsync = false;
+    while (!vsync && offset + sizeof(Gt4LinkRecord) <= size) {
         Gt4LinkRecord header;
-        std::memcpy(&header, data + offset, sizeof(header));
-        const uint8_t* payload = data + offset + sizeof(header);
-        offset += recordSpan(header.size);
-        onRecord(header, payload);
-        if (header.type == GT4_REC_VSYNC) return true;
+        if (std::fread(&header, sizeof header, 1, f) != 1) break;
+        const uint64_t span = recordSpan(header.size);
+        if (offset + span > size) break;
+        const size_t at = frame.size();
+        frame.resize(at + static_cast<size_t>(span));
+        std::memcpy(frame.data() + at, &header, sizeof header);
+        const size_t rest = static_cast<size_t>(span) - sizeof header;
+        if (rest && std::fread(frame.data() + at + sizeof header, 1, rest, f) != rest) break;
+        starts.push_back(at);
+        offset += span;
+        vsync = header.type == GT4_REC_VSYNC;
     }
-    return false;
+    for (size_t at : starts) {
+        Gt4LinkRecord header;
+        std::memcpy(&header, frame.data() + at, sizeof header);
+        onRecord(header, frame.data() + at + sizeof header);
+    }
+    return vsync;
 }
 
 CaptureWriter::CaptureWriter(const std::string& path) : out(std::fopen(path.c_str(), "wb")) {}

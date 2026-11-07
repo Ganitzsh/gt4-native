@@ -63,19 +63,24 @@ class ReplaySource {
 public:
     static std::unique_ptr<ReplaySource> open(const std::string& path, std::string& error);
     // Calls `onRecord` for each record up to and including the next VSYNC. Returns false at the end of
-    // the file (no VSYNC found; the records before the end were still delivered).
+    // the file (no VSYNC found; the records before the end were still delivered). A payload stays valid until the
+    // next call.
     bool nextFrame(const RecordCallback& onRecord);
     void rewind() { offset = 0; }
     size_t frames() const { return vsyncCount; }   // VSYNC records in the file
     const std::string& path() const { return file; }
 
 private:
+    // The capture is read one frame at a time, not mapped whole: a recording from boot runs to tens of gigabytes,
+    // and a mapped one stayed in the process's memory as it was read (two replays at once of a 14.5 GB capture
+    // left the machine short of memory). What is read goes through the system's file cache, which the system can
+    // take back.
     std::string file;
-    const uint8_t* data = nullptr;   // the mapped capture
-    size_t size = 0;                 // its whole records
-    std::shared_ptr<void> mapping;   // unmaps the file with the last owner
-    size_t offset = 0;
+    std::shared_ptr<std::FILE> in;
+    uint64_t size = 0;                 // the bytes of its whole records
+    uint64_t offset = 0;               // where the next frame starts
     size_t vsyncCount = 0;
+    std::vector<uint8_t> frame;        // the records of the frame last delivered
 };
 
 // Writes records in the capture format (for tests and tools).
