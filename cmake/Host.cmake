@@ -289,7 +289,7 @@ target_include_directories(gt4_host PRIVATE platform/sdl platform/render platfor
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party
     ${GT4_FSR2_DIR})
 target_compile_definitions(gt4_host PRIVATE VK_NO_PROTOTYPES FFX_GCC)
-target_link_libraries(gt4_host PRIVATE SDL3::SDL3 Vulkan::Headers gt4_guest_abi gt4_fsr2 gt4_gs gt4_saves ${GT4_VOLK} ${GT4_VOLK_HEADERS})
+target_link_libraries(gt4_host PRIVATE SDL3::SDL3 Vulkan::Headers gt4_guest_abi gt4_fsr2 gt4_gs gt4_saves gt4_input ${GT4_VOLK} ${GT4_VOLK_HEADERS})
 if(MSVC)
   target_compile_options(gt4_host PRIVATE /W4)
   # Generated SPIR-V tables and the volk loader are third-party style code: no warnings there.

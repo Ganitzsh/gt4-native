@@ -39,6 +39,8 @@ enum class FieldMode : uint8_t { Blend, Clean };
 enum class Preset : uint8_t { Original, Low, Medium, High, Ultra, Custom };
 // The AI's catch-up (GT4's "slow car boost": cars behind sped up, cars ahead slowed down, by event).
 enum class AiCatchUp : uint8_t { Original, Reduced, Off };
+// The pedals' pressure scale (input.trigger_travel, settings_input.cpp; docs/modern/spikes/D1-bindings.md).
+enum class TriggerTravel : uint8_t { Game, Full };
 
 struct Settings {
     static constexpr int kVersion = 1;
@@ -119,6 +121,9 @@ struct Settings {
 
     // [gameplay] (sent to the game; not part of the graphics presets)
     AiCatchUp aiCatchUp = AiCatchUp::Original;
+
+    // [input] (settings_input.cpp; not part of the graphics presets)
+    TriggerTravel triggerTravel = TriggerTravel::Game;   // sent to the game (kOptionTriggerTravel)
 
     // [scene] (test scene only; not saved)
     bool animate = true;

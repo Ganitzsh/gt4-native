@@ -12,6 +12,7 @@
 #include "gs_host.h"
 #include "cpu_profile.h"
 #include "ps2_pad.h"
+#include "input_map.h"
 #include "chord_guard.h"
 #include "renderer.h"
 #include "save_import.h"
@@ -453,59 +454,26 @@ std::string gamepadCommand(gt4::Settings& s, SDL_GamepadButton button) {
     }
 }
 
-// The game's pad 1 from the SDL gamepad (standard layout) and the keyboard (docs/GS_BACKEND.md, "Input").
-gt4::ps2::PadInput readPad(SDL_Gamepad* gamepad) {
-    using namespace gt4::ps2;
-    PadInput in;
-    auto press = [&](PadButton b, bool down) { if (down) in.button[b] = 1.0f; };
-    const bool* keys = SDL_GetKeyboardState(nullptr);
-    if (keys) {
-        press(PadUp, keys[SDL_SCANCODE_UP]);
-        press(PadDown, keys[SDL_SCANCODE_DOWN]);
-        press(PadLeft, keys[SDL_SCANCODE_LEFT]);
-        press(PadRight, keys[SDL_SCANCODE_RIGHT]);
-        press(PadCross, keys[SDL_SCANCODE_X]);
-        press(PadCircle, keys[SDL_SCANCODE_C]);
-        press(PadSquare, keys[SDL_SCANCODE_Z]);
-        press(PadTriangle, keys[SDL_SCANCODE_V]);
-        press(PadL1, keys[SDL_SCANCODE_Q]);
-        press(PadR1, keys[SDL_SCANCODE_E]);
-        press(PadL2, keys[SDL_SCANCODE_1]);
-        press(PadR2, keys[SDL_SCANCODE_3]);
-        press(PadStart, keys[SDL_SCANCODE_RETURN]);
-        press(PadSelect, keys[SDL_SCANCODE_BACKSPACE] || keys[SDL_SCANCODE_RSHIFT]);
-        if (keys[SDL_SCANCODE_J]) in.leftX -= 1.0f;
-        if (keys[SDL_SCANCODE_L]) in.leftX += 1.0f;
-        if (keys[SDL_SCANCODE_I]) in.leftY -= 1.0f;
-        if (keys[SDL_SCANCODE_K]) in.leftY += 1.0f;
-    }
+// The keyboard and the SDL gamepad now (standard layout), for the pad map (platform/input/input_map.h).
+gt4::input::Snapshot readInput(SDL_Gamepad* gamepad) {
+    gt4::input::Snapshot s;
+    int count = 0;
+    if (const bool* keys = SDL_GetKeyboardState(&count))
+        for (int k = 0; k < count && k < SDL_SCANCODE_COUNT; ++k) s.keys[k] = keys[k];
     if (gamepad) {
-        auto button = [&](SDL_GamepadButton b) { return SDL_GetGamepadButton(gamepad, b); };
-        auto axis = [&](SDL_GamepadAxis a) { return static_cast<float>(SDL_GetGamepadAxis(gamepad, a)) / 32767.0f; };
-        press(PadCross, button(SDL_GAMEPAD_BUTTON_SOUTH));
-        press(PadCircle, button(SDL_GAMEPAD_BUTTON_EAST));
-        press(PadSquare, button(SDL_GAMEPAD_BUTTON_WEST));
-        press(PadTriangle, button(SDL_GAMEPAD_BUTTON_NORTH));
-        press(PadSelect, button(SDL_GAMEPAD_BUTTON_BACK));
-        press(PadStart, button(SDL_GAMEPAD_BUTTON_START));
-        press(PadL3, button(SDL_GAMEPAD_BUTTON_LEFT_STICK));
-        press(PadR3, button(SDL_GAMEPAD_BUTTON_RIGHT_STICK));
-        press(PadL1, button(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER));
-        press(PadR1, button(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER));
-        press(PadUp, button(SDL_GAMEPAD_BUTTON_DPAD_UP));
-        press(PadDown, button(SDL_GAMEPAD_BUTTON_DPAD_DOWN));
-        press(PadLeft, button(SDL_GAMEPAD_BUTTON_DPAD_LEFT));
-        press(PadRight, button(SDL_GAMEPAD_BUTTON_DPAD_RIGHT));
-        // Analogue triggers drive the L2/R2 pressures (GT4's accelerator/brake can use them).
-        in.button[PadL2] = std::max(in.button[PadL2], std::clamp(axis(SDL_GAMEPAD_AXIS_LEFT_TRIGGER), 0.0f, 1.0f));
-        in.button[PadR2] = std::max(in.button[PadR2], std::clamp(axis(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER), 0.0f, 1.0f));
-        auto stick = [](float v) { return std::fabs(v) < 0.08f ? 0.0f : v; };
-        in.leftX = std::clamp(in.leftX + stick(axis(SDL_GAMEPAD_AXIS_LEFTX)), -1.0f, 1.0f);
-        in.leftY = std::clamp(in.leftY + stick(axis(SDL_GAMEPAD_AXIS_LEFTY)), -1.0f, 1.0f);
-        in.rightX = stick(axis(SDL_GAMEPAD_AXIS_RIGHTX));
-        in.rightY = stick(axis(SDL_GAMEPAD_AXIS_RIGHTY));
+        s.gamepad = true;
+        for (int b = 0; b < SDL_GAMEPAD_BUTTON_COUNT; ++b) s.buttons[b] = SDL_GetGamepadButton(gamepad, static_cast<SDL_GamepadButton>(b));
+        for (int a = 0; a < SDL_GAMEPAD_AXIS_COUNT; ++a)
+            s.axes[a] = static_cast<float>(SDL_GetGamepadAxis(gamepad, static_cast<SDL_GamepadAxis>(a))) / 32767.0f;
     }
-    return in;
+    return s;
+}
+
+// The game's pad 1 from the keyboard and the gamepad (docs/GS_BACKEND.md, "Input"): the PS2 mapping, through the
+// action map (tests/input_map.cpp checks it gives the same bytes as the readPad before it, for every input).
+gt4::ps2::PadInput readPad(SDL_Gamepad* gamepad) {
+    static const gt4::input::Map map = gt4::input::originalMap();
+    return gt4::input::apply(map, readInput(gamepad));
 }
 
 // GT4_HOST_KEYS=FRAME:KEY,... (unattended checks of the settings menu): presses KEY (escape up down left right
@@ -979,6 +947,7 @@ int run(const Options& options) {
                 }
                 // Nothing reaches the game while the menu is open, nor afterwards until every button is up
                 // (the button that closed the menu would act in the game).
+                gs->setGameOption(6, static_cast<uint32_t>(settings.triggerTravel)); // kOptionTriggerTravel
                 gt4::ps2::PadInput input = readPad(session ? session->gamepad() : gamepad);
                 if (menuEnabled) chordGuard.filter(input, SDL_GetTicks());
                 if (padHeldBack) {
