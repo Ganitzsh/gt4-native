@@ -289,16 +289,24 @@ bool interrupt_now() {
         ctx.ContextFlags = CONTEXT_CONTROL;
         GetThreadContext(r->host, &ctx);  // makes the suspension take effect
         if (g_guard_frozen) {
-            // the innermost return address in the image: runtime code (not a game function) means frozen inside it
+            // the innermost return address in the image: runtime code (not a game function) means frozen inside it.
+            // Code only: a pointer to the runtime's data on the stack named "runtime" too (g_lock + 0x10, the critical
+            // section's semaphore, from a thread waiting in EnterCriticalSection).
+            auto code = [](uint32_t a) {
+                MEMORY_BASIC_INFORMATION m;
+                return a >= 0x02000000 && a < 0x04000000 && VirtualQuery(reinterpret_cast<void *>(uintptr_t(a)), &m, sizeof m) &&
+                       m.State == MEM_COMMIT &&
+                       (m.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY));
+            };
             ctx.ContextFlags = CONTEXT_CONTROL;
-            uint32_t at = ctx.Eip >= 0x02000000 && ctx.Eip < 0x04000000 ? ctx.Eip : 0;
+            uint32_t at = code(ctx.Eip) ? ctx.Eip : 0;
             const auto *sp = reinterpret_cast<const uint32_t *>(ctx.Esp);
             MEMORY_BASIC_INFORMATION mi;
             for (int k = 0; !at && k < 1024; ++k) {
                 if ((k == 0 || (reinterpret_cast<uintptr_t>(sp + k) & 0xFFF) == 0) &&
                     (!VirtualQuery(sp + k, &mi, sizeof mi) || mi.State != MEM_COMMIT || (mi.Protect & (PAGE_GUARD | PAGE_NOACCESS))))
                     break;
-                if (sp[k] >= 0x02000000 && sp[k] < 0x04000000 && *native_name_for(sp[k], nullptr)) at = sp[k];
+                if (code(sp[k]) && *native_name_for(sp[k], nullptr)) at = sp[k];
             }
             uint32_t g = 0;
             if (at && !std::strcmp(native_name_for(at, &g), "runtime")) {
@@ -334,13 +342,14 @@ bool g_alarms_due() {
 
 // Delivers held interrupts on the calling guest thread (leaving runtime code, or EI).
 void deliver_on_self(Thread *me) {
+    // Runtime code from here: the interrupt thread, holding g_lock, would otherwise freeze this thread in its wait
+    // for g_lock (the watch's "frozen inside runtime code" at g_lock + 0x10, 2026-11-07 on the Odin). The handlers
+    // below run on this thread too: a syscall or EI they make must not deliver again (it would take g_lock a second
+    // time, and switch_away below releases it only once).
+    ++me->kernel_depth;
     EnterCriticalSection(&g_lock);
     if (g_alarms_due()) {
-        // the handlers run on this thread: a syscall or EI they make must not deliver again (it
-        // would take g_lock a second time, and switch_away below releases it only once)
-        ++me->kernel_depth;
         deliver_pending();
-        --me->kernel_depth;
         g_due_since = 0;
         ++g_delivered_cooperatively;
         Thread *best = best_ready();
@@ -350,6 +359,7 @@ void deliver_on_self(Thread *me) {
         }
     }
     LeaveCriticalSection(&g_lock);
+    --me->kernel_depth;
 }
 
 DWORD WINAPI interrupt_thread(void *) {
