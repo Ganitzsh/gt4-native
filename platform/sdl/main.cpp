@@ -69,6 +69,8 @@ const char* kUsage =
     "  --capture-frames LIST  write these frames (from 1; N, A-B, A-B/STEP or every:N, comma-separated) as\n"
     "                       DIR/frame_000600.ppm (with --frames and --capture-dir DIR); a fixed-step replay draws\n"
     "                       one VBlank a frame, so frame N is the capture's N-th VBlank\n"
+    "  --profile-json PATH  one JSON line per presented frame: the time since the last present, the draw's CPU\n"
+    "                       time, the GPU time of the last finished frame, frames skipped (tools/perf_report.py)\n"
     "  --session-dir PATH   attach a virtual gamepad, process commands, record frames/audio/events\n"
     "  --no-audio           disable playback and WAV capture for a session\n"
     "  --fixed-step         advance exactly one 60 Hz tick per frame (default for headless and sessions)\n"
@@ -142,6 +144,7 @@ struct Options {
     uint32_t captureEvery = 0;  // --capture-every: also every N frames, numbered
     FrameList captureFrames;    // --capture-frames: the frames written to --capture-dir
     std::string captureDir;
+    std::string profileJson;    // --profile-json: one line of timings per presented frame
     VkExtent2D size{0, 0};   // headless output; 0 = the window size setting
     std::string gpu, settingsPath, sessionDirectory, capture, importSave, saves;
     std::vector<std::pair<std::string, std::string>> sets;
@@ -199,6 +202,7 @@ Options parse(int argc, char** argv) {
         }
         else if (a == "--capture-frames") o.captureFrames = parseFrameList(value(i));
         else if (a == "--capture-dir") o.captureDir = value(i);
+        else if (a == "--profile-json") o.profileJson = value(i);
         else if (a == "--game") o.game = value(i);
         else if (a == "--game-args") o.gameArgs = splitArguments(value(i));
         else if (a == "--replay") o.replay = value(i);
@@ -1150,6 +1154,23 @@ int run(const Options& options) {
         if (presented) {
             ++frames;
             perfGpu += renderer->gpuMilliseconds();
+            // --profile-json: the frame pacing and the GPU's time, a line a presented frame (tools/perf_report.py).
+            if (!options.profileJson.empty()) {
+                static std::FILE* profile = std::fopen(options.profileJson.c_str(), "w");
+                static Uint64 lastPresent = 0;
+                static uint64_t lastSkipped = 0;
+                const Uint64 now = SDL_GetPerformanceCounter();
+                const uint64_t skipped = renderer->sceneCounters().framesSkipped;
+                if (profile) {
+                    std::fprintf(profile, "{\"frame\":%u,\"present_ms\":%.3f,\"draw_ms\":%.3f,\"gpu_ms\":%.3f,\"skipped\":%llu}\n",
+                                 frames, lastPresent ? static_cast<double>(now - lastPresent) * 1000.0 / frequency : 0.0,
+                                 static_cast<double>(now - frameStarted) * 1000.0 / frequency, renderer->gpuMilliseconds(),
+                                 static_cast<unsigned long long>(skipped - lastSkipped));
+                    std::fflush(profile);
+                }
+                lastPresent = now;
+                lastSkipped = skipped;
+            }
             // The hitch log (GT4_HITCH_LOG=0: off): with a live game, one line for a present more than 25 ms after the
             // one before, or that skipped game frames, or after which the game waited for the host: its time, the GPU's
             // last frame, and what can make a frame slow (frames skipped, textures decoded and uploaded, render targets and pipelines
