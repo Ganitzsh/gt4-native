@@ -21,9 +21,19 @@ build/host-windows-Release/gt4_host.exe --session-dir build/sessions/NAME
     --saves build/saves/saves
 ```
 
-## Release game builds
+## Heavy jobs: machine-wide slots
 
-`tools/release_game.py` stages into the shared decomp (`gt4-decomp/build/native_*_release`) and empties those
-folders, so two at once break each other. Until the staging moves into each clone, hold the lock while it runs:
-`mkdir C:/Users/julie/locks/gt4-decomp-release` (it fails while another lane holds it: wait and retry), your lane
-and the time in `owner.txt` inside, removed when `release_game.py` exits, on failure too.
+The machine is shared by every lane, so heavy jobs go through slots (a slot is a folder made with `mkdir`, which
+fails while someone holds it: wait and retry; `owner.txt` inside with your lane and the time; removed when the job
+exits, on failure too). Do not start one under 6 GB free (`Get-CimInstance Win32_OperatingSystem`,
+`FreePhysicalMemory`).
+
+| Slot | For | Limits |
+|---|---|---|
+| `C:/Users/julie/locks/gt4-decomp-release` | game builds (`tools/release_game.py`, `tools/game_cc.py`): one at a time | `--jobs 4` |
+| `C:/Users/julie/locks/heavy-1`, `heavy-2` | host builds, live game runs, replays: two at a time | `cmake --build --parallel 6` |
+
+Close PCSX2, replays and HTTP servers when the run is done.
+
+A fresh clone also needs the static 32-bit FFmpeg the game links for its movies, in `build/ffmpeg-i686`:
+`tools/build_ffmpeg.sh` builds it (FFmpeg 7.1.1), or copy a clone's (`GT4_FFMPEG=DIR` points the link elsewhere).
