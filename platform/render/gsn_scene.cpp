@@ -1392,6 +1392,16 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         builtScale[index] = drawnScale(frame.draws[frame.commands[at].index].target);
         for (size_t j = at + 1, seen = 0; j < frame.commands.size() && seen < 256; ++j, ++seen) {
             const auto& cmd = frame.commands[j];
+            // A Light's scene stage writes its target, a colour grade its destination: a reinterpretation of either
+            // after it must be built from what they leave, so it is not built ahead of them in this batch.
+            if (cmd.kind == gsn::FrameList::Command::Kind::Light) {
+                if (cmd.index < frame.lights.size()) written.push_back(frame.lights[cmd.index].target);
+                continue;
+            }
+            if (cmd.kind == gsn::FrameList::Command::Kind::Effect) {
+                if (cmd.index < frame.effects.size()) written.push_back(frame.effects[cmd.index].destination);
+                continue;
+            }
             if (cmd.kind != gsn::FrameList::Command::Kind::Draw) continue;
             const gsn::Draw& d = frame.draws[cmd.index];
             if (d.texture.kind == gsn::TextureSource::Kind::Reinterpreted && d.texture.id < count && !built[d.texture.id] &&
