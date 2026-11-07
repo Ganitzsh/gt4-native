@@ -274,6 +274,8 @@ struct GsnScene::Impl {
         std::map<std::string, uint64_t> counts;
         uint64_t frames = 0;
         std::chrono::steady_clock::time_point since = std::chrono::steady_clock::now();
+        bool quiet = false;   // on through setStageTiming only: no report printed
+        std::vector<std::pair<std::string, double>> last;   // the last finished frame's labels and milliseconds
     } profile;
     void tally(const char* what, uint64_t n = 1) {
         if (profile.on) profile.counts[what] += n;
@@ -298,6 +300,14 @@ struct GsnScene::Impl {
                                       VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
                 const double period = device.properties.limits.timestampPeriod * 1e-6;
                 for (size_t k = 1; k < t.size(); ++k) profile.milliseconds[l[k - 1]] += double(t[k] - t[k - 1]) * period;
+                // (the frame on its own, by label: GsnScene::lastFrameStages)
+                profile.last.clear();
+                for (size_t k = 1; k < t.size(); ++k) {
+                    const double ms = double(t[k] - t[k - 1]) * period;
+                    auto it = std::find_if(profile.last.begin(), profile.last.end(), [&](const auto& e) { return e.first == l[k - 1]; });
+                    if (it != profile.last.end()) it->second += ms;
+                    else profile.last.emplace_back(l[k - 1], ms);
+                }
                 ++profile.frames;
             }
             l.clear();
@@ -305,7 +315,7 @@ struct GsnScene::Impl {
             // beside the host's perf lines).
             const auto now = std::chrono::steady_clock::now();
             if (now - profile.since >= std::chrono::seconds(10)) {
-                printProfile();
+                if (!profile.quiet) printProfile();
                 profile.milliseconds.clear();
                 profile.counts.clear();
                 profile.frames = 0;
@@ -346,11 +356,7 @@ struct GsnScene::Impl {
 
     Impl(const vk::Device& d, VkCommandPool p) : device(d), pool(p) {
         if (const char* e = std::getenv("GT4_GPU_PROFILE"); e && *e && *e != '0') {
-            VkQueryPoolCreateInfo q{};
-            q.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
-            q.queryType = VK_QUERY_TYPE_TIMESTAMP;
-            q.queryCount = Profile::kPerSlot * kSlots;
-            profile.on = vkCreateQueryPool(device.device, &q, nullptr, &profile.pool) == VK_SUCCESS;
+            profile.on = startProfile();
             profile.level = std::atoi(e);
         }
         for (int linear = 0; linear < 2; ++linear)
@@ -358,6 +364,16 @@ struct GsnScene::Impl {
                 samplers[linear * 2 + repeat] = vk::createSampler(device, linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST, VK_SAMPLER_MIPMAP_MODE_NEAREST,
                                                                   repeat ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
         makeMipSamplers(16.0f);
+    }
+
+    // The GPU profile's timestamps (GT4_GPU_PROFILE, or setStageTiming).
+    bool startProfile() {
+        if (profile.pool) return true;
+        VkQueryPoolCreateInfo q{};
+        q.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+        q.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        q.queryCount = Profile::kPerSlot * kSlots;
+        return vkCreateQueryPool(device.device, &q, nullptr, &profile.pool) == VK_SUCCESS;
     }
 
     // The mipmapped textures' samplers at an anisotropy (texture.anisotropy; 1 = off).
@@ -385,7 +401,7 @@ struct GsnScene::Impl {
     }
     ~Impl() {
         vkDeviceWaitIdle(device.device);
-        printProfile();
+        if (!profile.quiet) printProfile();
         if (framesSkipped) std::printf("Frames skipped behind the game: %llu\n", static_cast<unsigned long long>(framesSkipped));
         if (readSkips) std::printf("... of them ahead of GS reads: %llu (of %llu reads)\n", static_cast<unsigned long long>(readSkips),
                                    static_cast<unsigned long long>(reads));
@@ -2250,6 +2266,16 @@ void GsnScene::setScale(uint32_t scale) { impl->scaleSetting = scale; }
 void GsnScene::setAnisotropy(int anisotropy) { impl->makeMipSamplers(static_cast<float>(anisotropy)); }
 
 void GsnScene::setTemporal(bool on) { impl->temporal = on; }
+void GsnScene::setStageTiming(bool on) {
+    Impl::Profile& p = impl->profile;
+    if (on && !p.on) {
+        p.on = impl->startProfile();
+        p.quiet = true;   // (GT4_GPU_PROFILE prints its reports; this only keeps the frames' stages)
+    } else if (!on && p.quiet) {
+        p.on = false;
+    }
+}
+std::vector<std::pair<std::string, double>> GsnScene::lastFrameStages() const { return impl->profile.last; }
 void GsnScene::setEffects(const SceneEffects& effects) { impl->effects = effects; }
 bool GsnScene::antiAliasesItself() const { return impl->temporal; }
 
