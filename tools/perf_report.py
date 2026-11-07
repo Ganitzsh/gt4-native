@@ -43,7 +43,7 @@ STAGE_ARRAYS = ("passes", "gs_passes", "cpu_stages")   # [{"name", "gpu_us" and/
 
 def stage_series(rows):
     """{(array, name, metric): [value per frame]}: a stage absent from a frame counts 0 there (it did not run);
-    a gpu_us of -1 (no timestamp) is left out."""
+    a frame where it ran untimed (gpu_us -1: no timestamp) is left out of its series, not counted 0."""
     keys = set()
     for r in rows:
         for array in STAGE_ARRAYS:
@@ -53,14 +53,19 @@ def stage_series(rows):
                         keys.add((array, s["name"], metric))
     series = {k: [] for k in keys}
     for r in rows:
-        present = {}
+        present, untimed = {}, set()
         for array in STAGE_ARRAYS:
             for s in r.get(array, []):
                 for metric in ("gpu_us", "cpu_us"):
                     if metric in s and s[metric] >= 0:
                         present[(array, s["name"], metric)] = present.get((array, s["name"], metric), 0.0) + s[metric]
+                    elif metric in s:
+                        untimed.add((array, s["name"], metric))
         for k in keys:
-            series[k].append(present.get(k, 0.0))
+            if k in present:
+                series[k].append(present[k])
+            elif k not in untimed:   # ran but not timed in this frame (its slot had no timestamps): left out
+                series[k].append(0.0)
     return series
 
 
