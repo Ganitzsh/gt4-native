@@ -41,16 +41,20 @@ float fieldLuma(sampler2D t, vec2 offset, vec2 size, bool lower, vec2 uv) {
 
 // How much the two fields differ around this pixel (display.field_mode = clean). Each field is drawn on its own, half a
 // line from the other, so a still stroke one line thick is whole on one field's line and split over two of the
-// other's: the fields' lumas are compared smoothed over two output rows above and below (1-2-1), where a still picture
-// differs by about 0.1 and a moved one by several times that. The largest difference over rows -2, 0, +2 and columns
-// -3, 0, +3 is taken, so a letter that moved is shown from one field as a whole rather than in patches (tuned on
-// menus_boot.cap's track menus against each field's own motion two fields later).
-float fieldsDiffer(bool currentLower, bool otherLower, vec2 px) {
+// other's: the fields' lumas are compared smoothed over a step above and below (1-2-1), where a still picture differs
+// by about 0.1 and a moved one by several times that. The largest difference over three rows and three columns, a step
+// apart, is taken, so a letter that moved is shown from one field as a whole rather than in patches. The steps are
+// fractions of the displayed rectangle, so they span the same GS lines and pixels at any output size: 2/720 of its
+// height and 3/1280 of its width, as tuned (the rectangle drawn at 1280x720, menus_boot.cap's track menus, against each
+// field's own motion two fields later).
+const vec2 kFieldStep = vec2(3.0 / 1280.0, 2.0 / 720.0);
+
+float fieldsDiffer(bool currentLower, bool otherLower) {
     float moved = 0.0;
     for (int i = -1; i <= 1; ++i) {
         float c[5], o[5];
         for (int j = 0; j < 5; ++j) {
-            const vec2 uv = inUv + vec2(float(3 * i) * px.x, float(2 * (j - 2)) * px.y);
+            const vec2 uv = inUv + vec2(float(i), float(j - 2)) * kFieldStep;
             c[j] = fieldLuma(frame, display.offset, display.size, currentLower, uv);
             o[j] = fieldLuma(otherField, display.otherOffset, display.otherSize, otherLower, uv);
         }
@@ -61,7 +65,6 @@ float fieldsDiffer(bool currentLower, bool otherLower, vec2 px) {
 }
 
 void main() {
-    const vec2 px = vec2(abs(dFdx(inUv.x)), abs(dFdy(inUv.y)));   // an output pixel in inUv (taken in uniform flow)
     const bool blended = display.blend > 0.0;
     const bool currentLower = blended && display.offset.y > display.otherOffset.y;
     const bool otherLower = blended && display.otherOffset.y > display.offset.y;
@@ -73,7 +76,7 @@ void main() {
         if (display.clean > 0.5) {
             // Where something moved between the two fields (a menu line sliding in), the blend would show it twice:
             // there this field alone.
-            const float moved = fieldsDiffer(currentLower, otherLower, px);
+            const float moved = fieldsDiffer(currentLower, otherLower);
             w *= 1.0 - smoothstep(0.10, 0.20, moved);
         }
         c = mix(c, o, w);
