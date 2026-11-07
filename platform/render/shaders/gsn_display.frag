@@ -26,33 +26,55 @@ vec3 linearFromSrgb(vec3 c) {
 // A point of a field's rectangle; in the clean field mode the lower of the two fields (the one whose rectangle starts
 // a line lower) does not show its last line: the line a TV hides below the other field's, where GT4's menus park
 // their outgoing text, a faint row at the bottom when it is blended in.
-vec2 fieldPoint(sampler2D t, vec2 offset, vec2 size, bool lower) {
-    vec2 p = offset + inUv * size;
+vec2 fieldPoint(sampler2D t, vec2 offset, vec2 size, bool lower, vec2 uv) {
+    vec2 p = offset + uv * size;
     if (display.clean > 0.5 && lower)
         p.y = min(p.y, offset.y + size.y - display.line - 0.5 / float(textureSize(t, 0).y));
     return p;
 }
 
+const vec3 kLuma = vec3(0.2126, 0.7152, 0.0722);
+
+float fieldLuma(sampler2D t, vec2 offset, vec2 size, bool lower, vec2 uv) {
+    return dot(clamp(textureLod(t, fieldPoint(t, offset, size, lower, uv), 0.0).rgb, 0.0, 1.0), kLuma);
+}
+
+// How much the two fields differ around this pixel (display.field_mode = clean). Each field is drawn on its own, half a
+// line from the other, so a still stroke one line thick is whole on one field's line and split over two of the
+// other's: the fields' lumas are compared smoothed over two output rows above and below (1-2-1), where a still picture
+// differs by about 0.1 and a moved one by several times that. The largest difference over rows -2, 0, +2 and columns
+// -3, 0, +3 is taken, so a letter that moved is shown from one field as a whole rather than in patches (tuned on
+// menus_boot.cap's track menus against each field's own motion two fields later).
+float fieldsDiffer(bool currentLower, bool otherLower, vec2 px) {
+    float moved = 0.0;
+    for (int i = -1; i <= 1; ++i) {
+        float c[5], o[5];
+        for (int j = 0; j < 5; ++j) {
+            const vec2 uv = inUv + vec2(float(3 * i) * px.x, float(2 * (j - 2)) * px.y);
+            c[j] = fieldLuma(frame, display.offset, display.size, currentLower, uv);
+            o[j] = fieldLuma(otherField, display.otherOffset, display.otherSize, otherLower, uv);
+        }
+        for (int j = 1; j <= 3; ++j)
+            moved = max(moved, abs((c[j - 1] + 2.0 * c[j] + c[j + 1]) - (o[j - 1] + 2.0 * o[j] + o[j + 1])) * 0.25);
+    }
+    return moved;
+}
+
 void main() {
+    const vec2 px = vec2(abs(dFdx(inUv.x)), abs(dFdy(inUv.y)));   // an output pixel in inUv (taken in uniform flow)
     const bool blended = display.blend > 0.0;
     const bool currentLower = blended && display.offset.y > display.otherOffset.y;
     const bool otherLower = blended && display.otherOffset.y > display.offset.y;
-    vec3 c = clamp(textureLod(frame, fieldPoint(frame, display.offset, display.size, currentLower), 0.0).rgb, 0.0, 1.0);
+    vec3 c = clamp(textureLod(frame, fieldPoint(frame, display.offset, display.size, currentLower, inUv), 0.0).rgb, 0.0, 1.0);
     if (blended) {
-        const vec2 q = fieldPoint(otherField, display.otherOffset, display.otherSize, otherLower);
+        const vec2 q = fieldPoint(otherField, display.otherOffset, display.otherSize, otherLower, inUv);
         const vec3 o = clamp(textureLod(otherField, q, 0.0).rgb, 0.0, 1.0);
         float w = display.blend;
         if (display.clean > 0.5) {
-            // Still where this field's colour lies within the other field's at this line and the lines above and
-            // below (the fields are half a line apart: a still edge falls between them); elsewhere something moved
-            // between the two fields (a menu line sliding in) and the blend would show it twice: this field alone.
-            const vec2 dy = vec2(0.0, display.line);
-            const vec3 up = clamp(textureLod(otherField, q - dy, 0.0).rgb, 0.0, 1.0);
-            const vec3 down = clamp(textureLod(otherField, q + dy, 0.0).rgb, 0.0, 1.0);
-            const vec3 lo = min(min(up, down), o), hi = max(max(up, down), o);
-            const vec3 outside = max(lo - c, c - hi);
-            const float moved = max(max(outside.r, outside.g), outside.b);
-            w *= 1.0 - smoothstep(0.03, 0.09, moved);
+            // Where something moved between the two fields (a menu line sliding in), the blend would show it twice:
+            // there this field alone.
+            const float moved = fieldsDiffer(currentLower, otherLower, px);
+            w *= 1.0 - smoothstep(0.10, 0.20, moved);
         }
         c = mix(c, o, w);
     }
