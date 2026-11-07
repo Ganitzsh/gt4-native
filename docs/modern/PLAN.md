@@ -44,10 +44,17 @@ Every ticket's acceptance uses these names.
 | `SCENE` | scene-decoder counters (CONTRACTS.md a.7) on REF captures recorded with scene records | the gates in that table |
 | `R5` | the Route 5 night metrics (`tools/frame_metrics.py`, ticket N1) on the N0 captures | as each ticket states |
 
-**REF captures** (local, `build/caps/REF.txt` lists them): `race7.cap` (race, 100 frames), `race.cap` (race-start
-flyover, 200), `event.cap` (event screen and menus, 85); from C10: a night race, a wet course, the showroom,
+**REF captures** (local, `build/caps/REF.txt` lists them): `race7.cap` (race, 100 frames); from C10, recorded
+from boot with display records: a race, the event screen and menus, a night race, a wet course, the showroom,
 Photo Travel, a post-race replay, a menu with a movie background, the track menu; from N0: Route 5 at night.
 Until C1 lands, single-frame checks use `--frames N --capture`.
+
+**Every pixel gate reports a non-zero-pixel count per capture**, and a capture that shows an all-black frame is
+not a REF capture. `refcap/race.cap` and `refcap/event.cap` (gt4-native-game/build) have no display records: they
+replay black at every preset (`display 0/0` in `GT4_GSN=stats`; 0 of 286,720 pixels non-zero on race.cap), on
+a80cfca too. Their frame lists are still built, so they serve draw statistics (the 93.5 % model share,
+ARCHITECTURE.md section 1) and the CPU-side tests (B5's mesh check, A10's decoder), never `ORIG`, `PRESETS`,
+`PARITY` or `VAL`. C10 replaces them first.
 
 ---
 
