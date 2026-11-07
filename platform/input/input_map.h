@@ -52,7 +52,8 @@ Map originalMap();
 // The settings that change the map (input.*; `original` is the PS2 mapping above and gets none of them).
 struct Options {
     // input.pedals: `original` (the triggers give the L2/R2 pressures) or `triggers` (the right trigger gives the
-    // pressure of the throttle button and the left one the brake's; L2/R2 then come from their keys only)
+    // pressure of the throttle button and the left one the brake's; the gamepad buttons on those two move to R2 and
+    // L2, GT4's default shift up and down)
     bool triggersAsPedals = false;
     ps2::PadButton throttle = ps2::PadCross;  // input.throttle_button
     ps2::PadButton brake = ps2::PadSquare;    // input.brake_button

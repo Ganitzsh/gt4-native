@@ -73,6 +73,17 @@ Map makeMap(const Options& o) {
     m.name = "triggers";
     for (auto* list : {&m.bindings[ps2::PadL2], &m.bindings[ps2::PadR2]})
         std::erase_if(*list, [](const Binding& b) { return b.source == Source::Axis; });
+    // The gamepad buttons on the throttle and brake buttons take the triggers' places, R2 and L2 (a swap): GT4 shifts
+    // on R2/L2 by default, which would otherwise have no gamepad binding left (docs/modern/spikes/D1-bindings.md).
+    const auto moveButtons = [&](ps2::PadButton from, ps2::PadButton to) {
+        if (from == to) return;
+        auto& list = m.bindings[from];
+        for (const Binding& b : list)
+            if (b.source == Source::Button) m.bindings[to].push_back(b);
+        std::erase_if(list, [](const Binding& b) { return b.source == Source::Button; });
+    };
+    moveButtons(o.throttle, ps2::PadR2);
+    moveButtons(o.brake, ps2::PadL2);
     m.bindings[o.throttle].push_back(axis(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER));
     m.bindings[o.brake].push_back(axis(SDL_GAMEPAD_AXIS_LEFT_TRIGGER));
     return m;

@@ -175,6 +175,20 @@ int main() {
         s.keys[SDL_SCANCODE_1] = true;
         ps2::encodePad(input::apply(pedals, s), b);
         expect(b[6 + 10] == 0xFF && !(b[1] & 0x01), "L2 still from its key");
+        // the gamepad's south and west buttons now give R2 and L2 (GT4's shift up and down), not Cross and Square
+        s = {};
+        s.gamepad = true;
+        s.buttons[SDL_GAMEPAD_BUTTON_SOUTH] = true;
+        ps2::encodePad(input::apply(pedals, s), b);
+        expect(b[6 + 11] == 0xFF && !(b[1] & 0x02) && b[6 + 6] == 0 && (b[1] & 0x40), "south gives R2, not Cross");
+        s.buttons[SDL_GAMEPAD_BUTTON_SOUTH] = false;
+        s.buttons[SDL_GAMEPAD_BUTTON_WEST] = true;
+        ps2::encodePad(input::apply(pedals, s), b);
+        expect(b[6 + 10] == 0xFF && !(b[1] & 0x01) && b[6 + 7] == 0 && (b[1] & 0x80), "west gives L2, not Square");
+        s = {};
+        s.keys[SDL_SCANCODE_X] = true;
+        ps2::encodePad(input::apply(pedals, s), b);
+        expect(b[6 + 6] == 0xFF && !(b[1] & 0x40), "the keyboard's X key still gives Cross");
 
         ps2::PadButton t{}, k{};
         expect(input::buttonByName("r2", t) && !input::buttonByName("pedal", k) && input::buttonByName("l2", k) &&
