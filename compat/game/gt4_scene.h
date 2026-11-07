@@ -148,4 +148,19 @@ struct gt4_scene_vehicle {
     unsigned int reserved[2];
 };
 
+/* The sizes include/gt4/gfx.h asserts, checked here by the game's own compiler (gcc 2.9: C89, so a negative array
+ * size stops the build): a layout that drifts fails the game build, not only the host's tests/scene_records.cpp. */
+typedef char gt4_scene_size_prefix[(sizeof(struct gt4_scene_prefix) == 4) ? 1 : -1];
+typedef char gt4_scene_size_frame_begin[(sizeof(struct gt4_scene_frame_begin) == 16) ? 1 : -1];
+typedef char gt4_scene_size_frame_end[(sizeof(struct gt4_scene_frame_end) == 20) ? 1 : -1];
+typedef char gt4_scene_size_view_begin[(sizeof(struct gt4_scene_view_begin) == 88) ? 1 : -1];
+typedef char gt4_scene_size_view_end[(sizeof(struct gt4_scene_view_end) == 8) ? 1 : -1];
+typedef char gt4_scene_size_projection[(sizeof(struct gt4_scene_projection) == 120) ? 1 : -1];
+typedef char gt4_scene_size_instance[(sizeof(struct gt4_scene_instance) == 120) ? 1 : -1];
+typedef char gt4_scene_size_light[(sizeof(struct gt4_scene_light) == 80) ? 1 : -1];
+typedef char gt4_scene_size_emitter[(sizeof(struct gt4_scene_emitter) == 80) ? 1 : -1];
+typedef char gt4_scene_size_marker[(sizeof(struct gt4_scene_marker) == 8) ? 1 : -1];
+typedef char gt4_scene_size_wheel[(sizeof(struct gt4_scene_wheel) == 48) ? 1 : -1];
+typedef char gt4_scene_size_vehicle[(sizeof(struct gt4_scene_vehicle) == 328) ? 1 : -1];
+
 #endif

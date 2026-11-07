@@ -3,6 +3,9 @@
 #ifndef GT4_GFX_H
 #define GT4_GFX_H
 
+/* the scene records' layouts (gt4_gfx_scene below): included here so every game build checks their sizes */
+#include "gt4_scene.h"
+
 /* A vertex: position in 1/16 pixel with the drawing context's origin, depth, colour (R in the low byte,
  * alpha 0x80 = 1), texture coordinates S, T, Q or U, V (1/16 texel), fog, and whether it draws (0: the
  * first vertices of a strip). */
