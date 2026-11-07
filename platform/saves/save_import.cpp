@@ -234,6 +234,45 @@ std::string stamp() {
     return buf;
 }
 
+// .backup/imports/DATE in the save folder, one not used yet
+fs::path displacedFolder(const fs::path& saveFolder) {
+    const std::string when = stamp();
+    const fs::path base = saveFolder / ".backup" / "imports";
+    fs::path dir = base / when;
+    std::error_code ec;
+    for (int n = 2; fs::exists(dir, ec); ++n) {
+        char suffix[16];
+        std::snprintf(suffix, sizeof suffix, "-%02d", n);
+        dir = base / (when + suffix);
+    }
+    return dir;
+}
+
+void put16(std::vector<unsigned char>& d, size_t at, uint16_t v) {
+    d[at] = static_cast<unsigned char>(v);
+    d[at + 1] = static_cast<unsigned char>(v >> 8);
+}
+void put32(std::vector<unsigned char>& d, size_t at, uint32_t v) {
+    for (int k = 0; k < 4; ++k) d[at + k] = static_cast<unsigned char>(v >> (8 * k));
+}
+
+// A 512-byte card directory entry: mode, length, creation and modification time (the PS2's clock, JST), name.
+void putEntry(std::vector<unsigned char>& out, uint16_t mode, uint32_t length, const std::tm& jst, const std::string& name) {
+    const size_t at = out.size();
+    out.resize(at + 512, 0);
+    put16(out, at, mode);
+    put32(out, at + 4, length);
+    for (size_t t : {size_t(0x08), size_t(0x18)}) {
+        out[at + t + 1] = static_cast<unsigned char>(jst.tm_sec);
+        out[at + t + 2] = static_cast<unsigned char>(jst.tm_min);
+        out[at + t + 3] = static_cast<unsigned char>(jst.tm_hour);
+        out[at + t + 4] = static_cast<unsigned char>(jst.tm_mday);
+        out[at + t + 5] = static_cast<unsigned char>(jst.tm_mon + 1);
+        put16(out, at + t + 6, static_cast<uint16_t>(jst.tm_year + 1900));
+    }
+    std::memcpy(out.data() + at + 0x40, name.data(), std::min<size_t>(name.size(), 31));
+}
+
 }  // namespace
 
 fs::path defaultSaveFolder() {
@@ -276,10 +315,14 @@ ImportResult importSave(const fs::path& source, const fs::path& saveFolder) {
     }
     std::error_code ec;
     fs::create_directories(saveFolder, ec);
-    const std::string when = stamp();
+    // a save the import replaces goes to .backup/imports/DATE/ (the game does not see names starting with ".")
+    const fs::path displaced = displacedFolder(saveFolder);
     for (const SaveEntry& save : saves) {
         const fs::path dir = saveFolder / fs::u8path(save.folder);
-        if (fs::exists(dir, ec)) fs::rename(dir, saveFolder / fs::u8path(save.folder + ".before-import-" + when), ec);
+        if (fs::exists(dir, ec)) {
+            fs::create_directories(displaced, ec);
+            if (!ec) fs::rename(dir, displaced / fs::u8path(save.folder), ec);
+        }
         if (ec || !fs::create_directories(dir, ec)) {
             r.message = "cannot write " + text(dir) + (ec ? ": " + ec.message() : "");
             return r;
@@ -296,6 +339,71 @@ ImportResult importSave(const fs::path& source, const fs::path& saveFolder) {
     }
     r.ok = true;
     r.message = "imported " + std::to_string(r.imported.size()) + " save(s) into " + text(saveFolder);
+    return r;
+}
+
+ExportResult exportSave(const fs::path& saveFolder, const std::string& save, const fs::path& out) {
+    ExportResult r;
+    const fs::path dir = saveFolder / fs::u8path(save);
+    std::error_code ec;
+    if (save.empty() || save[0] == '.' || save.find_first_of("/\\") != std::string::npos || !fs::is_directory(dir, ec)) {
+        r.message = "no save " + save + " in " + text(saveFolder);
+        return r;
+    }
+    std::vector<std::pair<std::string, std::vector<unsigned char>>> files;
+    for (const auto& f : fs::directory_iterator(dir, ec)) {
+        const std::string name = text(f.path().filename());
+        if (!f.is_regular_file(ec) || name.empty() || name[0] == '.') continue;   // the game's own files only
+        if (name.size() > 31) {
+            r.message = "a file name too long for a card: " + name;
+            return r;
+        }
+        std::vector<unsigned char> bytes;
+        if (!readFile(f.path(), bytes)) {
+            r.message = "cannot read " + text(f.path());
+            return r;
+        }
+        files.emplace_back(name, std::move(bytes));
+    }
+    std::sort(files.begin(), files.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    const std::time_t now = std::time(nullptr) + 9 * 3600;   // the PS2's clock keeps JST
+    std::tm jst{};
+#ifdef _WIN32
+    gmtime_s(&jst, &now);
+#else
+    gmtime_r(&now, &jst);
+#endif
+    // the folder (its length: the entries in it, "." and ".." included), ".", "..", then each file and its data
+    // in 1024-byte units, as uLaunchELF and PCSX2's memory card editor write it
+    std::vector<unsigned char> psu;
+    putEntry(psu, 0x8427, static_cast<uint32_t>(files.size() + 2), jst, save);
+    putEntry(psu, 0x8427, 0, jst, ".");
+    putEntry(psu, 0x8427, 0, jst, "..");
+    for (const auto& [name, bytes] : files) {
+        putEntry(psu, 0x8497, static_cast<uint32_t>(bytes.size()), jst, name);
+        psu.insert(psu.end(), bytes.begin(), bytes.end());
+        psu.resize(psu.size() + (1024 - bytes.size() % 1024) % 1024, 0);
+    }
+    // whole or not at all: written beside, then renamed over
+    const fs::path temp = out.parent_path() / fs::u8path("." + text(out.filename()) + ".tmp");
+    {
+        std::ofstream f(temp, std::ios::binary);
+        f.write(reinterpret_cast<const char*>(psu.data()), static_cast<std::streamsize>(psu.size()));
+        f.close();
+        if (!f) {
+            fs::remove(temp, ec);
+            r.message = "cannot write " + text(out);
+            return r;
+        }
+    }
+    fs::rename(temp, out, ec);
+    if (ec) {
+        fs::remove(temp, ec);
+        r.message = "cannot write " + text(out);
+        return r;
+    }
+    r.ok = true;
+    r.message = "exported " + save + " (" + std::to_string(files.size()) + " files) to " + text(out);
     return r;
 }
 

@@ -9,8 +9,9 @@
 //   dump of a card (.bin, .mcd), read through the card's own file system;
 // - a PCSX2 folder memory card (a folder with the save folders in it);
 // - a single save exported as .psu (uLaunchELF, PCSX2's memory card editor).
-// Only GT4's (NTSC-U) saves are taken, BASCUS-97328*; a save already in the folder is kept beside it, renamed
-// NAME.before-import-DATE.
+// Only GT4's (NTSC-U) saves are taken, BASCUS-97328*; a save already in the folder is moved to
+// .backup/imports/DATE/NAME inside it, where the game does not see it (runtime/save_folder.h hides names
+// starting with ".").
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -35,5 +36,13 @@ struct SaveEntry {
     std::vector<std::pair<std::string, std::vector<unsigned char>>> files;
 };
 std::vector<SaveEntry> readSaves(const std::filesystem::path& source, std::string& error);
+
+// One save of the folder (its name, such as BASCUS-97328GAMEDATA) as a .psu, which PCSX2's memory card editor,
+// uLaunchELF on a PS2 and importSave read. `out` is written whole or not at all.
+struct ExportResult {
+    bool ok = false;
+    std::string message;
+};
+ExportResult exportSave(const std::filesystem::path& saveFolder, const std::string& save, const std::filesystem::path& out);
 
 }  // namespace gt4::saves

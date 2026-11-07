@@ -49,8 +49,13 @@ is one of:
 - a PCSX2 folder memory card (its save folders are copied; PCSX2's `_pcsx2_*` index files are left);
 - one save exported as `.psu` (uLaunchELF, PCSX2's memory card editor).
 
-Other games' saves on the card are left. A save of the same name already in the folder is kept beside the new
-one, renamed `NAME.before-import-YYYYMMDD-HHMMSS`. `platform/saves/save_import.cpp`; checked by
+Other games' saves on the card are left. A save of the same name already in the folder is moved to
+`.backup/imports/YYYYMMDD-HHMMSS/NAME`, where the game does not list it and the backup rotation leaves it. `platform/saves/save_import.cpp`; checked by
 `tests/save_import.cpp` on card images, a `.psu` and a folder card built by the test, and on NetherSX2 (Android
 PCSX2) `.ps2` cards holding fourteen games' saves (2026-10-31: GT4's came out and loaded). A directory's entry
 count is the length in its parent's entry for it; a folder's own "." entry holds 0 on real cards.
+
+## Taking a save to a PS2 or PCSX2
+
+`gt4::saves::exportSave` (`platform/saves/save_import.h`) writes one save folder as a `.psu`, which PCSX2's
+memory card editor and uLaunchELF on a PS2 import; `tests/save_import.cpp` reads it back file for file.

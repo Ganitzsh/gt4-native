@@ -3,6 +3,7 @@
 #include "save_import.h"
 #include "temp_path.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -116,12 +117,20 @@ int main() {
         expect(r.imported.size() == 1 && r.imported[0] == "BASCUS-97328GAMEDATA", "only GT4's save taken");
         expect(readFile(saves / "BASCUS-97328GAMEDATA" / "BASCUS-97328GAMEDATA") == file, "the save's file read across two clusters");
         expect(!fs::exists(saves / "BASLUS-00000OTHER"), "another game's save left");
-        // again: the first import is kept beside the new one
+        // again, twice: each save an import replaces is kept in .backup/imports/DATE/, off the save listing
+        writeFile(saves / "BASCUS-97328GAMEDATA" / "BASCUS-97328GAMEDATA", payload(10, 7));
         const gt4::saves::ImportResult again = gt4::saves::importSave(image, saves);
-        size_t kept = 0;
+        const gt4::saves::ImportResult third = gt4::saves::importSave(image, saves);
+        std::vector<fs::path> kept;
+        for (const auto& e : fs::directory_iterator(saves / ".backup" / "imports")) kept.push_back(e.path());
+        std::sort(kept.begin(), kept.end());
+        expect(again.ok && third.ok && kept.size() == 2, "each replaced save kept, in its own folder");
+        expect(kept.size() == 2 && readFile(kept[0] / "BASCUS-97328GAMEDATA" / "BASCUS-97328GAMEDATA") == payload(10, 7),
+               "the save the import replaced is whole");
+        size_t listed = 0;
         for (const auto& e : fs::directory_iterator(saves))
-            kept += std::string(reinterpret_cast<const char*>(e.path().filename().u8string().c_str())).rfind("BASCUS-97328GAMEDATA.before-import-", 0) == 0;
-        expect(again.ok && kept == 1, "an existing save kept beside the import");
+            listed += e.path().filename().u8string().rfind(u8"BASCUS-97328", 0) == 0;
+        expect(listed == 1, "no displaced save among the game's saves");
     }
 
     // a .psu: the folder, ".", "..", the file and its data in 1024-byte units
@@ -137,6 +146,28 @@ int main() {
         writeFile(dir / "save.psu", psu);
         const gt4::saves::ImportResult r = gt4::saves::importSave(dir / "save.psu", dir / "saves_psu");
         expect(r.ok && readFile(dir / "saves_psu" / "BASCUS-97328GAMEDATA" / "garage") == file, ".psu imported");
+    }
+
+    // an export as .psu reads back as the same save, files and bytes
+    {
+        const fs::path saves = dir / "saves_psu";
+        writeFile(saves / "BASCUS-97328GAMEDATA" / "icon.sys", payload(964, 4));
+        writeFile(saves / "BASCUS-97328GAMEDATA" / ".garage.3.tmp", payload(5, 5));   // not the game's
+        const gt4::saves::ExportResult e = gt4::saves::exportSave(saves, "BASCUS-97328GAMEDATA", dir / "out.psu");
+        expect(e.ok, "export a save");
+        if (!e.ok) std::fprintf(stderr, "  %s\n", e.message.c_str());
+        std::string error;
+        const std::vector<gt4::saves::SaveEntry> back = gt4::saves::readSaves(dir / "out.psu", error);
+        expect(error.empty() && back.size() == 1 && back[0].folder == "BASCUS-97328GAMEDATA" && back[0].files.size() == 2,
+               "the export reads back with the save's files only");
+        if (back.size() == 1 && back[0].files.size() == 2) {
+            expect(back[0].files[0].first == "garage" && back[0].files[0].second == file, "the garage's bytes");
+            expect(back[0].files[1].first == "icon.sys" && back[0].files[1].second == payload(964, 4), "the icon's bytes");
+        }
+        expect(fs::file_size(dir / "out.psu") % 1024 == 512, "512-byte entries and 1024-byte data units");
+        expect(!gt4::saves::exportSave(saves, "BASCUS-97328NONE", dir / "none.psu").ok && !fs::exists(dir / "none.psu"),
+               "no export of a save that is not there");
+        expect(!gt4::saves::exportSave(saves, ".backup", dir / "hidden.psu").ok, "no export of a hidden folder");
     }
 
     // a folder card
