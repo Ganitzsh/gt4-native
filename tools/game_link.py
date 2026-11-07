@@ -81,6 +81,11 @@ def compile_runtime(out):
     # The checkout's path stays out of the objects (debug info: file and directory names), so the same commits give
     # the same exe in any folder (tools/release_game.py). Both spellings: the paths gcc sees use either slash.
     prefix_map = [f"-ffile-prefix-map={p}=gt4-native" for p in sorted({ROOT, ROOT.replace("\\", "/")})]
+    # FFmpeg's headers too, where they are (GT4_FFMPEG: a checkout without its own build/ffmpeg-i686 uses another's),
+    # under the name they have in a checkout's build folder: an FFmpeg outside the checkout put its absolute path in
+    # the movie and IPU objects' debug info, and the exe changed with the folder it was built in.
+    ffmpeg = os.path.abspath(FFMPEG)
+    prefix_map += [f"-ffile-prefix-map={p}=gt4-native/build/ffmpeg-i686" for p in sorted({ffmpeg, ffmpeg.replace("\\", "/")})]
     jobs = []
     files = []
     for dirpath, _, names in os.walk(rt):  # runtime/ and its subdirectories (runtime/native/...)
