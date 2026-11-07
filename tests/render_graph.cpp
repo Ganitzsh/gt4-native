@@ -751,6 +751,13 @@ int main() {
         g.pass("b", [&](PassBuilder& b) { b.use(stale, Use::ColorWrite, kOut); }, nothing);   // writes version 0 again
         g.compile();
         check(!g.plan().ok() && !g.plan().reused, "plan reuse: never when building found an error");
+        check(g.planCounts().first == 3 && g.planCounts().second == 5, "plan reuse: the counts (3 reused, 5 compiled)");
+        Graph once(backend);
+        once.begin(frameInfo());
+        once.pass("only", [&](PassBuilder& b) { b.keep(); }, nothing);
+        once.compile();
+        once.compile();
+        check(!once.plan().ok() && hasError(once.plan(), "twice"), "compile() twice without begin(): an error");
     }
 
     if (failures) std::fprintf(stderr, "%d failure(s)\n", failures);

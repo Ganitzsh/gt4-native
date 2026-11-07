@@ -18,6 +18,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace gt4 { struct Settings; }
@@ -222,6 +223,8 @@ public:
     std::string dump() const;                              // GT4_RG_DUMP=1: the compiled graph as Graphviz
 
     const Plan& plan() const { return compiled; }
+    // Frames that used the last compiled plan again, and frames that compiled one (Plan::reused), since the graph was made.
+    std::pair<uint64_t, uint64_t> planCounts() const;
     void setAbortOnError(bool abort) { abortOnError = abort; }   // default: abort in debug builds
     void setPipelineCache(PipelineCache* cache) { pipelines = cache; }
     // After the slot's fence: its last execution's timestamps (GPU -1 when the slot has none yet).

@@ -320,7 +320,9 @@ struct Graph::Cache {
     Plan plan;                            // the plan, while the next frame is built
     bool held = false;                    // `compiled` is the plan of `key`
     bool stored = false;                  // `plan` is
+    bool compiledThisFrame = false;       // compile() since begin() (once a frame)
     uint64_t generation = 0;              // counts the plans compiled afresh (Physical::Slot::generation)
+    uint64_t reused = 0, fresh = 0;       // frames that used the last plan again / compiled one (planCounts)
 };
 
 // --- Building ----------------------------------------------------------------------------------------------------
@@ -350,6 +352,7 @@ void Graph::begin(const FrameInfo& info) {
     frame = info;
     resources.clear();
     passes.clear();
+    cache->compiledThisFrame = false;
     if (cache->held) {   // (kept for this frame's compile(): moved, not copied)
         cache->plan = std::move(compiled);
         cache->held = false;
@@ -422,6 +425,8 @@ Texture Graph::history(const char* name, const TextureDesc& desc) {
     }
     return {addResource(std::move(r)), 0};
 }
+
+std::pair<uint64_t, uint64_t> Graph::planCounts() const { return {cache->reused, cache->fresh}; }
 
 bool Graph::historyValid(Texture t) const {
     return t && t.id <= resources.size() && resources[t.id - 1].kind == Resource::Kind::History && resources[t.id - 1].historyPreviousValid;
@@ -603,6 +608,13 @@ ImageInfo Graph::imageInfo(const Resource& r) const {
 
 // --- Compile -------------------------------------------------------------------------------------------------------
 
+// Everything compile() reads, by value (compared exactly, not as a hash). Two inputs are left out on purpose:
+// - names (passes', histories') go in as a hash and a length: a collision could only leave another frame's names in
+//   PlanPass::name and Plan::culled, never a barrier or a placement (those come from the uses and descriptions);
+// - the backend's answers (requirements(), memoryType()): the device is fixed for a graph's life. A test backend that
+//   changed them between frames would get the last frame's placements.
+// An import whose vk::Image state differs frame to frame (an Opaque pass leaving it as it likes) makes every frame
+// compile afresh: missed reuse, never a wrong plan (planCounts shows it).
 void Graph::signature(std::vector<uint64_t>& k) const {
     k.clear();
     auto put = [&](uint64_t v) { k.push_back(v); };
@@ -672,6 +684,13 @@ void Graph::signature(std::vector<uint64_t>& k) const {
 }
 
 void Graph::compile() {
+    // (once a frame: a second compile() would plan on top of this frame's plan)
+    if (cache->compiledThisFrame) {
+        error("compile() called twice without begin()");
+        if (abortOnError) std::abort();
+        return;
+    }
+    cache->compiledThisFrame = true;
     // The last compiled frame's plan, when nothing it depends on changed (and building found no error).
     signature(cache->scratch);
     if (cache->stored && compiled.ok() && cache->scratch == cache->key && cache->nodes.size() == passes.size()) {
@@ -679,6 +698,7 @@ void Graph::compile() {
         cache->stored = false;
         cache->held = true;
         compiled.reused = true;
+        ++cache->reused;
         for (size_t i = 0; i < passes.size(); ++i) {
             PassNode& node = *passes[i];
             const Cache::NodePlan& n = cache->nodes[i];
@@ -691,6 +711,7 @@ void Graph::compile() {
     cache->stored = false;
     compileFresh();
     ++cache->generation;
+    ++cache->fresh;
     if (compiled.ok()) {
         cache->key.swap(cache->scratch);
         cache->nodes.resize(passes.size());

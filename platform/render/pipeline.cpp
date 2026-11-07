@@ -80,6 +80,11 @@ struct FramePipeline::Impl {
 
     ~Impl() {
         vkDeviceWaitIdle(device.device);
+        if (graph) {   // (whether the frames used the compiled plan again: B4's CPU gate measures that)
+            const auto [reused, fresh] = graph->planCounts();
+            std::printf("Pipeline: render graph plan reused in %llu frames, compiled in %llu\n", static_cast<unsigned long long>(reused),
+                        static_cast<unsigned long long>(fresh));
+        }
         graph.reset();   // (its images and memory, before the device; it imports the display stages' images)
         releaseTargets();
         vk::destroy(device, resolve);

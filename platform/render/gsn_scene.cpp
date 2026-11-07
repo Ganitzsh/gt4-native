@@ -2691,7 +2691,7 @@ bool GsnScene::read(const gsn::ReadRequest& request, std::vector<uint8_t>& out) 
     // written again by a later list, the read's own included (what the read returns is then that frame's), or when a
     // later list reads one of its targets before writing it. GT4_READ_SKIP=0: every list drawn first.
     static const bool readSkip = [] { const char* e = std::getenv("GT4_READ_SKIP"); return !(e && *e == '0'); }();
-    // Where a slow read's time goes (the game waits for it: E4), printed for a read over 16 ms.
+    // Where a slow read's time goes (the game waits for it), printed for a read over 16 ms.
     using Clock = std::chrono::steady_clock;
     const Clock::time_point started = Clock::now();
     const Counters before = counters();
