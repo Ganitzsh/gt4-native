@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <functional>
 #include <map>
 #include <tuple>
 #include <string>
@@ -761,7 +762,86 @@ struct GsnScene::Impl {
         }
     }
 
-    void execute(VkCommandBuffer command, uint32_t slot);
+    // The scene stage (docs/NATIVE_RENDERER.md, docs/LIGHTING.md): a 3D scene complete in its target (the
+    // front end's Light command), before GT4's post effects and HUD. Its colour and Z images, and its area.
+    struct SceneImages {
+        vk::Image* colour = nullptr;
+        vk::Image* depth = nullptr;
+        VkExtent2D area{};
+        uint32_t sx = 1, sy = 1;   // the scene target's scale
+    };
+    // execute's state between its pieces (executeBegin, executeRange, executeLight, executeFinish): one list's
+    // execution, made anew by executeBegin. The functions see the piece's command buffer as `command`.
+    struct ExecuteState {
+        VkCommandBuffer command = VK_NULL_HANDLE;   // the piece's being recorded
+        vk::Buffer* vertices = nullptr;   // the list's vertices (vertexBuffers)
+        uint32_t modelBase = 0;           // where the GPU's vertices start
+        vk::Barriers b;
+        bool rendering = false;
+        uint32_t boundColour = 0, boundDepth = 0;
+        // The destination alpha test's stencil: stencilDepth's stencil holds stencilColour's alpha bit 7 over stencilRegion
+        // (render pixels) since prepareStencil copied it. Draws keep it so: a DATE draw by its two passes, and with
+        // VK_EXT_shader_stencil_export every draw that writes the target's alpha with stencilDepth bound (its shader
+        // writes each pixel's new bit 7 to the stencil). Only an alpha write it cannot follow makes it stale: the target's
+        // alpha written without stencilDepth or without export, another target's exported into stencilDepth, the scene
+        // stage or an effect writing the target. (Without export, each car part's base draw made the next part's
+        // reflection copy the stencil again: 20 copies, each ending the scene's render pass, in a far replay camera.)
+        bool stencilFresh = false;
+        uint32_t stencilColour = 0, stencilDepth = 0;
+        VkRect2D stencilRegion{};
+        VkPipeline boundPipeline = VK_NULL_HANDLE;
+        bool perPass = false;   // GT4_GPU_PROFILE=2: a mark at each render pass's end
+        // The draws' state as last set in this render pass: only changes are recorded (a draw's state commands cost the
+        // GPU's command processor more than its few vertices). Forgotten when the pass ends or another pass runs.
+        struct Recorded {
+            int depthTest = -1, compare = -1, reference = -1, depthWrite = -1;
+            int stencilMode = -1;   // 0 off; DATE: 1 test (kept), 2 test and invert where it passes; 3 alpha bit 7 written
+            VkRect2D scissor{{-1, -1}, {0, 0}};
+            VkImageView view = VK_NULL_HANDLE;
+            VkSampler sampler = VK_NULL_HANDLE;
+            bool pushed = false;
+            DrawConstants constants{};
+        } recorded;
+        std::vector<uint8_t> jittered;   // per command: a 3D draw of a scene lit later (temporal anti-aliasing)
+        const float* phase = nullptr;    // this frame's sub-pixel offset
+        // The reinterpreted textures': their count, palettes, indices and the scale each is built at.
+        size_t count = 0;
+        vk::Buffer* cluts = nullptr;
+        std::vector<uint32_t> indexStart;
+        size_t indexWords = 1;
+        vk::Buffer* indexBuffer = nullptr;
+        std::vector<std::pair<uint32_t, uint32_t>> builtScale;
+        vk::Buffer* curves = nullptr;   // the colour gradings' curves (none: nullptr)
+        long executed = 0;              // draws executed (GT4_GSN_LIMIT)
+        bool limited = false;           // GT4_GSN_LIMIT reached: the list's later commands not executed
+        // What execute's lambdas were (executeBegin makes them; each captures only the Impl).
+        std::function<const char*(uint32_t)> passLabel;
+        std::function<void()> end;
+        std::function<void(uint32_t, uint32_t)> begin;
+        std::function<void(uint32_t, uint32_t, VkRect2D)> prepareStencil;
+        std::function<bool(const gsn::FrameList::Lighting&, SceneImages&)> sceneImages;
+        std::function<void(vk::Image&, vk::Image&, VkExtent2D, const gsn::FrameList::Lighting&, uint32_t, uint32_t)> copyBack;
+        std::function<bool(vk::Image&, VkExtent2D, VkFormat, VkImageUsageFlags, const char*)> ensureImage;
+        std::function<void(const gsn::FrameList::Lighting&)> relight, reflect, haze, blur, focus, antialias;
+        std::function<bool(const gsn::FrameList::Lighting&, size_t)> drawVelocity;
+        std::function<void(const gsn::FrameList::Lighting&, const SceneImages&, vk::Pipeline&, const void*, uint32_t, vk::Image*)> stagePass;
+        std::function<vk::Image&(uint32_t)> imageFor;
+        std::function<GpuTarget*(const gsn::Reinterpretation&)> sourceOf, paletteOf;
+        std::function<vk::Image*(uint32_t, size_t)> build;
+        std::function<void(uint32_t)> grade;
+    } ex;
+    // A list's commands split at its Light commands: runs of the others (Range, [from, to)) and each Light alone
+    // (from: its index). Only the commands' kinds decide it (GsnScene::buildPrepass splits a list before it runs).
+    struct Segment {
+        enum class Kind { Range, Light } kind = Kind::Range;
+        size_t from = 0, to = 0;
+    };
+    static void segments(const gsn::FrameList& list, std::vector<Segment>& out);
+    void execute(VkCommandBuffer command, uint32_t slot);   // the four below, in order (as the graph's passes run them)
+    void executeBegin(VkCommandBuffer command, uint32_t slot);   // before the commands: the 3D batches, ex made
+    void executeRange(VkCommandBuffer command, uint32_t slot, size_t from, size_t to);   // the commands [from, to)
+    void executeLight(VkCommandBuffer command, uint32_t slot, size_t at);   // the scene stage at Light command `at`
+    void executeFinish(VkCommandBuffer command, uint32_t slot);   // after the commands: the displayed buffer
     void snapSprites();
     // Executes every pending list in order into `command` (the scale from `extent`), then empties the queue.
     // `profiled`: a frame's own submission (GT4_GPU_PROFILE).
@@ -824,11 +904,46 @@ void GsnScene::Impl::snapSprites() {
     }
 }
 
+// One list's commands (`frame`): executeBegin, its runs of commands between Light commands (executeRange) and the
+// scene stage at each Light (executeLight) in order, then executeFinish. The render graph runs the same pieces as
+// passes of their own (GsnScene::buildPrepass).
 void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
+    executeBegin(command, slot);
+    std::vector<Segment> split;
+    segments(frame, split);
+    for (const Segment& g : split) {
+        if (g.kind == Segment::Kind::Light) executeLight(command, slot, g.from);
+        else executeRange(command, slot, g.from, g.to);
+    }
+    executeFinish(command, slot);
+}
+
+void GsnScene::Impl::segments(const gsn::FrameList& list, std::vector<Segment>& out) {
+    out.clear();
+    const size_t n = list.commands.size();
+    for (size_t at = 0; at < n;) {
+        if (list.commands[at].kind == gsn::FrameList::Command::Kind::Light) {
+            out.push_back({Segment::Kind::Light, at, at + 1});
+            ++at;
+            continue;
+        }
+        size_t to = at + 1;
+        while (to < n && list.commands[to].kind != gsn::FrameList::Command::Kind::Light) ++to;
+        out.push_back({Segment::Kind::Range, at, to});
+        at = to;
+    }
+}
+
+// Before the list's commands: its vertices, its 3D batches, and the state the commands use (ex).
+void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
+    ex = ExecuteState{};
+    ex.command = command;
     snapSprites();
     const VkDeviceSize vertexBytes = std::max<VkDeviceSize>((frame.vertices.size() + frame.modelVertices) * sizeof(gsn::Vertex), 64);
-    vk::Buffer& vertices = buffer(vertexBuffers, slot, vertexBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-    const uint32_t modelBase = static_cast<uint32_t>(frame.vertices.size());   // where the GPU's vertices start
+    ex.vertices = &buffer(vertexBuffers, slot, vertexBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    vk::Buffer& vertices = *ex.vertices;
+    ex.modelBase = static_cast<uint32_t>(frame.vertices.size());   // where the GPU's vertices start
+    const uint32_t modelBase = ex.modelBase;
     std::memcpy(vertices.mapped, frame.vertices.data(), frame.vertices.size() * sizeof(gsn::Vertex));
     // GT4's 3D batches (docs/NATIVE_V2.md, step 2): gsn_models.comp writes their triangles into the ranges their
     // draws hold, before any draw reads them.
@@ -858,22 +973,9 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         vkCmdPipelineBarrier2(command, &d);
         tally("3D batches on the GPU", frame.models.size());
     }
-    vk::Barriers b;
-    bool rendering = false;
-    uint32_t boundColour = 0, boundDepth = 0;
-    // The destination alpha test's stencil: stencilDepth's stencil holds stencilColour's alpha bit 7 over stencilRegion
-    // (render pixels) since prepareStencil copied it. Draws keep it so: a DATE draw by its two passes, and with
-    // VK_EXT_shader_stencil_export every draw that writes the target's alpha with stencilDepth bound (its shader
-    // writes each pixel's new bit 7 to the stencil). Only an alpha write it cannot follow makes it stale: the target's
-    // alpha written without stencilDepth or without export, another target's exported into stencilDepth, the scene
-    // stage or an effect writing the target. (Without export, each car part's base draw made the next part's
-    // reflection copy the stencil again: 20 copies, each ending the scene's render pass, in a far replay camera.)
-    bool stencilFresh = false;
-    uint32_t stencilColour = 0, stencilDepth = 0;
-    VkRect2D stencilRegion{};
-    VkPipeline boundPipeline = VK_NULL_HANDLE;
+    // (the commands' state: ex, made anew above)
     // GT4_GPU_PROFILE=2: a render pass's time under its target's name (block address, size in GS pixels, format).
-    auto passLabel = [&](uint32_t id) -> const char* {
+    ex.passLabel = [this](uint32_t id) -> const char* {
         uint32_t bp = 0, psm = 0;
         for (const gsn::Target& t : frame.targets)
             if (t.id == id) bp = t.bp, psm = t.psm;
@@ -886,28 +988,30 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         profile.labelStore.emplace_back(name);
         return profile.passLabels[key] = profile.labelStore.back().c_str();
     };
-    const bool perPass = profile.on && profile.level >= 2;
-    // The draws' state as last set in this render pass: only changes are recorded (a draw's state commands cost the
-    // GPU's command processor more than its few vertices). Forgotten when the pass ends or another pass runs.
-    struct Recorded {
-        int depthTest = -1, compare = -1, reference = -1, depthWrite = -1;
-        int stencilMode = -1;   // 0 off; DATE: 1 test (kept), 2 test and invert where it passes; 3 alpha bit 7 written
-        VkRect2D scissor{{-1, -1}, {0, 0}};
-        VkImageView view = VK_NULL_HANDLE;
-        VkSampler sampler = VK_NULL_HANDLE;
-        bool pushed = false;
-        DrawConstants constants{};
-    } recorded;
-    auto end = [&] {
+    ex.perPass = profile.on && profile.level >= 2;
+    ex.end = [this] {
+        const VkCommandBuffer command = ex.command;
+        const bool perPass = ex.perPass;
+        auto& passLabel = ex.passLabel;
+        bool& rendering = ex.rendering;
+        const uint32_t boundColour = ex.boundColour;
+        VkPipeline& boundPipeline = ex.boundPipeline;
+        auto& recorded = ex.recorded;
         if (rendering) {
             vkCmdEndRendering(command);
             if (perPass) mark(command, passLabel(boundColour));
         }
         rendering = false;
         boundPipeline = VK_NULL_HANDLE;
-        recorded = Recorded{};
+        recorded = ExecuteState::Recorded{};
     };
-    auto begin = [&](uint32_t colourId, uint32_t depthId) {
+    ex.begin = [this](uint32_t colourId, uint32_t depthId) {
+        const VkCommandBuffer command = ex.command;
+        vk::Barriers& b = ex.b;
+        const bool perPass = ex.perPass;
+        bool& rendering = ex.rendering;
+        uint32_t& boundColour = ex.boundColour;
+        uint32_t& boundDepth = ex.boundDepth;
         if (perPass) mark(command, "between passes");
         GpuTarget& c = targets[colourId];
         vk::toColor(b, c.image);
@@ -951,7 +1055,11 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
     // The stencil copy of a target's alpha bit 7, for the destination alpha test.
     // Only over `region` (render pixels): the draws that will test it (copying a whole 1280 x 1344 target 14 times a
     // frame for the cars' reflection pass was 0.3 ms).
-    auto prepareStencil = [&](uint32_t colourId, uint32_t depthId, VkRect2D region) {
+    ex.prepareStencil = [this](uint32_t colourId, uint32_t depthId, VkRect2D region) {
+        const VkCommandBuffer command = ex.command;
+        vk::Barriers& b = ex.b;
+        const bool perPass = ex.perPass;
+        auto& end = ex.end;
         end();
         if (perPass) mark(command, "between passes");
         tally("stencil copies");
@@ -994,15 +1102,8 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         if (perPass) mark(command, "stencil copies");
     };
 
-    // The scene stage (docs/NATIVE_RENDERER.md, docs/LIGHTING.md): a 3D scene complete in its target (the
-    // front end's Light command), before GT4's post effects and HUD. Its colour and Z images, and its area.
-    struct SceneImages {
-        vk::Image* colour = nullptr;
-        vk::Image* depth = nullptr;
-        VkExtent2D area{};
-        uint32_t sx = 1, sy = 1;   // the scene target's scale
-    };
-    auto sceneImages = [&](const gsn::FrameList::Lighting& l, SceneImages& out) {
+    // The scene stage (docs/NATIVE_RENDERER.md, docs/LIGHTING.md): its images (SceneImages).
+    ex.sceneImages = [this](const gsn::FrameList::Lighting& l, SceneImages& out) {
         auto ct = targets.find(l.target), dt = targets.find(l.depth);
         if (ct == targets.end() || dt == targets.end() || ct->second.depth || !dt->second.depth) return false;
         if (!ct->second.image.valid() || !dt->second.image.valid()) return false;
@@ -1017,7 +1118,8 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         return true;
     };
     // The stage's result copied back into the scene, except an inset view (another camera: the mirror).
-    auto copyBack = [&](vk::Image& from, vk::Image& colour, VkExtent2D e, const gsn::FrameList::Lighting& l, uint32_t sx, uint32_t sy) {
+    ex.copyBack = [this](vk::Image& from, vk::Image& colour, VkExtent2D e, const gsn::FrameList::Lighting& l, uint32_t sx, uint32_t sy) {
+        const VkCommandBuffer command = ex.command;
         VkImageCopy regions[4]{};
         uint32_t n = 0;
         auto add = [&](uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1) {   // [x0, x1) x [y0, y1), clipped to e
@@ -1041,7 +1143,7 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         if (n) vkCmdCopyImage(command, from.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, colour.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, n, regions);
     };
     // An image of the stage at least `e` large (kept, grown).
-    auto ensureImage = [&](vk::Image& image, VkExtent2D e, VkFormat format, VkImageUsageFlags usage, const char* name) {
+    ex.ensureImage = [this](vk::Image& image, VkExtent2D e, VkFormat format, VkImageUsageFlags usage, const char* name) {
         if (image.valid() && image.extent.width >= e.width && image.extent.height >= e.height) return false;
         if (image.valid()) retire(image);
         vk::ImageDesc desc;
@@ -1053,7 +1155,13 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         return true;
     };
     // Lighting: ambient occlusion from the Z buffer and the enhanced grade, computed into litImage and copied back.
-    auto relight = [&](const gsn::FrameList::Lighting& l) {
+    ex.relight = [this](const gsn::FrameList::Lighting& l) {
+        const VkCommandBuffer command = ex.command;
+        vk::Barriers& b = ex.b;
+        auto& sceneImages = ex.sceneImages;
+        auto& end = ex.end;
+        auto& ensureImage = ex.ensureImage;
+        auto& copyBack = ex.copyBack;
         SceneImages si;
         if (!sceneImages(l, si)) return;
         vk::Image& colour = *si.colour;
@@ -1109,8 +1217,9 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
 
     // Temporal anti-aliasing: the 3D draws (depth-tested) into a scene's target before its Light command are
     // jittered by this frame's sub-pixel offset, the same for every scene of the frame.
-    std::vector<uint8_t> jittered(frame.commands.size(), 0);
-    const float* phase = kHalton[displayedFrames % 8];   // render pixels: over each target's own scale
+    ex.jittered.assign(frame.commands.size(), 0);
+    std::vector<uint8_t>& jittered = ex.jittered;
+    ex.phase = kHalton[displayedFrames % 8];   // render pixels: over each target's own scale
     if (temporal) {
         std::vector<std::pair<uint32_t, uint32_t>> lit;   // (target, Z buffer) of the scenes lit later
         for (size_t at = frame.commands.size(); at-- > 0;) {
@@ -1128,7 +1237,16 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
     // where the Z buffer the scene left shows it (depth test EQUAL; alpha-tested cut-outs need no texture: where
     // a fence was not drawn, the Z is what is behind it). 2D and transparent draws (blended without a Z write)
     // leave the surface under them. Into velocityImage, GS pixels.
-    auto drawVelocity = [&](const gsn::FrameList::Lighting& l, size_t lightAt) {
+    ex.drawVelocity = [this](const gsn::FrameList::Lighting& l, size_t lightAt) {
+        const VkCommandBuffer command = ex.command;
+        vk::Barriers& b = ex.b;
+        auto& sceneImages = ex.sceneImages;
+        auto& end = ex.end;
+        auto& ensureImage = ex.ensureImage;
+        vk::Buffer& vertices = *ex.vertices;
+        const uint32_t modelBase = ex.modelBase;
+        const std::vector<uint8_t>& jittered = ex.jittered;
+        const float* const phase = ex.phase;
         SceneImages si;
         if (!sceneImages(l, si)) return false;
         end();
@@ -1203,8 +1321,13 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
     // A pass of the scene stage over the scene's area: the scene (binding 0, linear), its Z (1), the motion
     // vectors (2: the scene when there are none) into litImage (3), copied back.
     // `third`: the image at binding 2 (the motion vectors, the half-resolution reflections; else the scene again).
-    auto stagePass = [&](const gsn::FrameList::Lighting& l, const SceneImages& si, vk::Pipeline& pass, const void* push, uint32_t pushSize,
+    ex.stagePass = [this](const gsn::FrameList::Lighting& l, const SceneImages& si, vk::Pipeline& pass, const void* push, uint32_t pushSize,
                          vk::Image* third) {
+        const VkCommandBuffer command = ex.command;
+        vk::Barriers& b = ex.b;
+        auto& end = ex.end;
+        auto& ensureImage = ex.ensureImage;
+        auto& copyBack = ex.copyBack;
         end();
         vk::Image& colour = *si.colour;
         const VkExtent2D e = si.area;
@@ -1230,7 +1353,13 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
     };
     constexpr float kZScale = 1.6e6f;   // GT4's 3D Z = 1.6e6 / view distance (docs/LIGHTING.md)
     static const uint32_t ssrView = std::getenv("GT4_SSR_VIEW") ? static_cast<uint32_t>(std::atoi(std::getenv("GT4_SSR_VIEW"))) : 0;
-    auto reflect = [&](const gsn::FrameList::Lighting& l) {
+    ex.reflect = [this](const gsn::FrameList::Lighting& l) {
+        const VkCommandBuffer command = ex.command;
+        vk::Barriers& b = ex.b;
+        auto& sceneImages = ex.sceneImages;
+        auto& end = ex.end;
+        auto& ensureImage = ex.ensureImage;
+        auto& stagePass = ex.stagePass;
         SceneImages si;
         if (!sceneImages(l, si)) return;
         struct {
@@ -1263,7 +1392,9 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         } c{{float(si.area.width), float(si.area.height)}, kZScale, ssrView};
         stagePass(l, si, ssrComposite, &c, sizeof c, &ssrImage);
     };
-    auto haze = [&](const gsn::FrameList::Lighting& l) {
+    ex.haze = [this](const gsn::FrameList::Lighting& l) {
+        auto& sceneImages = ex.sceneImages;
+        auto& stagePass = ex.stagePass;
         SceneImages si;
         if (!sceneImages(l, si) || !l.fogged) return;
         const uint32_t f = l.fogColour;
@@ -1274,7 +1405,9 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
             {float(f & 0xFF) / 255.0f, float((f >> 8) & 0xFF) / 255.0f, float((f >> 16) & 0xFF) / 255.0f, 1.0f}};
         stagePass(l, si, fogPass, &k, sizeof k, nullptr);
     };
-    auto blur = [&](const gsn::FrameList::Lighting& l) {
+    ex.blur = [this](const gsn::FrameList::Lighting& l) {
+        auto& sceneImages = ex.sceneImages;
+        auto& stagePass = ex.stagePass;
         SceneImages si;
         if (!sceneImages(l, si)) return;
         struct {
@@ -1285,7 +1418,9 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
             effects.blurSamples, static_cast<uint32_t>(displayedFrames)};
         stagePass(l, si, blurPass, &k, sizeof k, &velocityImage);
     };
-    auto focus = [&](const gsn::FrameList::Lighting& l) {
+    ex.focus = [this](const gsn::FrameList::Lighting& l) {
+        auto& sceneImages = ex.sceneImages;
+        auto& stagePass = ex.stagePass;
         SceneImages si;
         if (!sceneImages(l, si)) return;
         struct {
@@ -1298,7 +1433,12 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
     };
 
     // The resolve: the scene against its history (gsn_taa.comp), into the history's other image, copied back.
-    auto antialias = [&](const gsn::FrameList::Lighting& l) {
+    ex.antialias = [this](const gsn::FrameList::Lighting& l) {
+        const VkCommandBuffer command = ex.command;
+        vk::Barriers& b = ex.b;
+        auto& sceneImages = ex.sceneImages;
+        auto& ensureImage = ex.ensureImage;
+        const float* const phase = ex.phase;
         SceneImages si;
         if (!sceneImages(l, si)) return;
         vk::Image& colour = *si.colour;
@@ -1345,18 +1485,22 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
     };
 
     // Reinterpreted textures: built from their target when a draw first needs them.
-    const size_t count = frame.reinterpretations.size();
+    ex.count = frame.reinterpretations.size();
+    const size_t count = ex.count;
     built.assign(count, false);
-    vk::Buffer& cluts = buffer(clutBuffers, slot, std::max<VkDeviceSize>(count * 1024, 1024), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    ex.cluts = &buffer(clutBuffers, slot, std::max<VkDeviceSize>(count * 1024, 1024), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    vk::Buffer& cluts = *ex.cluts;
     for (size_t i = 0; i < count; ++i) std::memcpy(static_cast<uint8_t*>(cluts.mapped) + i * 1024, frame.reinterpretations[i].clut.data(), 1024);
     // Indices from GS memory (target 0), one buffer for the frame: each one's start in words.
-    std::vector<uint32_t> indexStart(count, 0);
-    size_t indexWords = 1;
+    ex.indexStart.assign(count, 0);
+    std::vector<uint32_t>& indexStart = ex.indexStart;
+    size_t& indexWords = ex.indexWords;   // (1)
     for (size_t i = 0; i < count; ++i) {
         indexStart[i] = static_cast<uint32_t>(indexWords);
         indexWords += (frame.reinterpretations[i].indices.size() + 3) / 4;
     }
-    vk::Buffer& indexBuffer = buffer(indexBuffers, slot, indexWords * 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    ex.indexBuffer = &buffer(indexBuffers, slot, indexWords * 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    vk::Buffer& indexBuffer = *ex.indexBuffer;
     for (size_t i = 0; i < count; ++i) {
         const auto& indices = frame.reinterpretations[i].indices;
         if (!indices.empty()) std::memcpy(static_cast<uint8_t*>(indexBuffer.mapped) + indexStart[i] * 4, indices.data(), indices.size());
@@ -1365,8 +1509,9 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
     for (auto& [size, pool] : reinterpretPool) pool.used = 0;
     reinterpretImages.assign(count, nullptr);
     // Each is built at the scale of the target its draw renders into (gsn.frag's kSnap reads it per render pixel).
-    std::vector<std::pair<uint32_t, uint32_t>> builtScale(count, {sx, sy});
-    auto imageFor = [&](uint32_t index) -> vk::Image& {
+    ex.builtScale.assign(count, {sx, sy});
+    ex.imageFor = [this](uint32_t index) -> vk::Image& {
+        const auto& builtScale = ex.builtScale;
         const gsn::Reinterpretation& r = frame.reinterpretations[index];
         const auto [bx, by] = builtScale[index];
         Pool& pool = reinterpretPool[(uint64_t(r.width * bx) << 32) | (r.height * by)];
@@ -1380,12 +1525,12 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         }
         return *pool.images[pool.used++];
     };
-    auto sourceOf = [&](const gsn::Reinterpretation& r) -> GpuTarget* {
+    ex.sourceOf = [this](const gsn::Reinterpretation& r) -> GpuTarget* {
         if (!r.target) return nullptr;
         auto it = targets.find(r.target);
         return it == targets.end() || !it->second.image.valid() || it->second.depth ? nullptr : &it->second;
     };
-    auto paletteOf = [&](const gsn::Reinterpretation& r) -> GpuTarget* {   // a palette drawn into a target (clutWritten)
+    ex.paletteOf = [this](const gsn::Reinterpretation& r) -> GpuTarget* {   // a palette drawn into a target (clutWritten)
         if (!r.clutTarget) return nullptr;
         auto it = targets.find(r.clutTarget);
         return it == targets.end() || !it->second.image.valid() || it->second.depth ? nullptr : &it->second;
@@ -1393,7 +1538,20 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
     // Builds the reinterpretation a draw needs, with every later one whose targets no draw in between
     // writes (their contents are the same now): one compute batch instead of a pass break each (GT4's colour
     // grading needs about 600 a frame).
-    auto build = [&](uint32_t index, size_t at) -> vk::Image* {
+    ex.build = [this](uint32_t index, size_t at) -> vk::Image* {
+        const VkCommandBuffer command = ex.command;
+        vk::Barriers& b = ex.b;
+        const bool perPass = ex.perPass;
+        auto& end = ex.end;
+        auto& sourceOf = ex.sourceOf;
+        auto& paletteOf = ex.paletteOf;
+        auto& imageFor = ex.imageFor;
+        auto& builtScale = ex.builtScale;
+        const size_t count = ex.count;
+        vk::Buffer& cluts = *ex.cluts;
+        const std::vector<uint32_t>& indexStart = ex.indexStart;
+        vk::Buffer& indexBuffer = *ex.indexBuffer;
+        const size_t indexWords = ex.indexWords;
         if (frame.reinterpretations[index].target && !sourceOf(frame.reinterpretations[index])) return nullptr;
         if (built[index]) return reinterpretImages[index];
         end();
@@ -1478,13 +1636,18 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
 
     // GT4's post effects as passes (docs/NATIVE_V2.md, step 3): the colour grading, computed into gradeImage over
     // the rectangle and copied back into the destination.
-    vk::Buffer* curves = nullptr;
+    vk::Buffer*& curves = ex.curves;   // (nullptr)
     if (!frame.effects.empty()) {
         curves = &buffer(curveBuffers, slot, frame.effects.size() * 1024, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
         for (size_t i = 0; i < frame.effects.size(); ++i)
             std::memcpy(static_cast<uint8_t*>(curves->mapped) + i * 1024, frame.effects[i].curve.data(), 1024);
     }
-    auto grade = [&](uint32_t index) {
+    ex.grade = [this](uint32_t index) {
+        const VkCommandBuffer command = ex.command;
+        vk::Barriers& b = ex.b;
+        auto& end = ex.end;
+        auto& ensureImage = ex.ensureImage;
+        vk::Buffer* const curves = ex.curves;
         const gsn::FrameList::Effect& e = frame.effects[index];
         auto s = targets.find(e.source), d = targets.find(e.destination);
         if (s == targets.end() || d == targets.end() || !curves) return;
@@ -1528,35 +1691,40 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
         tally("colour gradings");
         mark(command, "colour grading");
     };
+}
 
+// The list's commands [from, to): draws and effects (a Light among them: executeLight, as segments never puts one in a
+// range). GT4_GSN_LIMIT's count and stop go on across the list's ranges and Lights (ex.executed, ex.limited).
+void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t from, size_t to) {
+    ex.command = command;
+    vk::Barriers& b = ex.b;
+    bool& rendering = ex.rendering;
+    uint32_t& boundColour = ex.boundColour;
+    uint32_t& boundDepth = ex.boundDepth;
+    bool& stencilFresh = ex.stencilFresh;
+    uint32_t& stencilColour = ex.stencilColour;
+    uint32_t& stencilDepth = ex.stencilDepth;
+    VkRect2D& stencilRegion = ex.stencilRegion;
+    VkPipeline& boundPipeline = ex.boundPipeline;
+    auto& recorded = ex.recorded;
+    auto& end = ex.end;
+    auto& begin = ex.begin;
+    auto& prepareStencil = ex.prepareStencil;
+    auto& build = ex.build;
+    auto& grade = ex.grade;
+    const std::vector<uint8_t>& jittered = ex.jittered;
+    const float* const phase = ex.phase;
+    const size_t count = ex.count;
+    vk::Buffer& vertices = *ex.vertices;
+    const uint32_t modelBase = ex.modelBase;
     // GT4_GSN_LIMIT=K (debugging): only the first K draws of each frame.
     static const long limit = std::getenv("GT4_GSN_LIMIT") ? std::strtol(std::getenv("GT4_GSN_LIMIT"), nullptr, 10) : -1;
-    long executed = 0;
-    for (size_t at = 0; at < frame.commands.size(); ++at) {
+    long& executed = ex.executed;
+    if (ex.limited) return;
+    for (size_t at = from; at < to; ++at) {
         const auto& cmd = frame.commands[at];
         if (cmd.kind == gsn::FrameList::Command::Kind::Light) {
-            if (cmd.index >= frame.lights.size()) continue;
-            // The scene stage, in a modern renderer's order: motion vectors, lighting, reflections and fog
-            // (before the resolve, which also integrates their noise), the resolve, motion blur, depth of field.
-            const gsn::FrameList::Lighting& l = frame.lights[cmd.index];
-            if (l.target == stencilColour) stencilFresh = false;   // (the scene stage may write its alpha)
-            end();
-            mark(command, "draws");
-            tally("scenes");
-            const bool moving = (temporal || effects.shutter > 0.0f) && drawVelocity(l, at);
-            mark(command, "motion vectors");
-            if (lighting.occlusion > 0.0f || lighting.grade > 0.0f) relight(l);
-            mark(command, "lighting");
-            if (effects.reflections > 0.0f) reflect(l);
-            mark(command, "reflections");
-            if (effects.fogDensity > 0.0f) haze(l);
-            mark(command, "fog");
-            if (moving && temporal) antialias(l);
-            mark(command, "temporal resolve");
-            if (moving && effects.shutter > 0.0f) blur(l);
-            mark(command, "motion blur");
-            if (effects.aperture > 0.0f) focus(l);
-            mark(command, "depth of field");
+            executeLight(command, slot, at);
             continue;
         }
         if (cmd.kind == gsn::FrameList::Command::Kind::Effect) {
@@ -1567,7 +1735,10 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
             continue;
         }
         if (cmd.kind != gsn::FrameList::Command::Kind::Draw) continue;
-        if (limit >= 0 && executed++ >= limit) break;
+        if (limit >= 0 && executed++ >= limit) {
+            ex.limited = true;   // (no later command of the list: its ranges and Lights after this one too)
+            break;
+        }
         const gsn::Draw& d = frame.draws[cmd.index];
         auto targetIt = targets.find(d.target);
         if (targetIt == targets.end()) continue;
@@ -1943,6 +2114,52 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
             tally("draws");
         }
     }
+}
+
+// The scene stage at the list's Light command `at` (`frame.commands[at]`), as the commands' loop ran it.
+void GsnScene::Impl::executeLight(VkCommandBuffer command, uint32_t /*slot*/, size_t at) {
+    ex.command = command;
+    if (ex.limited) return;   // (GT4_GSN_LIMIT reached before it)
+    const auto& cmd = frame.commands[at];
+    if (cmd.index >= frame.lights.size()) return;
+    bool& stencilFresh = ex.stencilFresh;
+    const uint32_t stencilColour = ex.stencilColour;
+    auto& end = ex.end;
+    auto& drawVelocity = ex.drawVelocity;
+    auto& relight = ex.relight;
+    auto& reflect = ex.reflect;
+    auto& haze = ex.haze;
+    auto& antialias = ex.antialias;
+    auto& blur = ex.blur;
+    auto& focus = ex.focus;
+    // The scene stage, in a modern renderer's order: motion vectors, lighting, reflections and fog
+    // (before the resolve, which also integrates their noise), the resolve, motion blur, depth of field.
+    const gsn::FrameList::Lighting& l = frame.lights[cmd.index];
+    if (l.target == stencilColour) stencilFresh = false;   // (the scene stage may write its alpha)
+    end();
+    mark(command, "draws");
+    tally("scenes");
+    const bool moving = (temporal || effects.shutter > 0.0f) && drawVelocity(l, at);
+    mark(command, "motion vectors");
+    if (lighting.occlusion > 0.0f || lighting.grade > 0.0f) relight(l);
+    mark(command, "lighting");
+    if (effects.reflections > 0.0f) reflect(l);
+    mark(command, "reflections");
+    if (effects.fogDensity > 0.0f) haze(l);
+    mark(command, "fog");
+    if (moving && temporal) antialias(l);
+    mark(command, "temporal resolve");
+    if (moving && effects.shutter > 0.0f) blur(l);
+    mark(command, "motion blur");
+    if (effects.aperture > 0.0f) focus(l);
+    mark(command, "depth of field");
+}
+
+// After the list's commands: the last render pass ended, the displayed buffer's bookkeeping.
+void GsnScene::Impl::executeFinish(VkCommandBuffer command, uint32_t /*slot*/) {
+    ex.command = command;
+    vk::Barriers& b = ex.b;
+    auto& end = ex.end;
     end();
     mark(command, "draws");
     // The displayed buffer, for recordMain (a list cut for a GS -> host read displays nothing).
@@ -2806,10 +3023,39 @@ bool GsnScene::buildPrepass(rg::Graph& graph, const SceneView& view) {
             s.listIndex = i;
             s.pendingTargets(c.command, view.slot);
         });
-        graph.pass("gs: draws", keep, [&s, view](rg::PassContext& c) {
+        // The list's draws (pendingDraws' execute), split at its Light commands: its 3D batches, a pass for each run of
+        // commands between them and the scene stage at each, then the end of its draws. The split is the list's own
+        // (Impl::segments: its commands' kinds), made now; the list is made current by its uploads pass.
+        std::vector<Impl::Segment> split;
+        Impl::segments(s.pending[i], split);
+        graph.pass("gs: 3D batches", keep, [&s, view](rg::PassContext& c) {
             GT4_STAGE_SCOPE("render: the scene (game lists)");
             GT4_CPU_SCOPE("render: native renderer's commands");
-            s.pendingDraws(c.command, view.slot);
+            GT4_STAGE_SCOPE("render: the lists' draws");
+            s.executeBegin(c.command, view.slot);
+        });
+        for (const Impl::Segment& g : split) {
+            if (g.kind == Impl::Segment::Kind::Light) {
+                graph.pass("gs: scene stage", keep, [&s, view, at = g.from](rg::PassContext& c) {
+                    GT4_STAGE_SCOPE("render: the scene (game lists)");
+                    GT4_CPU_SCOPE("render: native renderer's commands");
+                    GT4_STAGE_SCOPE("render: the lists' draws");
+                    s.executeLight(c.command, view.slot, at);
+                });
+            } else {
+                graph.pass("gs: draws", keep, [&s, view, from = g.from, to = g.to](rg::PassContext& c) {
+                    GT4_STAGE_SCOPE("render: the scene (game lists)");
+                    GT4_CPU_SCOPE("render: native renderer's commands");
+                    GT4_STAGE_SCOPE("render: the lists' draws");
+                    s.executeRange(c.command, view.slot, from, to);
+                });
+            }
+        }
+        graph.pass("gs: draws end", keep, [&s, view](rg::PassContext& c) {
+            GT4_STAGE_SCOPE("render: the scene (game lists)");
+            GT4_CPU_SCOPE("render: native renderer's commands");
+            GT4_STAGE_SCOPE("render: the lists' draws");
+            s.executeFinish(c.command, view.slot);
         });
         graph.pass("gs: list end", keep, [&s](rg::PassContext& c) {
             GT4_STAGE_SCOPE("render: the scene (game lists)");
