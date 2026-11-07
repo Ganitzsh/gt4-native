@@ -226,6 +226,18 @@ if(GT4_GS_REFERENCE)
 endif()
 
 # Saves from a PS2 memory card or export into the native save folder (docs/SAVES.md): plain C++, no GPU.
+# The scene cache (platform/scene, docs/modern/ARCHITECTURE.md 3.1): GT4's model batches decoded into object-space
+# meshes on worker threads (ticket B5). Plain C++, no GPU.
+add_library(gt4_mesh_cache STATIC platform/scene/mesh_cache.cpp)
+target_include_directories(gt4_mesh_cache PUBLIC platform/scene include PRIVATE third_party)
+target_compile_features(gt4_mesh_cache PUBLIC cxx_std_20)
+target_link_libraries(gt4_mesh_cache PUBLIC Threads::Threads)
+if(MSVC)
+  target_compile_options(gt4_mesh_cache PRIVATE /W4)
+else()
+  target_compile_options(gt4_mesh_cache PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 add_library(gt4_saves STATIC platform/saves/save_import.cpp)
 target_include_directories(gt4_saves PUBLIC platform/saves)
 target_compile_features(gt4_saves PUBLIC cxx_std_20)
@@ -312,6 +324,16 @@ if(BUILD_TESTING)
     target_compile_options(gt4_pipeline_cache_file_test PRIVATE -Wall -Wextra -Wpedantic)
   endif()
   add_test(NAME pipeline_cache_file COMMAND gt4_pipeline_cache_file_test ${CMAKE_CURRENT_BINARY_DIR}/pipeline_cache_file_test)
+
+  # The mesh cache against the CPU 3D renderers on captures (game data: GT4_MESH_CAPTURES, by default the race7, race and
+  # event captures in build/caps; skipped (77) without them).
+  set(gt4_caps ${CMAKE_SOURCE_DIR}/build/caps)
+  set(GT4_MESH_CAPTURES "${gt4_caps}/race7.cap;${gt4_caps}/race.cap;${gt4_caps}/event.cap" CACHE STRING
+      "Captures the mesh_cache test replays")
+  add_executable(gt4_mesh_cache_test tests/mesh_cache.cpp)
+  target_link_libraries(gt4_mesh_cache_test PRIVATE gt4_mesh_cache gt4_ps2gfx)
+  add_test(NAME mesh_cache COMMAND gt4_mesh_cache_test ${GT4_MESH_CAPTURES})
+  set_tests_properties(mesh_cache PROPERTIES SKIP_RETURN_CODE 77)
 
   # Saves from memory card images, .psu exports and folder cards (built here; no game data).
   add_executable(gt4_save_import_test tests/save_import.cpp)
