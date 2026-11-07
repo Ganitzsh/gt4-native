@@ -39,6 +39,9 @@ public:
     virtual void texSet(const uint8_t* payload, size_t bytes) { (void)payload; (void)bytes; }
     // A post effect as a pass (docs/NATIVE_V2.md, step 3).
     virtual void effect(const gfx::EffectRecord& r) { (void)r; }
+    // A scene record (gfx::kScene: gfx::scene::Prefix, then that kind's struct), in order with the batches.
+    // Nothing by default (docs/modern/CONTRACTS.md (a): the scene decoder takes them, ticket A10).
+    virtual void scene(const uint8_t* payload, size_t bytes) { (void)payload; (void)bytes; }
     // A 3D batch for the GPU (docs/NATIVE_V2.md, step 2; PrimitiveSink::model), when the target takes them.
     virtual bool models() const { return false; }
     virtual void model(const gfx::ModelJob& job, const uint32_t* words) { (void)job; (void)words; }
@@ -83,6 +86,7 @@ public:
         uint64_t unknownPrograms = 0;   // batches started in a program image that is not GT4's (nothing drawn)
         uint64_t path3Held = 0, path3ForcedAtVsync = 0;   // PATH3 records held by MSKPATH3
         uint64_t gfxRecords = 0, badRecords = 0;   // native records in the VIF1 stream (include/gt4/gfx.h)
+        uint64_t sceneRecords = 0;   // of them gfx::kScene (0 while the game's kOptionSceneRecords is off)
         uint64_t uploads = 0, uploadsWithoutData = 0, draws = 0;
     };
     const Stats& stats() const { return counters; }

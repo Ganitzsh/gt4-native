@@ -192,6 +192,15 @@ void GraphicsStream::records(const uint8_t* data, size_t bytes) {
             gs.effect(r);
             break;
         }
+        case gfx::kScene:
+            // validated by the scene decoder (counters `bad`, `versionUnknown`...); only too short for a prefix here
+            if (h.bytes() < sizeof(gfx::scene::Prefix)) {
+                ++counters.badRecords;
+                break;
+            }
+            ++counters.sceneRecords;
+            gs.scene(payload, h.bytes());
+            break;
         case gfx::kTexSet: {
             gfx::TexSetRecord r;
             if (h.bytes() < sizeof r) {
@@ -793,7 +802,7 @@ std::string GraphicsStream::describe() const {
         << r.matched << " seen the frame before), " << v.directQwords
         << " DIRECT qwords, " << v.mpgInstructions << " MPG instructions, " << v.unknownCodes << " unknown codes; "
         << counters.gfxRecords << " native records (" << counters.uploads << " uploads, " << counters.uploadsWithoutData
-         << " without data, " << counters.draws << " draws, " << counters.badRecords << " bad); " << counters.displays << " displays, " << counters.reads
+         << " without data, " << counters.draws << " draws, " << counters.sceneRecords << " scene, " << counters.badRecords << " bad); " << counters.displays << " displays, " << counters.reads
         << " GS reads, " << counters.path3Held << " PATH3 records held by MSKPATH3 (" << counters.path3ForcedAtVsync
         << " released at VSYNC); model packets: " << vif1.modelStats.decoded << " decoded, " << vif1.modelStats.replayed << " replayed, "
         << vif1.modelStats.uncacheable << " not kept; 3D batches on the GPU: " << counters.modelBatches;

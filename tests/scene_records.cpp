@@ -1,7 +1,9 @@
 // The scene records' layouts (docs/modern/CONTRACTS.md (a)): include/gt4/gfx.h namespace gt4::gfx::scene against the
 // game's plain C copy compat/game/gt4_scene.h, every size and every member's offset, so both compilers (gcc 2.9 i386,
-// MSVC / clang x64) agree.
+// MSVC / clang x64) agree; and a kScene record through ps2::GraphicsStream reaching GsTarget::scene in order.
 #include "gt4/gfx.h"
+#include "gt4/link/protocol.h"
+#include "stream.h"
 
 #include "gt4_scene.h"
 
@@ -174,10 +176,67 @@ void layouts() {
     check(scene::recordSize(0) == 0 && scene::recordSize(11) == 0, "recordSize of an unknown kind");
 }
 
+// A target that keeps the scene records it is given, and counts the effect records around them (order).
+class Target : public gt4::ps2::GsTarget {
+public:
+    std::vector<std::string> order;
+    std::vector<std::vector<uint8_t>> scenes;
+    void gif(uint32_t, const uint8_t*, size_t) override {}
+    void display(const gt4::gfx::DisplayRecord&) override {}
+    void vsync(uint32_t, uint32_t) override {}
+    void readTransfer(void* out, uint32_t qwc) override { std::memset(out, 0, size_t(qwc) * 16); }
+    void effect(const gt4::gfx::EffectRecord&) override { order.push_back("effect"); }
+    void scene(const uint8_t* payload, size_t bytes) override {
+        order.push_back("scene");
+        scenes.emplace_back(payload, payload + bytes);
+    }
+};
+
+void append(std::vector<uint8_t>& block, uint32_t type, const void* payload, uint32_t bytes) {
+    const gt4::gfx::Header h = gt4::gfx::header(type, bytes);
+    const size_t at = block.size();
+    block.resize(at + size_t(gt4::gfx::recordQwords(bytes)) * 16, 0);
+    std::memcpy(block.data() + at, &h, sizeof h);
+    if (bytes) std::memcpy(block.data() + at + sizeof h, payload, bytes);
+}
+
+void stream() {
+    Target target;
+    gt4::ps2::GraphicsStream gs(target);
+    scene::FrameBegin begin{};
+    begin.prefix = {scene::kFrameBegin, scene::kVersion};
+    begin.frame = 7;
+    scene::Instance instance{};
+    instance.prefix = {scene::kInstance, scene::kVersion};
+    instance.serial = 1;
+    instance.objectToView[3][2] = -5.0f;
+    gt4::gfx::EffectRecord effect{};
+    std::vector<uint8_t> block;
+    append(block, gt4::gfx::kScene, &begin, sizeof begin);
+    append(block, gt4::gfx::kEffect, &effect, sizeof effect);
+    append(block, gt4::gfx::kScene, &instance, sizeof instance);
+    const uint16_t shortRecord = scene::kMarker;   // two bytes: shorter than a prefix
+    append(block, gt4::gfx::kScene, &shortRecord, sizeof shortRecord);
+    Gt4LinkRecord h{};
+    h.type = GT4_REC_GFX;
+    h.size = static_cast<uint32_t>(block.size());
+    gs.record(h, block.data());
+    check(target.order == std::vector<std::string>({"scene", "effect", "scene"}), "stream: scene records in order with the others");
+    check(target.scenes.size() == 2 && target.scenes[0].size() == sizeof begin && target.scenes[1].size() == sizeof instance,
+          "stream: each scene record whole");
+    if (target.scenes.size() == 2) {
+        scene::Instance back;
+        std::memcpy(&back, target.scenes[1].data(), sizeof back);
+        check(back.prefix.kind == scene::kInstance && back.serial == 1 && back.objectToView[3][2] == -5.0f, "stream: values kept");
+    }
+    check(gs.stats().badRecords == 1, "stream: a scene record shorter than its prefix is counted bad");
+    check(gs.stats().sceneRecords == 2, "stream: the well-formed scene records are counted (the summary's 'scene')");
+}
 }  // namespace
 
 int main() {
     layouts();
+    stream();
     if (failures) std::fprintf(stderr, "%d failure(s)\n", failures);
     else std::printf("scene_records: all checks passed\n");
     return failures ? 1 : 0;

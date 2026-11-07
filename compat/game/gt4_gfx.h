@@ -65,6 +65,12 @@ int gt4_gfx_grade(void *context, unsigned int sourcePage, unsigned int destinati
                   unsigned int red, unsigned int green, unsigned int blue, unsigned long long scissor);
 /* After an effect drawn the GS's way too (GT4_EFFECTS_BOTH=1, checking): its end. */
 void gt4_gfx_effect_end(void *context);
+/* Scene records (include/gt4/gfx.h gt4::gfx::scene; the layouts restated in compat/game/gt4_scene.h): `record`
+ * starts with its prefix; `bytes` is the size of that kind's struct. Appended to the packet like the batch records, so
+ * in order with them. The runtime fills in a frame begin's frame and vblank. Nothing is sent unless gt4_scene_on(). */
+void gt4_gfx_scene(void *context, const void *record, int bytes);
+/* The host's kOptionSceneRecords (runtime/runtime.h): 1 when it wants scene records. */
+unsigned int gt4_scene_on(void);
 #ifdef __cplusplus
 }
 #endif

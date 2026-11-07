@@ -6,8 +6,10 @@
 // that buffer too, so that they stay in order with the packets that are left: a DMA CNT tag whose upper
 // half ends with the record code (gfx::kStreamCode | qwords), followed by the record.
 #include "../guest.h"
+#include "../kernel.h"
 #include "../link.h"
 #include "../log.h"
+#include "../runtime.h"
 #include "gt4/link/protocol.h"
 #include "gt4/gfx.h"
 #include "gt4/unpack.h"
@@ -351,6 +353,31 @@ int gt4_gfx_upload_now(uint32_t destination, int x, int y, int w, int h, uint32_
     link_send(GT4_REC_GFX_DATA, head, sizeof head, guest_ptr(block.upload.source), qwords * 16);
     link_send(GT4_REC_GFX, &block, sizeof block);
     return static_cast<int>(qwords);
+}
+
+// Scene records (compat/game/gt4_gfx.h, docs/modern/CONTRACTS.md (a)): appended like the batch records, so the host
+// sees them in issue order with the batches. Values only, never guest pointers: the frame walker sends them as they
+// are. Nothing is sent unless the host asked for them (kOptionSceneRecords).
+int gt4_game_option(int id);   // runtime/sdk.cpp
+unsigned int gt4_scene_on(void) { return gt4_game_option(static_cast<int>(kOptionSceneRecords)) != 0 ? 1u : 0u; }
+
+void gt4_gfx_scene(uint32_t context, const void *record, int bytes) {
+    namespace scene = gfx::scene;
+    if (bytes < static_cast<int>(sizeof(scene::Prefix)) || !gt4_scene_on()) return;
+    scene::Prefix prefix;
+    std::memcpy(&prefix, record, sizeof prefix);
+    if (prefix.kind == scene::kFrameBegin && bytes >= static_cast<int>(sizeof(scene::FrameBegin))) {
+        // the runtime's part of a frame begin: its count and the VBlank (logs, captures)
+        static uint32_t frames = 0;
+        scene::FrameBegin begin;
+        std::memcpy(&begin, record, sizeof begin);
+        begin.frame = ++frames;
+        begin.vblank = kernel_frame_count();
+        append(context, gfx::kScene, &begin, sizeof begin, static_cast<const uint8_t *>(record) + sizeof begin,
+               static_cast<uint32_t>(bytes) - static_cast<uint32_t>(sizeof begin));
+        return;
+    }
+    append(context, gfx::kScene, record, static_cast<uint32_t>(bytes));
 }
 
 // GT4's 3D batches from game code (compat/game/gt4_gfx.h).

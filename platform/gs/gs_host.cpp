@@ -326,6 +326,7 @@ public:
     void texSet(const uint8_t* payload, size_t bytes) override { put(Op::TexSet, 0, 0, payload, bytes); }
     bool models() const override { return inner.models(); }
     void effect(const gfx::EffectRecord& r) override { put(Op::Effect, 0, 0, &r, sizeof r); }
+    void scene(const uint8_t* payload, size_t bytes) override { put(Op::Scene, 0, 0, payload, bytes); }
     void model(const gfx::ModelJob& job, const uint32_t* words) override {
         put(Op::Model, 0, 0, &job, sizeof job, words, gfx::kModelWords * 4);
     }
@@ -362,7 +363,7 @@ public:
     }
 
 private:
-    enum class Op : uint32_t { Gif, Primitives, Display, State, Upload, Read, Draw, Vsync, TexSet, Model, Effect, ReadLater };
+    enum class Op : uint32_t { Gif, Primitives, Display, State, Upload, Read, Draw, Vsync, TexSet, Model, Effect, ReadLater, Scene };
     struct Entry {
         Op op;
         uint32_t a, b;
@@ -447,6 +448,7 @@ private:
             case Op::Draw: inner.draw(*reinterpret_cast<const gfx::DrawRecord*>(first), reinterpret_cast<const gfx::Vertex*>(second)); break;
             case Op::Vsync: inner.vsync(e.a, e.b); break;
             case Op::TexSet: inner.texSet(first, e.first); break;
+            case Op::Scene: inner.scene(first, e.first); break;
             case Op::Effect: {
                 gfx::EffectRecord r;
                 std::memcpy(&r, first, sizeof r);
