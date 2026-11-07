@@ -3,6 +3,7 @@
 // frames in flight, captures, and the display pipeline (platform/render/pipeline.h) fed by the game's frames
 // from the native renderer (platform/render/gsn_scene.h), or by the test scene without a game.
 #include "gsn_scene.h"
+#include "render_graph.h"   // rg::PassTiming (passTimings)
 #include "settings.h"
 #include "settings_menu.h"
 
@@ -71,6 +72,10 @@ public:
     void setStageTiming(bool on);
     std::vector<std::pair<std::string, double>> gsStages() const;
     double averageGpuMilliseconds() const;   // mean GPU time over every timed frame so far
+    // The display pipeline's render graph passes in the last finished frame (names, GPU and CPU microseconds, GPU -1
+    // when not timed; docs/modern/CONTRACTS.md b.7), and its transient memory: for --profile-json.
+    const std::vector<gt4::rg::PassTiming>& passTimings() const;
+    uint64_t transientBytes() const;
     std::string pipelineDescription() const;
 
 private:

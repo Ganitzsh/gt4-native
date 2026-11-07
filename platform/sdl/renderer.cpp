@@ -217,6 +217,7 @@ struct Renderer::Impl {
     VkQueryPool timestamps = VK_NULL_HANDLE;
     bool timestampsSupported = false;
     double gpuMs = 0.0, gpuMsTotal = 0.0;
+    std::vector<gt4::rg::PassTiming> passTimes;   // the render graph's passes in the last finished frame
     uint64_t gpuSamples = 0;
 
     // Presentation target.
@@ -251,6 +252,15 @@ struct Renderer::Impl {
 
     ~Impl() {
         if (device.device) vkDeviceWaitIdle(device.device);
+        if (!passTimes.empty()) {   // the display passes' cost in the last finished frame (CONTRACTS b.7)
+            std::string line;
+            for (const auto& t : passTimes) {
+                char item[160];
+                std::snprintf(item, sizeof item, "%s%s %.0f/%.0f", line.empty() ? "" : ", ", t.name.c_str(), t.gpuMicroseconds, t.cpuMicroseconds);
+                line += item;
+            }
+            std::printf("Render graph: last frame's passes, GPU/CPU us: %s\n", line.c_str());
+        }
         overlay.reset();
         pipeline.reset();
         scene.reset();
@@ -802,6 +812,7 @@ struct Renderer::Impl {
             check(vkWaitForFences(device.device, 1, &frame.fence, VK_TRUE, UINT64_MAX), "vkWaitForFences");
         }
         readTimestamps(frame, slot);
+        if (pipeline) passTimes = pipeline->passTimings(slot);   // (the slot's graph timestamps: its fence has signalled)
         // The game's asynchronous reads copied in frames the GPU has finished (this slot's, and the other's if done).
         if (gsnScene)
             for (uint32_t k = 0; k < kFramesInFlight; ++k)
@@ -1034,5 +1045,7 @@ void Renderer::setStageTiming(bool on) { if (impl->gsnScene) impl->gsnScene->set
 std::vector<std::pair<std::string, double>> Renderer::gsStages() const {
     return impl->gsnScene ? impl->gsnScene->lastFrameStages() : std::vector<std::pair<std::string, double>>{};
 }
+const std::vector<gt4::rg::PassTiming>& Renderer::passTimings() const { return impl->passTimes; }
+uint64_t Renderer::transientBytes() const { return impl->pipeline ? impl->pipeline->transientBytes() : 0; }
 double Renderer::averageGpuMilliseconds() const { return impl->gpuSamples ? impl->gpuMsTotal / static_cast<double>(impl->gpuSamples) : 0.0; }
 std::string Renderer::pipelineDescription() const { return impl->pipeline->describe(); }

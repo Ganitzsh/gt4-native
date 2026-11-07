@@ -447,5 +447,10 @@ VkRect2D FramePipeline::contentRect() const { return impl->config.content; }
 VkExtent2D FramePipeline::renderExtent() const { return impl->config.render; }
 VkExtent2D FramePipeline::outputExtent() const { return impl->config.output; }
 std::string FramePipeline::describe() const { return impl->describe(); }
+const std::vector<rg::PassTiming>& FramePipeline::passTimings(uint32_t slot) {
+    static const std::vector<rg::PassTiming> none;
+    return impl->graph ? impl->graph->timings(slot) : none;
+}
+uint64_t FramePipeline::transientBytes() const { return impl->graph ? impl->graph->plan().transientBytes : 0; }
 
 }  // namespace gt4

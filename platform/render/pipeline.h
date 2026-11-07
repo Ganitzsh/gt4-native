@@ -7,6 +7,7 @@
 //   spatial path:  DOF -> motion blur -> bloom -> tonemap -> FXAA / SMAA (T2x) -> EASU / resample -> RCAS
 //   -> output pass into the content rectangle (aberration, vignette, grain, dither) -> 2D layer
 #include "overlay.h"
+#include "render_graph.h"
 #include "scene.h"
 #include "settings.h"
 #include "vk.h"
@@ -41,6 +42,11 @@ public:
     VkExtent2D outputExtent() const;
     // Human-readable summary of the active path (for the on-screen readout and logs).
     std::string describe() const;
+    // The render graph's passes in `slot`'s last execution (names, GPU and CPU microseconds; docs/modern/CONTRACTS.md
+    // b.7): call once that slot's fence has signalled. Empty before the first frame.
+    const std::vector<rg::PassTiming>& passTimings(uint32_t slot);
+    // The graph transients' memory as last compiled (aliased), in bytes.
+    uint64_t transientBytes() const;
 
 private:
     struct Impl;
