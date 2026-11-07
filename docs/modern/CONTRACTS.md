@@ -373,11 +373,19 @@ Where each record is sent (tickets in PLAN.md):
      the race is measured (none); the menus are still to do;
    - no kick in a race has a menu `FrameBegin` before `render_world`'s (its flags would stand).
 2. `ViewBegin` / `ViewEnd` pairs do not nest. Instances and lights appear only inside a view.
-3. An `Instance` is followed by exactly `items` `kBatchRun` records (with the `kBatchWrite`, `kBatchModel`,
+3. An `Instance` is followed by its `items` `kBatchRun` records (with the `kBatchWrite`, `kBatchModel`,
    `kState`, `kTexSet` records its items and callbacks send), before the next `Instance`, `ViewEnd` or `Marker`.
-   The decoder tags those `items` runs' `ModelJob`s with the instance (`ModelJob::pad[0]` = its position in
-   `SceneFrame::instances` + 1, which is its `serial` in a well-formed stream; 0 for none).
-   Batches outside any instance (immediate-mode glows and billboards: 0049BBF0, 0049C2A8...) stay untagged.
+   - The decoder tags those `items` runs' `ModelJob`s with the instance (`ModelJob::pad[0]` = its position in
+     `SceneFrame::instances` + 1, which is its `serial` in a well-formed stream; 0 for none).
+   - It closes the instance once its `items` runs have arrived. `kBatchRun` records after that belong to no
+     instance and stay untagged. They come from other draw paths that run after a 0049D328 Cmd: 00497838's
+     pre-built shapes, and 0049FAC8's Cmd-like models with their own 0049E480 / 0049E548 composition. A6 gives
+     those paths `Instance`s of their own.
+   - Batches outside any instance (immediate-mode glows and billboards: 0049BBF0, 0049C2A8...) stay untagged.
+   - Blind spot: an extra run from inside 0049D328's item loop (an item callback that draws), on any item,
+     takes the next tag slot. That pushes the Cmd's own last run past `items`, untagged. The per-job matrix
+     check flags the wrong tag unless the callback draws with the same matrix. `runsAfterSameMatrix` (a.7)
+     catches it either way: the displaced run always carries the closed instance's matrix.
 4. `Light` comes inside the view whose space it uses. `Emitter` and `Vehicle` come anywhere between
    `FrameBegin` and `FrameEnd`.
 4a. A `Projection` comes before the first record that names its id (`ViewBegin::projection`,
@@ -424,7 +432,8 @@ Where each record is sent (tickets in PLAN.md):
 | `viewsNested`, `viewEndWithoutBegin`, `viewsUnclosed` | pairing (`viewsUnclosed`: a view still open at `FrameEnd`) | 0 |
 | `instances`, `instancesWithoutView` | | `instancesWithoutView == 0` in race frames (the HUD widget is inside the frame, in its `kViewHud` view) |
 | `begins` | `FrameEnd::begins`: the `FrameBegin`s the runtime merged into one frame (render_world plus each 00217058 call) | reported |
-| `itemsMismatch` | an instance followed by more or fewer `kBatchRun` than `items` | 0 |
+| `itemsMismatch` | an instance closed (by the next `Instance`, `ViewEnd` or `Marker`) with fewer `kBatchRun` than `items` | 0 |
+| `runsAfterInstance`, `runsAfterSameMatrix` | `kBatchRun`s after an instance's `items` runs, before the next `Instance`, `ViewEnd` or `Marker` (untagged, a.5.3); of them, runs whose jobs' matrix equals the closed instance's (`diag(...) · objectToView · viewToClip`, same tolerance as `matrixMismatch`) | reported; `runsAfterSameMatrix` expected 0 |
 | `projections`, `projectionUnknown` | an `Instance` or `ViewBegin` naming an id not sent this frame, or an `Instance` with items and projection 0 (its jobs could not be checked) | `projectionUnknown == 0` |
 | `matrixChecked`, `matrixMismatch`, `matrixMaxError` | per tagged job: `diag(axisScale·k, 1) · objectToView · projection.viewToClip` (k = shapeScale, or 1 when 0) against `ModelJob::matrix`; mismatch when the largest difference exceeds `1e-5 · max |entry|` (R1: 0 of 270,515, largest 2.3e-7) | `matrixMismatch == 0` |
 | `viewportMismatch` | per tagged job: the instance's `projection.viewportScale / viewportOffset / clamp` against `ModelJob::scale / offset / clamp` | 0 |

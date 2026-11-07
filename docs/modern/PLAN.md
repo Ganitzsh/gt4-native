@@ -139,9 +139,12 @@ Depends: A3, R11, R12. Acceptance: `REL`; `ORIG`; on the N0 captures, the bracke
 and R12 listed.
 
 **A6: Further views (M).** Env-map passes 0044E660 / 0044EB10 (`kViewEnvFace`), the road reflection
-(`render_reflection` 003411D0, `kViewReflection`), showroom jitter passes, Photo Travel. Depends: A3, R6.
-Acceptance: `REL`; `ORIG`; `SCENE` on the showroom and photo captures; each env face's views bound to the 128 x 256
-env target.
+(`render_reflection` 003411D0, `kViewReflection`), showroom jitter passes, Photo Travel. `Instance` records for
+the draw paths that run after a Cmd (CONTRACTS a.5.3): 00497838's pre-built shapes, placed by position (what
+their `objectToView` is), and 0049FAC8's Cmd-like models, checking that their 0049E480 / 0049E548 composition
+follows R1's rule. Depends: A3, R6. Acceptance: `REL`; `ORIG`; `SCENE` on the showroom and photo captures; each
+env face's views bound to the 128 x 256 env target; `runsAfterInstance == 0` in race frames once both paths send
+`Instance`s.
 
 **A7: Light records (M).** 003B8EA0 (draft: course glows, view position from shared vector 31, width, height,
 colour, intensity); 0x00341A30 (car-light reflections); car lamps from the car instances (A6 / D6); `kSrcWarning`
