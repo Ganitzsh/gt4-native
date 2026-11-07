@@ -1047,7 +1047,7 @@ std::string GsHost::summary() const {
     }
     if (h.target && (h.target->frontend().stats.setTextures || h.target->frontend().stats.setMisses)) {
         const auto& s = h.target->frontend().stats;
-        out << "; native textures: " << s.setTextures << " lookups by set, " << s.setMisses << " not held, " << s.setDecodes << " decoded, " << s.setPagesWritten << " set pages into memory, "
+        out << "; native textures: " << s.setTextures << " lookups by set, " << s.setMisses << " not held, " << s.setDecodes << " decoded, " << s.streamed << " stream frames in place, " << s.setPagesWritten << " set pages into memory, "
             << s.byAddress << " lookups by address (" << s.targetReads << " of targets, " << s.reinterpreted << " reinterpreted)";
     }
     if (h.target && (h.target->gpuReads || h.target->staleReads))

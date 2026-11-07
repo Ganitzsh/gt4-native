@@ -1537,6 +1537,15 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
     const bool gone = c.id && !c.replacedId && (shown == decoded.end() || shown->second.id != c.id);
     const bool fresh = !c.version || c.generation != generation || c.clutHash != clutHash || lost || gone;
     if (!fresh && shown != decoded.end()) shown->second.lastUsed = frameCount;
+    // A stream: new content at this address and size on three or more consecutive frames (the menus' movie
+    // backgrounds, a video frame uploaded into the frame buffer each frame) is decoded into the texture the last
+    // one had, not a new texture (a GPU image, a texture-pack lookup) that the cache kept for 30 seconds (one per
+    // frame: the budget's evictions and the GPU's image churn in every menu). Not twice in one frame: the frame's
+    // earlier draws keep the pixels they were given.
+    const uint64_t previousKey = c.contentKey, previousDecode = c.decodedFrame;
+    const uint32_t previousId = c.id;
+    const bool consecutive = previousDecode != ~0ull && previousDecode + 2 >= frameCount && previousDecode != frameCount;
+    const bool streaming = fresh && previousId && !c.replacedId && consecutive && c.streak >= 2;
     // What the texture is (when it may have changed): its fields and palette (key), the content of every page its
     // levels cover.
     uint64_t contentKey = c.contentKey;
@@ -1558,6 +1567,7 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
         if (fresh) {   // named once per content (level 0 is replaced; the GPU makes a mipmapped texture's levels)
             Decoded& known = decoded[contentKey];
             known.lastUsed = frameCount;
+            if (!known.named && streaming) known.named = true;   // (a stream's frames: no pack has them)
             if (!known.named) {
                 MipAddress mips[6];
                 for (uint32_t i = 1; i < levelCount; ++i) mips[i - 1] = {levels[i].tbp, levels[i].tbw};
@@ -1604,13 +1614,26 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
         d.lastUsed = frameCount;
         if (d.id) {   // seen before: its texture is still on the GPU
             c.id = d.id;
+            c.streak = 0;
             ++stats.reused;
             src.kind = TextureSource::Kind::Memory;
             src.id = c.id;
             src.version = 1;
             return src;
         }
-        d.id = c.id = nextTexture++;
+        uint32_t id = 0;
+        if (streaming) {   // (the previous content's texture, unless a draw of this frame shows it)
+            auto old = decoded.find(previousKey);
+            if (old != decoded.end() && old->second.id == previousId && !old->second.replacedId && old->second.lastUsed != frameCount) {
+                cachedTexels -= old->second.texels;
+                decoded.erase(old);
+                id = previousId;
+                ++stats.streamed;
+            }
+        }
+        c.streak = consecutive ? c.streak + 1 : 1;
+        c.decodedFrame = frameCount;
+        d.id = c.id = id ? id : nextTexture++;
         d.texels = 0;
         for (uint32_t i = 0; i < levelCount; ++i) d.texels += uint64_t(levels[i].w) * levels[i].h;
         cachedTexels += d.texels;
@@ -1628,7 +1651,20 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
         texa.aem = s.texBlackTransparent;
         texa.ta1 = s.texAlpha1;
         size_t at = 0;
-        for (uint32_t i = 0; i < levelCount; ++i) {
+        // A stream's frame wider than its buffer (a 640-wide video frame declared 1024 texels wide): only the
+        // buffer's width is decoded, its last column repeated to the right.
+        const uint32_t shownWidth = std::max<uint32_t>(t.tbw, 1) * 64;
+        const bool part = id && levelCount == 1 && !indexed && shownWidth < w;
+        if (part) {
+            std::vector<uint32_t> visible(size_t(shownWidth) * h);
+            mem.decode(t, texa, 0, 0, shownWidth, h, visible.data());
+            for (uint32_t y = 0; y < h; ++y) {
+                uint32_t* row = image.pixels.data() + size_t(y) * w;
+                std::memcpy(row, visible.data() + size_t(y) * shownWidth, size_t(shownWidth) * 4);
+                std::fill(row + shownWidth, row + w, row[shownWidth - 1]);
+            }
+        }
+        for (uint32_t i = 0; i < (part ? 0u : levelCount); ++i) {
             GsMemory::Tex0 lt = t;
             lt.tbp = levels[i].tbp;
             lt.tbw = levels[i].tbw;
