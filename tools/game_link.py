@@ -33,9 +33,6 @@ from concurrent.futures import ThreadPoolExecutor
 # rule, docs/modern/CAPTURES.md).
 NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import objcache  # noqa: E402
-
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # FFmpeg (static, i686) for movies (runtime/native/movie.cpp): tools/build_ffmpeg.sh builds it here
 # (absolute and normalised once: the -I flag and the prefix map in compile_runtime must see the same string)
@@ -216,56 +213,24 @@ def nm_cache_save():
             json.dump(_NM_CACHE, f)
 
 
-_NM_CONTENT = None   # objcache.NmCache (machine-wide, by object content), False when turned off
-_SHA = {}            # object path -> (mtime, size, SHA-256)
-
-
-def nm_content():
-    global _NM_CONTENT
-    if _NM_CONTENT is None:
-        root = objcache.folder()
-        _NM_CONTENT = objcache.NmCache(root, tool("nm")) if root else False
-    return _NM_CONTENT or None
-
-
-def object_sha(o):
-    st = os.stat(o)
-    known = _SHA.get(o)
-    if not known or known[:2] != (st.st_mtime, st.st_size):
-        known = _SHA[o] = (st.st_mtime, st.st_size, objcache.sha256_file(o))
-    return known[2]
-
-
 def nm_lines(objs, args):
-    """{object: the lines `nm -A ARGS` printed for it, each without the object's path}. From the machine-wide
-    cache by the object's content (tools/objcache.py: a release build's objects are new files each time, but
-    mostly the same bytes), else nm on the rest, in chunks on 8 threads."""
-    cache = nm_content()
-    result, todo = {}, []
-    for o in objs:
-        key = cache.key(object_sha(o), args) if cache else None
-        lines = cache.get(key) if cache else None
-        if lines is None:
-            todo.append((o, key))
-        else:
-            result[o] = lines
+    """{object: the lines `nm -A ARGS` printed for it, each without the object's path}: nm in chunks on 8 threads.
+    (Not kept in tools/objcache.py: reading 127,000 kept listings, one file each, took longer than nm.)"""
+    result = {}
 
     def one(chunk):
-        return chunk, run([tool("nm"), "-A"] + list(args) + [o for o, _ in chunk], env=mingw_env())
+        return chunk, run([tool("nm"), "-A"] + list(args) + chunk, env=mingw_env())
 
     with ThreadPoolExecutor(8) as ex:
-        for chunk, text in ex.map(one, chunked(todo, path=lambda t: t[0])):
-            found = {o: [] for o, _ in chunk}
-            index = {os.path.normcase(os.path.normpath(o)): o for o, _ in chunk}
+        for chunk, text in ex.map(one, chunked(list(objs))):
+            found = {o: [] for o in chunk}
+            index = {os.path.normcase(os.path.normpath(o)): o for o in chunk}
             for line in text.splitlines():
                 path, _, rest = line.rpartition(":")
                 o = index.get(os.path.normcase(os.path.normpath(path)))
                 if o:
                     found[o].append(rest)
-            for o, key in chunk:
-                result[o] = found[o]
-                if cache:
-                    cache.put(key, found[o])
+            result.update(found)
     return result
 
 
@@ -834,9 +799,6 @@ def main():
     if a.eeorig:  # the translated code's RAM and scratchpad are the guest's, at their PS2 addresses
         cmd += ["-Wl,--defsym,__ZN3ps25g_ramE=0", "-Wl,--defsym,__ZN3ps25g_sprE=0x70000000"]
     nm_cache_save()
-    if nm_content():   # (tools/release_game.py adds these up for its stamp)
-        with open(os.path.join(a.out, "object_cache.jsonl"), "a", encoding="utf-8", newline="\n") as f:
-            f.write(json.dumps({"nm_from_cache": nm_content().hits, "nm_run": nm_content().runs}) + "\n")
     run(cmd, env=mingw_env())
     lap("linked")
     with open(os.path.join(a.out, "LINK_REPORT.txt"), "w") as f:

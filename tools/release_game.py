@@ -27,11 +27,11 @@ changed. A release game is therefore always built here, from nothing:
   5. copies the curated and draft sources it compiled to OUT/sources/ and writes OUT/BUILD-STAMP.json: both
      commits, the SHA-256 of every curated and draft source, the draft set's SHA-256 and how it was staged, the
      drafts list (where each draft came from), the sources that did not compile, the exe's SHA-256, and what the
-     object cache gave (object_cache: objects compiled or taken from it, nm listings run or taken).
+     object cache gave (object_cache: objects compiled or taken from it).
 
-Objects and nm's listings of them come from a machine-wide content-addressed cache when the same inputs made them
-before (tools/objcache.py: GT4_OBJ_CACHE=DIR, or =0 to build without it), so a build of commits that change a
-handful of sources compiles only those. The exe is the same with or without the cache.
+Objects come from a machine-wide content-addressed cache when the same inputs made them before
+(tools/objcache.py: GT4_OBJ_CACHE=DIR, or =0 to build without it), so a build of commits that change a handful of
+sources compiles only those. The exe is the same with or without the cache.
 
 tools/package_game.py --release takes the game from OUT only, and refuses it when the stamp does not match the exe
 or the trees have changed since (BUILD-INFO.txt and the game-sources zip are made from the stamp).
@@ -98,8 +98,8 @@ def failed_sources(census):
 
 
 def cache_summary(path):
-    """What tools/objcache.py gave this build (game_cc.py's and game_link.py's lines in OUT/object_cache.jsonl):
-    objects compiled or taken from the cache, nm listings run or taken. None when the cache was off."""
+    """What tools/objcache.py gave this build (game_cc.py's lines in OUT/object_cache.jsonl): objects compiled or
+    taken from the cache. None when the cache was off."""
     if not os.path.isfile(path):
         return None
     total = {}

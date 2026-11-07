@@ -960,21 +960,31 @@ def main():
     t0 = time.time()
     cache = open_cache(static, args)
     pool = concurrent.futures.ThreadPoolExecutor(args.jobs)
+    # Reading each source, its cache key and its kept object: file opens, about 2 ms each on this machine (a file
+    # scan per open), three or four per source; on 16 threads they overlap (one at a time, a warm build spent 222 of
+    # its 245 s in open).
+    io = concurrent.futures.ThreadPoolExecutor(16)
+    hits = 0
+
+    def prepare(rel):
+        data = recovered[rel][1] if rel in recovered else open(source_path(decomp, args.stage, rel), "rb").read()
+        prof = profile_of(data[:200])
+        if prof not in profiles:
+            prof = None
+        o_path = os.path.join(out, "obj", rel + ".o")
+        if os.path.exists(o_path):
+            os.remove(o_path)
+        key = cache.key(rel, data, profiles[prof], addresses.get(rel) or stem_address(rel)) if cache else None
+        rec = cache.get(key, o_path, os.path.join(out, "s", rel + ".s.err")) if cache else None
+        return rel, prof, data, key, rec
+
     for b in range(0, len(files), args.batch):
         chunk = files[b:b + args.batch]
         batch, keys, kept = [], [], {}
-        for rel in chunk:
-            data = recovered[rel][1] if rel in recovered else open(source_path(decomp, args.stage, rel), "rb").read()
-            prof = profile_of(data[:200])
-            if prof not in profiles:
-                prof = None
-            o_path = os.path.join(out, "obj", rel + ".o")
-            if os.path.exists(o_path):
-                os.remove(o_path)
-            key = cache.key(rel, data, profiles[prof], addresses.get(rel) or stem_address(rel)) if cache else None
-            rec = cache.get(key, o_path, os.path.join(out, "s", rel + ".s.err")) if cache else None
+        for rel, prof, data, key, rec in io.map(prepare, chunk):
             if rec is not None:   # (compiled before from the same inputs: its object is written to o_path)
                 kept[rel] = dict(rec, cached=True)
+                hits += 1
                 continue
             batch.append((rel, prof, data))
             keys.append(key)
@@ -1027,11 +1037,11 @@ def main():
         census.flush()
         done = b + len(chunk)
         print(f"[{done}/{len(files)}] {time.time() - t0:.0f}s ok={counts['ok']} failed={done - counts['ok']}"
-              + (f" from the object cache={cache.hits}" if cache else ""), flush=True)
+              + (f" from the object cache={hits}" if cache else ""), flush=True)
     census.close()
     if cache:   # (one line per run: tools/release_game.py adds them up for its stamp)
         with open(os.path.join(out, "object_cache.jsonl"), "a", encoding="utf-8", newline="\n") as f:
-            f.write(json.dumps({"sources": len(files), "from_cache": cache.hits, "stored": cache.stored}) + "\n")
+            f.write(json.dumps({"sources": len(files), "from_cache": hits, "stored": cache.stored}) + "\n")
     total = sum(counts.values())
     lines = [f"{total} sources, {counts['ok']} compiled and assembled ({100 * counts['ok'] / total:.1f}%)"]
     for k, v in counts.most_common():

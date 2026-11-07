@@ -1,11 +1,11 @@
-"""A machine-wide, content-addressed cache of the game's objects and of nm's output on them.
+"""A machine-wide, content-addressed cache of the game's objects.
 
 tools/game_cc.py keeps each object it compiled and assembled under the SHA-256 of everything that decides its
-bytes (ObjectCache.key); tools/game_link.py keeps nm's output per object under the object's own SHA-256. A
-release build of commits that change a handful of sources then compiles only those: every other object, and
-nm's listing of it, comes from the cache. Each entry is written to a temporary file and renamed into place, so
-a reader sees a whole entry or none, and any number of checkouts can use the cache at once; two writers of one
-key write the same bytes.
+bytes (ObjectCache.key). A release build of commits that change a handful of sources then compiles only those:
+every other object comes from the cache. (nm's listings are not kept: nm over the objects in chunks takes about
+a minute, and reading 127,000 kept listings one file each took longer.) Each entry is written to a temporary file
+and renamed into place, so a reader sees a whole entry or none, and any number of checkouts can use the cache at
+once; two writers of one key write the same bytes.
 
 The folder: GT4_OBJ_CACHE, else %LOCALAPPDATA%/gt4-native/objcache (~/.cache/gt4-native/objcache elsewhere).
 GT4_OBJ_CACHE=0 (or --no-cache) builds without it. Kept: objects that compiled and assembled, and the sources the
@@ -17,7 +17,7 @@ import json
 import os
 import uuid
 
-FORMAT = b"gt4-objcache-1"   # a change of the entries' meaning: a new number, so old entries are never read
+FORMAT = b"gt4-objcache-2"   # a change of the entries' meaning: a new number, so old entries are never read
 
 
 def folder():
@@ -99,27 +99,38 @@ class Store:
 
 
 class ObjectCache:
-    """Objects of tools/game_cc.py: <key>.o and <key>.json (its census record), the record written last."""
+    """Objects of tools/game_cc.py, one file per entry, <key>.entry: 4 bytes (little-endian) giving the length of a
+    JSON header {"sha256", "record"[, "err"]}, the header, then the object's bytes (none for a refused source). One
+    file, not two: on this machine an open costs about 2 ms (a file scan per open), and a warm build opens one per
+    source. get() may run on several threads at once; put() on one."""
 
     def __init__(self, root, base):
         self.store = Store(root)
         self.base = base   # digest of the compiler, assembler, tools, include tree and export policy
-        self.hits = 0
         self.stored = 0
 
     def key(self, rel, source, flags, address):
         return digest(self.base, rel, source, flags, "" if address is None else f"{address:08X}")
 
+    @staticmethod
+    def _entry(header, data=b""):
+        h = json.dumps(header, sort_keys=True).encode()
+        return len(h).to_bytes(4, "little") + h + data
+
     def get(self, key, o_path, err_path):
         """The census record of a kept result, None when not kept. An object is written to o_path; a source the
         compiler refused has its error output written to err_path instead (and no object)."""
-        raw = self.store.get("obj", key, "json")
-        if raw is None:
+        raw = self.store.get("obj", key, "entry")
+        if raw is None or len(raw) < 4:
             return None
-        entry = json.loads(raw)
+        n = int.from_bytes(raw[:4], "little")
+        try:
+            entry = json.loads(raw[4:4 + n])
+        except ValueError:
+            return None
+        data = raw[4 + n:]
         if entry.get("sha256"):
-            data = self.store.get("obj", key, "o")
-            if data is None or hashlib.sha256(data).hexdigest() != entry["sha256"]:
+            if hashlib.sha256(data).hexdigest() != entry["sha256"]:
                 return None
             os.makedirs(os.path.dirname(o_path), exist_ok=True)
             with open(o_path, "wb") as f:
@@ -128,45 +139,16 @@ class ObjectCache:
             os.makedirs(os.path.dirname(err_path), exist_ok=True)
             with open(err_path, "w", encoding="utf-8", newline="\n") as f:
                 f.write(entry.get("err", ""))
-        self.hits += 1
         return entry["record"]
 
     def put(self, key, o_path, record):
         """An object that compiled and assembled."""
         with open(o_path, "rb") as f:
             data = f.read()
-        self.store.put("obj", key, "o", data)
-        self.store.put("obj", key, "json", json.dumps(
-            {"sha256": hashlib.sha256(data).hexdigest(), "record": record}, sort_keys=True).encode())
+        self.store.put("obj", key, "entry", self._entry({"sha256": hashlib.sha256(data).hexdigest(), "record": record}, data))
         self.stored += 1
 
     def put_refused(self, key, record, err):
         """A source the compiler refused (an error, not a timeout): the same inputs are refused again."""
-        self.store.put("obj", key, "json", json.dumps(
-            {"sha256": None, "record": record, "err": err}, sort_keys=True).encode())
+        self.store.put("obj", key, "entry", self._entry({"sha256": None, "record": record, "err": err}))
         self.stored += 1
-
-
-class NmCache:
-    """nm's output for one object and one set of nm arguments: the lines it printed for that object, with the
-    object's path (nm -A's prefix) taken off."""
-
-    def __init__(self, root, nm_exe):
-        self.store = Store(root)
-        self.tool = sha256_file(nm_exe)
-        self.hits = 0
-        self.runs = 0
-
-    def key(self, obj_sha256, args):
-        return digest(self.tool, list(args), obj_sha256)
-
-    def get(self, key):
-        data = self.store.get("nm", key, "txt")
-        if data is None:
-            return None
-        self.hits += 1
-        return data.decode("utf-8").splitlines()
-
-    def put(self, key, lines):
-        self.store.put("nm", key, "txt", "".join(l + "\n" for l in lines).encode("utf-8"))
-        self.runs += 1
