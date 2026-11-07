@@ -72,8 +72,8 @@ bool guest_memory_init() {
     HANDLE file = CreateFileW(path, GENERIC_READ | GENERIC_EXECUTE, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr,
                               OPEN_EXISTING, 0, nullptr);
     // The shared section is shared by every process running this executable file: Windows keeps one image section
-    // per file. A second copy of the same file is refused; a gt4_game.exe in another folder (another checkout's
-    // build) has its own section and runs beside it. The mutex is named after the file itself (its volume and file
+    // per file. A second process running the same file is refused; a gt4_game.exe in another folder (another
+    // checkout's build) has its own section and runs beside it. The mutex is named after the file itself (its volume and file
     // index), so every path that reaches it (another spelling, a short name, a hard link) counts as the same file.
     // (It was one name for the whole machine: two checkouts could not run their games at once.)
     BY_HANDLE_FILE_INFORMATION identity{};
