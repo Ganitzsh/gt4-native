@@ -63,7 +63,7 @@ float largestDifference(const Mat4& a, const Mat4& b) {
 void SceneCounters::add(const SceneCounters& o) {
     records += o.records; bad += o.bad; versionUnknown += o.versionUnknown; unknownKind += o.unknownKind;
     outsideFrame += o.outsideFrame; frames += o.frames; framesUnclosed += o.framesUnclosed;
-    countsMismatch += o.countsMismatch; views += o.views; viewsNested += o.viewsNested;
+    countsMismatch += o.countsMismatch; begins += o.begins; views += o.views; viewsNested += o.viewsNested;
     viewEndWithoutBegin += o.viewEndWithoutBegin; viewsUnclosed += o.viewsUnclosed; projections += o.projections; projectionUnknown += o.projectionUnknown;
     instances += o.instances; instancesWithoutView += o.instancesWithoutView; itemsMismatch += o.itemsMismatch;
     jobsTagged += o.jobsTagged; jobsUntaggedInView += o.jobsUntaggedInView; matrixChecked += o.matrixChecked;
@@ -132,6 +132,8 @@ void SceneDecoder::record(const uint8_t* payload, size_t bytes) {
         if (r.frame != f.frame || r.views != f.views.size() || r.instances != f.instances.size() || r.lights != f.lights.size() ||
             r.emitters != f.emitters.size() || r.projections != f.projections.size())
             ++c.countsMismatch;
+        frame_->begins = r.begins;
+        c.begins += r.begins;
         endFrame(true);
         break;
     }

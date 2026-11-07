@@ -803,12 +803,13 @@ struct FrameBegin {
 };
 static_assert(sizeof(FrameBegin) == 16);
 
-struct FrameEnd {
+struct FrameEnd {                 // sent by the runtime at the frame's kick, never by the game (CONTRACTS.md a.5.1)
     Prefix prefix;
     uint32_t frame;               // as its FrameBegin
-    uint16_t views, instances;    // what the game sent this frame (the host checks its counts)
+    uint16_t views, instances;    // what gt4_gfx_scene appended this frame (the host checks its counts)
     uint16_t lights, emitters;
-    uint16_t projections, reserved;
+    uint16_t projections;
+    uint16_t begins;              // FrameBegins asked for this frame, the opening one included (>= 1); 0: not counted
 };
 static_assert(sizeof(FrameEnd) == 20);
 

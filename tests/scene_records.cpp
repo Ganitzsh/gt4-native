@@ -56,7 +56,7 @@ void layouts() {
     SAME_AT(FrameEnd, gt4_scene_frame_end, lights, lights);
     SAME_AT(FrameEnd, gt4_scene_frame_end, emitters, emitters);
     SAME_AT(FrameEnd, gt4_scene_frame_end, projections, projections);
-    SAME_AT(FrameEnd, gt4_scene_frame_end, reserved, reserved);
+    SAME_AT(FrameEnd, gt4_scene_frame_end, begins, begins);
 
     SAME_SIZE(ViewBegin, gt4_scene_view_begin);
     SAME_AT(ViewBegin, gt4_scene_view_begin, view, view);

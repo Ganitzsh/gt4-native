@@ -30,7 +30,8 @@ struct gt4_scene_frame_end {
     unsigned int frame;
     unsigned short views, instances;
     unsigned short lights, emitters;
-    unsigned short projections, reserved;
+    unsigned short projections;
+    unsigned short begins;   /* FrameBegins merged into this frame (the runtime sends FrameEnd, CONTRACTS.md a.5.1) */
 };
 
 /* roles: 1 main, 2 mirror, 3 env face, 4 reflection, 5 showroom, 6 photo, 7 HUD, 8 menu, 15 other;

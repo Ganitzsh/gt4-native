@@ -70,6 +70,7 @@ struct SceneCounters {
     uint64_t records = 0, bad = 0, versionUnknown = 0, unknownKind = 0, outsideFrame = 0;
     // frames and views
     uint64_t frames = 0, framesUnclosed = 0, countsMismatch = 0;
+    uint64_t begins = 0;   // FrameEnd::begins: the FrameBegins the runtime merged (reported)
     uint64_t views = 0, viewsNested = 0, viewEndWithoutBegin = 0, viewsUnclosed = 0;   // unclosed: open at FrameEnd
     // projections
     uint64_t projections = 0, projectionUnknown = 0;
@@ -132,6 +133,7 @@ struct InstanceData {
 };
 struct SceneFrame {
     uint32_t frame = 0, vblank = 0, flags = 0;
+    uint16_t begins = 0;                          // FrameEnd::begins
     std::vector<ProjectionData> projections;      // by id - 1
     std::vector<ViewData> views;                  // by id - 1
     std::vector<InstanceData> instances;          // by serial - 1

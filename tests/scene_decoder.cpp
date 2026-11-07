@@ -243,6 +243,15 @@ void frames() {
         auto f = d.takeFrame();
         check(f && f->frame == 2, "framesUnclosed: the new frame goes on");
     }
+    {   // FrameEnd::begins (the FrameBegins the runtime merged): on the frame and in the totals, not an error
+        SceneDecoder d;
+        put(d, frameBegin(1));
+        auto e = frameEnd(1, 0, 0, 0);
+        e.begins = 3;
+        put(d, e);
+        auto f = d.takeFrame();
+        check(f && f->complete && f->begins == 3 && d.totals().begins == 3 && d.totals().errorFree(), "begins: reported");
+    }
     {   // FrameEnd's counts differ from what arrived
         SceneDecoder d;
         put(d, frameBegin(1));
