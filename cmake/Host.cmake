@@ -391,6 +391,14 @@ if(BUILD_TESTING)
   endif()
   add_test(NAME lights_cluster COMMAND gt4_lights_cluster_test)
   set_tests_properties(lights_cluster PROPERTIES SKIP_RETURN_CODE 77)
+  # The night artefact metrics (tools/frame_metrics.py, ticket N1) on synthetic frames; skipped (77) without
+  # Python 3 and numpy.
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME frame_metrics_selftest
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/frame_metrics.py --selftest)
+    set_tests_properties(frame_metrics_selftest PROPERTIES SKIP_RETURN_CODE 77)
+  endif()
   # The game runtime's whole-range test for game memory (runtime/guest.h).
   add_executable(gt4_guest_ram_test tests/guest_ram.cpp)
   add_test(NAME guest_ram COMMAND gt4_guest_ram_test)
