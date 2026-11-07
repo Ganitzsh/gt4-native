@@ -239,6 +239,7 @@ add_executable(gt4_host
     platform/sdl/settings_menu.cpp
     platform/sdl/display.cpp
     platform/render/vk.cpp
+    platform/render/pipeline_cache_file.cpp
     platform/render/pipeline.cpp
     platform/render/test_scene.cpp
     platform/render/gsn_scene.cpp
@@ -279,6 +280,16 @@ if(BUILD_TESTING)
     target_compile_options(gt4_host_settings_test PRIVATE -Wall -Wextra -Wpedantic)
   endif()
   add_test(NAME host_settings COMMAND gt4_host_settings_test)
+
+  # The pipeline cache's file: Vulkan's header checked against the GPU, the save replacing the old file (no GPU).
+  add_executable(gt4_pipeline_cache_file_test tests/pipeline_cache_file.cpp platform/render/pipeline_cache_file.cpp)
+  target_include_directories(gt4_pipeline_cache_file_test PRIVATE platform/render)
+  if(MSVC)
+    target_compile_options(gt4_pipeline_cache_file_test PRIVATE /W4 /utf-8)
+  else()
+    target_compile_options(gt4_pipeline_cache_file_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  add_test(NAME pipeline_cache_file COMMAND gt4_pipeline_cache_file_test ${CMAKE_CURRENT_BINARY_DIR}/pipeline_cache_file_test)
 
   # Saves from memory card images, .psu exports and folder cards (built here; no game data).
   add_executable(gt4_save_import_test tests/save_import.cpp)

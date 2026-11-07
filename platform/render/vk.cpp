@@ -1,5 +1,7 @@
 #include "vk.h"
 
+#include "pipeline_cache_file.h"
+
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -24,6 +26,50 @@ uint32_t Device::maxSamples(uint32_t requested) const {
     for (uint32_t candidate = 2; candidate <= requested && candidate <= 64; candidate *= 2)
         if (sampleCounts & candidate) samples = candidate;
     return samples;
+}
+
+void openPipelineCache(Device& device, const std::string& path) {
+    std::vector<char> data = readCacheFile(path);
+    if (!data.empty()) {
+        // Vulkan's header names the GPU and driver that made the data: another one's is not used
+        PipelineCacheIdentity identity;
+        identity.vendorID = device.properties.vendorID;
+        identity.deviceID = device.properties.deviceID;
+        static_assert(sizeof identity.uuid == VK_UUID_SIZE);
+        std::memcpy(identity.uuid, device.properties.pipelineCacheUUID, VK_UUID_SIZE);
+        if (!pipelineCacheMatches(data.data(), data.size(), identity)) {
+            std::printf("Pipeline cache %s: from another GPU or driver, not used\n", path.c_str());
+            data.clear();
+        }
+    }
+    VkPipelineCacheCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+    info.initialDataSize = data.size();
+    info.pInitialData = data.empty() ? nullptr : data.data();
+    if (vkCreatePipelineCache(device.device, &info, nullptr, &device.pipelineCache) != VK_SUCCESS) {
+        device.pipelineCache = VK_NULL_HANDLE;
+        if (!data.empty()) {   // (data the driver refuses: an empty cache)
+            data.clear();
+            info.initialDataSize = 0;
+            info.pInitialData = nullptr;
+            if (vkCreatePipelineCache(device.device, &info, nullptr, &device.pipelineCache) != VK_SUCCESS) device.pipelineCache = VK_NULL_HANDLE;
+        }
+    }
+    if (!data.empty() && device.pipelineCache) std::printf("Pipeline cache: %s (%zu KB)\n", path.c_str(), data.size() / 1024);
+}
+
+void savePipelineCache(const Device& device, const std::string& path) {
+    if (path.empty() || !device.pipelineCache) return;
+    size_t size = 0;
+    if (vkGetPipelineCacheData(device.device, device.pipelineCache, &size, nullptr) != VK_SUCCESS || !size) return;
+    std::vector<char> data(size);
+    if (vkGetPipelineCacheData(device.device, device.pipelineCache, &size, data.data()) != VK_SUCCESS) return;
+    if (!writeCacheFile(path, data.data(), size)) std::printf("Pipeline cache %s: not saved\n", path.c_str());
+}
+
+void closePipelineCache(Device& device) {
+    if (device.pipelineCache) vkDestroyPipelineCache(device.device, device.pipelineCache, nullptr);
+    device.pipelineCache = VK_NULL_HANDLE;
 }
 
 bool hasStencil(VkFormat format) {
@@ -373,7 +419,7 @@ Pipeline createCompute(const Device& device, ShaderCode code, std::initializer_l
     info.stage.module = shader;
     info.stage.pName = "main";
     info.layout = pipeline.layout;
-    const VkResult result = vkCreateComputePipelines(device.device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline.pipeline);
+    const VkResult result = vkCreateComputePipelines(device.device, device.pipelineCache, 1, &info, nullptr, &pipeline.pipeline);
     vkDestroyShaderModule(device.device, shader, nullptr);
     check(result, name);
     label(device, VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(pipeline.pipeline), name);
@@ -490,7 +536,7 @@ Pipeline createGraphics(const Device& device, const GraphicsDesc& desc) {
     info.pColorBlendState = &blend;
     info.pDynamicState = &dynamic;
     info.layout = pipeline.layout;
-    const VkResult result = vkCreateGraphicsPipelines(device.device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline.pipeline);
+    const VkResult result = vkCreateGraphicsPipelines(device.device, device.pipelineCache, 1, &info, nullptr, &pipeline.pipeline);
     vkDestroyShaderModule(device.device, vertex, nullptr);
     if (fragment) vkDestroyShaderModule(device.device, fragment, nullptr);
     check(result, desc.name);

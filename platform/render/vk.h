@@ -27,6 +27,7 @@ struct Device {
     bool anisotropy = false;
     bool dualSourceBlend = false;   // VkPhysicalDeviceFeatures::dualSrcBlend, enabled when supported
     bool stencilExport = false;     // VK_EXT_shader_stencil_export, enabled when supported (GT4_STENCIL_EXPORT=0: not)
+    VkPipelineCache pipelineCache = VK_NULL_HANDLE;   // every pipeline made through it (openPipelineCache)
     uint32_t memoryType(uint32_t bits, VkMemoryPropertyFlags flags) const;
     uint32_t maxSamples(uint32_t requested) const;
 };
@@ -101,6 +102,14 @@ private:
     VkDeviceSize blockSize;
     std::vector<Block> blocks;
 };
+
+// The pipelines' cache, kept in a file (the host: pipeline_cache.bin beside settings.ini): a pipeline compiled once
+// is not compiled again in a later run (6 at a race's first frame took 840 ms on the desktop; more on a handheld,
+// whose driver cache may be off under Proton). Data from another GPU or driver is left out (its header). An empty
+// path: in memory only.
+void openPipelineCache(Device& device, const std::string& path);
+void savePipelineCache(const Device& device, const std::string& path);   // (written whole, then renamed over the old)
+void closePipelineCache(Device& device);
 
 Image createImage(const Device& device, const ImageDesc& desc);
 void destroy(const Device& device, Image& image);

@@ -26,6 +26,8 @@ namespace gt4::gsn { struct FrameList; struct ReadRequest; }
 
 class Renderer {
 public:
+    // The pipeline cache's file for the renderers made from now on (empty: none; vk::openPipelineCache).
+    static void setPipelineCacheFile(const std::string& path);
     // Windowed: presents to the window. The GPU must be able to present to the window's display.
     Renderer(SDL_Window* window, VkInstance instance, const std::string& gpuRequest, const gt4::Settings& settings);
     // Headless: renders into an offscreen image of the given size (no window, surface or swapchain).
