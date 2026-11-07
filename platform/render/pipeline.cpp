@@ -2,12 +2,14 @@
 
 #include "../gs/cpu_profile.h"
 #include "fsr2.h"
+#include "render_graph.h"
 #include "gt4_shaders.h"
 #include "smaa_textures.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <sstream>
 
@@ -112,6 +114,9 @@ struct FramePipeline::Impl {
     Vec2 jitter;
     SceneFormats sceneFormats;
     bool scenePrepared = false;
+    // GT4_RG_PIPELINE=1: record() through the render graph (ticket B3, docs/modern/CONTRACTS.md b.9), made on first use.
+    std::unique_ptr<rg::Graph> graph;
+    uint32_t frameSlot = 0;
 
     Impl(const vk::Device& d, VkCommandPool p) : device(d), pool(p), fsr2(d) {
         linearClamp = vk::createSampler(device, VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
@@ -130,6 +135,7 @@ struct FramePipeline::Impl {
 
     ~Impl() {
         vkDeviceWaitIdle(device.device);
+        graph.reset();   // (its images and memory, before the device)
         fsr2.destroy();
         releaseTargets();
         for (vk::Pipeline* p : {&resolve, &histogramPass, &adapt, &taa, &bloomDownPass, &bloomUpPass, &dofPrepare, &dofGather,
@@ -395,6 +401,7 @@ struct FramePipeline::Impl {
 
     SceneView beginFrame(uint32_t slot, uint32_t index) {
         frameIndex = index;
+        frameSlot = slot;
         SceneView view;
         view.renderExtent = config.render;
         view.outputExtent = config.output;
@@ -695,6 +702,8 @@ struct FramePipeline::Impl {
     }
 
     void record(VkCommandBuffer command, SceneSource& scene, const SceneView& view, vk::Image& target, Overlay& overlay, float dt) {
+        static const bool viaGraph = [] { const char* e = std::getenv("GT4_RG_PIPELINE"); return e && *e == '1'; }();
+        if (viaGraph && recordGraph(command, scene, view, target, overlay, dt)) return;
         // The game's frames are already graded for display: no tone mapping, automatic exposure or extra bloom.
         gameImage = scene.drawsOriginalEffects();
         renderScene(command, scene, view);
@@ -868,6 +877,543 @@ struct FramePipeline::Impl {
         overlay.record(command);
         vkCmdEndRendering(command);
         vk::endLabel(command);
+    }
+
+    // record() through the render graph (GT4_RG_PIPELINE=1; ticket B3, docs/modern/CONTRACTS.md b.9): the same stages,
+    // shaders, push constants and dispatches in the same order, with the barriers planned by the graph. Every image is
+    // imported (it keeps its vk::Image state for the code outside the graph); the scene and FSR 2 synchronise their own
+    // images (Opaque). False, with nothing recorded, when the graph does not compile (record() then records the frame
+    // as before).
+    bool recordGraph(VkCommandBuffer command, SceneSource& scene, const SceneView& view, vk::Image& target, Overlay& overlay, float dt) {
+        using rg::Use;
+        using rg::BufferUse;
+        constexpr VkPipelineStageFlags2 kC = vk::kCompute, kF = vk::kFragment, kOut = vk::kColorOut;
+        constexpr VkPipelineStageFlags2 kAll = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        if (!graph) graph = std::make_unique<rg::Graph>(device);
+        rg::FrameInfo info;
+        info.slot = frameSlot;
+        info.frameIndex = frameIndex;
+        info.render = config.render;
+        info.output = config.output;
+        info.settings = &settings;
+        graph->begin(info);
+        const uint32_t historyBefore = historyIndex;
+        std::map<const vk::Image*, rg::Texture> textures;   // each image imported once, at its current version
+        auto T = [&](vk::Image& image) -> rg::Texture& {
+            auto it = textures.find(&image);
+            if (it == textures.end()) it = textures.emplace(&image, graph->import(image, "pipeline image")).first;
+            return it->second;
+        };
+        rg::Buffer histogramBuffer = graph->import(histogram, "exposure histogram");
+        rg::Buffer stateBuffer = graph->import(exposureState, "exposure state");
+        // Read once the scene pass has run, as record() does (the camera this frame was rendered with).
+        SceneCamera camera{};
+        bool reset = false;
+
+        // The game's frames are already graded for display: no tone mapping, automatic exposure or extra bloom.
+        gameImage = scene.drawsOriginalEffects();
+        const bool ms = config.msaa > 1;
+        std::vector<vk::Image*> sceneImages = ms ? std::vector<vk::Image*>{&msColor, &msVelocity, &msDepth, &sceneColor, &sceneVelocity, &depthResolved}
+                                                 : std::vector<vk::Image*>{&sceneColor, &sceneVelocity, &sceneDepth};
+        graph->pass("scene", [&](rg::PassBuilder& b) {
+            for (vk::Image* image : sceneImages) T(*image) = b.use(T(*image), Use::Opaque, kAll);
+        }, [&](rg::PassContext& c) {
+            renderScene(c.command, scene, view);
+            camera = scene.camera();
+            reset = resetPending || camera.cut;
+            resetPending = false;
+        });
+
+        // Exposure.
+        const bool resetExposure = exposureReset;
+        graph->pass("exposure: clear", [&](rg::PassBuilder& b) {
+            histogramBuffer = b.use(histogramBuffer, BufferUse::TransferDst, vk::kTransfer);
+            if (resetExposure) stateBuffer = b.use(stateBuffer, BufferUse::TransferDst, vk::kTransfer);
+        }, [&](rg::PassContext& c) {
+            vk::beginLabel(c.command, "exposure");
+            if (resetExposure) vkCmdFillBuffer(c.command, exposureState.buffer, 0, VK_WHOLE_SIZE, 0);
+            vkCmdFillBuffer(c.command, histogram.buffer, 0, VK_WHOLE_SIZE, 0);
+        });
+        graph->pass("exposure: histogram", [&](rg::PassBuilder& b) {
+            b.use(T(sceneColor), Use::Sampled, kC);
+            histogramBuffer = b.use(histogramBuffer, BufferUse::StorageReadWrite, kC);
+        }, [&](rg::PassContext& c) {
+            vk::bind(c.command, histogramPass);
+            vk::Descriptors().sampled(0, sceneColor.view, pointClamp).storageBuffer(1, histogram.buffer, 0, VK_WHOLE_SIZE)
+                .push(c.command, histogramPass);
+            struct { int32_t w, h; float minLog2, range; } push{static_cast<int32_t>(config.render.width),
+                static_cast<int32_t>(config.render.height), kExposureMinLog2, kExposureRangeLog2};
+            vk::pushConstants(c.command, histogramPass, push);
+            vk::dispatch2D(c.command, (config.render.width + 1) / 2, (config.render.height + 1) / 2, 16, 16);
+        });
+        graph->pass("exposure: adapt", [&](rg::PassBuilder& b) {
+            histogramBuffer = b.use(histogramBuffer, BufferUse::StorageRead, kC);
+            stateBuffer = b.use(stateBuffer, BufferUse::StorageReadWrite, kC);
+            T(exposure) = b.use(T(exposure), Use::StorageWrite, kC);
+        }, [&](rg::PassContext& c) {
+            vk::bind(c.command, adapt);
+            vk::Descriptors().storageBuffer(0, histogram.buffer, 0, VK_WHOLE_SIZE).storageBuffer(1, exposureState.buffer, 0, VK_WHOLE_SIZE)
+                .storage(2, exposure.view).push(c.command, adapt);
+            struct { float minLog2, range, dt, compensation, automatic, reset; } adaptPush{kExposureMinLog2, kExposureRangeLog2,
+                std::clamp(dt, 0.0f, 0.25f), settings.exposure, settings.autoExposure && !gameImage ? 1.0f : 0.0f, resetExposure ? 1.0f : 0.0f};
+            vk::pushConstants(c.command, adapt, adaptPush);
+            vkCmdDispatch(c.command, 1, 1, 1);
+            exposureReset = false;
+            vk::endLabel(c.command);
+        });
+
+        // 1. Temporal reconstruction (to output resolution) or the render-resolution image.
+        vk::Image* hdr = &sceneColor;
+        if (config.fsr2) {
+            graph->pass("fsr2", [&](rg::PassBuilder& b) {
+                for (vk::Image* image : {&sceneColor, &depthImage(), &sceneVelocity, &exposure, &fsrOutput})
+                    T(*image) = b.use(T(*image), Use::Opaque, kAll);
+            }, [&](rg::PassContext& c) {
+                vk::beginLabel(c.command, "fsr2");
+                Fsr2Inputs in;
+                in.color = &sceneColor;
+                in.depth = &depthImage();
+                in.velocity = &sceneVelocity;
+                in.exposure = &exposure;
+                in.output = &fsrOutput;
+                in.renderSize = config.render;
+                in.jitter = jitter;
+                in.sharpness = settings.sharpness;
+                in.deltaMilliseconds = dt * 1000.0f;
+                in.reset = reset;
+                in.near = camera.near;
+                in.verticalFov = camera.verticalFov;
+                in.reactive = scene.reactiveMask();
+                in.transparencyAndComposition = scene.transparencyMask();
+                fsr2.dispatch(c.command, in);
+                vk::endLabel(c.command);
+            });
+            hdr = &fsrOutput;
+        } else if (config.taa) {
+            vk::Image& previous = history[historyIndex];
+            vk::Image& current = history[historyIndex ^ 1u];
+            historyIndex ^= 1u;
+            if (previous.layout == VK_IMAGE_LAYOUT_UNDEFINED)   // (no history yet: given a layout, as record() does)
+                graph->pass("taa: no history yet", [&](rg::PassBuilder& b) { T(previous) = b.use(T(previous), Use::StorageWrite, kC); },
+                            [](rg::PassContext&) {});
+            graph->pass("taa", [&](rg::PassBuilder& b) {
+                for (vk::Image* image : {&sceneColor, &depthImage(), &sceneVelocity, &previous, &exposure}) b.use(T(*image), Use::Sampled, kC);
+                T(current) = b.use(T(current), Use::StorageWrite, kC);
+            }, [&, previousImage = &previous, currentImage = &current](rg::PassContext& c) {
+                vk::beginLabel(c.command, "taa");
+                vk::bind(c.command, taa);
+                vk::Descriptors().sampled(0, sceneColor.view, pointClamp).sampled(1, depthImage().view, pointClamp)
+                    .sampled(2, sceneVelocity.view, pointClamp).sampled(3, previousImage->view, linearClamp)
+                    .sampled(4, exposure.view, pointClamp).storage(5, currentImage->view).push(c.command, taa);
+                struct { float rw, rh, ow, oh, jx, jy, reset, sharpen; } push{static_cast<float>(config.render.width),
+                    static_cast<float>(config.render.height), static_cast<float>(config.output.width), static_cast<float>(config.output.height),
+                    jitter.x, jitter.y, reset ? 1.0f : 0.0f, 0.0f};
+                vk::pushConstants(c.command, taa, push);
+                vk::dispatch2D(c.command, config.output.width, config.output.height);
+                vk::endLabel(c.command);
+            });
+            hdr = &current;
+        }
+
+        // 2. HDR effects at the post resolution.
+        if (enabled(settings.dof)) hdr = depthOfFieldGraph(*graph, T, hdr, camera);
+        if (enabled(settings.motionBlur)) hdr = motionBlurGraph(*graph, T, hdr, camera);
+        const uint32_t bloomLevels = bloomGraph(*graph, T, hdr, gameImage);
+
+        // 3. Display transform.
+        vk::Image* bloomImage = bloomLevels > 1 ? &bloomUp : &bloomDown;
+        if (bloomLevels == 0 && bloomDown.layout == VK_IMAGE_LAYOUT_UNDEFINED)
+            graph->pass("bloom: none yet", [&](rg::PassBuilder& b) { T(bloomDown) = b.use(T(bloomDown), Use::StorageWrite, kC); },
+                        [](rg::PassContext&) {});
+        graph->pass("tonemap", [&](rg::PassBuilder& b) {
+            b.use(T(*hdr), Use::Sampled, kC);
+            b.use(T(*bloomImage), Use::Sampled, kC, {0, 1});
+            b.use(T(exposure), Use::Sampled, kC);
+            T(ldrA) = b.use(T(ldrA), Use::StorageWrite, kC);
+        }, [&, hdrImage = hdr, bloomImage, bloomLevels](rg::PassContext& c) {
+            vk::beginLabel(c.command, "tonemap");
+            vk::bind(c.command, tonemap);
+            vk::Descriptors().sampled(0, hdrImage->view, pointClamp).sampled(1, bloomImage->mipViews[0], linearClamp)
+                .sampled(2, exposure.view, pointClamp).storage(3, ldrA.view).push(c.command, tonemap);
+            struct { int32_t w, h, tonemapper; float intensity, scale, additive; } tonePush{static_cast<int32_t>(config.post.width),
+                static_cast<int32_t>(config.post.height), gameImage ? 0 : tonemapperIndex(settings.tonemapper), settings.bloomIntensity,
+                bloomLevels ? 1.0f / static_cast<float>(bloomLevels) : 0.0f, settings.bloom == EffectQuality::Original ? 1.0f : 0.0f};
+            vk::pushConstants(c.command, tonemap, tonePush);
+            vk::dispatch2D(c.command, config.post.width, config.post.height);
+            vk::endLabel(c.command);
+        });
+        vk::Image* ldr = &ldrA;
+
+        // 4. Spatial anti-aliasing (render resolution, perceptual space).
+        if (config.spatialAa == AntiAliasing::Fxaa) {
+            graph->pass("fxaa", [&](rg::PassBuilder& b) {
+                b.use(T(ldrA), Use::Sampled, kC);
+                T(ldrB) = b.use(T(ldrB), Use::StorageWrite, kC);
+            }, [&](rg::PassContext& c) {
+                vk::beginLabel(c.command, "fxaa");
+                vk::bind(c.command, fxaa);
+                vk::Descriptors().sampled(0, ldrA.view, linearClamp).storage(1, ldrB.view).push(c.command, fxaa);
+                struct { int32_t w, h; float subpixel, threshold, minimum; } push{static_cast<int32_t>(config.post.width),
+                    static_cast<int32_t>(config.post.height), 0.75f, 0.166f, 0.0833f};
+                vk::pushConstants(c.command, fxaa, push);
+                vk::dispatch2D(c.command, config.post.width, config.post.height);
+                vk::endLabel(c.command);
+            });
+            ldr = &ldrB;
+        } else if (config.spatialAa == AntiAliasing::Smaa || config.spatialAa == AntiAliasing::SmaaT2x) {
+            ldr = smaaGraph(*graph, T, ldr, reset);
+        }
+
+        // 5. Spatial upscaling (or supersampling downscale) to the output resolution.
+        vk::Image* out = ldr;
+        if (!sameExtent(config.post, config.output)) {
+            graph->pass("upscale", [&](rg::PassBuilder& b) {
+                b.use(T(*ldr), Use::Sampled, kC);
+                T(outA) = b.use(T(outA), Use::StorageWrite, kC);
+            }, [&, input = ldr](rg::PassContext& c) {
+                vk::beginLabel(c.command, "upscale");
+                const bool upscaling = config.post.width < config.output.width;
+                if (config.upscaler == Upscaler::Fsr1 && upscaling) {
+                    vk::bind(c.command, easu);
+                    vk::Descriptors().sampled(0, input->view, linearClamp).storage(1, outA.view).push(c.command, easu);
+                    const float iw = static_cast<float>(config.post.width), ih = static_cast<float>(config.post.height);
+                    const float ow = static_cast<float>(config.output.width), oh = static_cast<float>(config.output.height);
+                    const float con[16] = {iw / ow, ih / oh, 0.5f * iw / ow - 0.5f, 0.5f * ih / oh - 0.5f,
+                                           1.0f / iw, 1.0f / ih, 1.0f / iw, -1.0f / ih,
+                                           -1.0f / iw, 2.0f / ih, 1.0f / iw, 2.0f / ih,
+                                           0.0f / iw, 4.0f / ih, 0.0f, 0.0f};
+                    struct { uint32_t con[16]; int32_t w, h; } push{};
+                    std::memcpy(push.con, con, sizeof(con));
+                    push.con[14] = push.con[15] = 0;
+                    push.w = static_cast<int32_t>(config.output.width);
+                    push.h = static_cast<int32_t>(config.output.height);
+                    vk::pushConstants(c.command, easu, push);
+                } else {
+                    vk::bind(c.command, resample);
+                    vk::Descriptors().sampled(0, input->view, linearClamp).storage(1, outA.view).push(c.command, resample);
+                    int mode = 2;
+                    if (upscaling) mode = config.upscaler == Upscaler::Bilinear ? 0 : config.upscaler == Upscaler::Bicubic ? 1 : 2;
+                    struct { int32_t sw, sh, tw, th, mode; } push{static_cast<int32_t>(config.post.width), static_cast<int32_t>(config.post.height),
+                        static_cast<int32_t>(config.output.width), static_cast<int32_t>(config.output.height), mode};
+                    vk::pushConstants(c.command, resample, push);
+                }
+                vk::dispatch2D(c.command, config.output.width, config.output.height);
+                vk::endLabel(c.command);
+            });
+            out = &outA;
+        }
+
+        // 6. Sharpening (FSR 2 sharpens inside its own pass).
+        if (settings.sharpness > 0.0f && !config.fsr2) {
+            vk::Image* sharpened = out == &outA ? &outB : &outA;
+            graph->pass("rcas", [&](rg::PassBuilder& b) {
+                b.use(T(*out), Use::Sampled, kC);
+                T(*sharpened) = b.use(T(*sharpened), Use::StorageWrite, kC);
+            }, [&, input = out, sharpened](rg::PassContext& c) {
+                vk::beginLabel(c.command, "rcas");
+                vk::bind(c.command, rcas);
+                vk::Descriptors().sampled(0, input->view, pointClamp).storage(1, sharpened->view).push(c.command, rcas);
+                const float stops = 2.0f - 2.0f * std::clamp(settings.sharpness, 0.0f, 1.0f);
+                const float linear = std::exp2(-stops);
+                struct { uint32_t con[4]; int32_t w, h; } push{};
+                std::memcpy(&push.con[0], &linear, sizeof(float));
+                push.w = static_cast<int32_t>(config.output.width);
+                push.h = static_cast<int32_t>(config.output.height);
+                vk::pushConstants(c.command, rcas, push);
+                vk::dispatch2D(c.command, config.output.width, config.output.height);
+                vk::endLabel(c.command);
+            });
+            out = sharpened;
+        }
+
+        // 7. Output pass and the 2D layer.
+        graph->pass("output", [&](rg::PassBuilder& b) {
+            b.use(T(*out), Use::Sampled, kF);
+            T(target) = b.use(T(target), Use::ColorWrite, kOut);
+        }, [&, input = out](rg::PassContext& c) {
+            vk::beginLabel(c.command, "output");
+            VkRenderingAttachmentInfo attachment = colorAttachment(target.view, true);
+            attachment.clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+            beginRendering(c.command, target.extent, &attachment, 1);
+            viewport(c.command, config.content);
+            vk::bind(c.command, finalPass);
+            vk::Descriptors().sampled(0, input->view, linearClamp).push(c.command, finalPass);
+            struct { float w, h, aberration, vignette, grain, dither, frame, srgb, paperWhite, peak; } push{
+                static_cast<float>(config.output.width), static_cast<float>(config.output.height), settings.chromaticAberration,
+                settings.vignette, settings.filmGrain, settings.dither ? 1.0f / static_cast<float>((1u << outputBits) - 1u) : 0.0f,
+                static_cast<float>(frameIndex % 65536u), srgbOutput ? 1.0f : 0.0f, hdrPaperWhite, hdrPeak};
+            vk::pushConstants(c.command, finalPass, push);
+            vkCmdDraw(c.command, 3, 1, 0, 0);
+            overlay.record(c.command);
+            vkCmdEndRendering(c.command);
+            vk::endLabel(c.command);
+        });
+
+        graph->compile();
+        if (!graph->plan().ok()) {
+            static bool told = false;
+            if (!told) std::fprintf(stderr, "render graph: the display pipeline did not compile; drawn without the graph\n");
+            told = true;
+            historyIndex = historyBefore;
+            return false;
+        }
+        graph->execute(command, VK_NULL_HANDLE);
+        return true;
+    }
+
+    // recordGraph's stages: the same work as depthOfField, motionBlurPass, bloomPass and smaa, as graph passes.
+    // `T` gives an image's graph handle (imported once, current version); `camera` and `reset` are read when the
+    // passes run (after the scene pass sets them).
+    template <class Images> vk::Image* depthOfFieldGraph(rg::Graph& g, Images& T, vk::Image* hdr, const SceneCamera& camera) {
+        using rg::Use;
+        constexpr VkPipelineStageFlags2 kC = vk::kCompute;
+        vk::Image* out = hdr == &hdrA ? &hdrB : &hdrA;
+        // The lens: a 24 mm tall sensor at the post.aperture f-number (depthOfField).
+        auto constants = [this](const SceneCamera& cam) {
+            const int q = level(settings.dof);
+            const float maxCoc[4] = {8.0f, 12.0f, 16.0f, 24.0f};
+            const float sensor = 0.024f;
+            const float focal = 0.5f * sensor / std::tan(0.5f * cam.verticalFov);
+            struct Push { int32_t w, h; float near, focus, focal, aperture, sensor, maxCoc, autofocus; } push{};
+            const VkExtent2D half = dofHalf.extent;
+            push.w = static_cast<int32_t>(half.width);
+            push.h = static_cast<int32_t>(half.height);
+            push.near = cam.near;
+            push.focus = std::max(settings.focusDistance, 0.5f);
+            push.focal = focal;
+            push.aperture = focal / std::max(settings.aperture, 0.5f);
+            push.sensor = sensor;
+            push.maxCoc = maxCoc[q] * static_cast<float>(half.height) / 540.0f;
+            push.autofocus = settings.focusDistance <= 0.0f ? 1.0f : 0.0f;
+            return push;
+        };
+        g.pass("dof: prepare", [&](rg::PassBuilder& b) {
+            b.use(T(*hdr), Use::Sampled, kC);
+            b.use(T(depthImage()), Use::Sampled, kC);
+            T(dofHalf) = b.use(T(dofHalf), Use::StorageWrite, kC);
+        }, [this, hdr, &camera, constants](rg::PassContext& c) {
+            vk::beginLabel(c.command, "depth of field");
+            const auto push = constants(camera);
+            vk::bind(c.command, dofPrepare);
+            vk::Descriptors().sampled(0, hdr->view, linearClamp).sampled(1, depthImage().view, pointClamp).storage(2, dofHalf.view)
+                .push(c.command, dofPrepare);
+            vk::pushConstants(c.command, dofPrepare, push);
+            vk::dispatch2D(c.command, dofHalf.extent.width, dofHalf.extent.height);
+        });
+        g.pass("dof: gather", [&](rg::PassBuilder& b) {
+            b.use(T(dofHalf), Use::Sampled, kC);
+            T(dofBlur) = b.use(T(dofBlur), Use::StorageWrite, kC);
+        }, [this, &camera, constants](rg::PassContext& c) {
+            const auto push = constants(camera);
+            const float sampleCounts[4] = {16.0f, 32.0f, 64.0f, 96.0f};   // bokeh gather samples per pixel
+            vk::bind(c.command, dofGather);
+            vk::Descriptors().sampled(0, dofHalf.view, linearClamp).storage(1, dofBlur.view).push(c.command, dofGather);
+            struct { int32_t w, h; float samples, maxCoc; } gather{push.w, push.h, sampleCounts[level(settings.dof)], push.maxCoc};
+            vk::pushConstants(c.command, dofGather, gather);
+            vk::dispatch2D(c.command, dofHalf.extent.width, dofHalf.extent.height);
+        });
+        g.pass("dof: composite", [&](rg::PassBuilder& b) {
+            b.use(T(*hdr), Use::Sampled, kC);
+            b.use(T(dofBlur), Use::Sampled, kC);
+            b.use(T(depthImage()), Use::Sampled, kC);
+            T(*out) = b.use(T(*out), Use::StorageWrite, kC);
+        }, [this, hdr, out, &camera, constants](rg::PassContext& c) {
+            auto push = constants(camera);
+            vk::bind(c.command, dofComposite);
+            vk::Descriptors().sampled(0, hdr->view, pointClamp).sampled(1, dofBlur.view, linearClamp)
+                .sampled(2, depthImage().view, pointClamp).storage(3, out->view).push(c.command, dofComposite);
+            push.w = static_cast<int32_t>(config.post.width);
+            push.h = static_cast<int32_t>(config.post.height);
+            vk::pushConstants(c.command, dofComposite, push);
+            vk::dispatch2D(c.command, config.post.width, config.post.height);
+            vk::endLabel(c.command);
+        });
+        return out;
+    }
+
+    template <class Images> vk::Image* motionBlurGraph(rg::Graph& g, Images& T, vk::Image* hdr, const SceneCamera& camera) {
+        using rg::Use;
+        constexpr VkPipelineStageFlags2 kC = vk::kCompute;
+        vk::Image* out = hdr == &hdrA ? &hdrB : &hdrA;
+        g.pass("motion blur: tiles", [&](rg::PassBuilder& b) {
+            b.use(T(sceneVelocity), Use::Sampled, kC);
+            T(tiles) = b.use(T(tiles), Use::StorageWrite, kC);
+        }, [this](rg::PassContext& c) {
+            vk::beginLabel(c.command, "motion blur");
+            const VkExtent2D count = tiles.extent;
+            vk::bind(c.command, tileMax);
+            vk::Descriptors().sampled(0, sceneVelocity.view, pointClamp).storage(1, tiles.view).push(c.command, tileMax);
+            struct { int32_t cw, ch, pw, ph, tile; float shutter; } tilePush{static_cast<int32_t>(count.width), static_cast<int32_t>(count.height),
+                static_cast<int32_t>(config.post.width), static_cast<int32_t>(config.post.height), static_cast<int32_t>(tileSize()), settings.shutter};
+            vk::pushConstants(c.command, tileMax, tilePush);
+            vk::dispatch2D(c.command, count.width, count.height);
+        });
+        g.pass("motion blur: neighbours", [&](rg::PassBuilder& b) {
+            b.use(T(tiles), Use::Sampled, kC);
+            T(neighbourMax) = b.use(T(neighbourMax), Use::StorageWrite, kC);
+        }, [this](rg::PassContext& c) {
+            const VkExtent2D count = tiles.extent;
+            vk::bind(c.command, neighbourMaxPass);
+            vk::Descriptors().sampled(0, tiles.view, pointClamp).storage(1, neighbourMax.view).push(c.command, neighbourMaxPass);
+            struct { int32_t cw, ch; } neighbourPush{static_cast<int32_t>(count.width), static_cast<int32_t>(count.height)};
+            vk::pushConstants(c.command, neighbourMaxPass, neighbourPush);
+            vk::dispatch2D(c.command, count.width, count.height);
+        });
+        g.pass("motion blur", [&](rg::PassBuilder& b) {
+            for (vk::Image* image : {hdr, &sceneVelocity, &depthImage(), &neighbourMax}) b.use(T(*image), Use::Sampled, kC);
+            T(*out) = b.use(T(*out), Use::StorageWrite, kC);
+        }, [this, hdr, out, &camera](rg::PassContext& c) {
+            const int samples[4] = {8, 12, 16, 24};
+            vk::bind(c.command, motionBlur);
+            vk::Descriptors().sampled(0, hdr->view, linearClamp).sampled(1, sceneVelocity.view, pointClamp)
+                .sampled(2, depthImage().view, pointClamp).sampled(3, neighbourMax.view, pointClamp).storage(4, out->view)
+                .push(c.command, motionBlur);
+            struct { int32_t w, h, tile, samples; float shutter, near, frame, pad; } push{static_cast<int32_t>(config.post.width),
+                static_cast<int32_t>(config.post.height), static_cast<int32_t>(tileSize()), samples[level(settings.motionBlur)], settings.shutter,
+                camera.near, static_cast<float>(frameIndex % 1024u), 0.0f};
+            vk::pushConstants(c.command, motionBlur, push);
+            vk::dispatch2D(c.command, config.post.width, config.post.height);
+            vk::endLabel(c.command);
+        });
+        return out;
+    }
+
+    // Returns the number of accumulated levels (0 = no bloom), as bloomPass.
+    template <class Images> uint32_t bloomGraph(rg::Graph& g, Images& T, vk::Image* hdr, bool gameDrawsOriginal) {
+        using rg::Use;
+        constexpr VkPipelineStageFlags2 kC = vk::kCompute;
+        if (settings.bloom == EffectQuality::Off || gameDrawsOriginal) return 0;
+        const bool original = settings.bloom == EffectQuality::Original;
+        const uint32_t wanted[4] = {4, 5, 6, 8};
+        const uint32_t levels = std::min(bloomDown.mips, original ? 3u : wanted[level(settings.bloom)]);
+        for (uint32_t mip = 0; mip < levels; ++mip) {
+            g.pass("bloom: down", [&](rg::PassBuilder& b) {
+                if (mip == 0) b.use(T(*hdr), Use::Sampled, kC);
+                else b.use(T(bloomDown), Use::Sampled, kC, {mip - 1, 1});
+                b.use(T(exposure), Use::Sampled, kC);
+                T(bloomDown) = b.use(T(bloomDown), Use::StorageWrite, kC, {mip, 1});
+            }, [this, hdr, mip, original](rg::PassContext& c) {
+                if (mip == 0) vk::beginLabel(c.command, "bloom");
+                const VkExtent2D size{std::max(1u, bloomDown.extent.width >> mip), std::max(1u, bloomDown.extent.height >> mip)};
+                const VkExtent2D source = mip == 0 ? config.post : VkExtent2D{std::max(1u, bloomDown.extent.width >> (mip - 1)),
+                                                                             std::max(1u, bloomDown.extent.height >> (mip - 1))};
+                const VkImageView input = mip == 0 ? hdr->view : bloomDown.mipViews[mip - 1];
+                vk::bind(c.command, bloomDownPass);
+                vk::Descriptors().sampled(0, input, linearClamp, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL).storage(1, bloomDown.mipViews[mip])
+                    .sampled(2, exposure.view, pointClamp).push(c.command, bloomDownPass);
+                struct { float tx, ty; int32_t w, h; float first, threshold; } push{1.0f / static_cast<float>(source.width),
+                    1.0f / static_cast<float>(source.height), static_cast<int32_t>(size.width), static_cast<int32_t>(size.height),
+                    mip == 0 ? 1.0f : 0.0f, original ? 1.0f : 0.0f};
+                vk::pushConstants(c.command, bloomDownPass, push);
+                vk::dispatch2D(c.command, size.width, size.height);
+            });
+        }
+        for (int mip = static_cast<int>(levels) - 2; mip >= 0; --mip) {
+            const auto m = static_cast<uint32_t>(mip);
+            const bool fromDown = m + 2 == levels;   // the smallest level comes from the down chain
+            g.pass("bloom: up", [&](rg::PassBuilder& b) {
+                b.use(T(fromDown ? bloomDown : bloomUp), Use::Sampled, kC, {m + 1, 1});
+                b.use(T(bloomDown), Use::Sampled, kC, {m, 1});
+                T(bloomUp) = b.use(T(bloomUp), Use::StorageWrite, kC, {m, 1});
+            }, [this, m, fromDown](rg::PassContext& c) {
+                const VkExtent2D size{std::max(1u, bloomUp.extent.width >> m), std::max(1u, bloomUp.extent.height >> m)};
+                const VkExtent2D smallerSize{std::max(1u, bloomUp.extent.width >> (m + 1)), std::max(1u, bloomUp.extent.height >> (m + 1))};
+                const VkImageView smaller = fromDown ? bloomDown.mipViews[m + 1] : bloomUp.mipViews[m + 1];
+                vk::bind(c.command, bloomUpPass);
+                vk::Descriptors().sampled(0, smaller, linearClamp, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                    .sampled(1, bloomDown.mipViews[m], linearClamp, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                    .storage(2, bloomUp.mipViews[m]).push(c.command, bloomUpPass);
+                struct { float tx, ty; int32_t w, h; float radius; } push{1.0f / static_cast<float>(smallerSize.width),
+                    1.0f / static_cast<float>(smallerSize.height), static_cast<int32_t>(size.width), static_cast<int32_t>(size.height), 1.0f};
+                vk::pushConstants(c.command, bloomUpPass, push);
+                vk::dispatch2D(c.command, size.width, size.height);
+                if (m == 0) vk::endLabel(c.command);
+            });
+        }
+        if (levels == 1) {   // (no up pass to close the label)
+            g.pass("bloom: end", [](rg::PassBuilder& b) { b.keep(); }, [](rg::PassContext& c) { vk::endLabel(c.command); });
+        }
+        return levels;
+    }
+
+    template <class Images> vk::Image* smaaGraph(rg::Graph& g, Images& T, vk::Image* ldr, const bool& reset) {
+        using rg::Use;
+        constexpr VkPipelineStageFlags2 kC = vk::kCompute, kF = vk::kFragment, kOut = vk::kColorOut;
+        const VkExtent2D p = config.post;
+        struct Push { float metrics[4]; float subsample[4]; } push{};
+        const float metrics[4] = {1.0f / static_cast<float>(p.width), 1.0f / static_cast<float>(p.height),
+                                  static_cast<float>(p.width), static_cast<float>(p.height)};
+        std::memcpy(push.metrics, metrics, sizeof(metrics));
+        const bool t2x = config.spatialAa == AntiAliasing::SmaaT2x;
+        if (t2x) {
+            const float index = (frameIndex & 1u) ? 2.0f : 1.0f;
+            push.subsample[0] = push.subsample[1] = push.subsample[2] = index;
+        }
+        const VkRect2D full{{0, 0}, p};
+        g.pass("smaa: edges", [&](rg::PassBuilder& b) {
+            b.use(T(*ldr), Use::Sampled, kF);
+            T(smaaEdges) = b.use(T(smaaEdges), Use::ColorWrite, kOut);
+        }, [this, ldr, push, full, p](rg::PassContext& c) {
+            vk::beginLabel(c.command, "smaa");
+            VkRenderingAttachmentInfo edges = colorAttachment(smaaEdges.view, true);
+            beginRendering(c.command, p, &edges, 1);
+            viewport(c.command, full);
+            vk::bind(c.command, smaaEdge);
+            vk::Descriptors().sampled(0, ldr->view, linearClamp).push(c.command, smaaEdge);
+            vk::pushConstants(c.command, smaaEdge, push);
+            vkCmdDraw(c.command, 3, 1, 0, 0);
+            vkCmdEndRendering(c.command);
+        });
+        g.pass("smaa: weights", [&](rg::PassBuilder& b) {
+            for (vk::Image* image : {&smaaEdges, &areaTexture, &searchTexture}) b.use(T(*image), Use::Sampled, kF);
+            T(smaaWeights) = b.use(T(smaaWeights), Use::ColorWrite, kOut);
+        }, [this, push, full, p](rg::PassContext& c) {
+            VkRenderingAttachmentInfo weights = colorAttachment(smaaWeights.view, true);
+            beginRendering(c.command, p, &weights, 1);
+            viewport(c.command, full);
+            vk::bind(c.command, smaaWeight);
+            vk::Descriptors().sampled(0, smaaEdges.view, linearClamp).sampled(1, areaTexture.view, linearClamp)
+                .sampled(2, searchTexture.view, pointClamp).push(c.command, smaaWeight);
+            vk::pushConstants(c.command, smaaWeight, push);
+            vkCmdDraw(c.command, 3, 1, 0, 0);
+            vkCmdEndRendering(c.command);
+        });
+        vk::Image* blended = t2x ? &smaaFrames[frameIndex & 1u] : &ldrB;
+        g.pass("smaa: blend", [&](rg::PassBuilder& b) {
+            for (vk::Image* image : {ldr, &smaaWeights, &sceneVelocity}) b.use(T(*image), Use::Sampled, kF);
+            T(*blended) = b.use(T(*blended), Use::ColorWrite, kOut);
+        }, [this, ldr, blended, push, full, p, t2x](rg::PassContext& c) {
+            VkRenderingAttachmentInfo blend = colorAttachment(blended->view, false);
+            beginRendering(c.command, p, &blend, 1);
+            viewport(c.command, full);
+            vk::bind(c.command, smaaBlend);
+            vk::Descriptors().sampled(0, ldr->view, linearClamp).sampled(1, smaaWeights.view, linearClamp)
+                .sampled(2, sceneVelocity.view, pointClamp).push(c.command, smaaBlend);
+            vk::pushConstants(c.command, smaaBlend, push);
+            vkCmdDraw(c.command, 3, 1, 0, 0);
+            vkCmdEndRendering(c.command);
+            if (!t2x) vk::endLabel(c.command);
+        });
+        if (!t2x) return blended;
+        vk::Image* previous = &smaaFrames[(frameIndex & 1u) ^ 1u];
+        const bool none = previous->layout == VK_IMAGE_LAYOUT_UNDEFINED;
+        if (none)   // (no previous frame yet: given a layout, as smaa() does)
+            g.pass("smaa: no previous frame", [&](rg::PassBuilder& b) { T(*previous) = b.use(T(*previous), Use::ColorWrite, kOut); },
+                   [](rg::PassContext&) {});
+        g.pass("smaa: resolve", [&](rg::PassBuilder& b) {
+            for (vk::Image* image : {blended, previous, &sceneVelocity}) b.use(T(*image), Use::Sampled, kC);
+            T(ldrB) = b.use(T(ldrB), Use::StorageWrite, kC);
+        }, [this, blended, previous, p, none, &reset](rg::PassContext& c) {
+            const bool first = reset || none;
+            vk::bind(c.command, smaaResolve);
+            vk::Descriptors().sampled(0, blended->view, pointClamp).sampled(1, previous->view, linearClamp)
+                .sampled(2, sceneVelocity.view, pointClamp).storage(3, ldrB.view).push(c.command, smaaResolve);
+            struct { int32_t w, h; float reset; } resolvePush{static_cast<int32_t>(p.width), static_cast<int32_t>(p.height), first ? 1.0f : 0.0f};
+            vk::pushConstants(c.command, smaaResolve, resolvePush);
+            vk::dispatch2D(c.command, p.width, p.height);
+            vk::endLabel(c.command);
+        });
+        return &ldrB;
     }
 
     vk::Image* smaa(VkCommandBuffer command, vk::Image* ldr, bool reset) {
