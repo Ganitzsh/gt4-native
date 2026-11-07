@@ -264,66 +264,133 @@ void GameLink::gameHostWaits(uint32_t& count, uint32_t& ms) const {
 }
 uint64_t GameLink::bytesReceived() const { return impl->received; }
 
-namespace {
+// A capture file read in blocks of 4 MB. On Windows without the system's file cache (FILE_FLAG_NO_BUFFERING): a replay
+// of a capture of many gigabytes read through the cache moved as much into the standby list and took the machine's
+// free memory to nothing for as long as it ran, although the system could take it back. Elsewhere through stdio.
+class CaptureReader {
+public:
+    static constexpr size_t kBlock = 4u << 20;
+    CaptureReader() = default;
+    CaptureReader(const CaptureReader&) = delete;
+    CaptureReader& operator=(const CaptureReader&) = delete;
+    ~CaptureReader();
+    bool open(const std::string& path);
+    uint64_t size() const { return bytes; }
+    // n bytes at `at` into `destination`; false when they are not all in the file
+    bool read(uint64_t at, void* destination, size_t n);
 
-bool seekTo(std::FILE* f, uint64_t at) {
+private:
+    uint64_t bytes = 0;
 #ifdef _WIN32
-    return _fseeki64(f, static_cast<__int64>(at), SEEK_SET) == 0;
+    static constexpr uint64_t kAlign = 4096;   // a multiple of the sector size (512 or 4096): unbuffered reads' unit
+    bool openHandle(const std::string& path, bool unbuffered);
+    bool fill(uint64_t at);
+    HANDLE handle = INVALID_HANDLE_VALUE;
+    bool unbuffered = false;
+    uint8_t* block = nullptr;   // kBlock bytes, page-aligned (VirtualAlloc), as unbuffered reads need
+    uint64_t blockAt = 0;       // the file position of block[0]
+    size_t have = 0;            // bytes in block
+    std::string file;
 #else
-    return fseeko(f, static_cast<off_t>(at), SEEK_SET) == 0;
+    std::FILE* f = nullptr;
 #endif
+};
+
+#ifdef _WIN32
+CaptureReader::~CaptureReader() {
+    if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+    if (block) VirtualFree(block, 0, MEM_RELEASE);
 }
 
-uint64_t fileSize(std::FILE* f) {
-    std::fseek(f, 0, SEEK_END);
-#ifdef _WIN32
-    const int64_t n = _ftelli64(f);
-#else
-    const int64_t n = ftello(f);
-#endif
-    std::fseek(f, 0, SEEK_SET);
-    return n > 0 ? static_cast<uint64_t>(n) : 0;
+bool CaptureReader::openHandle(const std::string& path, bool noCache) {
+    if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+    // Shared for deleting and renaming: a replay does not keep its capture from being removed (a test removes its
+    // capture while the replay is open).
+    handle = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                         OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN | (noCache ? FILE_FLAG_NO_BUFFERING : 0),
+                         nullptr);
+    unbuffered = noCache;
+    have = 0;
+    return handle != INVALID_HANDLE_VALUE;
 }
 
-}  // namespace
+bool CaptureReader::open(const std::string& path) {
+    file = path;
+    block = static_cast<uint8_t*>(VirtualAlloc(nullptr, kBlock, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+    if (!block || !(openHandle(path, true) || openHandle(path, false))) return false;
+    LARGE_INTEGER n{};
+    if (!GetFileSizeEx(handle, &n) || n.QuadPart < 0) return false;
+    bytes = static_cast<uint64_t>(n.QuadPart);
+    return true;
+}
+
+bool CaptureReader::fill(uint64_t at) {
+    blockAt = at & ~(kAlign - 1);
+    have = 0;
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        OVERLAPPED o{};
+        o.Offset = static_cast<DWORD>(blockAt);
+        o.OffsetHigh = static_cast<DWORD>(blockAt >> 32);
+        DWORD got = 0;
+        if (ReadFile(handle, block, static_cast<DWORD>(kBlock), &got, &o) || GetLastError() == ERROR_HANDLE_EOF) {
+            have = got;
+            return at < blockAt + have;
+        }
+        // (a volume whose sectors are larger than kAlign refuses unbuffered reads: through the cache then)
+        if (!unbuffered || GetLastError() != ERROR_INVALID_PARAMETER || !openHandle(file, false)) return false;
+    }
+    return false;
+}
+
+bool CaptureReader::read(uint64_t at, void* destination, size_t n) {
+    if (at + n > bytes) return false;
+    auto* out = static_cast<uint8_t*>(destination);
+    while (n) {
+        if ((at < blockAt || at >= blockAt + have) && !fill(at)) return false;
+        const size_t take = std::min<size_t>(n, static_cast<size_t>(blockAt + have - at));
+        std::memcpy(out, block + (at - blockAt), take);
+        out += take;
+        at += take;
+        n -= take;
+    }
+    return true;
+}
+#else
+CaptureReader::~CaptureReader() {
+    if (f) std::fclose(f);
+}
+
+bool CaptureReader::open(const std::string& path) {
+    f = std::fopen(path.c_str(), "rb");
+    if (!f) return false;
+    std::setvbuf(f, nullptr, _IOFBF, kBlock);
+    if (fseeko(f, 0, SEEK_END) != 0) return false;
+    const off_t n = ftello(f);
+    bytes = n > 0 ? static_cast<uint64_t>(n) : 0;
+    return true;
+}
+
+bool CaptureReader::read(uint64_t at, void* destination, size_t n) {
+    if (at + n > bytes || fseeko(f, static_cast<off_t>(at), SEEK_SET) != 0) return false;
+    return std::fread(destination, 1, n, f) == n;
+}
+#endif
 
 std::unique_ptr<ReplaySource> ReplaySource::open(const std::string& path, std::string& error) {
     auto source = std::make_unique<ReplaySource>();
     source->file = path;
-#ifdef _WIN32
-    // Shared for deleting and renaming, as the mapping before it was: a replay does not keep its capture from being
-    // removed (fopen's sharing would, and a test removing its capture while the replay is open stopped on it).
-    HANDLE handle = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
-    const int fd = handle == INVALID_HANDLE_VALUE ? -1 : _open_osfhandle(reinterpret_cast<intptr_t>(handle), _O_RDONLY | _O_BINARY);
-    if (fd < 0 && handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
-    std::FILE* f = fd >= 0 ? _fdopen(fd, "rb") : nullptr;
-    if (!f && fd >= 0) _close(fd);
-#else
-    std::FILE* f = std::fopen(path.c_str(), "rb");
-#endif
-    if (!f) {
+    auto reader = std::make_shared<CaptureReader>();
+    if (!reader->open(path)) {
         error = "cannot open the capture " + path;
         return nullptr;
     }
-    source->in = std::shared_ptr<std::FILE>(f, [](std::FILE* p) { std::fclose(p); });
-    std::setvbuf(f, nullptr, _IOFBF, 1 << 20);
-    const uint64_t bytes = fileSize(f);
-    // The VBlanks, from the records' headers, read in 4 MB chunks; a payload larger than what is left of a chunk is
-    // skipped by seeking. The file goes through the system's cache once and nothing of it stays in this process.
-    std::vector<uint8_t> chunk(4u << 20);
+    source->in = reader;
+    const uint64_t bytes = reader->size();
+    // The VBlanks, from the records' headers (a payload is skipped: the next header is read where it starts).
     uint64_t at = 0;            // the start of the next record in the file
-    uint64_t chunkAt = 0;       // the file position of chunk[0]
-    size_t have = 0;            // bytes in chunk
     while (at + sizeof(Gt4LinkRecord) <= bytes) {
-        if (at < chunkAt || at + sizeof(Gt4LinkRecord) > chunkAt + have) {   // the header is not in the chunk
-            if (!seekTo(f, at)) break;
-            chunkAt = at;
-            have = std::fread(chunk.data(), 1, chunk.size(), f);
-            if (have < sizeof(Gt4LinkRecord)) break;
-        }
         Gt4LinkRecord header;
-        std::memcpy(&header, chunk.data() + (at - chunkAt), sizeof header);
+        if (!reader->read(at, &header, sizeof header)) break;
         const uint64_t span = recordSpan(header.size);
         if (at + span > bytes) break;   // an incomplete record at the end
         at += span;
@@ -337,22 +404,22 @@ std::unique_ptr<ReplaySource> ReplaySource::open(const std::string& path, std::s
 }
 
 bool ReplaySource::nextFrame(const RecordCallback& onRecord) {
-    std::FILE* f = in.get();
-    if (!f || offset + sizeof(Gt4LinkRecord) > size || !seekTo(f, offset)) return false;
+    CaptureReader* f = in.get();
+    if (!f || offset + sizeof(Gt4LinkRecord) > size) return false;
     // The frame's records into one buffer first (their payloads stay valid until the next frame), then delivered.
     frame.clear();
     std::vector<size_t> starts;
     bool vsync = false;
     while (!vsync && offset + sizeof(Gt4LinkRecord) <= size) {
         Gt4LinkRecord header;
-        if (std::fread(&header, sizeof header, 1, f) != 1) break;
+        if (!f->read(offset, &header, sizeof header)) break;
         const uint64_t span = recordSpan(header.size);
         if (offset + span > size) break;
         const size_t at = frame.size();
         frame.resize(at + static_cast<size_t>(span));
         std::memcpy(frame.data() + at, &header, sizeof header);
         const size_t rest = static_cast<size_t>(span) - sizeof header;
-        if (rest && std::fread(frame.data() + at + sizeof header, 1, rest, f) != rest) break;
+        if (rest && !f->read(offset + sizeof header, frame.data() + at + sizeof header, rest)) break;
         starts.push_back(at);
         offset += span;
         vsync = header.type == GT4_REC_VSYNC;

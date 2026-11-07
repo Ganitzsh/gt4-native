@@ -6,9 +6,8 @@
 // of their ring and writes host -> game records into the other one. A monitor thread logs the game's
 // exit code (crashes included). Windows only; elsewhere start() reports that the link is unavailable.
 //
-// ReplaySource maps a capture file (the game's --capture output: the same records, concatenated) into
-// memory, read-only (captures run to many gigabytes: nothing is copied), and hands the records out
-// one VBlank at a time.
+// ReplaySource reads a capture file (the game's --capture output: the same records, concatenated) one
+// VBlank at a time and hands its records out (captures run to many gigabytes: only a frame is held).
 #include "gt4/link/protocol.h"
 
 #include <atomic>
@@ -59,6 +58,8 @@ private:
     std::unique_ptr<Impl> impl;
 };
 
+class CaptureReader;   // (link_host.cpp)
+
 class ReplaySource {
 public:
     static std::unique_ptr<ReplaySource> open(const std::string& path, std::string& error);
@@ -73,10 +74,10 @@ public:
 private:
     // The capture is read one frame at a time, not mapped whole: a recording from boot runs to tens of gigabytes,
     // and a mapped one stayed in the process's memory as it was read (two replays at once of a 14.5 GB capture
-    // left the machine short of memory). What is read goes through the system's file cache, which the system can
-    // take back.
+    // left the machine short of memory). On Windows it bypasses the system's file cache too (link_host.cpp,
+    // CaptureReader): through the cache, a replay took the machine's free memory to nothing while it ran.
     std::string file;
-    std::shared_ptr<std::FILE> in;
+    std::shared_ptr<CaptureReader> in;
     uint64_t size = 0;                 // the bytes of its whole records
     uint64_t offset = 0;               // where the next frame starts
     size_t vsyncCount = 0;
