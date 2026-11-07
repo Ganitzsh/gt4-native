@@ -2691,11 +2691,17 @@ bool GsnScene::read(const gsn::ReadRequest& request, std::vector<uint8_t>& out) 
     // written again by a later list, the read's own included (what the read returns is then that frame's), or when a
     // later list reads one of its targets before writing it. GT4_READ_SKIP=0: every list drawn first.
     static const bool readSkip = [] { const char* e = std::getenv("GT4_READ_SKIP"); return !(e && *e == '0'); }();
+    // Where a slow read's time goes (the game waits for it: E4), printed for a read over 16 ms.
+    using Clock = std::chrono::steady_clock;
+    const Clock::time_point started = Clock::now();
+    const Counters before = counters();
     ++s.reads;
     const size_t skipped = readSkip ? s.skipOlderFrames(0) : 0;
     s.readSkips += skipped;
+    const size_t lists = s.pending.size();
     vkDeviceWaitIdle(s.device.device);   // the frames in flight are done: slot 0's buffers are free
     for (auto& inFlight : s.readbacksInFlight) s.finishReadbacks(inFlight);
+    const Clock::time_point idle = Clock::now();
     vk::Uploader up(s.device, s.pool);
     VkCommandBuffer command = up.command();
     // the pixels as the game drew them: no frame interpolation (its moving 3D a step behind, by the display's clock)
@@ -2703,12 +2709,28 @@ bool GsnScene::read(const gsn::ReadRequest& request, std::vector<uint8_t>& out) 
     s.interpolate = false;
     s.executePending(command, 0, s.lastExtent);
     s.interpolate = interpolating;
+    const Clock::time_point recorded = Clock::now();
     Impl::Copied copied;
     const bool copiedOk = s.copyRect(command, request, copied);
     up.submit();
+    const Clock::time_point drawn = Clock::now();
     s.finishReadbacks(s.readbacksRecorded);   // (asynchronous reads in the lists drawn: done too)
+    if (copiedOk) s.pack(copied, out);
+    const Clock::time_point done = Clock::now();
+    auto ms = [](Clock::time_point a, Clock::time_point b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
+    if (ms(started, done) > 16.0) {
+        const Counters after = counters();
+        std::printf("gsn read %llu took %.1f ms: GPU idle first %.1f, recording %zu lists %.1f (pipelines +%llu, textures +%llu "
+                    "of %.1f MiB, targets +%llu), submit and GPU %.1f, readbacks and pack %.1f; %zu frames skipped ahead; target %u "
+                    "%ux%u\n",
+                    static_cast<unsigned long long>(s.reads), ms(started, done), ms(started, idle), lists, ms(idle, recorded),
+                    static_cast<unsigned long long>(after.pipelines - before.pipelines),
+                    static_cast<unsigned long long>(after.textures - before.textures),
+                    static_cast<double>(after.textureBytes - before.textureBytes) / 1048576.0,
+                    static_cast<unsigned long long>(after.targets - before.targets), ms(recorded, drawn), ms(drawn, done), skipped,
+                    request.target, request.width, request.height);
+    }
     if (!copiedOk) return false;
-    s.pack(copied, out);
     // GT4_READ_HASH=1 (testing): each read's bytes as a hash (FNV-1a), to compare runs.
     static const bool readHash = [] { const char* e = std::getenv("GT4_READ_HASH"); return e && *e && *e != '0'; }();
     if (readHash) {
