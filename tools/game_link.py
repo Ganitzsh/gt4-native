@@ -34,7 +34,8 @@ NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" el
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # FFmpeg (static, i686) for movies (runtime/native/movie.cpp): tools/build_ffmpeg.sh builds it here
-FFMPEG = os.environ.get("GT4_FFMPEG", os.path.join(ROOT, "build", "ffmpeg-i686"))
+# (absolute and normalised once: the -I flag and the prefix map in compile_runtime must see the same string)
+FFMPEG = os.path.abspath(os.environ.get("GT4_FFMPEG", os.path.join(ROOT, "build", "ffmpeg-i686")))
 FFMPEG_LIBS = ["avformat", "avcodec", "swscale", "swresample", "avutil"]
 MINGW = os.environ.get("GT4_MINGW32", r"C:\msys64\mingw32\bin")
 ADDR_NAME = re.compile(r"^_(?:func|D|jtbl|lbl|jumptable|L)_([0-9A-Fa-f]{8})$")
@@ -84,7 +85,7 @@ def compile_runtime(out):
     # FFmpeg's headers too, where they are (GT4_FFMPEG: a checkout without its own build/ffmpeg-i686 uses another's),
     # under the name they have in a checkout's build folder: an FFmpeg outside the checkout put its absolute path in
     # the movie and IPU objects' debug info, and the exe changed with the folder it was built in.
-    ffmpeg = os.path.abspath(FFMPEG)
+    ffmpeg = FFMPEG
     prefix_map += [f"-ffile-prefix-map={p}=gt4-native/build/ffmpeg-i686" for p in sorted({ffmpeg, ffmpeg.replace("\\", "/")})]
     jobs = []
     files = []
