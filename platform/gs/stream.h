@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <cstring>
 #include <functional>
 #include <memory>
 #include <string>
@@ -195,6 +196,21 @@ public:
         for (const uint64_t h : uploadHashes.all()) {
             auto it = uploadBytes.find(h);
             if (it != uploadBytes.end()) out(it->second);
+        }
+    }
+    // The record data received and not yet taken by its record, oldest first (a recording that starts mid-run writes
+    // them after its restoration: the game sends a set's upload bytes ahead of the set's record, and a record that
+    // came after the recording's start found no data in the replay). `field` is GT4_REC_GFX_DATA's u32 bytes field.
+    void exportPendingData(const std::function<void(uint32_t source, uint32_t field, const std::vector<uint8_t>& payload)>& out) const {
+        for (const RecordData& d : recordData) {
+            if (d.reference) {   // the content's hash, then its bytes when the game sent them too (GT4_VERIFY_UPLOADS)
+                std::vector<uint8_t> payload(8 + d.bytes.size());
+                std::memcpy(payload.data(), &d.hash, 8);
+                if (!d.bytes.empty()) std::memcpy(payload.data() + 8, d.bytes.data(), d.bytes.size());
+                out(d.source, d.size | gfx::kDataReference, payload);
+            } else {
+                out(d.source, static_cast<uint32_t>(d.bytes.size()), d.bytes);
+            }
         }
     }
     // Every model packet content kept, oldest first (a recording that starts mid-run).

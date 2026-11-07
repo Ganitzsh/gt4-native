@@ -692,6 +692,15 @@ struct GsHost::Impl {
                         std::memcpy(block.data() + sizeof hd, &m, sizeof m);
                         recorder->out->write(GT4_REC_GFX, block.data(), static_cast<uint32_t>(block.size()));
                     });
+                    // last, the record data still waiting for its record (a set's uploads sent before the start, its
+                    // record after it): the records that take it after the start find it, as they did live
+                    stream->exportPendingData([&](uint32_t source, uint32_t field, const std::vector<uint8_t>& payload) {
+                        std::vector<uint8_t> data(8 + payload.size());
+                        const uint32_t head[2] = {source, field};
+                        std::memcpy(data.data(), head, 8);
+                        if (!payload.empty()) std::memcpy(data.data() + 8, payload.data(), payload.size());
+                        recorder->out->write(GT4_REC_GFX_DATA, data.data(), static_cast<uint32_t>(data.size()));
+                    });
                 }
                 recorder->started = true;
                 recorder->out->write(header.type, payload, header.size);
