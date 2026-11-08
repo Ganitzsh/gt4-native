@@ -15,6 +15,7 @@ namespace {
 struct Quad {
     float centre[3] = {};
     float diagonal = 0.0f;
+    float colour[3] = {};   // the vertices' given colours averaged, 0x80 = 1.0
 };
 
 float distance(const float* a, const float* b) {
@@ -26,7 +27,10 @@ float distance(const float* a, const float* b) {
 Quad quadOf(const scene::Mesh& mesh, const uint32_t* v, int n) {
     Quad q;
     for (int i = 0; i < n; ++i)
-        for (int k = 0; k < 3; ++k) q.centre[k] += mesh.vertices[v[i]].position[k] / static_cast<float>(n);
+        for (int k = 0; k < 3; ++k) {
+            q.centre[k] += mesh.vertices[v[i]].position[k] / static_cast<float>(n);
+            q.colour[k] += static_cast<float>((mesh.vertices[v[i]].colour >> (8 * k)) & 0xFF) / (128.0f * static_cast<float>(n));
+        }
     for (int i = 0; i < n; ++i)
         for (int j = i + 1; j < n; ++j) q.diagonal = std::max(q.diagonal, distance(mesh.vertices[v[i]].position, mesh.vertices[v[j]].position));
     return q;
@@ -144,12 +148,12 @@ std::vector<CourseLamp> extractLamps(const scene::Mesh& mesh, uint32_t item, flo
         auto [at, fresh] = lampOf.emplace(r, lamps.size());
         if (fresh) lamps.emplace_back();
         CourseLamp& l = lamps[at->second];
-        for (int k = 0; k < 3; ++k) l.position[k] += quads[i].centre[k];
+        for (int k = 0; k < 3; ++k) l.position[k] += quads[i].centre[k], l.colour[k] += quads[i].colour[k];
         l.radius = std::max(l.radius, 0.5f * quads[i].diagonal);
         ++l.quads;
     }
     for (CourseLamp& l : lamps)
-        for (float& p : l.position) p /= static_cast<float>(l.quads);
+        for (int k = 0; k < 3; ++k) l.position[k] /= static_cast<float>(l.quads), l.colour[k] /= static_cast<float>(l.quads);
     s.lamps = static_cast<uint32_t>(lamps.size());
     if (stats) *stats = s;
     return lamps;

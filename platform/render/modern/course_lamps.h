@@ -20,6 +20,7 @@ struct CourseLamp {
     // from its centre), not its full extent.
     float radius = 0.0f;
     uint32_t quads = 0;       // quads merged into it (a single triangle counts as one)
+    float colour[3] = {};     // its vertices' given colours averaged (0x80 = 1.0): the glow's tint, times the texture's
 };
 
 struct LampStats {

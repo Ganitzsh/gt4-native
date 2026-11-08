@@ -38,9 +38,10 @@ struct GatherStats {
 };
 
 // The records of `view` among `records`, into `out` (replaced) and a header for the cluster slices [zNear, zFar]
-// (metres). `scale` multiplies every colour (the setting's strength).
+// (metres). `scale` multiplies every colour (the setting's strength). Records from `hostFrom` on are the host's own
+// (F2b's course lamps): without kFromGame.
 LightListHeader gatherLights(const gfx::scene::Light* records, size_t count, uint16_t view, float zNear, float zFar,
-                             float scale, std::vector<GpuLight>& out, GatherStats& stats);
+                             float scale, std::vector<GpuLight>& out, GatherStats& stats, size_t hostFrom = SIZE_MAX);
 
 // N synthetic street lamps for `view` (GT4_NIGHT_TEST_LIGHTS): two rows 7 m either side of the camera's axis, 4 m
 // above it, every 12 m from 6 m ahead; warm white, kSrcCourseGlow, ids 1..N.

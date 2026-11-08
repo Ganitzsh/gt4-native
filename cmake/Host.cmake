@@ -580,6 +580,19 @@ add_test(NAME material_table COMMAND gt4_material_table_test)
     target_compile_options(gt4_course_lamps_test PRIVATE -Wall -Wextra -Wpedantic)
   endif()
   add_test(NAME course_lamps COMMAND gt4_course_lamps_test)
+  # F2b's glow class and lamp pass on a synthetic scene frame, CPU only.
+  add_executable(gt4_course_lamp_pass_test tests/course_lamp_pass.cpp platform/render/modern/course_lamp_pass.cpp
+      platform/render/modern/course_lamps.cpp platform/render/modern/glow_classifier.cpp
+      platform/render/modern/lights_gather.cpp platform/render/modern/light_sources.cpp)
+  target_include_directories(gt4_course_lamp_pass_test PRIVATE platform/render/modern)
+  target_link_libraries(gt4_course_lamp_pass_test PRIVATE gt4_mesh_cache)
+  target_compile_definitions(gt4_course_lamp_pass_test PRIVATE $<$<BOOL:${WIN32}>:_CRT_SECURE_NO_WARNINGS>)
+  if(MSVC)
+    target_compile_options(gt4_course_lamp_pass_test PRIVATE /W4)
+  else()
+    target_compile_options(gt4_course_lamp_pass_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  add_test(NAME course_lamp_pass COMMAND gt4_course_lamp_pass_test)
   # The night artefact metrics (tools/frame_metrics.py, ticket N1) on synthetic frames; skipped (77) without
   # Python 3 and numpy.
   find_package(Python3 COMPONENTS Interpreter QUIET)

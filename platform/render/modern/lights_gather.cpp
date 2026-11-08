@@ -21,7 +21,7 @@ float linearise(float c) { return c > 0.0f ? std::pow(c, 2.2f) : 0.0f; }
 }  // namespace
 
 LightListHeader gatherLights(const gfx::scene::Light* records, size_t count, uint16_t view, float zNear, float zFar,
-                             float scale, std::vector<GpuLight>& out, GatherStats& stats) {
+                             float scale, std::vector<GpuLight>& out, GatherStats& stats, size_t hostFrom) {
     using namespace gfx::scene;
     out.clear();
     stats = {};
@@ -72,7 +72,7 @@ LightListHeader gatherLights(const gfx::scene::Light* records, size_t count, uin
         g.spotScale = cone ? spotScale(r.cosInner, r.cosOuter) : 0.0f;
         g.spotOffset = cone ? spotOffset(r.cosInner, r.cosOuter) : 0.0f;
         g.range = isDirectional ? 0.0f : ((r.range > 0.0f && std::isfinite(r.range)) ? r.range : d.range);
-        g.flags = kFromGame | ((r.width > 0.0f || r.height > 0.0f) ? kGameGlow : 0u);
+        g.flags = (i < hostFrom ? kFromGame : 0u) | ((r.width > 0.0f || r.height > 0.0f) ? kGameGlow : 0u);
         g.sourceRadius = d.sourceRadius;
         g.id = r.id;
         (isDirectional ? directional : local).push_back(g);
