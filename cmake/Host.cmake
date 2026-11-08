@@ -558,6 +558,11 @@ if(BUILD_TESTING)
   add_executable(gt4_course_lamps_test tests/course_lamps.cpp platform/render/modern/course_lamps.cpp)
   target_include_directories(gt4_course_lamps_test PRIVATE platform/render/modern)
   target_link_libraries(gt4_course_lamps_test PRIVATE gt4_mesh_cache)
+  if(MSVC)
+    target_compile_options(gt4_course_lamps_test PRIVATE /W4)
+  else()
+    target_compile_options(gt4_course_lamps_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
   add_test(NAME course_lamps COMMAND gt4_course_lamps_test)
   # The night artefact metrics (tools/frame_metrics.py, ticket N1) on synthetic frames; skipped (77) without
   # Python 3 and numpy.

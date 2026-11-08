@@ -16,16 +16,24 @@ namespace gt4::render {
 
 struct CourseLamp {
     float position[3] = {};   // the merged quads' centres averaged, object space
-    float size = 0.0f;        // the largest quad's longest diagonal: the glow's extent
+    // Half the largest quad's diagonal: a half size, as gfx::scene::Light's width and height are (the glow's reach
+    // from its centre), not its full extent.
+    float radius = 0.0f;
     uint32_t quads = 0;       // quads merged into it (a single triangle counts as one)
 };
 
 struct LampStats {
-    uint32_t triangles = 0, quads = 0, loneTriangles = 0, lamps = 0;
+    uint32_t triangles = 0;     // the item's, degenerate ones included
+    uint32_t degenerate = 0;    // two equal indices or no area (a strip's restart): left out
+    uint32_t quads = 0;         // quads made, lone triangles included
+    uint32_t skewQuads = 0;     // of them, pairs that are not a rectangle (a glow quad is one: a mesh of other shapes)
+    uint32_t loneTriangles = 0, lamps = 0;
 };
 
-// Quads whose centres are within `merge` x the smaller quad's size are one lamp. 0.25: crossed quads of one glow
-// share their centre; two lamps on one post are a lamp-size apart.
+// Triangles pair into rectangles first (opposite vertices summing to the shared edge's, equal diagonals), so a row of
+// quads sharing edges pairs within each quad; what is left pairs with any neighbour (counted as skew). Quads whose
+// centres are within `merge` x the smaller quad's diagonal are one lamp. 0.25: crossed quads of one glow share their
+// centre; two lamps on one post are a lamp-size apart.
 std::vector<CourseLamp> extractLamps(const scene::Mesh& mesh, uint32_t item, float merge = 0.25f, LampStats* stats = nullptr);
 
 }  // namespace gt4::render
