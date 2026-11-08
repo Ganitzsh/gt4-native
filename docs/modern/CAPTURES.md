@@ -141,6 +141,18 @@ where a pack texture is first used: keep `texture.hd_pack=off` for a perf compar
 (`--skip`) and compare runs that both have the pack on. A live game without `--fixed-step` loads the pack in the
 background as before; the host's "Texture pack:" line says which mode runs.
 
+Bases recorded across a change of what the game sends do not compare. Since 74ac4bb (D14) the presets low to ultra
+ask the game for `kOptionSceneRecords` 2: every race frame carries a vehicles-only block (FrameBegin with
+`kFrameVehiclesOnly`, six Vehicle records, FrameEnd), about 0.5 % more STREAM bytes. A STREAM or PERF base for low to
+ultra recorded before 74ac4bb does not match a run after it; `original` is unchanged (option 0). A gate on a quality
+preset needs a base from 74ac4bb on, or `--set input.haptics=original` on both sides. Since ba5c358 (link version 4)
+a game and a host pair only on the same side of it; captures carry no link version and replay across it.
+
+`tools/perf_report.py --baseline` compares stages by name: a stage found on one side only (renamed, split, new or
+gone) compares against nothing and cannot fail `--max-change`. It is listed as "only in the baseline / only in the
+run" (and `one_sided_stages` in `--json`). Across B4 step 4 (cced3ed), the GS passes' names changed and part of
+`colour grading` moved into `draws`: hold that comparison on their sum, or on `gpu_ms`.
+
 ## Scripting a live session
 
 A scripted session runs the host with `--session-dir DIR`: it attaches a virtual pad and runs the commands it
