@@ -101,6 +101,11 @@ void filtering() {
     expect(s.records == 6, "only view 1's records counted");
     expect(s.notLights == 1, "a car-light reflection is not a light");
     expect(s.unknownSource == 1, "an unknown source does not light, counted apart");
+    {
+        const SourceDefaults car = sourceDefaults(gfx::scene::kSrcCarLamp), other = sourceDefaults(gfx::scene::kSrcOther);
+        expect(car.known && car.lights && car.range == sourceDefaults(gfx::scene::kSrcTailLight).range && other.range == 10.0f,
+               "a car lamp of unknown group reaches as far as a tail lamp; 'other' keeps its general reach");
+    }
     expect(s.invalid == 1, "a NaN position is invalid");
     expect(s.dark == 2, "black and intensity 0 are dark lamps, counted apart");
     expect(s.kept == 1 && out.size() == 1, "one light kept");
