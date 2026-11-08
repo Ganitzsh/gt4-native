@@ -139,6 +139,8 @@ enum ViewRole : uint8_t {
     kViewPhoto = 6,        // Photo Travel / photo mode
     kViewHud = 7,          // 3D drawn by the HUD outside render_world (RaceRoundMeterBase 003BE3C8); never substituted
     kViewMenu = 8,         // menus' 3D (mRenderContextPS2::virtual_64 00217058: the Home garage car, small car views)
+    kViewEnvCopy = 9,      // an env face's copy into the shared env map (0044E660, after the face's ViewEnd);
+                           //   `pass` = face; never substituted
     kViewOther = 15,
 };
 enum ViewFlags : uint8_t {
@@ -340,7 +342,7 @@ Where each record is sent (tickets in PLAN.md):
 |---|---|---|
 | `FrameBegin` | start of `render_world` (`game_src/func_0033DEA8.cpp`; the 3 env-map passes come first inside it); menus: mRenderContextPS2::virtual_64 (00217058). The first since the last kick opens the frame; the runtime drops the others (a.5.1) | A3 |
 | `FrameEnd` | the runtime, at the frame's kick (004A11F8, `runtime/frame.cpp`), after `walk(list)`, when a frame is open | A3 |
-| `ViewBegin` / `ViewEnd` | main: after 0033EAB8's camera load (a `game_src` copy of 0033EAB8, or a hook at the camera's +0x18 call), `ViewEnd` before `render_back_mirror`; mirror: `game_src/func_00341E50.cpp` (after every main-view instance, so views never nest); env-map passes 0044E660 (before the main view); menus 00217058 (`kViewMenu`); the HUD's 3D widget 003BE3C8 (`kViewHud`); showroom and Photo Travel per R6 | A3, A6 |
+| `ViewBegin` / `ViewEnd` | main: after 0033EAB8's camera load (a `game_src` copy of 0033EAB8, or a hook at the camera's +0x18 call), `ViewEnd` before `render_back_mirror`; mirror: `game_src/func_00341E50.cpp` (after every main-view instance, so views never nest); env-map passes 0044E660 (before the main view; each face's `ViewEnd` right after its scene, before 001056A0 binds the env target, and the face's copy into the env map in a `kViewEnvCopy` view of its own); menus 00217058 (`kViewMenu`); the HUD's 3D widget 003BE3C8 (`kViewHud`); showroom and Photo Travel per R6 | A3, A6 |
 | `Projection` | `game_src/func_0049D328.cpp`, before the `Instance`, when set 1 (as 0049E480 picks it) or the viewport / clamp the batch holds (the runtime's copy of the last qwords 197..199 written by 0049E548) differ from the last `Projection` sent this frame (a 64 + 48-byte compare); also for each view's camera load, before its `ViewBegin` | A2, A3 |
 | `Instance` | `game_src/func_0049D328.cpp`, after 0049E480 / 0049E548, before the item loop; A and B read as 0049E480 picks them (by `s->current`) even when it does not run (R1: it recomposed for 16 % of the Cmds); and one per batch run inside `BillboardSet__render` 004506F0's billboard context, flagged `kInstBillboard`, just before the run (A7 step 1b); one per batch run inside the car light map pass 0038F5D0, flagged `kInstLightMap`, the context opened around each 0038F5D0 call by the `render_cars` copy (`game_src/func_00340950.cpp`, entrant = car `+0x544`) (A6) | A2, A6, A7 |
 | object identity | 00455708 (draft) sets a runtime-global "model context" that A2 reads | A4 |
@@ -475,7 +477,7 @@ Where each record is sent (tickets in PLAN.md):
      another target. The provisional target and its draws then become auxiliary. The split reasons and auxiliary
      reads below are decided at `ViewEnd` against the final principal, whatever order the draws came in.
    - **Auxiliary draws.** A tagged draw into any other colour target is auxiliary: a small pass inside the view,
-     such as the sky's 32 x 32 pass (00396B80, R1) in the main view, or an env face's composite into the env map.
+     such as the sky's 32 x 32 pass (00396B80, R1) in the main view.
      Auxiliary draws stay on the GS path in stream order, before the view's Light command, and a substitution
      never touches them. They are counted per view (`viewAuxiliaryDraws`), with the auxiliary targets they write.
    - **Auxiliary reads.** A draw into the principal target, inside the view, whose texture overlaps an auxiliary
@@ -501,8 +503,13 @@ Where each record is sent (tickets in PLAN.md):
      Rules (2) to (4) mean no pass the substitution leaves on the GS path can overwrite or read the substituted
      image unnoticed. Untagged draws into the principal target are unchanged: `jobsUntaggedInView`, drawn on the
      GS path.
-   - A separate view for an env face's composite (`kViewOther`, in 0044E660) is added when B7 needs the face's
-     write into the map as its own view, not before. The sky's pass needs no view of its own.
+   - **An env face's copy is a view of its own.** After a face's scene, 0044E660 binds the shared env target
+     (256 x 256) and draws the face into it with a Cmd (0049D308, orthographic, sampling the face's target).
+     Inside the face's view that copy sampled the principal before the Light (rule 4) and split every face (lane
+     A, 2026-11-08: 1.73 splits a frame on Route 5 night). It isn't part of the face's scene, so the face's
+     `ViewEnd` comes before it, and the copy is a `kViewEnvCopy` view (`pass` = face), bound to the env target and
+     never substituted. Its instances stay inside a view, so `instancesWithoutView` keeps its gate. The sky's pass
+     needs no view of its own.
 8. **Field frames.** With `display.race_frames = fields`, each field is its own frame (`kFrameField`, odd field
    flagged); views and instances are per field. With a.5.1 this needs one kick per field. A3 confirms the race
    kicks once per field in that mode; if it kicks once per frame, this rule comes back to the architect.

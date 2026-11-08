@@ -150,6 +150,14 @@ found, like the warning lamps at the Route 5 pit entry.
 (`render_reflection` 003411D0, `kViewReflection`), showroom jitter passes, Photo Travel. `Instance` records for the
 untagged draw paths: the car light maps. The view passes come first (the architect, 2026-11-08): they run in every
 race and B9 waits on them.
+- **The env faces** (lane A, 2026-11-08, a replay with `GT4_SCENE_DEBUG=1`, 7,617 frames). Each face renders into
+  its 128 x 256 target; 0044E660 then copied it into the shared env map inside the face's view, which split every
+  face by rule 4. The face's `ViewEnd` moves before the copy, and the copy gets its own `kViewEnvCopy` view
+  (CONTRACTS a.5.7). Acceptance below: each face bound to its target, unsplit.
+- **The road reflection** splits the main view by rule 1 (0.56 a frame): 10 draws into a 64 x 32 colour target with
+  its own Z, tested and written, through one of the main view's virtuals in 0033EAB8 (`render_reflection`
+  003411D0, being confirmed). How it becomes a `kViewReflection` view (a sibling of the main view like the mirror,
+  or nested) waits on where it falls in the main view's order.
 - **The paths that run after a Cmd** (CONTRACTS a.5.3: 00497838's pre-built shapes, 0049FAC8's Cmd-like models) are
   situational. With the light maps tagged, `runsAfterInstance` is 0 on Route 5 B-spec night (lane A, 2026-11-08,
   7,600 frames; 43,686 with step 1b alone). Their callers in the decomp: the race's sparks (ThickLine2,
