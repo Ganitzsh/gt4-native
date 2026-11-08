@@ -7,6 +7,7 @@
 #include "../gs/cpu_profile.h"
 
 #include <algorithm>
+#include <cassert>
 #include <bit>
 #include <chrono>
 #include <bit>
@@ -853,6 +854,7 @@ struct GsnScene::Impl {
     void pendingListEnd(VkCommandBuffer command);
     void endPending(VkCommandBuffer command);
     size_t pendingShown = 0;   // the list shown now (pending.size(): none)
+    size_t pendingBuilt = 0;   // the lists buildPrepass made passes for (checked when they run: the lists cannot change)
 
     // The pixels the display shows: the circuit's size in video clocks over its clocks per pixel; interlaced in
     // field mode each field shows every line of a half-height buffer.
@@ -3011,6 +3013,7 @@ bool GsnScene::buildPrepass(rg::Graph& graph, const SceneView& view) {
         return true;
     }
     s.lastExtent = view.renderExtent;
+    s.pendingBuilt = s.pending.size();
     graph.pass("gs: frame", keep, [&s, view](rg::PassContext& c) {
         GT4_STAGE_SCOPE("render: the scene (game lists)");
         GT4_CPU_SCOPE("render: native renderer's commands");
@@ -3020,6 +3023,7 @@ bool GsnScene::buildPrepass(rg::Graph& graph, const SceneView& view) {
         graph.pass("gs: uploads", keep, [&s, view, i](rg::PassContext& c) {
             GT4_STAGE_SCOPE("render: the scene (game lists)");
             GT4_CPU_SCOPE("render: native renderer's commands");
+            assert(s.pending.size() == s.pendingBuilt && i < s.pending.size());   // (lane A: nothing changes the lists in between)
             s.listIndex = i;
             s.pendingTargets(c.command, view.slot);
         });
