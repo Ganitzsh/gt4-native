@@ -370,6 +370,11 @@ public:
         // (a buffer the display showed lately counts apart: bracketDisplayed)
         uint64_t bracketPrincipal[3] = {}, bracketScreen[3] = {}, bracketDisplayed[3] = {}, bracketKept[3] = {};
         uint64_t bracketsOpenAtEnd = 0;
+        // A7's check (PLAN A7): the flare bracket's modeled jobs onto the picture (its glows), and those whose origin, through
+        // their own matrix, lands within 0.02 NDC of a main-view Light through the view's projection (the glow is drawn at
+        // the light's view position pulled along its ray, 00498198: the same point on screen)
+        uint64_t glowsChecked = 0, glowsWithLight = 0;
+        float glowMaxDistance = 0;   // the largest NDC distance (max of |dx|, |dy|) of a matched glow from its Light
         // B6 (scene cache): instances given ids, their items, and the time sceneView spent on them (the front-end
         // thread's added cost, PERF: at most 0.5 ms a race frame)
         uint64_t sceneInstances = 0, sceneItems = 0;
@@ -630,6 +635,12 @@ private:
         uint32_t id = 0;
         uint64_t at = 0;
     } shownTargets[4];
+    // A7's check: the flare bracket's glow jobs this frame, their origin in clip space (x, y, w); and the main view's Lights
+    // in NDC at the frame's end (storage kept)
+    struct GlowOrigin { float x, y, w; };
+    std::vector<GlowOrigin> glowOrigins;
+    std::vector<std::pair<float, float>> glowLights;
+    void checkGlows(const scene::SceneFrame& f);
     uint8_t bracketFor(uint32_t colour, uint8_t& rule) const;
     void countBracket(uint8_t rule);
     bool sceneVsyncInFrame = false;               // a VSync came while the scene frame was open (its markers: unchecked)

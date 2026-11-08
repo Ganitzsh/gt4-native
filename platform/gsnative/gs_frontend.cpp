@@ -1936,6 +1936,8 @@ void GsFrontend::model(const gfx::ModelJob& in, const uint32_t* words) {
     const uint16_t drawView = sceneSplit ? view : 0;
     uint8_t bracketRule = 0;
     const uint8_t bracket = bracketFor(colour, bracketRule);
+    if (bracket == kBracketFlare && bracketRule && glowOrigins.size() < 4096)   // (A7's check: a glow onto the picture)
+        glowOrigins.push_back({in.matrix[3][0], in.matrix[3][1], in.matrix[3][3]});
     Draw* batch = nullptr;
     if (!frame.commands.empty() && frame.commands.back().kind == FrameList::Command::Kind::Draw) {
         Draw& last = frame.draws[frame.commands.back().index];
@@ -2492,6 +2494,7 @@ void GsFrontend::sceneRecord(const uint8_t* payload, size_t bytes) {
         sceneVsyncInFrame = false;
         sceneBrackets = 0;
         sceneMainViews.clear();
+        glowOrigins.clear();
         // B6: a FrameBegin without the last frame's FrameEnd drops that frame (the decoder does): its jobs and counters go
         clearSceneJobs();
         sceneCacheCounters = {};
@@ -2605,6 +2608,37 @@ void GsFrontend::sceneView(std::shared_ptr<const scene::SceneView> view) {
     v.package = std::move(view);
     frame.views.push_back(std::move(v));
     ++stats.scenePackages;
+}
+
+// A7's check (PLAN A7): each glow the flare pass drew onto the picture this frame has a Light at its centre. A glow's job
+// matrix is object -> clip, and 00498198 draws it at the light's view position pulled along its ray (pos x (z - 0.5) / z),
+// so its origin lands where the Light does through the main view's projection. Lights of the frame's main views only (the
+// glow pass draws in the main view's space).
+void GsFrontend::checkGlows(const scene::SceneFrame& f) {
+    if (glowOrigins.empty()) return;
+    glowLights.clear();
+    for (const scene::ViewData& v : f.views) {
+        if (v.role != gfx::scene::kViewMain || !v.projection || v.projection > f.projections.size()) continue;
+        const scene::Mat4& p = f.projections[v.projection - 1u].viewToClip;
+        for (uint32_t k = v.firstLight; k < v.firstLight + v.lightCount && k < f.lights.size(); ++k) {
+            const float* q = f.lights[k].position;
+            float c[4];
+            for (int j = 0; j < 4; ++j) c[j] = q[0] * p.m[0][j] + q[1] * p.m[1][j] + q[2] * p.m[2][j] + p.m[3][j];
+            if (c[3] > 0) glowLights.emplace_back(c[0] / c[3], c[1] / c[3]);
+        }
+    }
+    for (const GlowOrigin& g : glowOrigins) {
+        if (!(g.w > 0)) continue;
+        ++stats.glowsChecked;
+        const float x = g.x / g.w, y = g.y / g.w;
+        float nearest = INFINITY;
+        for (const auto& l : glowLights) nearest = std::min(nearest, std::max(std::fabs(l.first - x), std::fabs(l.second - y)));
+        if (nearest <= 0.02f) {
+            ++stats.glowsWithLight;
+            stats.glowMaxDistance = std::max(stats.glowMaxDistance, nearest);
+        }
+    }
+    glowOrigins.clear();
 }
 
 void GsFrontend::sceneFrame(std::unique_ptr<scene::SceneFrame> f) {
@@ -2723,6 +2757,7 @@ void GsFrontend::sceneFrame(std::unique_ptr<scene::SceneFrame> f) {
             }
         }
     }
+    checkGlows(*f);
     ++stats.sceneFrames;
     stats.viewSplitTargets += c.viewSplitTargets;
     stats.viewsUnbound += c.viewsUnbound;

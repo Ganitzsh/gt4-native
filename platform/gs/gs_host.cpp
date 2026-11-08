@@ -1218,6 +1218,9 @@ std::string GsHost::summary() const {
                     << s.bracketScreen[k] << ", a displayed buffer " << s.bracketDisplayed[k] << ", kept (another target) "
                     << s.bracketKept[k];
         if (s.bracketsOpenAtEnd) out << "; scene frames ending with a bracket open " << s.bracketsOpenAtEnd;
+        if (s.glowsChecked)
+            out << "; flare glows with a Light at their centre " << s.glowsWithLight << " of " << s.glowsChecked
+                << " (largest distance " << s.glowMaxDistance << " NDC)";
         // B6: the scene cache's ids (instances and items given them, the front-end time, the caches' totals, and whether
         // the same object kept its ids)
         if (gt4::scene::SceneCache* cache = h.target->frontend().sceneCache()) {
