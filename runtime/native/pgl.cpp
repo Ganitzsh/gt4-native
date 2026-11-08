@@ -6,6 +6,7 @@
 // that buffer too, so that they stay in order with the packets that are left: a DMA CNT tag whose upper
 // half ends with the record code (gfx::kStreamCode | qwords), followed by the record.
 #include "../guest.h"
+#include "../image.h"
 #include "../kernel.h"
 #include "../link.h"
 #include "../log.h"
@@ -19,6 +20,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -380,7 +382,10 @@ struct SceneFrameState {
     int course = 0;      // the course's draws under way (gt4_scene_course: nested), its Cmds' Instances kInstCourse (A11a)
     int coursePaused = 0;  // inside them, draws that are not world-space course (billboards facing the camera): unflagged
     uint16_t openView = 0, viewInstances = 0;
-    uint16_t mainView = 0;   // the frame's last kViewMain view (A7: the glow pass's lights name it)
+    uint16_t mainView = 0;
+    float camera[16] = {};   // DEBUG (A11a): the open view's camera (set 0 at its ViewBegin)
+    bool haveCamera = false;
+    uint16_t courseTop = 0;   // DEBUG (A11a): the matrix stack's top when the outermost course bracket opened   // the frame's last kViewMain view (A7: the glow pass's lights name it)
     bool haveProjection = false;
     float clip[16] = {}, viewport[12] = {};   // the last Projection sent
 };
@@ -520,6 +525,8 @@ uint32_t gt4_scene_view_begin(uint32_t context, int role, int flags, uint32_t pa
     r.projection = sceneProjection(context, set1, viewport, view);
     if (r.flags & scene::kViewCameraKnown) {
         std::memcpy(r.worldToView, set0, sizeof r.worldToView);
+        std::memcpy(g_scene.camera, set0, sizeof g_scene.camera);   // DEBUG (A11a)
+        g_scene.haveCamera = true;
     } else {
         for (int i = 0; i < 4; ++i) r.worldToView[i][i] = 1.0f;
     }
@@ -546,6 +553,7 @@ void gt4_scene_view_end(uint32_t context) {
 void gt4_scene_course(uint32_t context, int on) {
     (void)context;
     if (!gt4_scene_on()) return;
+    if (on && g_scene.course == 0) g_scene.courseTop = gt4_matrix_stack_top;   // DEBUG (A11a)
     g_scene.course = on ? g_scene.course + 1 : (g_scene.course > 0 ? g_scene.course - 1 : 0);
 }
 
@@ -656,6 +664,39 @@ void gt4_scene_cmd(uint32_t context, uint32_t cmd) {
     r.cmd = cmd;
     r.entrant = 0xFFFFFFFFu;
     std::memcpy(r.objectToView, set0, sizeof r.objectToView);
+    if ((r.flags & scene::kInstCourse) && g_scene.haveCamera) {   // DEBUG (A11a): a course-flagged Cmd not drawn with the camera
+        float worst = 0.0f;
+        for (int i = 0; i < 16; ++i) worst = std::max(worst, std::fabs(set0[i] - g_scene.camera[i]));
+        {   // DEBUG (A11a): flagged Cmds by matrix-stack depth (rows above the bracket's), matched or not
+            static uint64_t match[9], mis[9], total;
+            const int d = static_cast<int>(static_cast<uint16_t>(gt4_matrix_stack_top - g_scene.courseTop));
+            const int b = d < 0 ? 0 : d / 4 > 7 ? 8 : d / 4;
+            (worst > 1e-2f ? mis : match)[b]++;
+            if (++total % 20000 == 0)
+                log_info("A11a depth: matched by depth/4 %llu %llu %llu %llu %llu, mismatched %llu %llu %llu %llu %llu (sets current %u)",
+                         (unsigned long long)match[0], (unsigned long long)match[1], (unsigned long long)match[2], (unsigned long long)match[3],
+                         (unsigned long long)match[8], (unsigned long long)mis[0], (unsigned long long)mis[1], (unsigned long long)mis[2],
+                         (unsigned long long)mis[3], (unsigned long long)mis[8], (unsigned)guest_ref<uint8_t>(kSpr + 1));
+        }
+        static int shown = 0;
+        if (worst > 1e-2f && shown < 40) {
+            ++shown;
+            char callers[400] = "";
+            size_t used = 0;
+            const uint32_t *sp = static_cast<const uint32_t *>(__builtin_frame_address(0));
+            uint32_t lastGuest = 0;
+            for (int k = 0; k < 400 && used < sizeof callers - 60; ++k) {
+                uint32_t guest = 0;
+                const char *n = native_name_for(sp[k], &guest);
+                if (n && *n && guest != lastGuest) {
+                    used += static_cast<size_t>(snprintf(callers + used, sizeof callers - used, " %s", n));
+                    lastGuest = guest;
+                }
+            }
+            log_info("A11a debug: cmd %08x view %u diff %.3f r0 %.3f %.3f %.3f t %.1f %.1f %.1f; stack:%s", cmd, g_scene.openView, worst,
+                     set0[0], set0[1], set0[2], set0[12], set0[13], set0[14], callers);
+        }
+    }
     const bool axisScaled = guest_ref<uint8_t>(kSpr + 0xE) != 0;
     for (int i = 0; i < 3; ++i) r.axisScale[i] = axisScaled ? sprFloats(0xBD0)[i] : 1.0f;
     r.shapeScale = guest_ref<float>(cmd + 4);
