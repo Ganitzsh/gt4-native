@@ -148,9 +148,16 @@ found, like the warning lamps at the Route 5 pit entry.
 
 **A6: Further views (M).** Env-map passes 0044E660 / 0044EB10 (`kViewEnvFace`), the road reflection
 (`render_reflection` 003411D0, `kViewReflection`), showroom jitter passes, Photo Travel. `Instance` records for the
-untagged draw paths: the car light maps, and those that run after a Cmd (CONTRACTS a.5.3): 00497838's
-pre-built shapes, placed by position (what their `objectToView` is), and 0049FAC8's Cmd-like models, checking that
-their 0049E480 / 0049E548 composition follows R1's rule.
+untagged draw paths: the car light maps. The view passes come first (the architect, 2026-11-08): they run in every
+race and B9 waits on them.
+- **The paths that run after a Cmd** (CONTRACTS a.5.3: 00497838's pre-built shapes, 0049FAC8's Cmd-like models) are
+  situational. With the light maps tagged, `runsAfterInstance` is 0 on Route 5 B-spec night (lane A, 2026-11-08,
+  7,600 frames; 43,686 with step 1b alone). Their callers in the decomp: the race's sparks (ThickLine2,
+  `ParticleManager_SparkParticle`), the HUD's round meter (`RaceRoundMeterBase` virtual 14), Photo pause (003C4EC0,
+  003C5AB8), and two game-data functions outside races (00194DB0, 001AB110). So they go with what draws them:
+  sparks to A8 (tagged on A8's capture with contact); the round meter with the HUD view, checked here on a lap race;
+  Photo pause with Photo Travel's views (R6). Where tagged, their `objectToView` is the position they are placed
+  by, and a 0049FAC8 model's 0049E480 / 0049E548 composition is checked against R1's rule.
 - **The car light maps** (lane A, from the code, 2026-11-08; the architect's call (A)). `render_cars` (00340950)
   calls, per car with its light context enabled, 0038E7F8 (fills the context from the course's light table near
   the car: up to six lamps) and 0038F5D0, which binds the car's light-map target (a 256 x 256 `GSBuffer` on large
@@ -168,7 +175,8 @@ their 0049E480 / 0049E548 composition follows R1's rule.
   natively), and lights from the context's lamps (a third source of course lamps beside `entries2[]` and the
   billboards, only if F2 finds lamps missing; lane F says).
 Depends: A3, R6. Acceptance: `REL`; `ORIG`; `SCENE` on the showroom and photo captures; each env face's views bound
-to the 128 x 256 env target; `runsAfterInstance == 0` in race frames once both paths send `Instance`s; on Route 5
+to the 128 x 256 env target; `runsAfterInstance == 0` in race frames without contact (met on Route 5 night) and with
+the round meter on a lap race; on Route 5
 night, `viewSplitTargets` and `viewAuxiliaryDraws` unchanged by the light maps and `viewLightMapDraws` reported.
 
 **A7: Light records (M).** Sources, corrected by lane A from the code (2026-11-08, a scan of the ELF for every
@@ -244,7 +252,8 @@ Depends: A3; step 2 also A6, A9, D6. Acceptance:
 **A8: Emitter records (M).** `RaceSmoke::update` 0x003E7A58, `SparkParticle::Update` 0x003C1430,
 `ParticleManager::Update` 0x003C2780 (drafts). Depends: A3, R2. Acceptance: `REL`; `ORIG`; on a race capture with
 tyre smoke and sparks: emitters per frame reported, positions within the projected bounds of the sprites the GS
-path draws for them.
+path draws for them. The sparks' draws through 0049FAC8 / 00497838 (A6) are tagged here, as an `Instance` with a
+particle flag or by the `Emitter` record, decided on that capture; `runsAfterInstance == 0` on it.
 
 **A9: Vehicle record (S).** From the per-car state D6 found, sent at the kick in `FrameEnd`'s own block, before
 `FrameEnd` (CONTRACTS a.5 rule 4; `runtime/frame.cpp`, lane A reviews). Depends: D6. Acceptance: `REL`; `ORIG`;
