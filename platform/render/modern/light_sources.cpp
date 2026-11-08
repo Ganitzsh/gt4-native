@@ -17,7 +17,9 @@ SourceDefaults sourceDefaults(uint8_t source) {
     case kSrcCarLightReflection: return {0.0f, 0.0f, 0.0f, false, true};   // GT4's picture of a light, not a light
     case kSrcSun: return {0.0f, 1.0f, 0.0f, true, true};
     case kSrcWarning: return {6.0f, 2.0f, 0.1f, true, true};
-    case kSrcOther: return {10.0f, 2.0f, 0.2f, true, true};                // sent as "other" on purpose
+    // Sent as "other" on purpose. A7 step 1a sends every car lamp this way (entries[] keeps neither the lamp group nor
+    // a direction): a point light all round the car, so as small and dim as a tail lamp until step 2's spots.
+    case kSrcOther: return {4.0f, 1.0f, 0.05f, true, true};
     default: return {0.0f, 0.0f, 0.0f, false, false};
     }
 }
