@@ -28,6 +28,9 @@ struct Test {
                                                    // what the original leaves there is a register's stale bits
     void *native = nullptr;   // another native version to run instead of the linked one (an older draft, a
                               // candidate fix) under its own name; the original side is the same either way
+    std::uint32_t double_addr = 0, double_size = 0;   // a region of doubles (8-byte steps from double_addr), compared
+                                                      // as doubles: within 1e-12 relative is rounding, 1e-6 drift,
+                                                      // when `floats` (the EE's soft-float against x87 doubles)
 };
 
 void add(const Test &t);

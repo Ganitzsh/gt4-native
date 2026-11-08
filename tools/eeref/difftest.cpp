@@ -253,6 +253,34 @@ bool run(const Test &t, int trials) {
         };
         for (int r = 0; r < 4; ++r)
             for (std::uint32_t k = 0; k < regions[r].size; k += 4) {
+                const std::uint32_t a = regions[r].addr + k;
+                if (t.double_size && a >= t.double_addr && a - t.double_addr <= t.double_size - 8 &&
+                    ((a - t.double_addr) & 7) == 0 && k + 8 <= regions[r].size) {
+                    std::uint64_t xb, yb;   // one double: compared whole, not as two unrelated words
+                    std::memcpy(&xb, &native.mem[r][k], 8);
+                    std::memcpy(&yb, &original.mem[r][k], 8);
+                    if (xb != yb) {
+                        double x, y;
+                        std::memcpy(&x, &xb, 8);
+                        std::memcpy(&y, &yb, 8);
+                        const double m = std::fmax(std::fabs(x), std::fabs(y));
+                        if (t.floats && std::fabs(x - y) <= 1e-12 * m) {
+                            ++rounding;
+                        } else if (t.floats && std::fabs(x - y) <= 1e-6 * m + 1e-9) {
+                            ++drifted;
+                        } else {
+                            if (same) {
+                                where = regions[r].name;
+                                at = a;
+                                na = static_cast<std::uint32_t>(xb >> 32);
+                                oa = static_cast<std::uint32_t>(yb >> 32);
+                            }
+                            same = false;
+                        }
+                    }
+                    k += 4;
+                    continue;
+                }
                 std::uint32_t x, y;
                 std::memcpy(&x, &native.mem[r][k], 4);
                 std::memcpy(&y, &original.mem[r][k], 4);
