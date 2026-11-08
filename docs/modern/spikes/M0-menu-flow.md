@@ -88,7 +88,8 @@ so it shows the next project the finished one chose.
 
 ## 6. Open points (each before the ticket named)
 
-1. **Page detection** (M8): which page of `gtmode` (map, Home, event maps) and of `boot` (opening, mode select) is
+1. ~~**Page detection**~~ (M8): answered for `gtmode`, section 9 (`boot`'s pages are unnamed: the mode select is
+   M8's follow-up). Was: which page of `gtmode` (map, Home, event maps) and of `boot` (opening, mode select) is
    up. Candidates in matched code: `MGame.major_menu_page` (001626B0) and the page natives `pushPage` 0022BCE0 and
    `closePage` 0022BD98 (0022BC20 is a corrected draft: not hooked). One more logging run.
    Section 7: the major menu page is not it (nothing sets it between the map and Home).
@@ -143,3 +144,25 @@ Euro race 2, lane A's route) and `r5_saves` (Arcade, licenses), with `--set ui.p
   Continue and Triangle go on (3), Exit leaves through each mode's own switch (4: the GT mode result, the time
   trial's and the single race's menus), Retry restarts the license test (5). Settings shows disabled: the host does
   not answer the page's schema request before M4.
+
+## 9. The page up, measured for M8 (2026-11-08)
+
+**Method.** Three local logging builds (never pushed) reading, from the menu tick, the menu project's pages on every
+change; headless live sessions from copies of `r5_saves`: Home, the map, the License Center and back, Home and back,
+GT Auto and back, an Error dialog over the map (Extreme Events, locked) opened and closed, Start on the map and on
+GT Auto.
+
+- **Where the pages are.** The menu tick's project (the menu object's + 0x70) is the update context
+  (`mUpdateContextPS2`). Its render context (`mRenderContextPS2`, vtable 00663BE0) is at **+ 0xBC**, and its + 0x10
+  points back. The render context keeps its pages on a **stack**, a vector at + 0x28 (begin) and + 0x2C (end): one
+  entry on a page, two with a dialog over it, empty for a few VBlanks between pages.
+- **A page** is a root window (`mRootWindow`, vtable 00665418). **+ 0xE0 points to its name**: `HOME`, `MAP`,
+  `LICENSE`, `GTAUTO`; the Error dialog's is `keep`; `boot`'s pages have none. **+ 0x98 bit 0x00100000** is set while
+  the page is the active one (cleared when another opens, and on a closed dialog). **+ 0x00** is 2 at rest, 3
+  under a dialog, 4, 5 and 7 opening or closing.
+- `getCurrentPage` (0022BE00, `*(render context + 0x38)`'s slot) is the **last page opened, not the top**: after the
+  dialog closed it still held the dialog until GT Auto opened. The stack's top is the page up.
+- **The map is up** when the stack's top is named `MAP`, is active and at rest. Checked through every step: true on
+  the map only, false under the dialog and while it closes, on Home, GT Auto, the License Center and between pages.
+  The map's root window kept its address across returns within the project.
+- **Start** on the map and on GT Auto changes nothing in GT4 (no page change, nothing logged).

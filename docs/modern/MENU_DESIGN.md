@@ -164,11 +164,13 @@ Each hook is a `game_src` copy of a matched function with one added call, guarde
    GT4's own exit. The hub opens over the project rather than in its place because a menu project is what runs the
    menu update the pages tick in and keeps GT4 drawing frames; the cost is GT4's Options loading first.
 2. **Start on the GT mode map.** While project `"gtmode"` is on its map page, Start opens the hub. The pad hook
-   (section 3.3) sees Start's edge before GT4's `MenuControl` does and swallows it. What Start does there today is
-   [U]. Decision (coordinator for the owner, 2026-11-08): if Start already opens something there, Settings becomes
-   an item of it; Select is used only if Start opens nothing. If what Start opens is a scripted page, the item is
-   ours, drawn beside GT4's list and reached with a button its prompt shows, since GT4's scripted lists are not
-   edited (M8 says which case M0 found).
+   (section 3.3) sees Start's edge before GT4's `MenuControl` does and swallows it. Start does nothing there in GT4
+   (M0, M8), so Start opens the hub. The rule (coordinator for the owner, 2026-11-08; the owner asked for Start on the
+   GT mode map): where Start is free, Start opens the hub; where Start already opens a GT4 menu, Settings becomes an
+   item of that menu; Select only on a screen where Start does something else and there is no menu to add to. The map
+   is read, not hooked (M0 section 9): the top of the menu project's page stack, a root window named `MAP`, active and
+   at rest, so a dialog over the map, Home and every other page are not it; the pad thread takes Start only while the
+   menu tick saw the map within two VBlanks. With `ui.entry = integrated` only (3.8).
 3. **The mode select at game start.** Its Options item as in 1. If it has none [U], Start there as in 2.
 4. **The race pause.** `ui.pause = native` (presets low to ultra from M9, 3.8): the copy of `RacePause::update`
    (003C3820) keeps GT4's pause (the race frozen by `RaceBase + 0xCD8`, the course clock stopped) but answers with
