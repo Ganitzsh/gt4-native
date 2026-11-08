@@ -243,10 +243,11 @@ else()
 endif()
 
 # The lighting's CPU parts (platform/render/modern, tickets F2 and F2b): the light sources' defaults, the gather into
-# the light list, the course lamps from the meshes and their glow class. No GPU; the host and the tests link it, so
+# the light list, and the course lamps (the billboards' glow class, and the promotion of the glow billboards'
+# candidates). No GPU; the host and the tests link it, so
 # each is compiled once.
 add_library(gt4_lighting STATIC platform/render/modern/light_sources.cpp platform/render/modern/lights_gather.cpp
-    platform/render/modern/course_lamps.cpp platform/render/modern/course_lamp_pass.cpp
+    platform/render/modern/course_lamp_pass.cpp
     platform/render/modern/glow_classifier.cpp)
 target_include_directories(gt4_lighting PUBLIC platform/render/modern include)
 target_link_libraries(gt4_lighting PUBLIC gt4_mesh_cache)
@@ -616,9 +617,9 @@ add_test(NAME material_table COMMAND gt4_material_table_test)
   add_test(NAME lights_cluster COMMAND gt4_lights_cluster_test)
   set_tests_properties(lights_cluster PROPERTIES SKIP_RETURN_CODE 77)
   # The light gather (ticket F2): Light records into the light list, CPU only.
-  # The lighting's CPU parts (gt4_lighting), each test CPU only: the light gather (F2), the course's lamps from a
-  # mesh item (F2b), and F2b's glow class and lamp pass on a synthetic scene frame.
-  foreach(test IN ITEMS lights_gather course_lamps course_lamp_pass)
+  # The lighting's CPU parts (gt4_lighting), each test CPU only: the light gather (F2), and F2b's glow class and lamp
+  # pass on a synthetic scene frame.
+  foreach(test IN ITEMS lights_gather course_lamp_pass)
     add_executable(gt4_${test}_test tests/${test}.cpp)
     target_link_libraries(gt4_${test}_test PRIVATE gt4_lighting)
     target_compile_definitions(gt4_${test}_test PRIVATE $<$<BOOL:${WIN32}>:_CRT_SECURE_NO_WARNINGS>)

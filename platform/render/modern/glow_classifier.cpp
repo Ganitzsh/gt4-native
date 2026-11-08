@@ -18,8 +18,10 @@ GlowScores glowTexture(const scene::TextureSummary& s) {
     if (!s.known) return g;
     g.centreToRim = s.centreToRim;
     g.alphaCore = s.alphaCore / 255.0f;
-    // A glow: its centre at least three times its rim, and some texels at alpha 0x80 (the core the alpha test passes).
-    g.glow = g.centreToRim >= 3.0f && s.alphaCore > 0;
+    // A glow: its centre at least three times its rim. (No opaque core required: on lane A's step 1b capture the
+    // street-lamp billboards' glow texture has no texel at alpha 0x80, centre/rim 406; the one flat texture with the
+    // lamp state there, a sign, has 0.77.)
+    g.glow = g.centreToRim >= 3.0f;
     return g;
 }
 

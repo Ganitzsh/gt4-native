@@ -20,6 +20,9 @@ SourceDefaults sourceDefaults(uint8_t source) {
     // A car lamp whose group is not known (A7 step 1a: entries[] keeps neither the group nor a direction): a point
     // light all round the car, so as small and dim as a tail lamp until step 2's headlight spots.
     case kSrcCarLamp: return {4.0f, 1.0f, 0.05f, true, true};
+    // A course billboard (A7 step 1b): a candidate, not a light. F2b's lamp pass promotes the glows to kSrcCourseGlow;
+    // what is left (trees, signs) never lights.
+    case kSrcBillboard: return {0.0f, 0.0f, 0.0f, false, true};
     case kSrcOther: return {10.0f, 2.0f, 0.2f, true, true};                // sent as "other" on purpose
     default: return {0.0f, 0.0f, 0.0f, false, false};
     }

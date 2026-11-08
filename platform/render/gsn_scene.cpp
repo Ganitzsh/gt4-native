@@ -199,9 +199,7 @@ struct GsnScene::Impl {
     // F2b: the course's street lamps from B6's meshes (course_lamp_pass.h), and its totals (printed at exit)
     render::CourseLampPass lampPass;
     struct LampTotals {
-        uint64_t frames = 0, lamps = 0, glowItems = 0, extracted = 0, cacheHits = 0, meshMissing = 0, cacheClears = 0,
-                 skewQuads = 0, degenerate = 0;
-        uint32_t largestItemQuads = 0;
+        uint64_t frames = 0, candidates = 0, kept = 0, dropped = 0, noInstance = 0, merged = 0, mergedAgain = 0;
         double microseconds = 0.0;   // the pass's time on the render thread
     } lampTotals;
     // gsn_light.comp's push constants from `night` on (offset 40): mirrored field for field.
@@ -498,16 +496,14 @@ struct GsnScene::Impl {
         if (framesSkipped) std::printf("Frames skipped behind the game: %llu\n", static_cast<unsigned long long>(framesSkipped));
         if (lampTotals.frames) {   // F2b's course lamps (per execution: an interpolated present runs a list again)
             const LampTotals& t = lampTotals;
-            std::printf("F2b course lamps: %llu night executions, %llu lamps (%.1f an execution) from %llu glow items, %.1f us "
-                        "an execution; extracted %llu, reused %llu, mesh missing %llu, cache clears %llu; largest item %u quads, "
-                        "skew quads %llu, degenerate %llu\n",
-                        static_cast<unsigned long long>(t.frames), static_cast<unsigned long long>(t.lamps),
-                        double(t.lamps) / double(t.frames), static_cast<unsigned long long>(t.glowItems),
-                        t.microseconds / double(t.frames),
-                        static_cast<unsigned long long>(t.extracted), static_cast<unsigned long long>(t.cacheHits),
-                        static_cast<unsigned long long>(t.meshMissing), static_cast<unsigned long long>(t.cacheClears),
-                        t.largestItemQuads, static_cast<unsigned long long>(t.skewQuads),
-                        static_cast<unsigned long long>(t.degenerate));
+            std::printf("F2b course lamps: %llu night executions, %llu billboard candidates: %llu lamps (%.1f an execution), "
+                        "%llu not glows, %llu without an instance or material, %llu already a game record (%llu of them a "
+                        "second time); %.1f us an execution\n",
+                        static_cast<unsigned long long>(t.frames), static_cast<unsigned long long>(t.candidates),
+                        static_cast<unsigned long long>(t.kept), double(t.kept) / double(t.frames),
+                        static_cast<unsigned long long>(t.dropped), static_cast<unsigned long long>(t.noInstance),
+                        static_cast<unsigned long long>(t.merged), static_cast<unsigned long long>(t.mergedAgain),
+                        t.microseconds / double(t.frames));
         }
         if (counters.flareDrawsSkipped || counters.glareDrawsSkipped)
             std::printf("N4 draws skipped onto the picture: flare %llu, glare %llu\n",
@@ -2607,28 +2603,24 @@ bool GsnScene::Impl::nightPrepare(const gsn::FrameList::Lighting& l, const Scene
     if (!(std::fabs(k.focal[0]) > 0.0f && std::fabs(k.focal[1]) > 0.0f && k.distanceA != 0.0f)) return false;
     // The lamps: the view's records, and the test lamps.
     nightRecords.assign(sf.lights.begin(), sf.lights.end());
-    nightHostFrom = nightRecords.size();   // (the course lamps and the test lamps follow the game's: no kFromGame)
-    // F2b: the main view's street lamps, from the course meshes B6 named (the list's scene cache, shared with the front
-    // end: meshes by id, the materials' glow class and colour)
+    // (the test lamps follow the game's records: no kFromGame. kFromGame means 'came through a game record': F2b's
+    // promoted billboard candidates keep it, as A7 step 1b sent them)
+    nightHostFrom = nightRecords.size();
+    // F2b: the main view's street lamps: A7 step 1b's billboard candidates whose instance's material has the glow class
+    // become kSrcCourseGlow (the list's scene cache, shared with the front end, holds the classes)
     if (const std::shared_ptr<const scene::SceneCache> cache = frame.sceneCache) {
-        render::LampSources sources;
-        sources.mesh = [&cache](scene::MeshId id) { return cache->meshes().mesh(id); };
-        sources.classes = [&cache](scene::MaterialId id) { return cache->materials().classes(id); };
         render::CourseLampPass::Stats ls;
         const auto started = std::chrono::steady_clock::now();
-        lampPass.lights(sf, view->id, sources, nightRecords, &ls);
+        lampPass.promote(sf, view->id, [&cache](scene::MaterialId id) { return cache->materials().classes(id); }, nightRecords, &ls);
         LampTotals& t = lampTotals;
         t.microseconds += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - started).count();
         ++t.frames;
-        t.lamps += ls.lamps;
-        t.glowItems += ls.glowItems;
-        t.extracted += ls.extracted;
-        t.cacheHits += ls.cacheHits;
-        t.meshMissing += ls.meshMissing;
-        t.cacheClears += ls.cacheClears;
-        t.skewQuads += ls.skewQuads;
-        t.degenerate += ls.degenerate;
-        t.largestItemQuads = std::max(t.largestItemQuads, ls.largestItemQuads);
+        t.candidates += ls.candidates;
+        t.kept += ls.kept;
+        t.dropped += ls.dropped;
+        t.noInstance += ls.noInstance;
+        t.merged += ls.merged;
+        t.mergedAgain += ls.mergedAgain;
     }
     if (const uint32_t n = render::testLightCount()) {
         const std::vector<gfx::scene::Light> test = render::testLights(view->id, n);

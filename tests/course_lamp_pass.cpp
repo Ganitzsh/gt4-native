@@ -1,7 +1,7 @@
 // F2b's glow class and lamp pass (PLAN.md F2b) on synthetic data: a texture summary of a glow and of a flat texture;
-// the street-lamp draw's signature; the classifier's bit and colour; the lamp pass on a SceneFrame with two instances
-// of one mesh (one extraction, then a cache hit), their transforms, a non-glow item, a missing mesh; and the gather's
-// host records without kFromGame.
+// the street-lamp draw's signature; the classifier's bit and colour; the lamp pass on a SceneFrame's billboard
+// candidates (A7 step 1b): a glow promoted with its colour, a tree left, a candidate without an instance, one merged with
+// a game record (entries2[]), another view's left alone; and the gather: promoted lamps lit, candidates never.
 #include "course_lamp_pass.h"
 #include "glow_classifier.h"
 #include "gt4/render/light_list.h"
@@ -10,7 +10,6 @@
 
 #include <cmath>
 #include <cstdio>
-#include <memory>
 #include <string>
 #include <vector>
 
@@ -43,33 +42,19 @@ std::vector<uint32_t> texture(uint32_t w, bool glow) {
     return t;
 }
 
-scene::Mesh lampMesh() {   // item 0: two lamps (quads) at (0, 5, 0) and (10, 5, 0); item 1: a quad that is not a glow
-    scene::Mesh mesh;
-    auto quad = [&](float x, float y, float h) {
-        const uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
-        const float c[4][2] = {{-h, -h}, {h, -h}, {h, h}, {-h, h}};
-        for (const auto& p : c) {
-            scene::MeshVertex v;
-            v.position[0] = x + p[0];
-            v.position[1] = y + p[1];
-            v.colour = 0x80804080u;   // R 0x80 (1.0), G 0x40 (0.5), B 0x80 (1.0)
-            mesh.vertices.push_back(v);
-        }
-        for (uint32_t i : {0u, 1u, 2u, 0u, 2u, 3u}) mesh.indices.push_back(base + i);
-    };
-    quad(0.0f, 5.0f, 0.5f);
-    quad(10.0f, 5.0f, 0.5f);
-    scene::MeshItem a;
-    a.firstIndex = 0;
-    a.indexCount = 12;
-    mesh.items.push_back(a);
-    quad(50.0f, 0.0f, 2.0f);
-    scene::MeshItem b;
-    b.firstIndex = 12;
-    b.indexCount = 6;
-    mesh.items.push_back(b);
-    mesh.key.packets = 0x1234;
-    return mesh;
+gfx::scene::Light light(uint16_t view, uint8_t source, uint32_t id, float x, float y, float z, float half) {
+    gfx::scene::Light l{};
+    l.view = view;
+    l.kind = gfx::scene::kLightPoint;
+    l.source = source;
+    l.id = id;
+    l.position[0] = x;
+    l.position[1] = y;
+    l.position[2] = z;
+    l.width = l.height = half;
+    l.colour[0] = l.colour[1] = l.colour[2] = 1.0f;
+    l.intensity = 1.0f;
+    return l;
 }
 
 }  // namespace
@@ -83,6 +68,9 @@ int main() {
     expect(glowTexture(glowSum).glow, "a glow texture passes");
     expect(flatSum.known && near(flatSum.centreToRim, 1.0f, 0.05f) && !glowTexture(flatSum).glow, "a flat texture does not");
     expect(!glowTexture(scene::TextureSummary{}).glow, "no summary: not a glow");
+    scene::TextureSummary noCore = glowSum;   // the street-lamp billboards' glow: no texel at alpha 0x80
+    noCore.alphaCore = 0;
+    expect(glowTexture(noCore).glow, "a radial glow without an opaque core is a glow");
     const std::vector<uint32_t> bigTex = texture(512, true);   // sampled every 4th texel each way
     const scene::TextureSummary bigSum = scene::summarizeTexture(bigTex.data(), 512, 512);
     expect(bigSum.width == 512 && glowTexture(bigSum).glow && near(bigSum.centreToRim, glowSum.centreToRim, 0.2f * glowSum.centreToRim),
@@ -133,76 +121,52 @@ int main() {
     const GlowClassifier::Stats cs = classifier.stats();
     expect(cs.judged == 5 && cs.signature == 4 && cs.glows == 2 && cs.noSummary == 1 && cs.textures == 2, "the classifier's counts");
 
-    // 4. The lamp pass on a SceneFrame: view 1, two instances of mesh 7 (item 0 a glow, item 1 not), one of mesh 9 whose
-    // mesh is gone.
-    auto mesh = std::make_shared<const scene::Mesh>(lampMesh());
+    // 4. The lamp pass on a SceneFrame: two kInstBillboard instances, serial 5 (material 100, a glow) and serial 6
+    // (material 101, a tree); candidates naming them, one naming no instance, one at a game kSrcCourseGlow record, one
+    // in another view.
+    using namespace gfx::scene;
     scene::SceneFrame sf;
-    scene::ViewData v;
-    v.id = 1;
-    v.firstInstance = 0;
-    v.instanceCount = 3;
-    sf.views.push_back(v);
-    scene::InstanceData a;
-    a.view = 1;
-    a.mesh = 7;
-    a.firstMaterial = 0;
-    a.materialCount = 2;
-    a.objectToView.m[3][2] = -10.0f;   // 10 units ahead
-    scene::InstanceData b = a;
-    b.object = 2;
-    b.axisScale[0] = b.axisScale[1] = b.axisScale[2] = 2.0f;   // twice the size, 20 to the left
-    b.objectToView.m[3][0] = -20.0f;
-    scene::InstanceData gone = a;
-    gone.object = 3;
-    gone.mesh = 9;
-    sf.instances = {a, b, gone};
-    sf.materials = {100, 101};   // all three share materials 100 (glow) and 101
-    LampSources sources;
-    sources.mesh = [&](scene::MeshId id) { return id == 7 ? mesh : nullptr; };
-    const uint8_t mean[3] = {255, 128, 64};   // (1, 0.5, 0.25)
-    sources.classes = [&](scene::MaterialId id) { return id == 100 ? glowClasses(mean) : 0u; };
+    scene::InstanceData lamps, trees;
+    lamps.serial = 5;
+    lamps.view = 1;
+    lamps.firstMaterial = 0;
+    lamps.materialCount = 1;
+    trees = lamps;
+    trees.serial = 6;
+    trees.firstMaterial = 1;
+    sf.instances = {lamps, trees};
+    sf.materials = {100, 101};
+    const uint8_t mean[3] = {255, 128, 64};   // the glow texture's mean (1, 0.5, 0.25)
+    auto classes = [&](scene::MaterialId id) { return id == 100 ? glowClasses(mean) : 0u; };
+    std::vector<Light> records;
+    records.push_back(light(1, kSrcCourseGlow, 0x900, 10.0f, 5.0f, -10.0f, 0.0f));   // a game record (entries2[])
+    records.push_back(light(1, kSrcBillboard, 5, 0.0f, 5.0f, -10.0f, 1.0f));         // a lamp
+    records[1].colour[1] = 2.0f;                                                     // (its tint: a channel up to 2)
+    records.push_back(light(1, kSrcBillboard, 6, 3.0f, 2.0f, -12.0f, 2.0f));         // a tree
+    records.push_back(light(1, kSrcBillboard, 99, 4.0f, 5.0f, -10.0f, 1.0f));        // no such instance
+    records.push_back(light(1, kSrcBillboard, 5, 10.3f, 5.0f, -10.0f, 0.5f));        // the game record's lamp
+    records.push_back(light(2, kSrcBillboard, 5, 0.0f, 5.0f, -10.0f, 1.0f));         // another view
+    records.push_back(light(1, kSrcBillboard, 5, 0.8f, 5.0f, -10.0f, 1.0f));         // a second head on the same post
+    records.push_back(light(1, kSrcBillboard, 5, 9.8f, 5.0f, -10.0f, 0.5f));         // a second billboard at the game lamp
     CourseLampPass pass;
-    std::vector<gfx::scene::Light> lights;
     CourseLampPass::Stats s;
-    pass.lights(sf, 1, sources, lights, &s);
-    expect(s.instances == 3 && s.glowItems == 3 && s.lamps == 4, "two instances' two lamps; the gone mesh's none");
-    expect(s.extracted == 1 && s.cacheHits == 1 && s.meshMissing == 1, "one extraction, a cache hit, a missing mesh counted");
-    expect(lights.size() == 4, "four lights");
-    if (lights.size() == 4) {
-        const gfx::scene::Light& l = lights[0];
-        expect(l.view == 1 && l.source == gfx::scene::kSrcCourseGlow && l.kind == gfx::scene::kLightPoint, "a course glow point light");
-        expect(near(l.position[0], 0.0f) && near(l.position[1], 5.0f) && near(l.position[2], -10.0f), "placed by objectToView");
-        expect(near(l.width, 0.5f * std::sqrt(2.0f)) && near(l.height, l.width), "half the quad's diagonal");
-        expect(near(l.colour[0], 1.0f) && near(l.colour[1], 128.0f / 255.0f * 0.5f) && near(l.colour[2], 64.0f / 255.0f), "texture colour x vertex colour");
-        const gfx::scene::Light& big = lights[3];   // instance b's second lamp: (10, 5, 0) x 2 + (-20, 0, -10)
-        expect(near(big.position[0], 0.0f) && near(big.position[1], 10.0f) && near(big.position[2], -10.0f) &&
-                   near(big.width, std::sqrt(2.0f)),
-               "the axis scale scales the position and the radius");
-    }
-    // the next frame: everything from the caches
-    lights.clear();
-    pass.lights(sf, 1, sources, lights, &s);
-    expect(s.extracted == 0 && s.cacheHits == 2 && s.lamps == 4, "the next frame extracts nothing");
-    pass.lights(sf, 2, sources, lights, &s);
-    expect(s.lamps == 0, "another view: none");
+    pass.promote(sf, 1, classes, records, &s);
+    expect(s.candidates == 6 && s.kept == 2 && s.dropped == 1 && s.noInstance == 1 && s.merged == 2 && s.mergedAgain == 1,
+           "the candidates' counts (a second billboard at one game lamp counted)");
+    expect(records[1].source == kSrcCourseGlow && near(records[1].colour[0], 1.0f) &&
+               near(records[1].colour[1], 2.0f * 128.0f / 255.0f) && near(records[1].colour[2], 64.0f / 255.0f),
+           "a glow billboard: a course lamp, the texture's mean times its own colour");
+    expect(records[2].source == kSrcBillboard && records[3].source == kSrcBillboard, "a tree and an unknown instance stay candidates");
+    expect(records[4].source == kSrcBillboard && near(records[0].width, 0.5f) && near(records[0].position[0], 10.0f),
+           "a billboard at a game record: one lamp, the record's position, the billboard's size");
+    expect(records[5].source == kSrcBillboard, "another view's candidate left alone");
+    expect(records[6].source == kSrcCourseGlow, "two lamp heads close together stay two lamps (no merge between candidates)");
 
-    // 5. The gather: the game's records keep kFromGame, the host's lamps don't.
-    std::vector<gfx::scene::Light> records;
-    gfx::scene::Light game{};
-    game.view = 1;
-    game.kind = gfx::scene::kLightPoint;
-    game.source = gfx::scene::kSrcWarning;
-    game.position[2] = -5.0f;
-    game.colour[0] = 1.0f;
-    game.intensity = 1.0f;
-    records.push_back(game);
-    records.insert(records.end(), lights.begin(), lights.end());
+    // 5. The gather: the promoted lamp and the game record light; the candidates never do.
     std::vector<GpuLight> out;
     GatherStats gs;
-    gatherLights(records.data(), records.size(), 1, 0.5f, 500.0f, 1.0f, out, gs, 1);
-    size_t fromGame = 0, host = 0;
-    for (const GpuLight& g : out) (g.flags & kFromGame ? fromGame : host) += 1;
-    expect(out.size() == 5 && fromGame == 1 && host == 4, "the host's course lamps without kFromGame");
+    gatherLights(records.data(), records.size(), 1, 0.5f, 500.0f, 1.0f, out, gs);
+    expect(out.size() == 3 && gs.notLights == 4, "three lights (two lamps, the game record); four candidates not lit");
 
     std::printf("course_lamp_pass: %s\n", failures ? "FAILED" : "all checks passed");
     return failures ? 1 : 0;

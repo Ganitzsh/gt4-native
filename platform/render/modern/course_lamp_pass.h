@@ -1,61 +1,41 @@
 #pragma once
-// F2b's lamp pass (PLAN.md F2b): the course's street lamps as lights. For a view's instances with a mesh (B6), each item
-// whose material has the glow class (glow_classifier.h) gives its lamps (course_lamps.h), placed with the instance's
-// transform into view space and sent on as Light records (kSrcCourseGlow) beside the game's own (A7), for the gather
-// (lights_gather.h, without kFromGame). The render thread's: what it learns is cached per material id (classes and
-// colour never change for an id) and per (mesh key, item) (an evicted mesh asked for again comes back under a new id).
-#include "course_lamps.h"
+// F2b's lamp pass (PLAN.md F2b): the course's street lamps. GT4 draws their glows as course billboards
+// (BillboardSet__render), and A7 step 1b sends each billboard as a kSrcBillboard candidate: its centre and size in the
+// view's space, its id the serial of the kInstBillboard instance its flush drew. A candidate whose instance's material
+// has the glow class (glow_classifier.h, set by B6's classifier) becomes a kSrcCourseGlow light; the others (trees,
+// signs) stay candidates, which the gather never lights. Render thread; works on the frame's Light records in place.
 #include "gt4/gfx.h"
 #include "scene_frame.h"
 
 #include <cstdint>
 #include <functional>
-#include <memory>
 #include <unordered_map>
 #include <vector>
 
 namespace gt4::render {
 
-// Where the pass reads B6's caches (SceneCache: MeshCache::mesh, MaterialTable::classes, whose glow bits carry the
-// glow's colour: glow_classifier.h). Functions, so a test can give a synthetic frame.
-struct LampSources {
-    std::function<std::shared_ptr<const scene::Mesh>(scene::MeshId)> mesh;   // null: dropped or not decoded
-    std::function<uint32_t(scene::MaterialId)> classes;                        // 0: none or unknown
-};
-
 class CourseLampPass {
 public:
     struct Stats {
-        uint32_t instances = 0;          // the view's instances with a mesh
-        uint32_t glowItems = 0;          // items with the glow class
-        uint32_t lamps = 0;              // lights sent
-        uint32_t meshMissing = 0;        // glow items whose mesh was not there (dropped, pending): no lamps this frame
-        uint32_t extracted = 0, cacheHits = 0;   // (mesh key, item) extractions this frame, and reuses
-        uint32_t largestItemQuads = 0, skewQuads = 0, degenerate = 0;   // of this frame's extractions
-        uint32_t cacheClears = 0;        // the (mesh key, item) cache went past its bound and was cleared this call
+        uint32_t candidates = 0;   // the view's kSrcBillboard records
+        uint32_t kept = 0;         // promoted to kSrcCourseGlow
+        uint32_t dropped = 0;      // their instance's material is not a glow (left as candidates: not lit)
+        uint32_t noInstance = 0;   // no instance with that serial in the frame, or it has no material (not lit)
+        uint32_t merged = 0;       // promoted ones that were already a game kSrcCourseGlow record (entries2[]): one lamp
+        uint32_t mergedAgain = 0;  // of them, into a record another candidate had already merged into this call
     };
-    // Appends the lamps of view `view` of `frame` to `out`, as Light records in that view's space.
-    void lights(const scene::SceneFrame& frame, uint16_t view, const LampSources& sources, std::vector<gfx::scene::Light>& out,
-                Stats* stats = nullptr);
+    // In `records` (the frame's Lights): each kSrcBillboard candidate of view `view` is promoted or left (above). A
+    // promoted candidate within its billboard's half size of a game kSrcCourseGlow record of the view (A7 step 1a's
+    // entries2[]) is that lamp: the record keeps its position and blink and takes the billboard's size, and the
+    // candidate goes back to being a candidate (not lit twice). `classes` reads MaterialTable::classes.
+    void promote(const scene::SceneFrame& frame, uint16_t view, const std::function<uint32_t(scene::MaterialId)>& classes,
+                 std::vector<gfx::scene::Light>& records, Stats* stats = nullptr);
 
 private:
-    struct Material {
-        uint32_t classes = 0;
-        float colour[3] = {};
-    };
-    struct ItemKey {
-        scene::MeshKey mesh{};
-        uint32_t item = 0;
-    };
-    struct ItemKeyHash {
-        size_t operator()(const ItemKey& k) const { return scene::MeshKeyHash{}(k.mesh) * 31u + k.item; }
-    };
-    struct ItemKeyEqual {
-        bool operator()(const ItemKey& a, const ItemKey& b) const { return a.item == b.item && a.mesh == b.mesh; }
-    };
-    std::unordered_map<scene::MaterialId, Material> materials;
-    std::unordered_map<scene::MeshId, scene::MeshKey> keys;   // ids are never reused
-    std::unordered_map<ItemKey, std::vector<CourseLamp>, ItemKeyHash, ItemKeyEqual> lampsByItem;
+    std::unordered_map<scene::MaterialId, uint32_t> classesById;   // never change for an id (bounded: cleared past 100k)
+    std::unordered_map<uint32_t, uint32_t> bySerial;              // this frame's instances by serial (rebuilt per call)
+    std::vector<size_t> gameLamps;                                 // the game's kSrcCourseGlow records of the view (per call)
+    std::vector<uint8_t> mergedInto;                               // records a candidate merged into (per call)
 };
 
 }  // namespace gt4::render

@@ -32,7 +32,7 @@ inline void glowColour(uint32_t classes, float out[3]) {
 // (the glow's core writes Z), Z written, the batch unlit (lighting body 0).
 bool glowSignature(const scene::ItemSource& item);
 
-// The texture check: bright in the centre against the rim, with an opaque core (alpha 0x80) for the alpha test to pass.
+// The texture check: bright in the centre against the rim (a radial glow); the opaque core is reported, not required.
 struct GlowScores {
     float centreToRim = 0.0f;
     float alphaCore = 0.0f;   // 0..1
