@@ -142,15 +142,15 @@ int main() {
         small.plan(none, spans, st, cp);
         check(spans.empty() && small.stats().viewsNotSubstituted == 1, "a cut view: wholly on the GS path");
         for (const uint8_t role : {uint8_t(gt4::gfx::scene::kViewHud), uint8_t(gt4::gfx::scene::kViewMenu),
-                                   uint8_t(gt4::gfx::scene::kViewEnvCopy)}) {
+                                   uint8_t(gt4::gfx::scene::kViewEnvCopy), uint8_t(gt4::gfx::scene::kViewPhoto)}) {
             gsn::FrameList kept = makeList(cache);
             auto view = std::make_shared<scene::SceneView>(*kept.views[0].package);
             view->view.role = role;
             kept.views[0].package = view;
             small.plan(kept, spans, st, cp);
-            check(spans.empty(), "a HUD, menu or env-copy view: never substituted");
+            check(spans.empty(), "a HUD, menu, env-copy or photo view: never substituted");
         }
-        check(small.stats().viewsOfRoleKept == 3, "... and counted");
+        check(small.stats().viewsOfRoleKept == 4, "... and counted");
         for (const uint16_t flag : {uint16_t(gt4::gfx::scene::kInstLightMap), uint16_t(gt4::gfx::scene::kInstReflection)}) {
             gsn::FrameList out = makeList(cache);
             auto view = std::make_shared<scene::SceneView>(*out.views[0].package);

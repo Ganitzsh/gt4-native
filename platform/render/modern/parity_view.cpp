@@ -129,10 +129,12 @@ void ParityView::plan(const gsn::FrameList& list, std::vector<ParitySpan>& spans
     for (uint32_t viewIndex = 0; viewIndex < list.views.size(); ++viewIndex) {
         const gsn::FrameList::ViewOnList& view = list.views[viewIndex];
         if (!view.package) continue;
-        // Roles never substituted (CONTRACTS.md a.5): the HUD's 3D, menus' 3D, and an env face's copy into the shared env
-        // map (kViewEnvCopy: after the face's ViewEnd, pass = face): the GS path draws them.
+        // Roles never substituted (CONTRACTS.md a.5): the HUD's 3D, menus' 3D, an env face's copy into the shared env
+        // map (kViewEnvCopy: after the face's ViewEnd, pass = face), and Photo Travel's views (kViewPhoto, until B9
+        // handles them): the GS path draws them.
         const uint8_t role = view.package->view.role;
-        if (role == gfx::scene::kViewHud || role == gfx::scene::kViewMenu || role == gfx::scene::kViewEnvCopy) {
+        if (role == gfx::scene::kViewHud || role == gfx::scene::kViewMenu || role == gfx::scene::kViewEnvCopy ||
+            role == gfx::scene::kViewPhoto) {
             ++counters.viewsOfRoleKept;
             continue;
         }
