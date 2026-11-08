@@ -280,7 +280,11 @@ place, copied only on a miss) and its materials per item, into `FrameList::ViewO
     materials); the same object (`InstanceData::object`) keeps its mesh and material ids across race frames,
     counted; new meshes per frame after the race's first 300 frames near 0 outside the per-frame ones (after
     the first lap, for a lap-long capture or a live session);
-  - `PERF`: the front-end thread's added time with the split on reported, at most 0.5 ms a race frame;
+  - `PERF`: the front-end thread's added time with the split on, at most 0.5 ms a race frame at p95, measured as
+    the thread's CPU time (`QueryThreadCycleTime` on Windows, `CLOCK_THREAD_CPUTIME_ID` on Linux) beside the wall
+    clock, since the wall clock's p95 includes preemption (lane B measured 330 us mean, p95 538-743 us under load).
+    Cycles are converted with a one-time calibration against the high-resolution clock, said in the summary line,
+    and the margin under 0.5 ms is reported, not only pass or fail (headroom for the Odin under FEX);
   - `ORIG` and `PRESETS` identical.
 
 **B7: Parity view renderer (L).** `platform/render/modern/parity_view.cpp`, `shaders/modern_parity.*`: draws a
