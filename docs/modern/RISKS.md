@@ -183,6 +183,34 @@ in a debug colour; check by eye on cars, glass, chrome, course.
 
 **Time box.** 3 days.
 
+**Result (lane B, 2026-11-08; open until the showroom and photo census).** A spike (local, never pushed) ran
+hybrid at `original` on `race_grid43` and `race_boot` (day) and `a6r_r5` (night): for each substituted item its
+lighting body (`ModelJob::chain >> 16`), and for the N.L bodies the four light lanes (qwords 201..203 per lane,
+colours 205..208, ambient 204) through the instance's `objectToView` into view space; a debug view coloured each
+body (`GT4_R8_BODY=1` with `GT4_SIDE_VIEW=material`).
+- **Classes**, from what each body does (`gt4_lighting.glsl`'s `lightVertex`), for MaterialTable's classify hook:
+  - prelit: no chain (body 0, the course's bulk: 532,070 of `race_grid43`'s 977,197 items), 0x0B0 (the colour
+    unchanged: the rest of the course, mostly env faces), 0x1508 (scale, offset, limit) and 0x16F8 (fade). Baked
+    lighting: never relit, only shadowed and occluded;
+  - car paint: 0x10A8 and 0x12C8 (a sphere map or a map by quadrant from a matrix in 201..203; no lights);
+  - glossy: 0xCA8 and 0xEA0 (specular from the eye, one direction in 201..203);
+  - diffuse N.L: 0x0118, 0x0290, 0x0418 and 0x0B48 by day, 0x05B0, 0x0788 and 0x0960 at night; roughness from
+    the squarings (the power);
+  - projected: 0x1608, kept as GT4 draws it. A body not listed keeps GT4's colour.
+  The course is prelit everywhere, so B10 relights cars and objects and only darkens the course.
+- **Day lights:** in the N.L bodies, lane 0 and lane 2 are each one fixed directional light: 0.00 degrees between
+  every batch of a view, in all 697 lists of `race_grid43` and 1,666 of `race_boot` (lane 0 about (0.74, 0.48,
+  0.47) in view space on `race_grid43`); lanes 1 and 3 are empty; plus the ambient (204). Their colours are per
+  object (lane 0 from 10.6 to 49.3, the ambient from 4.5 to 17.9 between cars of one frame): GT4 scales them per
+  object. So there is no one global sun: B10 relights with both lanes and the ambient, each object's own colours
+  and the direction from the batches, no game record (`kSrcSun` stays reserved). How the per-instance light
+  colours reach the scene stage (the side pass or the instance table) is B10's question.
+- **Night:** no sun. All four lanes are per-object lights (up to 168 degrees apart within a view): the street lamps
+  as a direction per object, so lamps stay F2's.
+- **Open:** the showroom and photo census (lane B, next; R8 closes with it); with B10's first step, the untagged
+  draws at equal Z over items (B10's veiled question) and the error of colour divided by GT4's lighting factor
+  against the CPU renderers (B10's channel).
+
 ---
 
 ## R9: The game's reads of its scene target (B8's read switch: a table per reader)
