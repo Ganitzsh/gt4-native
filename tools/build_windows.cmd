@@ -2,8 +2,9 @@
 rem Build gt4-native on Windows with MSVC + Ninja (VS 2022 Build Tools): the SDL3 + Vulkan host and the tests.
 rem   tools\build_windows.cmd [Release|Debug] [extra CMake arguments]
 rem GT4_ARCH=x64 (default) or arm64. arm64 is a cross build from an x64 machine (PLAN.md C4): it needs the
-rem "MSVC v143 ARM64/ARM64EC build tools" component, compiles the shaders with the Vulkan SDK's glslang (it runs
-rem here; the arm64 one would not, cmake/HostDependencies.cmake), builds into build\host-windows-arm64-CONFIG and
+rem "MSVC v143 ARM64/ARM64EC build tools" component, compiles the shaders with a glslang that runs here (the arm64
+rem one would not, cmake/HostDependencies.cmake): GT4_GLSLANG_EXECUTABLE (an x64 build's, as CI does), else the Vulkan
+rem SDK's glslangValidator, builds into build\host-windows-arm64-CONFIG and
 rem runs no tests (the binaries do not run on x64). Windows ARM64 packages are built by CI.
 setlocal
 set CONFIG=%~1
@@ -28,8 +29,11 @@ call "%VSPATH%\Common7\Tools\VsDevCmd.bat" -arch=%GT4_ARCH% -host_arch=x64 -no_l
 cd /d "%~dp0.."
 set EXTRA=
 if defined CROSS (
-    if not exist "%VULKAN_SDK%\Bin\glslangValidator.exe" (echo An arm64 build needs the Vulkan SDK's glslangValidator ^(VULKAN_SDK^) & exit /b 1)
-    set EXTRA=-DCMAKE_SYSTEM_NAME=Windows -DCMAKE_SYSTEM_PROCESSOR=ARM64 "-DGT4_GLSLANG_EXECUTABLE=%VULKAN_SDK%\Bin\glslangValidator.exe"
+    if not defined GT4_GLSLANG_EXECUTABLE set "GT4_GLSLANG_EXECUTABLE=%VULKAN_SDK%\Bin\glslangValidator.exe"
+)
+if defined CROSS (
+    if not exist "%GT4_GLSLANG_EXECUTABLE%" (echo An arm64 build needs a glslang for this machine: GT4_GLSLANG_EXECUTABLE, or the Vulkan SDK's glslangValidator ^(VULKAN_SDK^) & exit /b 1)
+    set EXTRA=-DCMAKE_SYSTEM_NAME=Windows -DCMAKE_SYSTEM_PROCESSOR=ARM64 "-DGT4_GLSLANG_EXECUTABLE=%GT4_GLSLANG_EXECUTABLE%"
 )
 cmake -S . -B %BUILD% -G Ninja -DCMAKE_BUILD_TYPE=%CONFIG% -DGT4_BUILD_HOST=ON -DBUILD_TESTING=ON %EXTRA% %2 %3 %4 %5 || exit /b 1
 cmake --build %BUILD% --parallel || exit /b 1
