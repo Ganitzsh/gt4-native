@@ -139,7 +139,25 @@ void store_index(volatile uint64_t *index, uint64_t value) { __atomic_store_n(in
 }  // namespace
 
 bool link_open(const char *name) {
-    HANDLE h = OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE, name);
+    // --link NAME: the host's named section (Local\gt4_link_<pid>). --link PATH (a path: it has a slash, a backslash
+    // or a drive colon, and is no Local\ or Global\ name): a file the host made, mapped by path. That is how the link
+    // crosses to a native Linux host from under Wine (Z:\dev\shm\gt4_link_<pid>; docs/modern/spikes/
+    // R4-link-across-fex.md); on Windows the host makes one with GT4_LINK_FILE.
+    const bool named = !std::strncmp(name, "Local\\", 6) || !std::strncmp(name, "Global\\", 7);
+    const bool file = !named && (std::strchr(name, '\\') || std::strchr(name, '/') || std::strchr(name, ':'));
+    HANDLE h = nullptr;
+    if (file) {
+        HANDLE f = CreateFileA(name, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                               nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (f == INVALID_HANDLE_VALUE) {
+            log_error("link: cannot open the file %s (Windows error %lu)", name, GetLastError());
+            return false;
+        }
+        h = CreateFileMappingA(f, nullptr, PAGE_READWRITE, 0, GT4_LINK_SIZE, nullptr);
+        CloseHandle(f);   // (the mapping keeps the file open)
+    } else {
+        h = OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE, name);
+    }
     if (!h) {
         log_error("link: cannot open %s (Windows error %lu)", name, GetLastError());
         return false;

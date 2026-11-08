@@ -79,10 +79,11 @@ const char* exitDescription(DWORD code) {
 }  // namespace
 
 struct GameLink::Impl {
-    std::string name;
+    std::string name;   // the named section's name, or the backing file's path (GT4_LINK_FILE)
 #ifdef _WIN32
     HANDLE mapping = nullptr;
     HANDLE process = nullptr;
+    std::string file;   // the backing file, removed when the link goes (empty: a named section)
 #endif
     uint8_t* view = nullptr;
     Gt4LinkHeader* header = nullptr;
@@ -102,6 +103,7 @@ struct GameLink::Impl {
         if (process) CloseHandle(process);
         if (view) UnmapViewOfFile(view);
         if (mapping) CloseHandle(mapping);
+        if (!file.empty()) DeleteFileA(file.c_str());
 #endif
     }
 };
@@ -115,8 +117,26 @@ std::unique_ptr<GameLink> GameLink::start(const Options& options, std::string& e
     return nullptr;
 #else
     auto impl = std::make_unique<Impl>();
-    impl->name = "Local\\gt4_link_" + std::to_string(GetCurrentProcessId());
-    impl->mapping = CreateFileMappingA(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, GT4_LINK_SIZE, impl->name.c_str());
+    // The link's memory: by default a named section the game opens by name. GT4_LINK_FILE=PATH: a file the game maps
+    // by path instead (--link PATH), the way the link crosses to a game under Wine on Linux, where a named section is
+    // Wine's own and a native host cannot open it (docs/modern/spikes/R4-link-across-fex.md); here, to test that path.
+    // The file is created (emptied if it exists) and removed when the link goes.
+    const char* linkFile = std::getenv("GT4_LINK_FILE");
+    if (linkFile && *linkFile) {
+        impl->name = linkFile;
+        HANDLE file = CreateFileA(linkFile, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                  nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY, nullptr);
+        if (file == INVALID_HANDLE_VALUE) {
+            error = "cannot create the link file " + impl->name + ": Windows error " + std::to_string(GetLastError());
+            return nullptr;
+        }
+        impl->file = linkFile;
+        impl->mapping = CreateFileMappingA(file, nullptr, PAGE_READWRITE, 0, GT4_LINK_SIZE, nullptr);   // (sizes the file)
+        CloseHandle(file);   // (the mapping keeps the file open)
+    } else {
+        impl->name = "Local\\gt4_link_" + std::to_string(GetCurrentProcessId());
+        impl->mapping = CreateFileMappingA(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, GT4_LINK_SIZE, impl->name.c_str());
+    }
     if (!impl->mapping) {
         error = "CreateFileMapping(" + impl->name + ") failed: Windows error " + std::to_string(GetLastError());
         return nullptr;
