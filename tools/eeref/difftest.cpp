@@ -1,8 +1,9 @@
 // GT4_DIFFTEST=NAME[,NAME...]|all (a gt4_game linked with `game_link.py --eeorig`): runs the native code and the
 // original code of game functions on the same random inputs and compares everything they write and return; logs a
-// line per test and exits (code 1 if any differs). For native rewrites of functions no recorded scene reaches
-// (docs/NATIVE_ONLY.md): each test below knows its function's arguments, the memory it reads and writes, and the
-// shared vectors it reads. The buffers live in a scratch area of guest RAM the game has not used
+// line per test and exits (code 1 if any differs, unless tools/eeref/known.txt lists the function: an understood
+// difference, reported as `known`; GT4_DIFFTEST_KNOWN=FILE reads another list). For native rewrites of functions no
+// recorded scene reaches (docs/NATIVE_ONLY.md): each test below knows its function's arguments, the memory it reads
+// and writes, and the shared vectors it reads. The buffers live in a scratch area of guest RAM the game has not used
 // yet (the test runs before the game starts).
 #include "difftest.h"
 
@@ -13,8 +14,10 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -197,6 +200,10 @@ struct Snapshot {
 };
 
 bool run(const Test &t, int trials) {
+    if (t.double_size && t.double_size < 8) {   // a region of doubles holds at least one
+        gt4::rt::log_error("difftest %s: double_size %u is under 8 bytes", t.name, t.double_size);
+        return false;
+    }
     void *fn = t.native ? t.native : native_fn(t.addr);
     if (!fn) {
         gt4::rt::log_error("difftest %s: no native function", t.name);
@@ -305,12 +312,44 @@ bool run(const Test &t, int trials) {
 
 }  // namespace
 
+// The understood differences (tools/eeref/known.txt, which replay.py reads too): address -> why.
+std::map<std::uint32_t, std::string> known_differences() {
+    std::map<std::uint32_t, std::string> out;
+    const char *path = getenv("GT4_DIFFTEST_KNOWN") ? getenv("GT4_DIFFTEST_KNOWN") : "tools/eeref/known.txt";
+    std::FILE *f = std::fopen(path, "r");
+    if (!f) {
+        gt4::rt::log_warn("difftest: no %s; every difference counts", path);
+        return out;
+    }
+    char line[512];
+    while (std::fgets(line, sizeof line, f)) {
+        unsigned addr = 0;
+        int used = 0;
+        if (line[0] == '#' || std::sscanf(line, "%8x%n", &addr, &used) != 1 || used != 8) continue;
+        std::string why = line + used;
+        why.erase(0, why.find_first_not_of(" \t"));
+        why.erase(why.find_last_not_of("\r\n") + 1);
+        out[addr] = why;
+    }
+    std::fclose(f);
+    return out;
+}
+
 // From gt4_orig_install: runs the tests GT4_DIFFTEST names ("all" for every one) and exits.
 extern "C" void gt4_difftest(const char *names) {
     const int trials = getenv("GT4_DIFFTEST_TRIALS") ? atoi(getenv("GT4_DIFFTEST_TRIALS")) : 200;
     const std::string list = std::string(",") + names + ",";
+    const std::map<std::uint32_t, std::string> known = known_differences();
     bool ok = true;
-    for (const Test &t : tests())
-        if (list == ",all," || list.find(std::string(",") + t.name + ",") != std::string::npos) ok = run(t, trials) && ok;
+    for (const Test &t : tests()) {
+        if (list != ",all," && list.find(std::string(",") + t.name + ",") == std::string::npos) continue;
+        if (run(t, trials)) continue;
+        const auto k = known.find(t.addr);
+        if (k != known.end() && !t.native) {   // another native version is never the one known.txt describes
+            gt4::rt::log_info("difftest %s: known (tools/eeref/known.txt): %s", t.name, k->second.c_str());
+            continue;
+        }
+        ok = false;
+    }
     std::exit(ok ? 0 : 1);
 }
