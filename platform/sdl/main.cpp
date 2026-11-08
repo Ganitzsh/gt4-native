@@ -471,9 +471,11 @@ gt4::input::Snapshot readInput(SDL_Gamepad* gamepad) {
 
 // The game's pad 1 from the keyboard and the gamepad (docs/GS_BACKEND.md, "Input"): the PS2 mapping, through the
 // action map (tests/input_map.cpp checks it gives the same bytes as the readPad before it, for every input).
-gt4::ps2::PadInput readPad(SDL_Gamepad* gamepad) {
+gt4::ps2::PadInput readPad(SDL_Gamepad* gamepad, bool keyboard = true) {
     static const gt4::input::Map map = gt4::input::originalMap();
-    return gt4::input::apply(map, readInput(gamepad));
+    gt4::input::Snapshot s = readInput(gamepad);
+    if (!keyboard) std::fill(std::begin(s.keys), std::end(s.keys), false);   // (pad 2: its gamepad only)
+    return gt4::input::apply(map, s);
 }
 
 // GT4_HOST_KEYS=FRAME:KEY,... (unattended checks of the settings menu): presses KEY (escape up down left right
@@ -695,6 +697,8 @@ int run(const Options& options) {
                         jsonQuote(gpu.driver) + ",\"headless\":" + (windowed ? "false" : "true"));
     }
     SDL_Gamepad* gamepad = nullptr;
+    SDL_Gamepad* gamepad2 = nullptr;   // pad 2: a second gamepad (SDL_EVENT_GAMEPAD_ADDED)
+    bool pad2Sent = false;             // pad 2 sent as connected, so its removal is told to the game
     auto save = [&] {
         if (interactive && !settingsPath.empty()) {
             try { gt4::saveSettings(settings, settingsPath); }
@@ -812,10 +816,15 @@ int run(const Options& options) {
                 renderer->displayChanged();
                 break;
             case SDL_EVENT_GAMEPAD_ADDED:
-                if (!gamepad && !session) gamepad = SDL_OpenGamepad(event.gdevice.which);
+                // The first gamepad is pad 1 (with the keyboard), a second one pad 2: the PS2's two ports. A session
+                // has its virtual pad as pad 1 and opens no real one.
+                if (session) break;
+                if (!gamepad) gamepad = SDL_OpenGamepad(event.gdevice.which);
+                else if (!gamepad2 && SDL_GetGamepadID(gamepad) != event.gdevice.which) gamepad2 = SDL_OpenGamepad(event.gdevice.which);
                 break;
             case SDL_EVENT_GAMEPAD_REMOVED:
                 if (gamepad && SDL_GetGamepadID(gamepad) == event.gdevice.which) { SDL_CloseGamepad(gamepad); gamepad = nullptr; }
+                if (gamepad2 && SDL_GetGamepadID(gamepad2) == event.gdevice.which) { SDL_CloseGamepad(gamepad2); gamepad2 = nullptr; }
                 break;
             case SDL_EVENT_GAMEPAD_BUTTON_DOWN: {
                 if (!menuEnabled || !gamepad || SDL_GetGamepadID(gamepad) != event.gbutton.which) break;
@@ -945,9 +954,9 @@ int run(const Options& options) {
                                                                                : gt4::aspectValue(settings.aspect);
                     gs->setGameOption(4, a > 0.0f ? static_cast<uint32_t>(a * 1000.0f + 0.5f) : 0u);
                 }
+                gs->setGameOption(6, static_cast<uint32_t>(settings.triggerTravel)); // kOptionTriggerTravel
                 // Nothing reaches the game while the menu is open, nor afterwards until every button is up
                 // (the button that closed the menu would act in the game).
-                gs->setGameOption(6, static_cast<uint32_t>(settings.triggerTravel)); // kOptionTriggerTravel
                 gt4::ps2::PadInput input = readPad(session ? session->gamepad() : gamepad);
                 if (menuEnabled) chordGuard.filter(input, SDL_GetTicks());
                 if (padHeldBack) {
@@ -959,6 +968,19 @@ int run(const Options& options) {
                 uint8_t pad[18];
                 gt4::ps2::encodePad(input, pad);
                 gs->sendPad(0, true, pad);
+                // Pad 2: a second gamepad (no keyboard), held back like pad 1. Without one, port 2 is empty: the game
+                // sees no controller there, as on a PS2 (runtime/iop.cpp scePad2GetState); told once when it goes.
+                if (gamepad2) {
+                    gt4::ps2::PadInput input2 = readPad(gamepad2, false);
+                    if (menu.isOpen() || padHeldBack) input2 = gt4::ps2::PadInput{};
+                    gt4::ps2::encodePad(input2, pad);
+                    gs->sendPad(1, true, pad);
+                    pad2Sent = true;
+                } else if (pad2Sent) {
+                    gt4::ps2::encodePad(gt4::ps2::PadInput{}, pad);
+                    gs->sendPad(1, false, pad);
+                    pad2Sent = false;
+                }
             }
             renderer->setStatus(gs->status());
             if (!options.game.empty() && gs->finished()) {
@@ -1270,6 +1292,7 @@ int run(const Options& options) {
         }
     }
     if (gamepad) SDL_CloseGamepad(gamepad);
+    if (gamepad2) SDL_CloseGamepad(gamepad2);
     if (options.frames && frames < options.frames && !gameExited)
         throw std::runtime_error("Window closed before the requested frames were presented");
     if (options.smoke && (!firstResize || !minimized || !restored || !sawMinimized))
