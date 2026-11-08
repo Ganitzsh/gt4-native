@@ -102,9 +102,9 @@ int main(int argc, char** argv) {
                 gamePath.c_str(), probe::kRecords, probe::kRecordBytes, static_cast<unsigned long long>(probe::kStart));
     std::fflush(stdout);
     const auto t0 = std::chrono::steady_clock::now();
-    uint32_t bad = 0;
+    uint32_t bad = 0, anomalies = 0;
     const uint32_t good = probe::exchange(h->h2g, base + 4096 + probe::kRingBytes, h->g2h, base + 4096,
-                                          [] { __atomic_thread_fence(__ATOMIC_SEQ_CST); }, &bad);
+                                          [] { __atomic_thread_fence(__ATOMIC_SEQ_CST); }, &bad, &anomalies);
     const long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
     int gameExit = -1;
 #ifdef _WIN32
@@ -123,9 +123,9 @@ int main(int argc, char** argv) {
     close(fd);
     unlink(path.c_str());
 #endif
-    std::printf("probe_host: received %u of %u records intact, %u bad, in %lld ms; the game's side exited %d\n", good,
-                probe::kRecords, bad, ms, gameExit);
-    const bool passed = good == probe::kRecords && bad == 0 && gameExit == 0;
+    std::printf("probe_host: received %u of %u records intact, %u bad, %u impossible indices, in %lld ms; the game's side "
+                "exited %d\n", good, probe::kRecords, bad, anomalies, ms, gameExit);
+    const bool passed = good == probe::kRecords && bad == 0 && anomalies == 0 && gameExit == 0;
     std::printf("%s\n", passed ? "PROBE PASSED" : "PROBE FAILED");
     return passed ? 0 : 1;
 }

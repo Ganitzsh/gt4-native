@@ -28,8 +28,25 @@ struct Header {
     Ring g2h, h2g;                          // at 64 and 192: 8-byte aligned
 };
 
+#ifndef PROBE_TORN
 inline uint64_t load_index(const volatile uint64_t* p) { return __atomic_load_n(p, __ATOMIC_ACQUIRE); }
 inline void store_index(volatile uint64_t* p, uint64_t v) { __atomic_store_n(p, v, __ATOMIC_RELEASE); }
+#else
+// The control build (-DPROBE_TORN): the index as the game had it before the 8-byte fix, two 32-bit accesses, low word
+// first. On a run where this build reports bad records or anomalies and the normal build none, the probe has shown it
+// can see the failure it guards against (lane D's suggestion). The indices cross 2^32 once a run: run it several times.
+inline uint64_t load_index(const volatile uint64_t* p) {
+    const volatile uint32_t* w = reinterpret_cast<const volatile uint32_t*>(p);
+    const uint32_t lo = w[0];
+    const uint32_t hi = w[1];
+    return (uint64_t(hi) << 32) | lo;
+}
+inline void store_index(volatile uint64_t* p, uint64_t v) {
+    volatile uint32_t* w = reinterpret_cast<volatile uint32_t*>(p);
+    w[0] = static_cast<uint32_t>(v);
+    w[1] = static_cast<uint32_t>(v >> 32);
+}
+#endif
 
 // One record: its number in the first 8 bytes, then bytes that depend on it.
 inline void fill(uint8_t* r, uint64_t n) {
@@ -46,16 +63,23 @@ inline bool check(const uint8_t* r, uint64_t n) {
 }
 
 // Both directions at once from one thread: send while there is room, take what has come. `fence` is the side's full
-// barrier (MemoryBarrier on Windows, __atomic_thread_fence on POSIX). Returns the records received intact.
+// barrier (MemoryBarrier on Windows, __atomic_thread_fence on POSIX). Returns the records received intact. `anomalies`
+// counts indices that cannot be right (a head behind the last one seen, or more than a ring from its tail): a torn
+// read, ignored for that pass.
 template <typename Fence>
-uint32_t exchange(Ring& out, uint8_t* outData, Ring& in, const uint8_t* inData, Fence fence, uint32_t* bad) {
+uint32_t exchange(Ring& out, uint8_t* outData, Ring& in, const uint8_t* inData, Fence fence, uint32_t* bad,
+                  uint32_t* anomalies) {
     uint32_t sent = 0, got = 0;
+    uint64_t lastHead = 0;
     *bad = 0;
+    *anomalies = 0;
     uint8_t rec[kRecordBytes];
     for (uint64_t spins = 0; (sent < kRecords || got < kRecords) && spins < 2000000000ull; ++spins) {
         if (sent < kRecords) {
-            const uint64_t head = load_index(&out.head);
-            if (head + kRecordBytes - load_index(&out.tail) <= kRingBytes) {
+            const uint64_t head = load_index(&out.head), tail = load_index(&out.tail);
+            if (tail > head || head - tail > kRingBytes) {
+                ++*anomalies;
+            } else if (head + kRecordBytes - tail <= kRingBytes) {
                 fill(rec, sent);
                 uint8_t* at = outData + (head % kRingBytes);
                 for (uint32_t k = 0; k < kRecordBytes; ++k) at[k] = rec[k];
@@ -67,6 +91,11 @@ uint32_t exchange(Ring& out, uint8_t* outData, Ring& in, const uint8_t* inData, 
         const uint64_t head = load_index(&in.head);
         fence();
         uint64_t tail = load_index(&in.tail);
+        if (head < lastHead || head < tail || head - tail > kRingBytes) {
+            ++*anomalies;
+            continue;
+        }
+        lastHead = head;
         while (tail + kRecordBytes <= head && got < kRecords) {
             if (!check(inData + (tail % kRingBytes), got)) ++*bad;
             ++got;

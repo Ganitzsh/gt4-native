@@ -32,16 +32,22 @@ int main(int argc, char** argv) {
         return 5;
     }
     uint8_t* base = static_cast<uint8_t*>(view);
-    uint32_t bad = 0;
+    uint32_t bad = 0, anomalies = 0;
     const DWORD t0 = GetTickCount();
     const uint32_t good = probe::exchange(h->g2h, base + 4096, h->h2g, base + 4096 + probe::kRingBytes,
-                                          [] { MemoryBarrier(); }, &bad);
+                                          [] { MemoryBarrier(); }, &bad, &anomalies);
     h->gameDone = good;
-    std::printf("probe_game: received %u of %u records intact, %u bad, in %lu ms; its ring index ended at %llu (low word "
-                "wrapped: %s)\n", good, probe::kRecords, bad, GetTickCount() - t0,
+    std::printf("probe_game%s: received %u of %u records intact, %u bad, %u impossible indices, in %lu ms; its ring "
+                "index ended at %llu (low word wrapped: %s)\n",
+#ifdef PROBE_TORN
+                " (CONTROL, split 32-bit indices)",
+#else
+                "",
+#endif
+                good, probe::kRecords, bad, anomalies, GetTickCount() - t0,
                 static_cast<unsigned long long>(probe::load_index(&h->h2g.tail)),
                 probe::load_index(&h->h2g.tail) > (1ull << 32) ? "yes" : "no");
     UnmapViewOfFile(view);
     CloseHandle(m);
-    return good == probe::kRecords && bad == 0 ? 0 : 1;
+    return good == probe::kRecords && bad == 0 && anomalies == 0 ? 0 : 1;
 }
