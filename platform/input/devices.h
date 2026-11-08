@@ -21,10 +21,16 @@ namespace gt4::input {
 enum class DeviceType : uint8_t { Keyboard, Gamepad, Wheel };
 
 struct Profile {
-    std::string key;    // "keyboard", or the gamepad's GUID (SDL_GUIDToString)
+    // "keyboard", or the gamepad's GUID (SDL_GUIDToString: 32 hex digits). A key never holds a dot: the settings pages
+    // name a device's setting input.device.<key>.<setting> and split it at the first dot after the key.
+    std::string key;
     std::string name;   // the device's name when last seen (for the player; not part of the key)
     DeviceType type = DeviceType::Gamepad;
     Map map;            // this device's bindings only (keys for the keyboard; buttons and axes for a gamepad)
+    // Its own values of the input settings (D13, PLAN e86394d), each under the setting's name without `input.`
+    // (steer.deadzone, haptics.strength, response...), in the file's order; the host validates them against its option
+    // table and gates them (platform/sdl/device_settings.h). Anything not here takes the global value.
+    std::vector<std::pair<std::string, std::string>> overrides;
 };
 
 // The type's defaults: the `original` map's bindings of that source (a wheel: a gamepad's, until D15).
@@ -44,9 +50,10 @@ struct Check {
 };
 Check checkProfile(const Profile& profile);
 
-// input_profiles.ini: one section per device, [keyboard] or [gamepad GUID] (or [wheel GUID]), with name = and one
-// line per bound action (cross = button:south, leftx = key:j:-1 key:l axis:leftx; see bindingText). Actions with no
-// line keep the type's defaults; `action =` with nothing unbinds. Unknown lines are warnings, never fatal.
+// input_profiles.ini: one section per device, [keyboard] or [gamepad GUID] (or [wheel GUID]), with name =, one line per
+// bound action (cross = button:south, leftx = key:j:-1 key:l axis:leftx; see bindingText), and one per overridden
+// setting (steer.deadzone = 3: a name with a dot, or response, haptics, trigger_effects). Actions with no line keep the
+// type's defaults; `action =` with nothing unbinds. Unknown lines are warnings, never fatal.
 std::string formatProfiles(const std::vector<Profile>& profiles);
 std::vector<Profile> parseProfiles(std::string_view text, std::vector<std::string>* warnings = nullptr);
 

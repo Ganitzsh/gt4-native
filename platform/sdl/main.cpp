@@ -1056,11 +1056,11 @@ int run(const Options& options) {
                     const uint32_t v = g_rumble[p].load();
                     const Uint64 now = SDL_GetTicks();
                     gt4::input::HapticsOut h;
-                    if (settings.hapticsMode == gt4::HapticsMode::Physics && playerCarAt[p] && now - playerCarAt[p] < 250 &&
+                    const gt4::Settings& ps = pads.settingsFor(p, settings);   // (with the pad's own, D13)
+                    if (ps.hapticsMode == gt4::HapticsMode::Physics && playerCarAt[p] && now - playerCarAt[p] < 250 &&
                         !menu.isOpen() && !padHeldBack)
-                        h = gt4::input::haptics(playerCar[p], {settings.hapticsStrength / 100.0f, settings.triggerEffects,
-                                                               settings.hapticsUndersteer, settings.hapticsLockUp,
-                                                               settings.hapticsWheelspin, settings.hapticsKerbs});
+                        h = gt4::input::haptics(playerCar[p], {ps.hapticsStrength / 100.0f, ps.triggerEffects, ps.hapticsUndersteer,
+                                                               ps.hapticsLockUp, ps.hapticsWheelspin, ps.hapticsKerbs});
                     if (session) {
                         if (v != rumbleApplied[p])
                             session->record("rumble", "\"port\":" + std::to_string(p) + ",\"small\":" +

@@ -276,6 +276,7 @@ add_executable(gt4_host
     platform/sdl/renderer.cpp
     platform/sdl/session.cpp
     platform/sdl/pad_devices.cpp
+    platform/sdl/device_settings.cpp
     ${GT4_SETTINGS_SOURCES}
     platform/sdl/settings_menu.cpp
     platform/sdl/display.cpp
@@ -319,6 +320,12 @@ endif()
 
 # Settings and display math checks (no GPU or window needed).
 if(BUILD_TESTING)
+  # A device's own input settings (PLAN.md D13): which, their check, the order and the gates, the file's round trip.
+  add_executable(gt4_device_settings_test tests/device_settings.cpp platform/sdl/device_settings.cpp ${GT4_SETTINGS_SOURCES})
+  target_include_directories(gt4_device_settings_test PRIVATE platform/sdl platform/render platform/gs)
+  target_link_libraries(gt4_device_settings_test PRIVATE gt4_input)
+  add_test(NAME device_settings COMMAND gt4_device_settings_test)
+
   add_executable(gt4_host_settings_test tests/host_settings.cpp ${GT4_SETTINGS_SOURCES} platform/sdl/settings_menu.cpp)
   target_include_directories(gt4_host_settings_test PRIVATE platform/sdl platform/render platform/gs)
   if(MSVC)
