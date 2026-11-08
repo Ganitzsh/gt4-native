@@ -102,8 +102,28 @@ gt4_host --headless --size 1280x720 --session-dir build/sessions/<name> --no-aud
    Count the lit frames (over 5 % of the pixels not black, as tools/frame_diff.py's lit check).
 6. Add the row to the table above and the file name to `build/caps/REF.txt`.
 
-PCSX2 software-renderer stills at the same scene points (menus, showroom, paused race, Photo Travel) wait for the
-owner's go: PCSX2 takes the keyboard focus on the owner's desktop. They will go in `build/refs/`.
+### PCSX2 stills at the same scene points
+
+PCSX2's software renderer is the reference for what the PS2 shows (menus, showroom, paused race, Photo Travel). It
+takes the keyboard focus on the console desktop: run it only with the coordinator's go, under the live-game lock and a
+heavy slot, and close it when done. The stills stay in `build/refs/` (Sony's frames: never committed or served).
+
+1. A portable PCSX2 copied into your clone's `build/pcsx2/` (with `portable.txt`), its BIOS from the owner's
+   install, the ISO read in place. `inis/PCSX2.ini`: `[EmuCore/GS] Renderer = 13` (software),
+   `upscale_multiplier = 1`; `[Hotkeys] Screenshot = Keyboard/F8` (into `snaps/`), `ToggleSlowMotion =
+   Keyboard/F9`; `[Framerate] SlomoScalar = 0.1`; pad 1 on the keyboard (arrows, X cross, C circle, T triangle,
+   S square, Return start).
+2. Start it with `pcsx2-qt.exe -fastboot -- <the ISO>`. A host save-folder copy is not a PS2 memory card: the game
+   says it finds no data; answer Cancel, then Start game (Arcade mode needs none). Skip the intro with Start.
+3. Keys reach PCSX2 only while its window has the focus (SetForegroundWindow, then SendInput); check every step with
+   an F8 screenshot rather than timings, which change from one boot to the next.
+4. The Original Circuits menu (Arcade > Time Trial > Original Circuits): at rest, F8 a few seconds after it opens;
+   mid-slide, F9 (slow motion, 10 %), hold Right for about 1.5 s (in slow motion the game samples the pad a few times
+   a second, and a short press is missed), F8 every half second, then F9 again. At full speed the slide is over before
+   the first F8.
+
+Taken 2026-11-08 (lane C): `build/refs/original_circuits_rest.png` (El Capitan, at rest) and
+`build/refs/oc_slow2_1..8.png` (El Capitan to High-Speed Ring, mid-slide), 640x480.
 
 ## Comparisons and timings
 
