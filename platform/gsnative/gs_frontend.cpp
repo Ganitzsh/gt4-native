@@ -2196,7 +2196,7 @@ bool GsFrontend::overlaps(uint32_t a, uint32_t b) const {
         if (t.id == b) tb = &t;
     }
     if (!ta || !tb) return false;
-    constexpr uint32_t kBlocks = 16384;
+    static constexpr uint32_t kBlocks = 16384;   // (static: std::min takes it by reference, GCC wants it captured otherwise)
     auto span = [](const Target& t) {
         const bool sixteen = (t.psm & 0x0F) >= 2;   // PSMCT16/16S, PSMZ16/16S
         const uint32_t rows = sixteen ? 64u : 32u;
