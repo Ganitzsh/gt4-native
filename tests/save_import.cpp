@@ -256,6 +256,12 @@ int main() {
                    gt4::saves::readSaves(dir / "mine.psu", error).size() == 1 && error.empty(),
                "with force: replaced by the new export");
         expect(!fs::exists(dir / ".mine.ps2.tmp") && !fs::exists(dir / ".mine.psu.tmp"), "no temporary file left");
+        // a failed rename (here an output the rename cannot replace, a folder) fails the export, the temporary file
+        // removed (lane C's review: the removal used to reset the rename's error, and the export claimed success)
+        fs::create_directories(dir / "held.ps2" / "x");
+        expect(!gt4::saves::exportCard(saves, dir / "held.ps2", true).ok && fs::is_directory(dir / "held.ps2" / "x") &&
+                   !fs::exists(dir / ".held.ps2.tmp"),
+               "a failed rename: no success, nothing left");
     }
 
     // a folder card

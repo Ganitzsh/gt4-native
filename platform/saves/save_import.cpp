@@ -399,9 +399,13 @@ bool writeWhole(const fs::path& out, const std::vector<unsigned char>& bytes, bo
         fs::remove(temp, ec);
         return false;
     }
-    fs::rename(temp, out, ec);
-    if (ec) fs::remove(temp, ec);
-    return !ec;
+    std::error_code renamed;   // (its own: removing the temporary file would reset `ec` to success)
+    fs::rename(temp, out, renamed);
+    if (renamed) {   // such as an output held open by another program (PCSX2 with the card mounted)
+        fs::remove(temp, ec);
+        return false;
+    }
+    return true;
 }
 
 }  // namespace
