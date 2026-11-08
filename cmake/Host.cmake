@@ -242,6 +242,21 @@ else()
   target_compile_options(gt4_mesh_cache PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# The lighting's CPU parts (platform/render/modern, tickets F2 and F2b): the light sources' defaults, the gather into
+# the light list, the course lamps from the meshes and their glow class. No GPU; the host and the tests link it, so
+# each is compiled once.
+add_library(gt4_lighting STATIC platform/render/modern/light_sources.cpp platform/render/modern/lights_gather.cpp
+    platform/render/modern/course_lamps.cpp platform/render/modern/course_lamp_pass.cpp
+    platform/render/modern/glow_classifier.cpp)
+target_include_directories(gt4_lighting PUBLIC platform/render/modern include)
+target_link_libraries(gt4_lighting PUBLIC gt4_mesh_cache)
+target_compile_definitions(gt4_lighting PRIVATE $<$<BOOL:${WIN32}>:_CRT_SECURE_NO_WARNINGS>)
+if(MSVC)
+  target_compile_options(gt4_lighting PRIVATE /W4)
+else()
+  target_compile_options(gt4_lighting PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 add_library(gt4_saves STATIC platform/saves/save_import.cpp)
 target_include_directories(gt4_saves PUBLIC platform/saves)
 target_compile_features(gt4_saves PUBLIC cxx_std_20)
@@ -293,8 +308,6 @@ add_executable(gt4_host
     platform/render/test_scene.cpp
     platform/render/gsn_scene.cpp
     platform/render/modern/lights_cluster.cpp
-    platform/render/modern/lights_gather.cpp
-    platform/render/modern/light_sources.cpp
     platform/render/overlay.cpp
     platform/render/fsr2.cpp
     platform/render/smaa_textures.cpp
@@ -305,7 +318,7 @@ target_include_directories(gt4_host PRIVATE platform/sdl platform/render platfor
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party
     ${GT4_FSR2_DIR})
 target_compile_definitions(gt4_host PRIVATE VK_NO_PROTOTYPES FFX_GCC GT4_LIGHTS_CLUSTER_GPU=1)
-target_link_libraries(gt4_host PRIVATE SDL3::SDL3 Vulkan::Headers gt4_guest_abi gt4_fsr2 gt4_gs gt4_saves gt4_input ${GT4_VOLK} ${GT4_VOLK_HEADERS})
+target_link_libraries(gt4_host PRIVATE SDL3::SDL3 Vulkan::Headers gt4_guest_abi gt4_fsr2 gt4_gs gt4_saves gt4_input gt4_lighting ${GT4_VOLK} ${GT4_VOLK_HEADERS})
 if(MSVC)
   target_compile_options(gt4_host PRIVATE /W4)
   # Generated SPIR-V tables and the volk loader are third-party style code: no warnings there.
@@ -581,34 +594,19 @@ add_test(NAME material_table COMMAND gt4_material_table_test)
   add_test(NAME lights_cluster COMMAND gt4_lights_cluster_test)
   set_tests_properties(lights_cluster PROPERTIES SKIP_RETURN_CODE 77)
   # The light gather (ticket F2): Light records into the light list, CPU only.
-  add_executable(gt4_lights_gather_test tests/lights_gather.cpp platform/render/modern/lights_gather.cpp
-      platform/render/modern/light_sources.cpp)
-  target_include_directories(gt4_lights_gather_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include platform/render/modern)
-  target_compile_definitions(gt4_lights_gather_test PRIVATE $<$<BOOL:${WIN32}>:_CRT_SECURE_NO_WARNINGS>)
-  add_test(NAME lights_gather COMMAND gt4_lights_gather_test)
-  # The course's lamps from its meshes (ticket F2b): quads of a mesh item merged into lamps, CPU only.
-  add_executable(gt4_course_lamps_test tests/course_lamps.cpp platform/render/modern/course_lamps.cpp)
-  target_include_directories(gt4_course_lamps_test PRIVATE platform/render/modern)
-  target_link_libraries(gt4_course_lamps_test PRIVATE gt4_mesh_cache)
-  if(MSVC)
-    target_compile_options(gt4_course_lamps_test PRIVATE /W4)
-  else()
-    target_compile_options(gt4_course_lamps_test PRIVATE -Wall -Wextra -Wpedantic)
-  endif()
-  add_test(NAME course_lamps COMMAND gt4_course_lamps_test)
-  # F2b's glow class and lamp pass on a synthetic scene frame, CPU only.
-  add_executable(gt4_course_lamp_pass_test tests/course_lamp_pass.cpp platform/render/modern/course_lamp_pass.cpp
-      platform/render/modern/course_lamps.cpp platform/render/modern/glow_classifier.cpp
-      platform/render/modern/lights_gather.cpp platform/render/modern/light_sources.cpp)
-  target_include_directories(gt4_course_lamp_pass_test PRIVATE platform/render/modern)
-  target_link_libraries(gt4_course_lamp_pass_test PRIVATE gt4_mesh_cache)
-  target_compile_definitions(gt4_course_lamp_pass_test PRIVATE $<$<BOOL:${WIN32}>:_CRT_SECURE_NO_WARNINGS>)
-  if(MSVC)
-    target_compile_options(gt4_course_lamp_pass_test PRIVATE /W4)
-  else()
-    target_compile_options(gt4_course_lamp_pass_test PRIVATE -Wall -Wextra -Wpedantic)
-  endif()
-  add_test(NAME course_lamp_pass COMMAND gt4_course_lamp_pass_test)
+  # The lighting's CPU parts (gt4_lighting), each test CPU only: the light gather (F2), the course's lamps from a
+  # mesh item (F2b), and F2b's glow class and lamp pass on a synthetic scene frame.
+  foreach(test IN ITEMS lights_gather course_lamps course_lamp_pass)
+    add_executable(gt4_${test}_test tests/${test}.cpp)
+    target_link_libraries(gt4_${test}_test PRIVATE gt4_lighting)
+    target_compile_definitions(gt4_${test}_test PRIVATE $<$<BOOL:${WIN32}>:_CRT_SECURE_NO_WARNINGS>)
+    if(MSVC)
+      target_compile_options(gt4_${test}_test PRIVATE /W4)
+    else()
+      target_compile_options(gt4_${test}_test PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME ${test} COMMAND gt4_${test}_test)
+  endforeach()
   # The night artefact metrics (tools/frame_metrics.py, ticket N1) on synthetic frames; skipped (77) without
   # Python 3 and numpy.
   find_package(Python3 COMPONENTS Interpreter QUIET)
