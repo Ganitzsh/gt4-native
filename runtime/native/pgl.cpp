@@ -378,6 +378,7 @@ struct SceneFrameState {
     DWORD thread = 0;   // the thread that opened the frame (the kick must be the same: A3's check)
     uint32_t flags = 0;  // the opening FrameBegin's (they stand for the frame)
     int course = 0;      // the course's draws under way (gt4_scene_course: nested), its Cmds' Instances kInstCourse (A11a)
+    int coursePaused = 0;  // inside them, draws that are not world-space course (billboards facing the camera): unflagged
     uint16_t openView = 0, viewInstances = 0;
     uint16_t mainView = 0;   // the frame's last kViewMain view (A7: the glow pass's lights name it)
     bool haveProjection = false;
@@ -548,6 +549,14 @@ void gt4_scene_course(uint32_t context, int on) {
     g_scene.course = on ? g_scene.course + 1 : (g_scene.course > 0 ? g_scene.course - 1 : 0);
 }
 
+// Inside the course's draws, draws that are not its world-space geometry pause the flag (1) and resume it (0): the
+// BillboardSet's camera-facing billboards (CourseData::render_course_2), whose objectToView is not the camera.
+void gt4_scene_course_pause(uint32_t context, int pause) {
+    (void)context;
+    if (!gt4_scene_on()) return;
+    g_scene.coursePaused = pause ? g_scene.coursePaused + 1 : (g_scene.coursePaused > 0 ? g_scene.coursePaused - 1 : 0);
+}
+
 // A marker (CONTRACTS.md a.4, a.5 5): around render_post_effect and the panels' render_panel, in the open frame; `view` the
 // view open at it (0 none).
 void gt4_scene_marker(uint32_t context, int kind) {
@@ -642,7 +651,7 @@ void gt4_scene_cmd(uint32_t context, uint32_t cmd) {
     r.prefix = {scene::kInstance, scene::kVersion};
     r.view = g_scene.openView;
     r.flags = static_cast<uint16_t>((flag ? scene::kInstLighting : 0) | ((bits & 0x80) ? scene::kInstSkinned : 0) |
-                                    (g_scene.course > 0 ? scene::kInstCourse : 0));
+                                    (g_scene.course > 0 && g_scene.coursePaused == 0 ? scene::kInstCourse : 0));
     r.serial = static_cast<uint32_t>(g_scene.instances) + 1;   // (counted as it is appended)
     r.cmd = cmd;
     r.entrant = 0xFFFFFFFFu;

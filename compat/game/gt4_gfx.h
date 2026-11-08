@@ -94,6 +94,8 @@ void gt4_scene_marker(void *context, int kind);
 void gt4_scene_glow_lights(void *context, unsigned int view, const void *glow);
 /* The course's draws begin (on 1) or end (on 0): the Instances in between are flagged kInstCourse (nested calls count). */
 void gt4_scene_course(void *context, int on);
+/* Inside the course's draws, a draw that is not its world-space geometry (camera-facing billboards) pauses the flag. */
+void gt4_scene_course_pause(void *context, int pause);
 #ifdef __cplusplus
 }
 #endif
