@@ -661,14 +661,22 @@ held; GT4's volume files are inflated on the game thread; no load time is measur
     handle (off the loads' mutex), and read each stream ahead on open. Target: no regression on the desktop
     numbers, and a cold-cache check on the desktop (an uncached copy of the image, before and after) showing it
     helps where it should; the device numbers come from `GT4_LOAD_STATS` in the owner's device test (R4's list).
-  - (c) the faster frame clock on loading screens, outside `original`: `LoadingMode` (0x00104E30) timed first, and
-    the clock runs fast only while the game is in it, and never during anything with game time the player
-    watches (the countdown, replays, animated menus): if `LoadingMode` ever runs under one of those, the clock
-    follows the state the player sees, not the function. Target: the race load's waiting from 0.55 s to under
-    0.2 s, with a race's lap times and AI behaviour unchanged after a faster load.
+  - (c) **replaced** (lane C's measurement, 2026-11-08; the architect): no faster frame clock. `LoadingMode`
+    (0x00104E30) is never called on the race route, and the game loop waits at most one VBlank a frame throughout
+    the race load (0.82 s: disc 0.01, CPU 0.09, waiting 0.71). The missing frames are three gaps (30 VBlanks, 0.5
+    s) in which the game thread waits on no VBlank and uses almost no CPU, in line with the load's GS reads (the
+    car thumbnails: 38 reads, two of them 125 and 78 ms). The other VBlank waits (`mUpdateContext::Sync` 00215298,
+    135 VBlanks on the route) pace the visible fades and menu animations, which stay as they are. So (c) is the GS
+    read path in loads: first measured (`GT4_READ_STATS=1`: when each read is asked and lands, in VBlanks, and the
+    host's time from `GS_READ` to `GS_IMAGE`), each gap matched to the read in flight; then shortened where the
+    time goes (`runtime/link.cpp` lane C's, lane A reviewing; a host change by the lane that owns its file). On a
+    PS2 the read is sub-frame, so a faster read is closer to the original and applies to `original` too, on the
+    coordinator's condition: only if `ORIG` on `race7`, `race_grid43` and `race_boot` stays identical, since a
+    faster read must not change which frame the game sees its result in. Target: the race load's waiting under
+    0.2 s; the reads' bytes unchanged (`GT4_READ_HASH`); lap times and AI unchanged.
 - Acceptance: the load times (race and menus) reported before and after, against those targets; `ORIG` unchanged in
-  its picture and the game's pacing (faster reads shorten `original`'s loads too, which is the point; the faster
-  frame clock stays outside it); saves and replays unaffected (session test).
+  its picture and the game's pacing (faster reads shorten `original`'s loads too, which is the point; the frame in
+  which the game sees each read's result is unchanged); saves and replays unaffected (session test).
 
 **D11: Latency (S-M; lane C, moved from lane D).** The input-to-photon budget D12-D16's filters count against. From
 the audit (section 4.6): two frames in flight today, and the pad sampled every host frame. Design: one frame in
