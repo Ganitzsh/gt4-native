@@ -315,7 +315,10 @@ as 008744D0, `GT4_HEAP_LOG`), or constants in its code? Would any of them use mo
 on track, longer replays, fewer loading stalls)? Does any game code still use the uncached mirrors?
 
 **Method.** Follow the heap setup in the decomp; a session with `GT4_HEAP_LOG` to see each pool's high-water mark; an
-audit run that leaves the mirrors unmapped and logs the faulting functions.
+audit run that leaves the mirrors unmapped and logs the faulting functions. The runtime masks the 0x2 / 0x3 addresses
+the game hands it (`frame.cpp`'s `ptr()`, the flare buffer, read destinations): those are values, not mirror
+accesses, so the audit counts only game code that dereferences a mirror, which is the question. A debug runtime
+build; nothing goes to main.
 
 **Time box.** 2 days. The answer is "lift it, to N MB, for this" or "nothing would use it".
 
@@ -331,9 +334,26 @@ ADSR, pitch, reverb.
 the register image, with the same timing and voice release? Or does the driver depend on the register image's
 semantics too deeply to gain anything?
 
-**Method.** Map the driver's call sites from the decomp (where it builds the image); count the register fields it
-reads back; prototype one sound class (the engine) on a native voice and compare a session's audio (D5's -60 dB
-bar).
+**Method.** Map the driver's call sites from the decomp (where it builds the image), and count the register fields
+it reads back.
+- **Prototype order:** a one-shot class first (a menu sound: key-on, volume, release, no modulation), then the
+  engine, the hardest (per-frame pitch and volume, loops, voice stealing), so the engine's failures don't hide
+  simpler ones.
+- **Comparison from one capture:** two live sessions' audio isn't sample-repeatable, so they can't be compared. One
+  capture records both the SPUP register image, as today, and the prototype's native voice calls beside it (a new
+  record type that today's host ignores). Each path is mixed offline from that same capture and compared at D5's
+  -60 dB bar. Timing: each key-on and release lands in the same frame as on the image path, or in the same SPU tick
+  if the driver writes mid-frame.
+- **The samples:** a native voice API still plays the driver's ADPCM banks from SPU RAM. So the spike says whether
+  the SPU RAM image stays (likely, as the upload path) and only the per-frame register image goes.
+
+**Decision rule.** Go only if both hold:
+- the gain is measurable: the per-frame image transfer bytes and the host's parse cost, measured, plus what a
+  native API enables (positional audio, per-voice effects, higher rates);
+- every read-back the driver needs (ENVX / ENDX for voice release and stealing, and any others the count finds) can
+  be answered from the native voices with the same semantics.
+
+Otherwise the answer is no, and the register image stays.
 
 **Time box.** 3 days, after D5.
 

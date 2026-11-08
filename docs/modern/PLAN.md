@@ -63,8 +63,8 @@ ARCHITECTURE.md section 1) and the CPU-side tests (B5's mesh check, A10's decode
 
 | Lane | Owns | Shared files it may touch, and in which order |
 |---|---|---|
-| A. Scene extraction | `game_src/` hooks, `runtime/native/pgl.cpp`, `runtime/frame.cpp`, `runtime/runtime.h`, `compat/game/gt4_scene.h`, `include/gt4/gfx.h` scene section, `platform/scene/scene_decoder.*`, `scene_frame.h` | `stream.cpp`, `stream.h`, `gs_host.cpp` (QueuedTarget): A1, A10. `gs_frontend.*`: A10 **after E2**. `protocol.h`: A1 **before D2**. `runtime/gs.cpp` `on_frame` (ticks deferred during a walk, CONTRACTS a.5.1): A3 |
-| B. Renderer | `platform/render/graph/`, `platform/render/modern/`, `platform/scene/mesh_cache.*`, `material_table.*`, `pipeline.cpp`, `gsn_scene.cpp`, `vk.*`, shaders | `renderer.cpp`, `main.cpp`: B2 **first** (day one) |
+| A. Scene extraction | `game_src/` hooks, `runtime/native/pgl.cpp`, `runtime/frame.cpp`, `runtime/runtime.h`, `runtime/kernel.cpp` (from P4), `compat/game/gt4_scene.h`, `include/gt4/gfx.h` scene section, `platform/scene/scene_decoder.*`, `scene_frame.h` | `stream.cpp`, `stream.h`, `gs_host.cpp` (QueuedTarget): A1, A10. `gs_frontend.*`: A10 **after E2**. `protocol.h`: A1 **before D2**. `runtime/gs.cpp` `on_frame` (ticks deferred during a walk, CONTRACTS a.5.1): A3 |
+| B. Renderer | `platform/render/graph/`, `platform/render/modern/`, `platform/scene/mesh_cache.*`, `material_table.*`, `pipeline.cpp`, `gsn_scene.cpp`, `vk.*`, shaders; for P2, the target, page and palette parts of `gs_frontend.*` and `gs_memory.*` (lane A reviews) | `renderer.cpp`, `main.cpp`: B2 **first** (day one) |
 | C. Platform, ARM64, tooling | `cmake/`, `tools/build_*`, `tools/package_game.py`, `tools/frame_diff.py`, `tools/perf_report.py`, `platform/core/`, `link_host.cpp`, `docs/modern/CAPTURES.md`, `platform/gsnative/texture_pack.*`, `platform/sdl/session.*` and `tools/host_session.py` (the test harness), `runtime/link.cpp` (lane A reviews every change: its async reads and tick deferral) | `main.cpp`, `renderer.cpp`: C1 **after B2** |
 | D. Systems | `platform/input/`, `platform/audio/`, `runtime/memcard.cpp`, `platform/saves/`, `runtime/iop.cpp`, `runtime/audio.cpp` | `main.cpp`: D1 **after C1**. `protocol.h`: D2 **after A1**. `stream.cpp`: D5 **after A10** |
 | E. UI | `platform/render/overlay.*`, `platform/sdl/settings*.{h,cpp}`, `settings_menu.*`, `platform/render/modern/layer2d.*` | `gs_frontend.cpp` `textureFor` (E2), `gsn_display.frag` (E3): day one, **before A10** |
@@ -684,30 +684,91 @@ The owner's direction (2026-11-08): no PS2 concept beyond what the game logic ne
 lists what is kept and why. These tickets remove or lift the rest. Each is checked with `ORIG` and `PRESETS`, since
 `original` keeps the PS2 picture.
 
-**P1: Retire the GIF and VIF records (S, lane C; lane B reviews the decoders' removal).** The live game sends none
-(`GT4_REC_GIF`, `VIF1`, `VIF0`, protocol.h). Convert or re-record every capture CAPTURES.md lists that still has
-them, then delete the record kinds, the host's GIF decoder and `vif1.cpp`'s stream path (its model-packet decoder
-stays). Depends: none. Acceptance: `CTEST`; `ORIG`; `PRESETS`; every listed capture replays; a capture with an old
-record is refused with a message, not misdrawn.
+**P1: Retire the GIF and VIF records (M, lane C; lane B reviews the stream changes).** The live game sends none
+(`GT4_REC_GIF`, `VIF1`, `VIF0`, and kind 4, the old GS_PRIV; protocol.h). Lane C's scan of `build/caps`: only
+`race.cap` and `event.cap` have them, and CAPTURES.md already lists both as replaced by `race_boot.cap`. So no
+capture is converted: those two leave the list.
+- **What goes:** the record kinds (their numbers stay reserved, so an old capture is recognised and refused), their
+  cases in `GraphicsStream::record`, `vif1.cpp`'s stream and DIRECT path, `CountingSink`, MSKPATH3 holding and the
+  PATH3 counters.
+- **What stays:** the GS back end's packet input (`gs.gif`, `gs_host`'s `Op::Gif`, the front end's `gif()`). The
+  3D renderers pass the game's own packets on as PATH1 (`RendererSink::packet`), and state restore replays the
+  saved GS registers as one A+D packet. `vif1.cpp`'s model-packet decoder stays too.
+- **The STATE record:** `race7.cap`, the `ORIG` reference, starts with one, and its version 2 / 3 layout carries
+  vif1's program, batch buffers, renderer constants and the VIF registers. The reader keeps reading that layout
+  (it skips the VIF registers).
+- **Tests:** the ones that write the old records are rewritten onto GFX records, or lose the stream cases they
+  cover: `gs_host` (`tests/gs_host.cpp:46-48`, the synthetic capture `host_replay` replays, which keeps a fixture),
+  `ps2gfx` (`tests/ps2gfx.cpp:404-498`) and `gs_backend` (`tests/gs_backend.cpp:178`, reference builds only).
+- Depends: none. Acceptance: `CTEST`; `ORIG` (`race7.cap` identical before and after); `PRESETS`; every listed
+  capture replays; `race.cap` (kept out of the repo, as always) is refused with a message, not misdrawn.
 
-**P2: Native targets (L, lane B).** Finish docs/NATIVE_V2.md steps 1 and 3. Targets become native images keyed
-by the game's surface, not GS memory. Reinterpretations become explicit copies. A GS view of memory stays only for
-reads (R9) and where `original` needs one. Depends: B4, R9. Acceptance: `PRESETS` identical; `VAL`; `PERF` no
-worse; the host's GS memory bytes per race frame reported, lower than today's.
+**P2: Native targets and palettes (L in total, lane B; three pieces, each S-M with its own identity-gated
+commits).** What is left of docs/NATIVE_V2.md (step 1's textures are done):
+- **P2a: targets keyed by surface**, instead of GS page ownership. Today a record names a surface only by its
+  FRAME / ZBUF address, width and format, so P2a's key is derived on the host from those. P3b later carries the same
+  key as an explicit handle; P2a defines surface identity, P3b does not define it again. P2a lands before B8's
+  import code, or B8 imports by P2a's key, so B8's imports are not written twice.
+- **P2b: native palettes.** CLUTs come from the set's content, and the game's palette writes become palette data,
+  so set pages stop being materialised for CLUT loads.
+- **P2c: reinterpretations as explicit copies** from the named source target, on the GPU (as `gsn_scene`'s
+  reinterpret pass already is). The fallback (004A9470, never seen) stays, and is counted.
+- A GS view of memory stays for every reader until R9 decides it: P2 needs only R9's list of readers, not its
+  decisions.
+- Files: P2 owns the target, page and palette parts of `gs_frontend.*` and `gs_memory.*`, lane A reviewing
+  (section 3).
+- Depends: B4; R9's reader list. Order: P2a, then B8's imports, then P2b and P2c.
+- Acceptance, per piece:
+  - `ORIG` (`original` runs the same GS front end, so P2 changes its path too); `PRESETS` identical; `VAL`;
+  - `PERF`: the GPU and the front-end thread no worse;
+  - a new metric in `GT4_GSN=stats`: pages materialised and bytes written into `gs_memory` per frame (uploads,
+    CLUT loads, transfers), with the baseline measured at the parent commit on `race7.cap` and `race_boot.cap`
+    (NATIVE_V2 has about 130 pages a frame). It must come out lower;
+  - reinterpretation fallbacks counted: 0 on `race7`, `race_boot` and `menus_boot.cap` (the menus);
+  - the R9 readers' bytes unchanged (`GT4_READ_HASH` on a live session to a race: CarIconMaker, the luminance
+    probe).
 
-**P3: Draw state in renderer terms (L, lane A with lane B).** `include/gt4/gfx.h` records carry blend, depth,
-texture and target handles instead of GS register images. pgl's API, the game logic's calls, stays as it is. The
-GS encoding moves into the GS back end, which `original` still uses. The frame list's DMA-tag block links become
-plain offsets. Depends: B8, P2, A10. Acceptance: `CTEST`; `ORIG` and `PRESETS` identical; `STREAM` no larger;
-`hook_lint` 0.
+**P3a: Block links as offsets (S-M, lane A).** The frame list's DMA-tag block links become plain offsets
+(`runtime/frame.cpp`'s walk, pgl's packet). Depends: none. It goes with P1's format bump (both phase 1); P3b bumps
+the format again later, with its own conversion.
 
-**P4: No preemptive frame delivery (S-M, lane A).** Find the threads that make no syscall for 50 ms (17 of 8,911
-deliveries in a session to a race used the fallback), give each a safe point, then delete the thread freeze and
-`GT4_FRAME_DELIVERY=preemptive` (`runtime/kernel.cpp:258-273`). Depends: none. Acceptance: `REL`; `ORIG`; a GT
-mode session, a race and the menus: 0 preemptive deliveries before the code goes; `gt4_game --self-test` passes
-without it.
+**P3b: Draw state in renderer terms (L; lane A the runtime side, lane B the host side).** `include/gt4/gfx.h`
+records carry blend, depth, texture and target handles instead of GS register images. The target handle is P2a's
+surface key. Depends: P2a, A10.
+- **The round trip.** pgl's API stays GS-shaped in places (the pglu calls, the mirror's own TEX0s, the effects'
+  register values, 0049CC48). So the decode moves into `pgl.cpp`, and the GS back end re-encodes for the GS path,
+  which `original` still uses. The renderer terms must carry the GS-only states: alpha test fail modes (FB_ONLY,
+  ZB_ONLY, RGB_ONLY), destination alpha test (DATE / DATM), PABE, FBA, COLCLAMP, DTHE, TFX / TCC, fog, STQ against
+  UV, AA1, CLAMP's region modes, and MMAG / MMIN / LCM / K. A state with no mapping is counted and kept raw, never
+  approximated.
+- `STREAM` no larger may need packing: a handle plus explicit fields can outgrow a 64-bit register image.
 
-**P5: Spike R17, guest memory beyond 32 MB (S, lane A).** RISKS.md R17. If it finds a use, a ticket follows.
+Acceptance for P3a and P3b:
+- `CTEST`, including for P3b: decoding then encoding gives back every draw state of `race7`, `race_boot` and
+  `menus_boot.cap` (the menus);
+- `ORIG` and `PRESETS` identical;
+- `STREAM` no larger, measured on the same route as today's baseline;
+- `hook_lint` 0.
+- **Captures.** The new records change the link format, so every capture CAPTURES.md lists is converted (old
+  records to new) or refused with a message, as in P1. The converter is also the identity oracle: the converted
+  capture on the new host against the old capture on the old host, identical. Each ticket states this before its
+  code changes. P1 and P3a share one format bump (phase 1); P3b's is its own, later.
+
+**P4: No preemptive frame delivery (S-M, lane A, which owns `runtime/kernel.cpp` for it).** Find the threads that
+make no syscall for 50 ms (17 of 8,911 deliveries in a session to a race used the fallback), give each a safe point,
+then delete the thread freeze, `GT4_FRAME_DELIVERY=preemptive` (`runtime/kernel.cpp:258-273`) and `GT4_WATCH`'s
+guard that exists only for the freeze (`g_guard_frozen`, `g_frozen_in_runtime`). The risk: a thread that spins on a
+flag a callback sets has no syscall at all, so deleting the freeze without a safe point in that exact loop deadlocks
+it. Depends: none. Acceptance:
+- `REL`; `ORIG`; `gt4_game --self-test` passes without the freeze.
+- 0 preemptive deliveries before the code goes, over a GT mode session, a race, the menus, a replay, a licence
+  test, the movies and loading screens, and Photo Travel (where decoder and loader loops live).
+- The commit names each thread and loop found (PC, function).
+- A diagnostic stays instead of the freeze: a delivery waiting more than 50 ms logs the running thread's PC once, so
+  a missed loop shows instead of stalling silently.
+
+**P5: Spike R17, guest memory beyond 32 MB (S, lane A).** RISKS.md R17: a debug runtime build, nothing to main.
+Acceptance: the answer and its measurements in R17. If it finds a use, a ticket follows.
 
 **P6: Spike R18, the sound driver without the SPU2 register image (M, lane D).** RISKS.md R18. Depends: D5.
 
@@ -740,10 +801,10 @@ No two day-one tickets edit the same file except `main.cpp` / `renderer.cpp` (B2
 | Phase | Tickets | Gate to leave it |
 |---|---|---|
 | 0. Foundations (weeks 1-3) | A0, A1, A10, A2, A3; B2, B1, B5, B3; C1-C4, C10; E1-E4; F0, F1, N0, N1; spikes R1-R7, R9-R12 | `SCENE` gates on race and event captures; B3 `PRESETS` |
-| 1. Parity (weeks 3-8) | B4, B6, B7, A4, A5a, A6, A11a, P1, P4, P5; D-track (D12, D13 first; P6 after D5) | `PARITY` on REF |
+| 1. Parity (weeks 3-8) | B4, B6, B7, A4, A5a, A6, A11a, P1, P2a (after B4, before B8's imports), P3a, P4, P5; D-track (D12, D13 first; P6 after D5) | `PARITY` on REF |
 | 2. Hybrid ships (weeks 8-10) | A7 step 1, B8, B9, F2, N3, N4 (hybrid parts) | `render.scene = hybrid` in presets low-ultra; `R5` gates in hybrid |
 | 3. Modern lighting (weeks 10-18) | B10-B15, F3, F4, A7 step 2, A8 (N2b/c and A11b only if N2 reopens) | `R5` gates in modern; owner review |
-| 4. Resolution and effects | B16-B22, F5, E6-E9, P2, P3 | per ticket |
+| 4. Resolution and effects | B16-B22, F5, E6-E9, P2b, P2c, P3b | per ticket |
 | 5. Optional | B23, C6 on devices, research track | per ticket |
 
 Critical path: A0 -> A1 -> A10 -> A2/A3 -> B7 (also needs B1 -> B3 -> B4 and B5 -> B6) -> B8 -> B10 -> B15.

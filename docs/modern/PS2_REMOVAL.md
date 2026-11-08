@@ -30,14 +30,16 @@ permanent residue:
   - GT4's post effects: B15, modern mode (GT4's grade and glare skipped, the pipeline's bloom, exposure and tone map),
     with N3 and N4 for the flare and lamp draws;
   - the HUD: E6 (an output-resolution layer), E7 (SDF text for GT4's font pages), E9 (HUD scale, safe area);
-  - the menus: a native menu with host-owned assets and text (lane M; its tickets are not in this plan yet), with
-    E5's host font;
+  - GT4's own menus keep drawing through the GS path: E6 and E7 change how their 2D and text look (output
+    resolution, SDF text), and P3b makes their draw state native, but nothing replaces them. Lane M adds new
+    settings pages inside GT4's menu flow, drawn by the host with host-owned assets and SDF text (page logic stays
+    in the game; lane M's `MENU_DESIGN.md`, tickets M1-Mn, once the coordinator approves them);
 - **reads of graphics memory** that the game logic uses (luminance probe, photo tiles, car icons): R9 decides each,
   served from the modern targets where they exist;
 - **GS-shaped records**: the `gfx` records still carry GS register images (TEX0, ALPHA, TEST, ZBUF...) and name
-  surfaces by GS address and format: P3;
+  surfaces by GS address and format: P3b (and P3a for the frame list's DMA-tag links);
 - **the GS memory model on the host**, which the GS path needs for targets, reads and reinterpretations (textures
-  are already native, NATIVE_V2 step 1): P2.
+  are already native, NATIVE_V2 step 1): P2a-P2c.
 
 ## 2. Mechanisms left, and their verdicts
 
@@ -62,9 +64,9 @@ permanent residue:
 | Memory card (libmc on folders; PS2 save files) | `runtime/memcard.cpp`, `save_folder.cpp` | **kept** | The game's save code and its data format. D3 hardened it. |
 | Pad (libpad2's 18-byte frames, pressure) | `runtime/iop.cpp`, `platform/gs/ps2_pad.h`, `platform/input/` | **kept** at the pad API | GT4's input layer reads PS2 pad bytes. Devices map onto it (D12-D16). |
 | IPU and the movie format | `runtime/native/movie.cpp` | **replaced** already | FFmpeg decodes PSS. The PSS files are the disc's data. |
-| GS-shaped `gfx` records (GS register images, surfaces named by GS address and format; the frame list's DMA tag layout as block links) | `include/gt4/gfx.h`, `runtime/native/pgl.cpp`, `runtime/frame.cpp` | **replaced**, after B8 | P3: draw state in renderer terms (blend, depth, texture and target handles). The GS encoding moves into the GS back end, which `original` still uses. pgl's API (the game logic's calls) is unchanged. |
-| The host's GS memory model (targets by address, reinterpretation, swizzling) | `platform/gsnative/gs_memory.*`, `gs_frontend.*` | **replaced** for everything but reads and `original` | P2: finish NATIVE_V2 steps 1 and 3 (targets as native images; reinterpretations as explicit copies). Reads (R9) and the GS path keep a GS view of memory where `original` needs it. |
-| Legacy GIF / VIF1 / VIF0 records and the host's decoders for them | `protocol.h` (`GT4_REC_GIF`, `VIF1`, `VIF0`), `gs_frontend.*`, `platform/gs/vif1.cpp`'s stream path | **replaced** (dead in the live game) | P1: convert or re-record the captures that still use them, then delete the record kinds and decoders. `vif1.cpp`'s model-packet decoder stays: the model files' vertex data is the game's data. |
+| GS-shaped `gfx` records (GS register images, surfaces named by GS address and format; the frame list's DMA tag layout as block links) | `include/gt4/gfx.h`, `runtime/native/pgl.cpp`, `runtime/frame.cpp` | **replaced** | P3a: block links as offsets (any time); P3b, after P2a: draw state in renderer terms (blend, depth, texture and target handles). The GS encoding moves into the GS back end, which `original` still uses. pgl's API (the game logic's calls) is unchanged. |
+| The host's GS memory model (targets by address, reinterpretation, swizzling) | `platform/gsnative/gs_memory.*`, `gs_frontend.*` | **replaced** | P2a: targets keyed by surface; P2b: native palettes; P2c: reinterpretations as explicit copies. `original` runs the same front end, so its path changes too, identical at every step. A GS view of memory stays for the game's readers until R9 decides each. |
+| Legacy GIF / VIF1 / VIF0 records and their stream path | `protocol.h` (`GT4_REC_GIF`, `VIF1`, `VIF0`, and kind 4, the old GS_PRIV), `GraphicsStream::record`'s cases, `platform/gs/vif1.cpp`'s stream and DIRECT path | **replaced** (dead in the live game) | P1: delete the record kinds (their numbers kept reserved, so an old capture is refused), their stream cases and `vif1.cpp`'s stream path. The GS back end's packet input stays: the 3D renderers pass the game's packets on as PATH1, and state restore replays the saved GS registers as one A+D packet. `vif1.cpp`'s model-packet decoder stays too: the model files' vertex data is the game's data. |
 | VIF UNPACK layout of model packets | `vif1.cpp` `batchModel`, the mesh cache (B5) | **kept** as a data format | The game's model files are in this format. The mesh cache decodes it once. |
 | The display record in the graphics library's encoding (PMODE, SMODE2, DISPFB, DISPLAY) | `runtime/gs.cpp`, the host | **kept** | It is what the game's library computes. The host converts it once a frame. |
 | Interlaced fields (`display.race_frames = fields`) | game option, `runtime/gs.cpp` | **kept** as an option | `progressive` is the default; fields stay for the PS2 picture. |
