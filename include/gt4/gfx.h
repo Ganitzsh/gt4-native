@@ -888,9 +888,10 @@ enum InstanceFlags : uint16_t {
                                //   course lamps near the car, drawn into the car's reflection texture, not the view's
                                //   target; objectToView = set 0 as the pass set it (the car's camera, orthographic);
                                //   entrant = the car. Out of the binding (CONTRACTS.md a.5.7)
-    kInstReflection = 1024,    // drawn by the road reflection pass (render_reflection 003411D0) into its 64 x 32 target
-                               //   with its own Z, inside the main view; set by the pass's context (the 0033EAB8
-                               //   copy), never from the target. Out of the binding (CONTRACTS.md a.5.7)
+    kInstReflection = 1024,    // drawn by the road reflection pass (render_reflection 003411D0), inside the main view:
+                               //   into its 64 x 32 target with its own Z, and in part straight into the main view's
+                               //   own target; set by the pass's context (the 0033EAB8 copy), never from the target.
+                               //   Out of the binding (CONTRACTS.md a.5.7)
 };
 struct Instance {
     Prefix prefix;
