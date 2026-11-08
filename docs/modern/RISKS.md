@@ -380,6 +380,12 @@ Otherwise the answer is no, and the register image stays.
 
 ## Other risks, no spike needed now
 
+- **Motion vectors for earlier depth partitions.** The scene stage's motion-vector pass redraws the 3D with depth
+  EQUAL against the frame's Z at the Light, but GT4 clears Z between its depth partitions (R5), so surfaces drawn
+  in an earlier partition (the far course) get no motion vectors today. TAA and motion blur treat them as static.
+  B8's per-partition side-channel passes give the substituted items theirs; the GS path's own pass would need the
+  same per-partition split, measured when TAA ghosting on distant scenery is reviewed (B16).
+
 - **Draw count of the modern path.** 1,000 instances and 1,702 batches a race frame: welded meshes and GPU culling
   (B7, B10) keep it low; measured by `PERF` from B7.
 - **`original` regression.** Mitigated by `ORIG` on every ticket and by the option that keeps the game from

@@ -420,15 +420,31 @@ colour and alpha as they stand (particles Z-tested against the cars, t76 added b
    drawn, retired after the frames in flight when the mesh cache evicts the mesh, under a budget. Each item stays
    one indexed draw; its CPU cost per item is reported into B6c's span. B7's host-visible arena stays for
    `render.scene = parity` only.
-2. **The hybrid pipelines:** the parity vertex stage and a hybrid fragment stage (`gsn.frag`'s parity variant in
-   B8's first form, so hybrid at 1x equals parity), with side-channel attachments in the hybrid render passes:
-   view-space normal, material id (B6's `MaterialId`, so B10's classes reach the scene stage), view-space depth
-   (from the instance's own projection, independent of GT4's partitioned Z) and motion. They are cleared where the
-   view begins and made only in hybrid. Untagged draws leave normal, depth and motion alone. An untagged draw that
-   writes colour without blending (the sky, opaque billboards) writes material id 0 ("GT4's colour as it is"), so
-   the scene stage never relights it with the normal of the car under it. A blended one leaves the id (an integer
-   can't blend: writing 0 would cut a hard-edged hole in the relighting under faint smoke) and marks the pixel
-   veiled (a bit, or its coverage in a small unorm channel); how a veiled pixel is lit is B10's.
+2. **The hybrid pipelines and the side-channel passes:** the parity vertex stage and a hybrid fragment stage
+   (`gsn.frag`'s parity variant in B8's first form, so hybrid at 1x equals parity). The side channels (view-space
+   normal, material id: B6's `MaterialId`, so B10's classes reach the scene stage; view-space depth, from the
+   instance's own projection, independent of GT4's partitioned Z; motion) are not extra attachments of the GS
+   passes: GT4's blended draws use dual-source blending, which allows one colour output
+   (`maxFragmentDualSrcAttachments`), and every GS pipeline would need a variant per attachment count. Instead a
+   side-channel pass redraws the items with depth test EQUAL, as the scene stage's motion-vector pass does, through
+   the parity vertex stage (the same Z to the bit), writing no colour or depth to the GS target:
+   - **one pass per depth partition:** GT4 clears Z between its partitions (R5, about 2.7 clears a frame; the
+     course's near and far passes), so a single pass at the Light would find only the last partition's Z. A pass
+     runs just before each Z clear of the view's depth target in the command order, and at the Light, for the
+     items drawn since the previous one. The Z clears are R5's classes (sprites with Z test ALWAYS writing Z, the
+     alpha-test-never Z-only fills), recognised in the plan, not by a heuristic in the draw loop;
+   - **each pass** first writes material 0 ("GT4's colour as it is") and clears the other channels where this
+     partition wrote Z (Z differs from the value the clear left), then redraws the partition's items with EQUAL.
+     So a later partition overwrites an earlier one exactly where it drew, as GT4's colour does after the clear,
+     and a pixel whose final Z an untagged opaque draw wrote (the sky, opaque billboards) keeps material 0, never
+     a stale channel or the normal of the car under it;
+   - **veiled:** the same pass then draws the partition's blended draws (items and untagged, from the GS vertex
+     buffer as the motion-vector pass reads it) with test GEQUAL and no depth write, marking the pixels a blend
+     lies in front of (a bit, or the coverage in a small unorm channel). A material id is an integer and can't
+     blend, so writing 0 there would cut a hard-edged hole in the relighting under faint smoke. How a veiled pixel
+     is lit is B10's;
+   - the cost: the items drawn once more in total a frame (the motion-vector pass is 46 us on `race7` high), split
+     over two or three passes, and no change to the GS passes or pipelines. Made only in hybrid.
 3. **The scene stage reads the side channels:** in B8 only a debug view of them; B10 lights with them.
 4. **The read switch** (R9 as a per-reader table): a list holding a game read of the scene target whose reader is
    marked GS-only draws that view on the GS path (its items left out), so the read sees the PS2's picture; counted
