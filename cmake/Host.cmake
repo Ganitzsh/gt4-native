@@ -659,6 +659,12 @@ add_test(NAME material_table COMMAND gt4_material_table_test)
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/frame_diff.py --selftest)
     # The machine's slots (tools/slot.py): a live holder kept, a dead or reused one removed, on a temporary folder.
     add_test(NAME slot_selftest COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/slot.py --self-test)
+    # PLAN rule 9's comment-only proof (tools/comment_only.py): comment edits pass; a // comment ending in a
+    # backslash, a /* */ pair around unchanged code, code, known.txt entries and added sources fail. Skipped (77)
+    # without g++.
+    add_test(NAME comment_only_selftest
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/comment_only.py --self-test)
+    set_tests_properties(comment_only_selftest PROPERTIES SKIP_RETURN_CODE 77)
     # A replay comes out the same every run with frame interpolation and the HD pack on (C1): a capture with 3D
     # replayed twice, every frame bit for bit. Needs GT4_DETERMINISM_CAPTURE (captures are not in the repository)
     # and a Vulkan GPU; skipped (77) without the capture.
