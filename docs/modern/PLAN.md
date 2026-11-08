@@ -69,7 +69,7 @@ ARCHITECTURE.md section 1) and the CPU-side tests (B5's mesh check, A10's decode
 | D. Systems | `platform/input/`, `platform/audio/`, `runtime/memcard.cpp`, `platform/saves/`, `runtime/iop.cpp`, `runtime/audio.cpp` | `main.cpp`: D1 **after C1**. `protocol.h`: D2 **after A1**. `stream.cpp`: D5 **after A10** |
 | E. UI | no agent; its files moved on 2026-11-08 (the coordinator): the settings table to lane C, `overlay.*`, `settings_menu.*` and `layer2d.*` to lane M. Its remaining tickets E5 (SDF font), E6 (2D layer), E7 and E9 (HUD) go to lane M with their files (the coordinator), lane C reviewing | `gs_frontend.cpp` `textureFor` (E2), `gsn_display.frag` (E3): day one, **before A10** |
 | F. Night lighting | `include/gt4/render/light_list.h`, `shaders/light_list.glsl`, `platform/render/modern/lights_*`, `tools/frame_metrics.py`, the Route 5 tickets | `gsn_scene.cpp` scene stage: F2 **after B4** |
-| M. Menus (docs/modern/MENU_DESIGN.md) | `platform/ui/` (page engine, UI draw list, UI renderer, SDF text), `platform/render/modern/layer2d.*`, `platform/render/overlay.*`, `settings_menu.*` (deleted by M9), `runtime/menu/`, `assets/ui/`, `tools/ui_assets.py`, `include/gt4/ui.h`, the menu-flow `game_src` copies (00109D00, 0010FE40, 0038B428, 0038B2B0); lane C reviews the host-side UI files | `protocol.h`: M1, one link version per landing (serialised with P1 and P3a). `runtime/link.cpp` (lane C's, lane A reviews). `runtime/iop.cpp` (lane D reviews). `main.cpp` (lane C's order) |
+| M. Menus (docs/modern/MENU_DESIGN.md) | `platform/ui/` (page engine, UI draw list, UI renderer, SDF text), `platform/render/modern/layer2d.*`, `platform/render/overlay.*`, `settings_menu.*` (deleted by M9), `runtime/menu/`, `assets/ui/`, `tools/ui_assets.py`, `include/gt4/ui.h`, the menu-flow `game_src` copies (00109D00, 0010FE40, 0038B428, 0038B2B0); lane C reviews the host-side UI files | `protocol.h`: M1 took link version 4 (ba5c358); a later change to what the game sends takes the next one. `runtime/link.cpp` (lane C's, lane A reviews). `runtime/iop.cpp` (lane D reviews). `main.cpp` (lane C's order) |
 
 `settings.cpp` / `settings.h`: E1 splits the option table into per-module files on day one; after that each lane
 adds its options in its own file (`settings_scene.cpp`, `settings_input.cpp`, `settings_audio.cpp`,
@@ -840,8 +840,8 @@ commits).** What is left of docs/NATIVE_V2.md (step 1's textures are done):
     probe).
 
 **P3a: Block links as offsets (S-M, lane A).** The frame list's DMA-tag block links become plain offsets
-(`runtime/frame.cpp`'s walk, pgl's packet). Depends: none. It goes with P1's format bump (both phase 1); P3b bumps
-the format again later, with its own conversion.
+(`runtime/frame.cpp`'s walk, pgl's packet). Depends: none. It changes what the game sends, so it takes the next
+`GT4_LINK_VERSION` and converts the captures; P3b does both again later.
 
 **P3b: Draw state in renderer terms (L; lane A the runtime side, lane B the host side).** `include/gt4/gfx.h`
 records carry blend, depth, texture and target handles instead of GS register images. The target handle is P2a's
@@ -863,7 +863,11 @@ Acceptance for P3a and P3b:
 - **Captures.** The new records change the link format, so every capture CAPTURES.md lists is converted (old
   records to new) or refused with a message, as in P1. The converter is also the identity oracle: the converted
   capture on the new host against the old capture on the old host, identical. Each ticket states this before its
-  code changes. P1 and P3a share one format bump (phase 1); P3b's is its own, later.
+  code changes. P3a and P3b each take the next `GT4_LINK_VERSION` when they land (M1 took 4). P1 needs neither a
+  version nor a conversion: it only removes host code for kinds the game no longer sends. Captures don't carry
+  `GT4_LINK_VERSION`, so the version alone won't refuse an old capture: the replay reads the new record layout,
+  from converted REF captures or through a reader kept for the old one, and anything else is refused by its
+  layout.
 
 **P4: No preemptive frame delivery (S-M, lane A, which owns `runtime/kernel.cpp` for it).** Find the threads that
 make no syscall for 50 ms (17 of 8,911 deliveries in a session to a race used the fallback), give each a safe point,
