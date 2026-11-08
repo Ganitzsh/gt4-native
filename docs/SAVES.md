@@ -57,5 +57,33 @@ count is the length in its parent's entry for it; a folder's own "." entry holds
 
 ## Taking a save to a PS2 or PCSX2
 
-`gt4::saves::exportSave` (`platform/saves/save_import.h`) writes one save folder as a `.psu`, which PCSX2's
-memory card editor and uLaunchELF on a PS2 import; `tests/save_import.cpp` reads it back file for file.
+```
+gt4_host --export-save FILE.psu [--export-name NAME] [--saves DIR] [--force]   one save (default BASCUS-97328GAMEDATA)
+gt4_host --export-save FILE.ps2 [--saves DIR] [--force]   a new PCSX2 memory card with every GT4 save of the folder
+```
+
+- A name without an extension gets `.psu`, the default: a `.psu` is imported onto a card by PCSX2 or a PS2 and cannot
+  damage one.
+- The output is always a new file, written whole beside it and then renamed. An existing FILE is refused and never
+  opened; `--force` replaces it by that rename. No export ever modifies a card image in place.
+
+- `gt4::saves::exportSave` (`platform/saves/save_import.h`) writes one save folder as a `.psu`, which PCSX2's memory
+  card editor and uLaunchELF on a PS2 import.
+- `gt4::saves::exportCard` writes every GT4 save of the folder onto a new 8 MiB card in PCSX2's `.ps2` format. The
+  layout is the standard one the PS2 formats:
+  - 16,384 pages of 512 bytes, each followed by its 16 bytes of ECC (three bytes per 128-byte quarter, the Hamming
+    code the card keeps);
+  - two pages to a cluster; the superblock (`Sony PS2 Memory Card Format 1.2.0.0`) in cluster 0;
+  - the indirect FAT in cluster 8, the FAT in 9-40, and 8,135 allocatable clusters from 41;
+  - the root `.` and `..`, then each save's folder (mode 0x8427) with its files (0x8497), dated now on the PS2's
+    clock (JST); a folder's `.` points at its parent's first cluster and its entry there;
+  - the card's flags 0x2B, as mymcplus formats a card;
+  - backup erase block 1022 erased (every byte 0xFF, the spare bytes too), block 1023 zero pages. The card's server
+    takes a backup block that is not erased for an unfinished write and copies it back at mount: a card with zeros in
+    1022 lost its superblock in PCSX2 (lane U's run).
+- `tests/save_import.cpp` reads both back file for file, and checks the card's size, superblock, an empty page's
+  ECC, the erased block, and that an existing file is refused (or, with force, replaced).
+
+A save folder copied as it is into a PCSX2 folder memory card is not enough: GT4 found no data there (lane C, a copy
+of a native save into a folder card). A folder card also holds `_pcsx2_superblock` at its root and per-folder
+metadata, which PCSX2 writes when it formats one or saves into it. Which of them GT4 needs was not narrowed down.

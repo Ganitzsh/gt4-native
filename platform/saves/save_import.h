@@ -38,11 +38,18 @@ struct SaveEntry {
 std::vector<SaveEntry> readSaves(const std::filesystem::path& source, std::string& error);
 
 // One save of the folder (its name, such as BASCUS-97328GAMEDATA) as a .psu, which PCSX2's memory card editor,
-// uLaunchELF on a PS2 and importSave read. `out` is written whole or not at all.
+// uLaunchELF on a PS2 and importSave read. `out` is written whole or not at all, always as a new file: an existing
+// `out` is never opened or modified; it is refused, or with `force` replaced by renaming the new file over it.
 struct ExportResult {
     bool ok = false;
     std::string message;
 };
-ExportResult exportSave(const std::filesystem::path& saveFolder, const std::string& save, const std::filesystem::path& out);
+ExportResult exportSave(const std::filesystem::path& saveFolder, const std::string& save,
+                        const std::filesystem::path& out, bool force = false);
+
+// Every GT4 save of the folder (BASCUS-97328...) on a new 8 MiB memory card image in PCSX2's .ps2 format (512-byte
+// pages, each with its 16 bytes of ECC), as the PS2 formats a card: PCSX2 mounts it as a card file, and its browser and
+// GT4 see the saves. `out` is written as exportSave's: a new file, never a card the player already has.
+ExportResult exportCard(const std::filesystem::path& saveFolder, const std::filesystem::path& out, bool force = false);
 
 }  // namespace gt4::saves
