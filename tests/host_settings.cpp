@@ -102,6 +102,26 @@ int main() {
         check(!setOption(f, "display.field_mode", "bob").empty(), "an unknown field mode is refused");
     }
 
+    // lighting.night (settings_lighting.cpp, PLAN.md F2): original by default and in the original preset, which
+    // turns it back off; the quality presets leave it as the player set it (in none of them until N3).
+    {
+        Settings n;
+        check(n.night == LightingMode::Original && getOption(n, "lighting.night") == "original", "lighting.night is original by default");
+        applyPreset(n, Preset::Original);
+        check(setOption(n, "lighting.night", "enhanced").empty() && n.night == LightingMode::Enhanced, "lighting.night = enhanced is taken");
+        check(detectPreset(n) == Preset::Custom, "the original preset with the night relit reads as custom");
+        applyPreset(n, Preset::Original);
+        check(n.night == LightingMode::Original && detectPreset(n) == Preset::Original, "the original preset turns the night relight off");
+        check(setOption(n, "lighting.night", "enhanced").empty(), "enhanced again");
+        applyPreset(n, Preset::High);
+        check(n.night == LightingMode::Enhanced && detectPreset(n) == Preset::High, "a quality preset leaves it as set");
+        for (Preset preset : {Preset::Low, Preset::Medium, Preset::High, Preset::Ultra}) {
+            Settings t;
+            applyPreset(t, preset);
+            check(t.night == LightingMode::Original, "no preset turns the night relight on");
+        }
+    }
+
     // render.scene (settings_scene.cpp): only the GS path until the modern renderer draws a view.
     {
         Settings r;

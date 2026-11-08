@@ -78,6 +78,7 @@ struct Settings {
     AntiAliasing aa = AntiAliasing::Taa;
     int msaa = 1;                     // 1, 2, 4 or 8 samples
     SceneRenderer scene = SceneRenderer::Original;   // render.scene (settings_scene.cpp)
+    LightingMode night = LightingMode::Original;     // lighting.night (settings_lighting.cpp; PLAN.md F2)
 
     // [texture]
     TextureFilter textureFilter = TextureFilter::Trilinear;

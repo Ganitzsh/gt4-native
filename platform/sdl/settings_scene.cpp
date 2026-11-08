@@ -28,13 +28,14 @@ void sceneOptions(std::vector<Option>& o) {
 namespace gt4 {
 
 // The game sends scene records (kOptionSceneRecords) when a capture wants them (GT4_HOST_RECORD_SCENE=1, CONTRACTS.md
-// a.1 and docs/modern/CAPTURES.md) or a modern renderer draws the scene. Read here only, once.
+// a.1 and docs/modern/CAPTURES.md), a modern renderer draws the scene, or the night relight needs the lamps
+// (lighting.night = enhanced, PLAN.md F2: the game sends its lights only as scene records). Read here only, once.
 bool sceneRecordsWanted(const Settings& settings) {
     static const bool record = [] {
         const char* e = std::getenv("GT4_HOST_RECORD_SCENE");
         return e && e[0] == '1' && e[1] == '\0';
     }();
-    return record || settings.scene != SceneRenderer::Original;
+    return record || settings.scene != SceneRenderer::Original || settings.night != LightingMode::Original;
 }
 
 }  // namespace gt4

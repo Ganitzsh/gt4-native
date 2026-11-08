@@ -55,11 +55,12 @@ const PresetTable& presetValues(Preset preset) {
     // Personal-taste effects (depth of field, motion blur, grain, vignette, aberration) belong only to the
     // PS2-faithful preset; the quality presets leave them as the player set them.
     // render.scene: original in the original preset; low to ultra take hybrid when it lands (PLAN.md B8,
-    // ARCHITECTURE.md section 7) and leave it as it is until then.
+    // ARCHITECTURE.md section 7) and leave it as it is until then. lighting.night likewise: original here, and the
+    // quality presets leave it alone until N3 lands (PLAN.md F2).
     // input.response: original (the PS2's sticks, as before) in the original preset, modern in the others (PLAN.md
     // D12); its input.steer.* and input.pedal.* values are the player's, in no preset.
     static const PresetTable original{
-        {"render.scene", "original"}, {"render.gs", "original"}, {"display.field_mode", "blend"}, {"render.quality", "native"}, {"render.upscaler", "bilinear"}, {"render.sharpness", "0"},
+        {"render.scene", "original"}, {"lighting.night", "original"}, {"render.gs", "original"}, {"display.field_mode", "blend"}, {"render.quality", "native"}, {"render.upscaler", "bilinear"}, {"render.sharpness", "0"},
         {"render.aa", "off"}, {"render.msaa", "1"}, {"texture.filter", "bilinear"}, {"texture.anisotropy", "1"},
         {"texture.lod_bias", "0"}, {"effects.shadows", "original"}, {"effects.reflections", "original"},
         {"effects.bloom", "original"}, {"effects.dof", "original"}, {"effects.motion_blur", "original"},
