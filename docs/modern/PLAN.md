@@ -156,10 +156,11 @@ env face's views bound to the 128 x 256 env target; `runsAfterInstance == 0` in 
 
 **A7: Light records (M).** Sources, corrected by lane A from the code (2026-11-08, a scan of the ELF for every
 store to the lists' counts). The light-glow pass 003B88C8 draws from two per-frame lists in its object:
-- **The street lamps are in neither list** (lane A, Route 5 Normal at night, 2026-11-08): `entries2[]` was empty in
-  every frame, and they are not `BillboardSet__render` billboards either (one type, vegetation-like, 56 in the run).
-  Their glows are most likely course geometry. So the street lamps come host-side, from the mesh cache: F2b, not
-  this ticket.
+- **Some course lamps are in `entries2[]`** (lane A, corrected 2026-11-08). The first hook read the list too
+  early, before the course sources were added, and saw it empty. Read right before 003B88C8 draws it, a B-spec
+  S.S. Route 5 Reverse night race sends 1,928 `kSrcCourseGlow` lights over 1,200 frames (about 1.6 a frame),
+  besides 33,027 car lamps. They are not `BillboardSet__render` billboards (one type, vegetation-like). How many of
+  the street lamps the list holds is not measured yet: F2b compares them with its lamp heads.
 - **Step 1a, warning lamps and car lamps, now.**
   - `entries2[100]` at `+0x184C` (count at `+0x1848`; 24-byte hits: view-space x, y, z, distance, a visibility flag,
     the source pointer, which gives the params index). Its only writer is 003B7B70 (matched source,
@@ -177,9 +178,12 @@ store to the lists' counts). The light-glow pass 003B88C8 draws from two per-fra
   - One `Light` per entry: point, range 0, colour = the light's rgb x the pass's rgb / 255, intensity without the
     view-dependent term (fields as agreed with lane F).
   - When: 0033EAB8 empties both lists (003B80E8, which also saves the current matrix at `+0x21B0`) after the main
-    `ViewEnd` and the mirror view; both are full after its method 0x3F0, with this frame's camera, before the flare
-    read 003B8848 and the glow draws (003B88C8 from 0033F2E8). The `Light`s are sent right after, tagged with the
-    main view's id (CONTRACTS a.5 rule 4). F2 reads them from the frame's `SceneFrame` by view id.
+    `ViewEnd` and the mirror view, with this frame's camera. The course sources are added after method 0x3F0, so
+    the lists are read right before 003B88C8 draws them (in 0033F2E8, inside the flare bracket). The `Light`s are
+    sent there, tagged with the main view's id (CONTRACTS a.5 rule 4). F2 reads them from the frame's `SceneFrame`
+    by view id.
+  - The glow-quad check passes (lane A, the same race): 53,546 of 53,546 flare-pass glows (003B88C8's additive
+    stars, mostly car lamps; not the street-lamp draw F2b reads) have a `Light` at their centre.
 - **Step 2, headlight spots:** each headlight's direction and cone from the car body (A9's record, D6), so the
   headlights light the road ahead and not around the car. In lane A's runs the player's car showed no lamps in
   `entries[]` in a time trial once the race ran (perhaps the in-car or bumper view hides them; whether the
@@ -839,10 +843,12 @@ Acceptance: `ORIG`; `VAL`; `PERF(<= 1 ms)` at 1440 x 1080; on a night capture la
 them (review against PCSX2 stills: the scene otherwise unchanged); on the lamps capture with the car moving, N1
 shows no new step above 4 % (N2's bar) from the added light.
 
-**F2b: Course lamps from the mesh cache (M, lane F; lane B reviews the mesh-cache use).** The street lamps are not in
-any game list (A7). Their glows are most likely course geometry: lamp-head quads with a glow texture or an additive
-blend, drawn through the course's Cmds. The host finds them once per course mesh and synthesises their lights. No
-new game hook is needed, it is done once per mesh, and it works for other emissive props too.
+**F2b: Course lamps from the mesh cache (M, lane F; lane B reviews the mesh-cache use).** Few street lamps come as
+game records (A7 step 1a: about 1.6 course lights a frame on Route 5, against about 116 lamp-head quads in the
+street-lamp draw a frame, F2b step 0: R11's draw 309, which is course geometry and not a flare-pass draw). Their
+glows are most likely course geometry: lamp-head quads with a glow texture or an additive blend, drawn through the
+course's Cmds. The host finds them once per course mesh and synthesises their lights. No new game hook is needed, it
+is done once per mesh, and it works for other emissive props too.
 - **Step 0 (half a day):** on a Route 5 night capture, find how the lamp-head glows are drawn: the course meshes'
   draw states (texture, blend; B6's `MaterialKey`) of the draws on the lamp heads. Also R11's open point, target
   37's producer: if the light image is drawn from the lamp heads themselves, the same geometry names them.
@@ -891,6 +897,8 @@ new game hook is needed, it is done once per mesh, and it works for other emissi
   - on a second night course (one of lane F's sessions), the same: no miss and no light where no glow is drawn;
   - the gather's dropped count (`GatherStats::dropped`, lights over the list's cap) is 0 on the capture: a dropped
     lamp would show as a dark patch that the miss check, which only asks that the light exists, can't see;
+  - compared with A7's `kSrcCourseGlow` records on lane A's `glow_r5.cap`: where both name a lamp, it gets one
+    light, not two (which one wins is decided from the comparison);
   - the per-frame cost reported (0 extraction after a mesh's first sight), and `PERF` with night enhanced against
     night off in a night race: the split now runs there, so B6's front-end cost lands there too (lane A), measured;
   - `ORIG` unchanged; with scene records off nothing runs.
