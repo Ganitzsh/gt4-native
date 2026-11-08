@@ -58,7 +58,7 @@ void sweep(const input::Shape& shape, const char* name) {
 }  // namespace
 
 int main() {
-    sweep(input::Shape{}, "defaults (no inner dead zone)");
+    sweep(input::Shape{}, "defaults (5 % inner)");
     const input::Shape fivePercent{0.05f, 0.02f, 1.0f, 1.0f, 1.0f};   // 5 % inner, 2 % outer, linear
     sweep(fivePercent, "5 % inner");
     sweep({0.05f, 0.02f, 2.0f, 1.0f, 1.0f}, "linearity 2");

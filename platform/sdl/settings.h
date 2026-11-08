@@ -129,15 +129,14 @@ struct Settings {
     TriggerTravel triggerTravel = TriggerTravel::Game;   // sent to the game (kOptionTriggerTravel)
     // (input.response is a graphics-preset member: original in the original preset, modern in the others)
     InputResponse inputResponse = InputResponse::Modern;
-    // percent of travel; 0 by default: GT4's own band (about 25 % of a side at a standstill, the D12 live
-    // measurement) already swallows a stick's noise, and a host dead zone on top only adds to it
-    float steerDeadzone = 0.0f;
+    float steerDeadzone = 5.0f;         // percent of travel (GT4's band is compensated: steerGameBand)
     float steerOuterDeadzone = 2.0f;    // percent
     float steerLinearity = 1.0f;        // exponent
     float steerSensitivity = 1.0f;      // gain
     float steerSaturation = 100.0f;     // percent of lock
     float steerSmoothing = 0.0f;        // ms
     float steerKeyRate = 150.0f;        // ms to full lock from a key
+    float steerGameBand = 29.0f;        // percent of a side: GT4's steering band, compensated in modern (PLAN D12)
     float pedalDeadzone = 5.0f;         // percent
     float pedalOuterDeadzone = 2.0f;    // percent
     float pedalLinearity = 1.0f;        // exponent

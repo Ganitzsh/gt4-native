@@ -25,8 +25,10 @@ void profile_start();
 // kOptionAspect: the content's aspect x 1000 as the host shows it now (0: not sent), over the start-up --aspect.
 // kOptionSceneRecords: 1 when the host wants scene records (gt4_scene_on, docs/modern/CONTRACTS.md (a)); 0 by default.
 // kOptionTriggerTravel: input.trigger_travel, 0 game, 1 full (runtime/pad_pedals.h; lane D, iop.cpp scale_pedals).
+// kOptionSteerBand: input.steer.game_band in permille, 0 = off (original): GT4's steering band compensated in the left
+// stick's byte while a race is loaded (runtime/pad_steer.h; lane D, iop.cpp steer_band_pad).
 enum GameOption : uint32_t { kOptionAiCatchUp = 0, kOptionMirrorDetail = 1, kOptionModelDetail = 2, kOptionRaceFrames = 3, kOptionAspect = 4,
-                             kOptionSceneRecords = 5, kOptionTriggerTravel = 6, kGameOptionCount = 8 };
+                             kOptionSceneRecords = 5, kOptionTriggerTravel = 6, kOptionSteerBand = 7, kGameOptionCount = 8 };
 void set_game_option(uint32_t id, uint32_t value);   // GT4_REC_HOST_CMD 4 (runtime/link.cpp)
 
 // Scene records (docs/modern/CONTRACTS.md a.5.1): a scene frame is one kicked list. At the kick (runtime/frame.cpp)

@@ -5,6 +5,7 @@
 #include "audio.h"
 #include "gt4/link/protocol.h"
 #include "pad_pedals.h"
+#include "pad_steer.h"
 #include "vehicle.h"
 #include "guest.h"
 #include "image.h"
@@ -567,6 +568,16 @@ bool ds2_buttons(int port, int8_t out[16]) {
     return true;
 }
 
+// input.steer.game_band (the host's kOptionSteerBand, permille; runtime/pad_steer.h): GT4's steering band compensated
+// in the left stick's byte, on each port, only while a race's physics runs (vehicle_live(): some car has weight on a
+// wheel; the conductor alone is in the menus too): the band is the car's, and menus outside a race read the byte as they
+// always did. A race's own pause menu and its replays see the remapped byte.
+void steer_band_pad(uint8_t *data) {
+    const int permille = gt4_game_option(static_cast<int>(kOptionSteerBand));
+    if (permille <= 0 || !vehicle_live()) return;
+    data[4] = pad::steer_band(data[4], static_cast<uint32_t>(permille));   // (bytes 2..5 the sticks; 4 left X)
+}
+
 // input.trigger_travel = full (the host's kOptionTriggerTravel, live; GT4_TRIGGER_TRAVEL=game|full overrides it for
 // tests): the pedals' pressures rescaled to GT4's range (runtime/pad_pedals.h), on the buttons GT4's assignment has
 // accelerate and brake on. Where the assignment can't be read (early in the boot, or a config that isn't a DUALSHOCK 2
@@ -612,6 +623,7 @@ void scale_pedals(int port, uint8_t *data) {
 extern "C" int gt4_replace_scePad2Read(int id, uint8_t *data) {
     if (!link_pad(id & 1, data)) std::memcpy(data, g_pad[id & 1], 18);
     scale_pedals(id & 1, data);
+    steer_band_pad(data);
     // GT4_VEHICLE_LOG (D6, D12; debugging): the cars' state once a VBlank (pad 1's read), with the steering byte this
     // read gives the game, for the lap and steering plots. On the pad's thread, so a line can mix two physics ticks;
     // the scene records come from the frame's kick (lane A's path).

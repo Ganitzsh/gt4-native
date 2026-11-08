@@ -80,7 +80,7 @@ void Response::step(ps2::PadInput& in, const Snapshot& s, const ResponseConfig& 
     keySteer_ = ramp(keySteer_, std::clamp(steer.digital, -1.0f, 1.0f), config.keyRateMs, dt);
     const float steerTotal = std::clamp(keySteer_ + steer.analogue, -1.0f, 1.0f);
     steer_ = smooth(steer_, shapeAxis(steerTotal, config.steer), config.steerSmoothingMs, dt);
-    in.leftX = steer_;
+    in.leftX = steer_;   // (GT4's band is compensated game-side while a race runs: runtime/pad_steer.h)
     // the pedals: L2 and R2's pressure (a key or button reads full; a trigger is shaped), smoothed
     const ps2::PadButton pedal[2] = {ps2::PadL2, ps2::PadR2};
     for (int k = 0; k < 2; ++k) {

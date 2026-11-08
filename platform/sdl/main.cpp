@@ -976,6 +976,10 @@ int run(const Options& options) {
                     gs->setGameOption(4, a > 0.0f ? static_cast<uint32_t>(a * 1000.0f + 0.5f) : 0u);
                 }
                 gs->setGameOption(6, static_cast<uint32_t>(settings.triggerTravel)); // kOptionTriggerTravel
+                // kOptionSteerBand: GT4's steering band, compensated game-side while a race runs (runtime/pad_steer.h); per
+                // mille, 0 = off, and always 0 in original
+                gs->setGameOption(7, settings.inputResponse == gt4::InputResponse::Modern
+                                         ? static_cast<uint32_t>(std::lround(settings.steerGameBand * 10.0f)) : 0u);
                 // Nothing reaches the game while the menu is open, nor afterwards until every button is up
                 // (the button that closed the menu would act in the game).
                 // the frame's time for the pads' response (its filters and the keys' ramp): a 60 Hz tick under

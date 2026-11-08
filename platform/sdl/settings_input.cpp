@@ -16,9 +16,9 @@ void inputOptions(std::vector<Option>& o) {
     o.push_back(enumOption("input.response", &Settings::inputResponse, {"original", "modern"},
         "How the sticks and pedals respond. original = as before: the sticks cut at 8 % of their travel and jump "
         "from there, nothing else (the input.steer and input.pedal options are not used). modern = the steering "
-        "and the pedals through the dead zones, curve and filters below, the keys' steering ramped. GT4 adds a centre "
-        "band of its own (the wheels stay straight up to about a quarter of a side's travel at a standstill), so the "
-        "steering's dead zone defaults to 0."));
+        "and the pedals through the dead zones, curve and filters below, the keys' steering ramped, and, in races, GT4's "
+        "own centre band compensated (input.steer.game_band): GT4 keeps the wheels straight for the first 29 % of a "
+        "side of the stick, and original keeps that, as on the PS2."));
     o.push_back(floatOption("input.steer.deadzone", &Settings::steerDeadzone, 0.0f, 30.0f,
         "Steering (left stick X), percent of travel each side: below it the wheels stay straight, above it the "
         "steering starts from straight (the rest of the travel rescaled, no jump)."));
@@ -37,6 +37,11 @@ void inputOptions(std::vector<Option>& o) {
     o.push_back(floatOption("input.steer.key_rate", &Settings::steerKeyRate, 0.0f, 500.0f,
         "Steering from the keyboard: ms from straight to full lock while a key is held (back to straight twice as "
         "fast). 0 = at once."));
+    o.push_back(floatOption("input.steer.game_band", &Settings::steerGameBand, 0.0f, 40.0f,
+        "Steering: GT4's own centre band, percent of a side (the car's steering command stays 0 inside it; measured "
+        "29). In modern, while a race is loaded, the game starts the steering at the band's edge, so the stick's first "
+        "steps past the dead zone above turn the wheels; menus outside a race read the stick as before. 0 = not "
+        "compensated. original never compensates it."));
     o.push_back(floatOption("input.pedal.deadzone", &Settings::pedalDeadzone, 0.0f, 30.0f,
         "The pedals (the analogue triggers on L2 and R2, and the right stick's halves): percent of travel before "
         "they start, from 0. GT4's own pedal curve and input.trigger_travel apply after this."));
