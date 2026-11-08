@@ -25,7 +25,9 @@ A public release holds no game data at all:
 takes gt4_game.exe only from a clean build (tools/release_game.py): it refuses one whose BUILD-STAMP.json does not
 match the exe, or whose inputs (either tree) have changed since. It writes OUT/GT4-Native-VERSION-game-sources.zip
 (the decomp's files at the stamped commit, the native corrections and drafts as compiled, the stamp) and
-OUT/GT4-Native-VERSION-windows-x64.zip:
+OUT/GT4-Native-VERSION-windows-ARCH.zip (--arch x64, the default, or arm64: a cross build's host from
+build/host-windows-arm64-Release, tools/build_windows.cmd with GT4_ARCH=arm64, and the arm64 C++ runtime; built by
+CI, PLAN.md C4):
     GT4-Native-VERSION/gt4_host.exe, gt4_game.exe, msvcp140.dll, vcruntime140*.dll
     GT4-Native-VERSION/settings.ini, settings-handheld.ini   the desktop and handheld profiles
     GT4-Native-VERSION/README.txt, LICENSE, THIRD_PARTY_NOTICES.md, CREDITS.md, BUILD-INFO.txt
@@ -230,7 +232,8 @@ def release(a):
     root = a.build_root or ROOT
     if not a.decomp:
         raise SystemExit("--release needs --decomp (the game build's sources are checked against it)")
-    host = os.path.join(root, os.path.relpath(HOST, ROOT))
+    host = os.path.join(root, os.path.relpath(HOST, ROOT)) if a.arch == "x64" else \
+        os.path.join(root, "build", "host-windows-arm64-Release", "gt4_host.exe")
     build = a.game_build or os.path.join(root, "build", "game_release")
     stamp = checked_game_build(build, a.decomp, root)
     game = os.path.join(build, "gt4_game.exe")
@@ -261,8 +264,8 @@ def release(a):
     sources = os.path.join(a.out, f"{name}-game-sources.zip")
     print(f"writing {sources}")
     game_sources_zip(sources, stamp, build, a.decomp, a.release)
-    archive = os.path.join(a.out, f"{name}-windows-x64.zip")
-    files = [(f, os.path.basename(f)) for f in [host, game] + vc_runtime()]
+    archive = os.path.join(a.out, f"{name}-windows-{a.arch}.zip")
+    files = [(f, os.path.basename(f)) for f in [host, game] + vc_runtime(a.arch)]
     files += [(os.path.join(root, d), d) for d in RELEASE_DOCS if os.path.isfile(os.path.join(root, d))]
     texts = {
         "settings.ini": ("version = 1\n\n" + PROFILES["desktop"], "\n"),
@@ -296,11 +299,13 @@ def release(a):
     print(f"{sources}: {os.path.getsize(sources) / 2**20:.1f} MiB, SHA-256 {sdigest}")
 
 
-def vc_runtime():
-    """The x64 C++ runtime DLLs gt4_host.exe imports, from Visual Studio's redistributable folder."""
-    roots = glob.glob(r"C:\Program Files*\Microsoft Visual Studio\*\*\VC\Redist\MSVC\*\x64\Microsoft.VC1*.CRT")
+def vc_runtime(arch="x64"):
+    """The C++ runtime DLLs gt4_host.exe imports, for its architecture (x64 or arm64), from Visual Studio's
+    redistributable folder."""
+    roots = glob.glob(rf"C:\Program Files*\Microsoft Visual Studio\*\*\VC\Redist\MSVC\*\{arch}\Microsoft.VC1*.CRT")
     if not roots:
-        raise SystemExit("Visual Studio's VC\\Redist folder (Microsoft.VC143.CRT) not found")
+        raise SystemExit(f"Visual Studio's VC\\Redist folder for {arch} (Microsoft.VC143.CRT) not found"
+                         + (" (the 'MSVC v143 ARM64' component; Windows ARM64 packages are built by CI)" if arch != "x64" else ""))
     crt = sorted(roots)[-1]
     files = [os.path.join(crt, n) for n in ("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll")]
     for f in files:
@@ -341,7 +346,11 @@ def main():
     ap.add_argument("--profile", choices=sorted(PROFILES), default="desktop")
     ap.add_argument("--textures", help="a texture pack folder (textures/SCUS-97328) for the HD textures archive")
     ap.add_argument("--out", default=os.path.join(ROOT, "build", "package"))
+    ap.add_argument("--arch", choices=("x64", "arm64"), default="x64",
+                    help="with --release: the host's architecture (arm64: a cross build, built by CI)")
     a = ap.parse_args()
+    if a.arch != "x64" and not a.release:
+        ap.error("--arch arm64 only builds a release archive (--release): the other packages run the host here")
     if a.release:
         return release(a)
     if not a.decomp:
