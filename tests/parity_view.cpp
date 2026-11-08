@@ -151,7 +151,7 @@ int main() {
             check(spans.empty(), "a HUD, menu or env-copy view: never substituted");
         }
         check(small.stats().viewsOfRoleKept == 3, "... and counted");
-        for (const uint16_t flag : {uint16_t(gt4::gfx::scene::kInstLightMap), uint16_t(1024) /* kInstReflection */}) {
+        for (const uint16_t flag : {uint16_t(gt4::gfx::scene::kInstLightMap), uint16_t(gt4::gfx::scene::kInstReflection)}) {
             gsn::FrameList out = makeList(cache);
             auto view = std::make_shared<scene::SceneView>(*out.views[0].package);
             view->instances[0].flags = flag;
