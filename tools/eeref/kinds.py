@@ -31,7 +31,7 @@ def main():
             text = abi_lint.strip_comments(open(path, encoding='utf-8', errors='replace').read())
         except OSError:
             continue
-        for addr, kinds, is_def, _line, _used, ret in abi_lint.scan(path, text):
+        for addr, kinds, is_def, _line, _used, ret, *_ in abi_lint.scan(path, text):
             if not is_def or kinds is None:
                 continue
             if addr in best and best[addr][0] <= rank[role]:
@@ -47,7 +47,7 @@ def main():
             path = os.path.join(root, n)
             text = abi_lint.strip_comments(open(path, encoding='utf-8', errors='replace').read())
             text = text.replace('gt4_replace_func_', 'func_')
-            for addr, kinds, is_def, _line, _used, ret in abi_lint.scan(path, text):
+            for addr, kinds, is_def, _line, _used, ret, *_ in abi_lint.scan(path, text):
                 if is_def and kinds is not None:
                     ks = ''.join(k if k in 'ifwq' else 'i' for k in kinds if k != '...')
                     best[addr] = (-1, ks or '-', {'s': 'v'}.get(ret, ret if ret in 'viwf' else 'i'))

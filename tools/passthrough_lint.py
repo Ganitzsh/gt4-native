@@ -275,7 +275,7 @@ def definitions(decomp):
             continue
         params = [p for p in abi_lint.split_params(d.group(1)) if p.strip() and p.strip() != "void"]
         kinds = [abi_lint.kind(p) for p in params]
-        rets = [r for (x, _k, is_def, _l, _u, r) in abi_lint.scan(path, text) if is_def and x == addr]
+        rets = [r for (x, _k, is_def, _l, _u, r, *_) in abi_lint.scan(path, text) if is_def and x == addr]
         if rets and rets[0] == "s":
             kinds = ["i"] + kinds   # the returned struct's address comes first
         nint = sum(1 for k in kinds if k != "f")
@@ -302,7 +302,7 @@ def expected_arguments(decomp, defs):
             text = abi_lint.strip_comments(open(path, encoding="utf-8", errors="replace").read())
         except OSError:
             continue
-        for addr, kinds, is_def, _line, _used, _ret in abi_lint.scan(path, text):
+        for addr, kinds, is_def, _line, _used, _ret, *_ in abi_lint.scan(path, text):
             if not is_def and kinds is not None:
                 raise_to(addr, sum(1 for k in kinds if k != "f"), sum(1 for k in kinds if k == "f"),
                          "declared so in " + os.path.basename(path))
