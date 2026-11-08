@@ -392,6 +392,7 @@ struct SceneFrameState {
     uint16_t billboardCount = 0;   // the flush's billboards kept (g_billboards)
     uint16_t openView = 0, viewInstances = 0;
     uint16_t mainView = 0;   // the frame's last kViewMain view (A7: the glow pass's lights name it)
+    int mainRole = 0;        // R6: the role a kViewMain request opens with instead (gt4_scene_main_role; 0 none)
     bool haveProjection = false;
     float clip[16] = {}, viewport[12] = {};   // the last Projection sent
 };
@@ -523,6 +524,7 @@ void gt4_scene_frame_begin(uint32_t context, uint32_t flags) {
 uint32_t gt4_scene_view_begin(uint32_t context, int role, int flags, uint32_t pass) {
     namespace scene = gfx::scene;
     if (!gt4_scene_on() || !g_scene.inFrame) return 0;
+    if (role == scene::kViewMain && g_scene.mainRole) role = g_scene.mainRole;   // (R6: Photo Travel's preview)
     float set0[16], set1[16], viewport[12];
     currentSets(set0, set1);
     std::memcpy(viewport, sprFloats(0xFA0), sizeof viewport);
@@ -544,6 +546,14 @@ uint32_t gt4_scene_view_begin(uint32_t context, int role, int flags, uint32_t pa
     g_scene.viewInstances = 0;
     if (role == scene::kViewMain) g_scene.mainView = view;
     return view;
+}
+
+// R6: until set back to 0, a view the game opens as kViewMain (0033EAB8's copy: the race's world) opens as `role`
+// instead: Photo Travel's preview draws the race's world through 0033E368 into its own buffers (kViewPhoto, CONTRACTS
+// a.4). Per frame: a FrameBegin clears it.
+void gt4_scene_main_role(uint32_t context, int role) {
+    (void)context;
+    g_scene.mainRole = role;
 }
 
 void gt4_scene_view_end(uint32_t context) {

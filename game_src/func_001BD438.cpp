@@ -1,4 +1,9 @@
 /* compiler: ee-gcc2.96-no-strict-aliasing */
+/* Scene records (R6, CONTRACTS a.4): Photo Travel's preview draws the race's world (0033E368) into its own CT32 and
+ * Z24 buffers, outside 0033DEA8's frame: it opens the frame itself, and the world's view, which 0033EAB8's copy opens
+ * as kViewMain, opens as kViewPhoto (pass 0). Nothing is sent while scene records are off. */
+#include "gt4_gfx.h"
+#include "spr.h"
 struct Rect { float x,y,w,h; Rect() {} Rect(float a,float b,float c,float d):x(a),y(b),w(c),h(d) {} };
 struct Buf { int a[16]; };
 struct Ventry { short delta; short pad; void (*fn)(); };
@@ -46,7 +51,11 @@ extern "C" void mPhotoViewFace__virtual_70(void *arg0, View *view, int enabled) 
  func_003C7DA8(race);
  Buf b, c;
  func_001052E0(&b,0,width,height);func_00105338(&c,&b,0x31);
- func_0033E368(race, &b, &c, -1, 0.0f);func_003C7A50(race,&c);
+ gt4_scene_frame_begin(spr_base(),0);
+ gt4_scene_main_role(spr_base(),6);   /* kViewPhoto */
+ func_0033E368(race, &b, &c, -1, 0.0f);
+ gt4_scene_main_role(spr_base(),0);
+ func_003C7A50(race,&c);
  *(int*)((char*)race+0xe320)=0;
  float dist,fov;
  if(func_003C7838(race)) {
