@@ -226,6 +226,9 @@ public:
     // Frames that used the last compiled plan again, and frames that compiled one (Plan::reused), since the graph was made.
     std::pair<uint64_t, uint64_t> planCounts() const;
     void setAbortOnError(bool abort) { abortOnError = abort; }   // default: abort in debug builds
+    // GT4_CPU_PROFILE's scope per pass, named after it (default on). Off for a graph whose work its caller already times
+    // as one stage (GsnScene::read's: "main: a read the game waits for"), so a read's passes are not counted again.
+    void setPassScopes(bool on) { passScopes = on; }
     void setPipelineCache(PipelineCache* cache) { pipelines = cache; }
     // After the slot's fence: its last execution's timestamps (GPU -1 when the slot has none yet).
     const std::vector<PassTiming>& timings(uint32_t slot);
@@ -262,6 +265,7 @@ private:
     std::vector<std::unique_ptr<PassNode>> passes;
     Plan compiled;
     bool abortOnError;
+    bool passScopes = true;
     PipelineCache* pipelines = nullptr;
     std::unique_ptr<Physical> physical;     // Vulkan objects kept across frames
     std::unique_ptr<Cache> cache;           // the last compiled plan and its signature

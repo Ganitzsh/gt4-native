@@ -1063,7 +1063,9 @@ struct GsnScene::Impl {
     // frame slot; GsnScene::read: a read's, "read: ..." passes into readGraph, slot 0, its readbacks left for the read).
     void buildPending(rg::Graph& graph, uint32_t slot, VkExtent2D extent, bool read);
     // GsnScene::read's own render graph (ticket B4 step 5): one slot, so one transient heap (the read waits for the
-    // device first). Destroyed with the scene.
+    // device first). Destroyed with the scene. Its transients stay allocated meanwhile, at the largest scene stage a read
+    // needed: next to the frame graph's, up to twice the scene stage's work-image memory (a few tens of MiB at 1080p
+    // ultra). A low-VRAM device (B6's budgets) can drop it after a burst of reads instead.
     std::unique_ptr<rg::Graph> readGraph;
     uint32_t readFrames = 0;
     bool reading = false;   // GsnScene::read's graph is being built or run: its passes' CPU time is the read's
@@ -3520,7 +3522,10 @@ bool GsnScene::read(const gsn::ReadRequest& request, std::vector<uint8_t>& out) 
     // b.6), so slot 0's buffers and the one transient heap are free, and no frame's graph is between build and execute.
     Impl::Copied copied;
     bool copiedOk = false;
-    if (!s.readGraph) s.readGraph = std::make_unique<rg::Graph>(s.device);
+    if (!s.readGraph) {
+        s.readGraph = std::make_unique<rg::Graph>(s.device);
+        s.readGraph->setPassScopes(false);   // (the read is one stage already: "main: a read the game waits for")
+    }
     rg::FrameInfo info;
     info.slot = 0;
     info.frameIndex = ++s.readFrames;

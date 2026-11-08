@@ -1567,8 +1567,9 @@ void Graph::execute(VkCommandBuffer command, VkQueue computeQueue) {
         {
             static std::map<const char*, cpuprofile::Slot*> scopes;   // (the render thread's)
             cpuprofile::Slot*& s = scopes[node.name];
-            if (!s && cpuprofile::enabled()) s = &cpuprofile::slot(node.name);
-            cpuprofile::Scope scope(cpuprofile::enabled() ? s : nullptr);
+            const bool scoped = passScopes && cpuprofile::enabled();
+            if (!s && scoped) s = &cpuprofile::slot(node.name);
+            cpuprofile::Scope scope(scoped ? s : nullptr);
             PassContext context(*this, frame, step.pass);
             context.command = command;
             context.pipelines = pipelines;
