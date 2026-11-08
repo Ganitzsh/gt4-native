@@ -3461,6 +3461,8 @@ void GsnScene::Impl::pendingListEnd(VkCommandBuffer command) {
     static const long dumpAt = std::getenv("GT4_GSN_DUMP") ? std::strtol(std::getenv("GT4_GSN_DUMP"), nullptr, 10) : -1;
     static const long dumpEvery = std::getenv("GT4_GSN_DUMP_EVERY") ? std::strtol(std::getenv("GT4_GSN_DUMP_EVERY"), nullptr, 10) : 0;
     static const bool dumpDepth = [] { const char* e = std::getenv("GT4_GSN_DUMP_DEPTH"); return e && *e == '1'; }();
+    // GT4_GSN_DUMP_DISPLAYED=1: only the displayed target (and its Z buffer with _DEPTH): a frame series stays small
+    static const bool dumpDisplayed = [] { const char* e = std::getenv("GT4_GSN_DUMP_DISPLAYED"); return e && *e == '1'; }();
     static long dumpNext = dumpAt;   // (-1: done)
     // (not while an earlier dump waits to be written: its copies may be in this submission still)
     if (frame.displayed && dump.images.empty() && (frame.dump || (dumpNext >= 0 && static_cast<long>(frame.vblank) >= dumpNext))) {
@@ -3469,6 +3471,7 @@ void GsnScene::Impl::pendingListEnd(VkCommandBuffer command) {
         vk::Barriers b;
         for (auto& [id, t] : targets) {
             if (!t.image.valid()) continue;
+            if (dumpDisplayed && id != displayTarget && !(t.depth && dumpDepth)) continue;
             if (t.depth) {
                 if (!dumpDepth) continue;
                 vk::Buffer buffer = vk::createBuffer(device, VkDeviceSize(t.image.extent.width) * t.image.extent.height * 4,
