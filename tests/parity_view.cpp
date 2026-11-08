@@ -141,6 +141,16 @@ int main() {
         none.views[0].items.clear();
         small.plan(none, spans, st, cp);
         check(spans.empty() && small.stats().viewsNotSubstituted == 1, "a cut view: wholly on the GS path");
+        for (const uint8_t role : {uint8_t(gt4::gfx::scene::kViewHud), uint8_t(gt4::gfx::scene::kViewMenu),
+                                   uint8_t(gt4::gfx::scene::kViewEnvCopy)}) {
+            gsn::FrameList kept = makeList(cache);
+            auto view = std::make_shared<scene::SceneView>(*kept.views[0].package);
+            view->view.role = role;
+            kept.views[0].package = view;
+            small.plan(kept, spans, st, cp);
+            check(spans.empty(), "a HUD, menu or env-copy view: never substituted");
+        }
+        check(small.stats().viewsOfRoleKept == 3, "... and counted");
         gsn::FrameList differ = makeList(cache);
         differ.views[0].items[1].modelVertexCount = 3;
         small.plan(differ, spans, st, cp);

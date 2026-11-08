@@ -69,6 +69,7 @@ struct ParityStats {
     uint64_t items = 0;            // tagged items of the lists' substituted views
     uint64_t drawn = 0;            // drawn from the mesh cache
     uint64_t viewsNotSubstituted = 0;   // views cut or not valid (no ids: B6), wholly on the GS path (views, not items)
+    uint64_t viewsOfRoleKept = 0;       // views of a role never substituted (the HUD's, menus', an env face's copy)
     uint64_t viewsForReadSync = 0;      // B8 step 4: views on the GS path because their list was cut for a game read
     uint64_t viewsForReadAsync = 0;     // ... because an asynchronous read names their target
     uint64_t meshNone = 0;         // mesh 0: skinned, a billboard run, a key-frame blend, or still decoding
