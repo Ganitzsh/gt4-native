@@ -145,6 +145,37 @@ int main(int argc, char** argv) {
         expect(events.size() == 3 && events[2].first == 2 && (events[2].second & 0xFF) == 0x55, "LABEL reported with its ID");
     }
 
+    // 1b. Surfaces (docs/modern/PLAN.md P2a): a target per block address, width and class. CT24 and CT32 at one
+    // address are one surface, CT16 there another, a Z16 buffer apart from a Z24 one; a FRAME at another width is
+    // another surface.
+    {
+        using gt4::gsn::SurfaceKey;
+        expect(SurfaceKey::of(0, 10, PSMCT24, false) == SurfaceKey::of(0, 10, PSMCT32, false), "CT24 and CT32: one surface");
+        expect(!(SurfaceKey::of(0, 10, PSMCT16, false) == SurfaceKey::of(0, 10, PSMCT32, false)), "CT16 is another surface");
+        expect(!(SurfaceKey::of(0x70, 10, 0x32 /* PSMZ16 */, true) == SurfaceKey::of(0x70, 10, PSMZ24, true)), "Z16 apart from Z24");
+        expect(SurfaceKey::of(0x70, 10, PSMZ32, true) == SurfaceKey::of(0x70, 10, PSMZ24, true), "Z32 and Z24: one surface");
+        expect(!(SurfaceKey::of(0x70, 10, PSMZ24, true) == SurfaceKey::of(0x70, 10, PSMCT32, false)), "Z apart from colour");
+        gt4::gsn::GsFrontend fe;
+        Gif g = setup();
+        sprite(g, 0, 0, 64, 32, rgbaq(1, 2, 3, 0x80));
+        g.ad({{FRAME_1, frame(0, 10, PSMCT24)}});
+        sprite(g, 0, 0, 64, 32, rgbaq(1, 2, 3, 0x80));
+        g.ad({{FRAME_1, frame(0, 10, PSMCT16)}});
+        sprite(g, 0, 0, 64, 32, rgbaq(1, 2, 3, 0x80));
+        g.ad({{FRAME_1, frame(0, 5, PSMCT32)}});
+        sprite(g, 0, 0, 64, 32, rgbaq(1, 2, 3, 0x80));
+        fe.gif(3, static_cast<const uint8_t*>(g.data()), g.bytes());
+        gt4::gsn::FrameList list;
+        fe.cut(list);
+        std::vector<uint32_t> drawn;
+        for (const auto& d : list.draws) drawn.push_back(d.target);
+        expect(drawn.size() == 4 && drawn[0] == drawn[1] && drawn[2] != drawn[0] && drawn[3] != drawn[0] && drawn[3] != drawn[2],
+               "draws find their target by surface");
+        uint32_t colour = 0;
+        for (const auto& t : list.targets) colour += t.depth ? 0 : 1;
+        expect(colour == 3, "three colour surfaces, three targets");
+    }
+
     // 2. GS -> host reads: uploaded pixels come from GS memory; drawn ones are asked of the GPU.
     {
         gt4::gsn::GsFrontend fe;

@@ -691,8 +691,8 @@ void GsFrontend::emit(const Vertex* v, uint32_t n, Topology topology) {
                        s.c.blendD == 2 && s.c.blendFixed == 0x80 && (s.c.colorKeep & 0xFFFFFF) == 0;
         for (uint32_t k = 0; inverts && k < n; ++k) inverts = (out[k].rgba & 0xFFFFFF) == 0xFFFFFF;
         if (inverts) {
-            for (Target& t : targets) {
-                if (!t.depth || t.bp != s.c.colorBase || t.bw != s.c.colorWidth || (t.psm & 2) != (f & 2)) continue;
+            if (const uint32_t id = surfaceTarget(SurfaceKey::of(s.c.colorBase, s.c.colorWidth, f, true))) {
+                Target& t = targets[id - 1];
                 // The run's first primitive drawn again starts a second pass: every pixel it covers turned round
                 // twice, as on the GS (the replay's Dive view draws the pass twice in a row at the end of each frame;
                 // counted once, the Z buffer was left inverted for its next scene, whose 3D draws do not turn their Z
@@ -916,13 +916,18 @@ void GsFrontend::sceneRead(uint32_t target) {
     it->second = {};
 }
 
+SurfaceKey SurfaceKey::of(uint32_t bp, uint32_t bw, uint32_t psm, bool depth) {
+    SurfaceKey k;
+    k.bp = bp;
+    k.bw = bw;
+    k.kind = depth ? ((psm & 2) ? kDepth16 : kDepth32) : layout32(psm) ? kColour32 : kColourOther;
+    return k;
+}
+
 uint32_t GsFrontend::targetFor(uint32_t bp, uint32_t psm, bool depth, uint32_t heightNeeded, uint32_t bw) {
-    const bool wide = !depth && layout32(psm);
-    for (Target& t : targets) {
-        if (t.depth != depth || t.bp != bp) continue;
-        if (t.bw != bw) continue;
-        if (!depth && layout32(t.psm) != wide) continue;
-        if (depth && (t.psm & 2) != (psm & 2)) continue;
+    const SurfaceKey key = SurfaceKey::of(bp, bw, psm, depth);
+    if (const uint32_t id = surfaceTarget(key)) {
+        Target& t = targets[id - 1];
         if (heightNeeded > t.height) t.height = (heightNeeded + 31) & ~31u;
         if (!depth) t.psm = psm;   // CT24 and CT32 share the layout; the last write tells which alpha is valid
         if (readBackShape(depth, psm, bw) && !t.exact) markExact(t.id);
@@ -943,7 +948,8 @@ uint32_t GsFrontend::targetFor(uint32_t bp, uint32_t psm, bool depth, uint32_t h
             ++stats.droppedDraws;
             return 0;
         }
-        // Forget what the old buffer owned: its pages are plain memory again.
+        // Forget what the old buffer owned: its pages are plain memory again, its surface no longer names it.
+        surfaces.erase(slot->surface().packed());
         for (PageOwner& page : pages)
             if (page.target == slot->id) page = {};
         if (slot->id < targetWritten.size()) targetWritten[slot->id] = 0;
@@ -962,6 +968,7 @@ uint32_t GsFrontend::targetFor(uint32_t bp, uint32_t psm, bool depth, uint32_t h
     t.height = (std::max<uint32_t>(heightNeeded, 32) + 31) & ~31u;
     if (slot) *slot = t;
     else targets.push_back(t);
+    surfaces[key.packed()] = t.id;
     return t.id;
 }
 
@@ -1460,8 +1467,10 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
     if (!(t.tbp % 32)) {
         uint64_t best = 0;
         const uint64_t baseWritten = pages[(t.tbp / 32) & 511].serial;
-        for (const Target& candidate : targets) {
-            if (candidate.depth || candidate.bp != t.tbp || candidate.bw != t.tbw) continue;
+        for (const SurfaceKey::Kind kind : {SurfaceKey::kColour32, SurfaceKey::kColourOther}) {
+            const uint32_t id = surfaceTarget({t.tbp, t.tbw, kind});
+            if (!id) continue;
+            const Target& candidate = targets[id - 1];
             const uint64_t written = candidate.id < targetWritten.size() ? targetWritten[candidate.id] : 0;
             if (written && written >= baseWritten && written >= best) {
                 best = written;
@@ -2988,8 +2997,10 @@ void GsFrontend::vsync(uint64_t vblank, FrameList& out) {
         uint32_t best = 0;
         uint64_t bestWritten = 0;
         bool bestLayout = false;
-        for (const Target& t : targets) {
-            if (t.depth || t.bp != c.base || t.bw != c.width) continue;
+        for (const SurfaceKey::Kind kind : {SurfaceKey::kColour32, SurfaceKey::kColourOther}) {
+            const uint32_t id = surfaceTarget({c.base, c.width, kind});
+            if (!id) continue;
+            const Target& t = targets[id - 1];
             const bool layout = layout32(t.psm) == layout32(c.format);
             const uint64_t written = t.id < targetWritten.size() ? targetWritten[t.id] : 0;
             if (!best || (layout && !bestLayout) || (layout == bestLayout && written > bestWritten)) {

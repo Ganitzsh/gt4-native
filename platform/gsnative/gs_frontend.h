@@ -124,10 +124,24 @@ struct Reinterpretation {
     uint32_t clutTarget = 0, clutTargetBp = 0, clutTargetBw = 0;
 };
 
+// A surface (docs/modern/PLAN.md P2a): what names a render target. A frame or Z buffer at a block address and a width
+// (64-pixel units), of one class: colour in the 32-bit layout (CT32, CT24, and the T8H / T4HL / T4HH that share it),
+// other colour (16-bit; a Z format drawn as colour), Z32 / Z24, Z16. The formats of one class at one address are one
+// surface (the last write tells CT24 from CT32). Today it is derived from FRAME / ZBUF; P3b's target handle carries it.
+struct SurfaceKey {
+    enum Kind : uint32_t { kColour32, kColourOther, kDepth32, kDepth16 };
+    uint32_t bp = 0, bw = 0;
+    Kind kind = kColour32;
+    static SurfaceKey of(uint32_t bp, uint32_t bw, uint32_t psm, bool depth);
+    uint64_t packed() const { return uint64_t(bp) | uint64_t(bw) << 32 | uint64_t(kind) << 48; }
+    bool operator==(const SurfaceKey& o) const { return bp == o.bp && bw == o.bw && kind == o.kind; }
+};
+
 // A render target: a frame or Z buffer at FBP (blocks) / FBW (64-pixel units) / PSM, as tall as drawn.
 struct Target {
     uint32_t id = 0, bp = 0, bw = 0, psm = 0, height = 0;
     bool depth = false;
+    SurfaceKey surface() const { return SurfaceKey::of(bp, bw, psm, depth); }   // (one target per surface)
     uint32_t generation = 0;   // a new buffer in this slot (the id is reused): the back end starts a new image
     uint64_t lastUsed = 0;     // the front end's frame count when last drawn into, sampled or displayed
     // Drawn at the PS2's resolution: a target the game reads back into EE memory (a narrow 16-bit one: its car
@@ -479,6 +493,12 @@ private:
 
     // Targets and the owner of each 8 KiB page (0: memory; else a target id), with when it was written.
     std::vector<Target> targets;
+    // P2a: each target by its surface (SurfaceKey::packed; targetFor keeps it), and the lookup (0: none).
+    std::unordered_map<uint64_t, uint32_t> surfaces;
+    uint32_t surfaceTarget(const SurfaceKey& key) const {
+        const auto it = surfaces.find(key.packed());
+        return it == surfaces.end() ? 0 : it->second;
+    }
     struct PageOwner {
         uint32_t target = 0;
         uint64_t serial = 0;
