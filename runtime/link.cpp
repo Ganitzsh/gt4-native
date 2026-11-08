@@ -126,6 +126,16 @@ void ring_read(const uint8_t *data, uint32_t size, uint64_t pos, void *dst, uint
     if (n > first) std::memcpy(static_cast<uint8_t *>(dst) + first, data, n - first);
 }
 
+// A ring's 64-bit head or tail, read or written in ONE 8-byte access. This game is i686: a plain uint64_t is two
+// 32-bit accesses (movl low word, then movl high word), and the host on the other side reads and writes the same
+// word at any time. A torn value is off by 4 GiB whenever the low word wraps (every 4 GiB of traffic, several times a
+// long session): a head read 4 GiB ahead makes the host take garbage for records, a tail read 4 GiB ahead makes the
+// game overwrite records the host has not read. __atomic_load_n / __atomic_store_n on 8 aligned bytes are one SSE2
+// movq here (the runtime is built with -msse2; the rings' words sit at 8-byte offsets in the page-aligned section),
+// single-copy atomic on x86 and under FEX (docs/modern/spikes/R4-link-across-fex.md).
+uint64_t load_index(const volatile uint64_t *index) { return __atomic_load_n(index, __ATOMIC_ACQUIRE); }
+void store_index(volatile uint64_t *index, uint64_t value) { __atomic_store_n(index, value, __ATOMIC_RELEASE); }
+
 }  // namespace
 
 bool link_open(const char *name) {
@@ -236,13 +246,13 @@ void link_send(uint32_t type, const void *payload, uint32_t size, const void *ex
         log_warn("link: record of %u bytes dropped (ring %u)", total, ring);
         return;
     }
-    uint64_t head = g_hdr->g2h.head;
+    uint64_t head = load_index(&g_hdr->g2h.head);
     // Wait for room (the host drains continuously). Not forever: some records are sent while the game holds its
     // kernel lock (GFX records from the frame callbacks), and an endless wait there stops every guest thread, VBlanks
     // included (seen with a host throttled behind the game). After a second the record is dropped, loudly.
-    if (head + total - g_hdr->g2h.tail > ring) {
+    if (head + total - load_index(&g_hdr->g2h.tail) > ring) {
         const DWORD since = GetTickCount();
-        while (head + total - g_hdr->g2h.tail > ring) {
+        while (head + total - load_index(&g_hdr->g2h.tail) > ring) {
             Sleep(1);
             if (GetTickCount() - since >= 1000) {
                 static uint32_t dropped = 0;
@@ -261,7 +271,7 @@ void link_send(uint32_t type, const void *payload, uint32_t size, const void *ex
     if (size) ring_write(g_g2h, ring, head + sizeof rec, payload, size);
     if (extra_size) ring_write(g_g2h, ring, head + sizeof rec + size, extra, extra_size);
     MemoryBarrier();
-    g_hdr->g2h.head = head + total;
+    store_index(&g_hdr->g2h.head, head + total);
 }
 
 void link_poll() {
@@ -281,8 +291,8 @@ void link_poll() {
         }
     }
     const uint32_t ring = g_hdr->h2g_size;
-    uint64_t tail = g_hdr->h2g.tail;
-    const uint64_t head = g_hdr->h2g.head;
+    uint64_t tail = load_index(&g_hdr->h2g.tail);
+    const uint64_t head = load_index(&g_hdr->h2g.head);
     MemoryBarrier();
     while (tail + sizeof(Gt4LinkRecord) <= head) {
         Gt4LinkRecord rec;
@@ -349,7 +359,7 @@ void link_poll() {
         }
         tail += (sizeof rec + rec.size + 15) & ~15ull;
     }
-    g_hdr->h2g.tail = tail;
+    store_index(&g_hdr->h2g.tail, tail);
 }
 
 bool link_read_image(uint32_t qwc, void *dst) {
