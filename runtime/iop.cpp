@@ -511,7 +511,14 @@ extern "C" int gt4_replace_scePad2CreateSocket(const uint8_t *param, uint32_t) {
     return param ? static_cast<int>(rd32(param + 4) & 1) : 0;
 }
 extern "C" int gt4_replace_scePad2DeleteSocket(int) { return 1; }
-extern "C" int gt4_replace_scePad2GetState(int) { return 1; }  // stable
+// 1 (stable) for a port with a pad, 0 for an empty one: what libpad2 returns when nothing answers on the port (GT4's
+// pad update, 00551580, then clears that port's record and does not read it). Port 1 always has the host's pad (the
+// keyboard at least); port 2 only while the host sends one (a second gamepad).
+extern "C" int gt4_replace_scePad2GetState(int socket) {
+    if ((socket & 1) == 0) return 1;
+    uint8_t data[18];
+    return link_pad(1, data) ? 1 : 0;
+}
 // GT4_PAD_SCRIPT=VBLANK:BUTTON[:FRAMES],...: on top of the host's pad, hold BUTTON on pad 1 for FRAMES
 // VBlanks (default 6) from VBLANK on, for unattended runs and captures. Buttons as gt4_host's
 // ps2_pad.h: select l3 r3 start up right down left l2 r2 l1 r1 triangle circle cross square.
