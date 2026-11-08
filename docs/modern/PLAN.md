@@ -181,8 +181,9 @@ lamps; `SCENE`: `lightViewUnknown == 0`, `lightsAfterViewEnd` reported.
 tyre smoke and sparks: emitters per frame reported, positions within the projected bounds of the sprites the GS
 path draws for them.
 
-**A9: Vehicle record (S).** Where D6 found the per-car state. Depends: D6. Acceptance: `REL`; `ORIG`; the record's
-transform matches the car body instance's `objectToWorld` within 1e-3; speed matches the HUD's speed.
+**A9: Vehicle record (S).** From the per-car state D6 found, sent at the kick in `FrameEnd`'s own block, before
+`FrameEnd` (CONTRACTS a.5 rule 4; `runtime/frame.cpp`, lane A reviews). Depends: D6. Acceptance: `REL`; `ORIG`;
+the record's transform matches the car body instance's `objectToWorld` within 1e-3; speed matches the HUD's speed.
 
 **A11a: Course instance flag (S).** While the course is drawn, the runtime marks the instances A2 sends with
 `kInstCourse`. The course is drawn in three places (lane A, from the code): 00396D40 (the race's main view, near and

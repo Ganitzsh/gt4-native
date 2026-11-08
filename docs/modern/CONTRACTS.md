@@ -269,7 +269,7 @@ struct Marker {
 };
 static_assert(sizeof(Marker) == 8);
 
-// --- Vehicle state: one per entrant per simulation tick (fields found by ticket D-S6) ----------------------
+// --- Vehicle state: one per running car per frame, at the kick (fields: D6, RISKS R14; a.5 rule 4) ----------
 enum VehicleFields : uint16_t {
     kVehTransform = 1, kVehVelocity = 2, kVehEngine = 4, kVehInputs = 8, kVehWheelContact = 16,
     kVehWheelForces = 32, kVehWheelSlip = 64, kVehSteeringTorque = 128,
@@ -317,7 +317,7 @@ Where each record is sent (tickets in PLAN.md):
 | `Light` | step 1: 003B88C8's `entries2[]` (course lamps, warning lamps), sent in 0033EAB8 right after 003B7B70 fills it in method 0x3F0, tagged with the main view's id (a.5 rule 4); step 2: car lamps from `entries[]` (003B8530, `RaceCarModel` virtual 35) or 003B8EA0 (draft, virtual 36), with A6 | A7 |
 | `Emitter` | 0x003E7A58, 0x003C1430, 0x003C2780 | A8 |
 | `Marker` | `kMarkPost*` at the start and end of render_post_effect (`game_src/func_0033F890.cpp`, virtual 105); `kMarkHud*` at the start and end of RaceBasic::render_panel (`game_src/func_0038B5A0.cpp`, which RaceSolitaire's calls and RaceSplitBattleBase's reaches per player). Both are reached through the race's vtable after `render_world`, so they are inside the kick's frame (a.5.1) | A5 |
-| `Vehicle` | where D-S6 finds the per-car state | A9 |
+| `Vehicle` | the kick (`send_frame_end`, `runtime/frame.cpp`), in `FrameEnd`'s own `GT4_REC_GFX` block, before `FrameEnd`: one per running car, in entrant order, each padded to whole qwords; fields from the car state D6 found (R14) | A9 (D6 emits, lane A reviews) |
 
 ### a.5 Ordering within a frame, and against the existing records
 
@@ -325,7 +325,8 @@ Where each record is sent (tickets in PLAN.md):
    - The first `FrameBegin` since the last kick opens the frame. The runtime drops any later one until the kick
      and counts it in `FrameEnd::begins`, so the opening one's `flags` stand.
    - The kick (004A11F8) sends `FrameEnd` after `walk(list)` when a frame is open. It goes as a `GT4_REC_GFX` block
-     of its own from the kick's thread. Between the list's first block and `FrameEnd` no record that ends a host
+     of its own from the kick's thread. The frame's `Vehicle` records go in that same block, before `FrameEnd`
+     (rule 4), so they are its last records. Between the list's first block and `FrameEnd` no record that ends a host
      `FrameList` is sent: no `GT4_REC_VSYNC` and no `GT4_REC_DISPLAY` (which goes with it). Other records keep
      their stream order, as on the PS2: `audio_frame`'s records at the tick, uploads from the game's interrupt
      handlers delivered on the kick thread mid-list (`gt4_gfx_upload_now`), read replies. So the whole list and
@@ -408,7 +409,10 @@ Where each record is sent (tickets in PLAN.md):
    - A consumer that runs in a partial list cut before `FrameEnd` doesn't have the later lights. It counts that,
      and F2 adds no light in that frame.
    - A `Light` naming a view this frame hasn't begun is `lightViewUnknown`, and is dropped.
-   `Emitter` and `Vehicle` come anywhere between `FrameBegin` and `FrameEnd`.
+   `Emitter` comes anywhere between `FrameBegin` and `FrameEnd`. `Vehicle` comes at the kick, in `FrameEnd`'s own
+   block before `FrameEnd` (a.5.1): one per running car, in entrant order, after every view. `FrameEnd` has no
+   vehicle count (the layout is unchanged); the decoder counts them as they come. They are sent only with scene
+   records on and a frame open, so with records off the stream is unchanged.
 4a. A `Projection` comes before the first record that names its id (`ViewBegin::projection`,
    `Instance::projection`); ids are per frame and never reused within it. A `Projection` may come outside a view
    (`view` 0): the env-map passes' come before the main view opens.
@@ -617,8 +621,10 @@ read, then the one that receives `FrameEnd`. (Race route: 38 reads in about 4900
     allocates nothing once the pool has warmed.
   - `SceneFrame` stays as it is (instances indexed by `ModelJob::pad[0]`). The package is a copy, not a second
     owner.
-  - Emitters and vehicles may come anywhere in a frame (a.5.4). A view substituted in a partial list sees only
-    those that arrived before its `ViewEnd`. A8 and A9 send them before the main view's `ViewEnd` where they can.
+  - Emitters may come anywhere in a frame (a.5 rule 4). A view substituted in a partial list sees only those that
+    arrived before its `ViewEnd`; A8 sends them before the main view's `ViewEnd` where it can. Vehicles come at
+    the kick, after every view, so a package never holds them (`SceneView::vehicles` stays empty): consumers read
+    them from `FrameList::scene`, and a substitution in a list cut before `FrameEnd` has none.
 - A partial list is drawn before its frame's `FrameEnd` has arrived. So a view in a partial list is validated on
   its own, at its `ViewEnd`, not at `FrameEnd`.
   - **A view whose `ViewEnd` arrived before the cut** can be substituted in the partial list, at its Light
