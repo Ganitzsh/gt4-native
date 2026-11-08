@@ -913,6 +913,8 @@ std::unique_ptr<GsHost> GsHost::create(const Options& options, std::string& erro
             if (stream == 0) sink(rate, frames, count);  // stream 0: the game's final mix
         });
     if (options.rumble) h.stream->setRumbleWriter(options.rumble);
+    if (options.ui) h.stream->setUiWriter(options.ui);
+    if (options.settingsSet) h.stream->setSettingsSetWriter(options.settingsSet);
     if (!options.gamePath.empty()) {
         ps2::GameLink::Options linkOptions;
         linkOptions.gamePath = options.gamePath;
@@ -1029,6 +1031,16 @@ void GsHost::setPaused(bool paused) {
     if (!impl->link || !impl->link->running() || impl->paused == paused) return;
     impl->paused = paused;
     const uint32_t command = paused ? 2u : 3u;
+    impl->link->write(GT4_REC_HOST_CMD, &command, sizeof command);
+}
+
+void GsHost::sendSettings(const std::vector<uint8_t>& payload) {
+    if (!impl->link || !impl->link->running() || payload.empty()) return;
+    impl->link->write(GT4_REC_SETTINGS, payload.data(), static_cast<uint32_t>(payload.size()));
+}
+
+void GsHost::sendMenuCommand(uint32_t command) {
+    if (!impl->link || !impl->link->running() || (command != 6 && command != 7)) return;
     impl->link->write(GT4_REC_HOST_CMD, &command, sizeof command);
 }
 

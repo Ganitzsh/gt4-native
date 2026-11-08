@@ -85,6 +85,11 @@ public:
     void setRumbleWriter(std::function<void(uint32_t port, uint32_t small, uint32_t large)> writer) {
         rumbleWriter = std::move(writer);
     }
+    // GT4_REC_UI and GT4_REC_SETTINGS_SET (the settings pages, include/gt4/ui.h): the payload, on the stream's thread.
+    void setUiWriter(std::function<void(const uint8_t*, size_t)> writer) { uiWriter = std::move(writer); }
+    void setSettingsSetWriter(std::function<void(const uint8_t*, size_t)> writer) {
+        settingsSetWriter = std::move(writer);
+    }
 
     // One whole record (header + payload).
     void record(const Gt4LinkRecord& header, const uint8_t* payload);
@@ -93,6 +98,7 @@ public:
     struct Stats {
         uint64_t records = 0, gifPackets[4] = {}, gifBytes = 0, vif1Bytes = 0, vif0Records = 0, displays = 0;
         uint64_t vsyncs = 0, reads = 0, logs = 0, audio = 0, unknown = 0;
+        uint64_t ui = 0;   // the settings pages' records (GT4_REC_UI, GT4_REC_SETTINGS_SET)
         uint64_t primitiveRuns = 0, primitiveVertices = 0;   // from the 3D renderers
         uint64_t texSets = 0;   // native texture set records (docs/NATIVE_V2.md)
         uint64_t modelBatches = 0;   // 3D batches drawn on the GPU (docs/NATIVE_V2.md, step 2)
@@ -259,6 +265,7 @@ private:
     std::deque<bool> readsAsync;   // the read records not yet asked for by GT4_REC_GS_READ: gfx::kReadAsync each
     AudioWriter audioWriter;
     std::function<void(uint32_t, uint32_t, uint32_t)> rumbleWriter;
+    std::function<void(const uint8_t*, size_t)> uiWriter, settingsSetWriter;
     Stats counters;
     scene::SceneDecoder sceneDecoder_;   // the kScene records (docs/modern/CONTRACTS.md a.5, a.7; ticket A10)
     // a.5.1's checks: VSyncs that came while a scene frame was open (a list split across FrameLists), FrameLists that

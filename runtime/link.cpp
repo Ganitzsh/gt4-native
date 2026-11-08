@@ -26,6 +26,14 @@ uint64_t g_seq = 0;
 uint8_t g_pad[2][18];
 bool g_pad_valid[2];
 std::mutex g_pad_mutex;
+// The settings pages' host records (GT4_REC_SETTINGS): a byte ring of [u32 size][payload] entries, fixed so link_poll
+// never allocates; and the newest open / close command (GT4_REC_HOST_CMD 6 / 7).
+constexpr uint32_t kSettingsRing = 256u << 10;
+uint8_t g_settings[kSettingsRing];
+uint32_t g_settings_used = 0;
+std::mutex g_settings_mutex;
+std::atomic<uint32_t> g_settings_dropped{0};
+std::atomic<uint32_t> g_menu_command{0};
 std::recursive_mutex g_poll_mutex;  // the frame clock's poll and link_read_image
 uint32_t g_image_id = 0;           // the download waiting for its GS_IMAGE (0: none)
 uint8_t *g_image_dst = nullptr;
@@ -382,6 +390,15 @@ void link_poll() {
                     g_async_landed = true;
                 }
             }
+        } else if (rec.type == GT4_REC_SETTINGS) {
+            std::lock_guard<std::mutex> lock(g_settings_mutex);
+            if (g_settings_used + 4 + n <= kSettingsRing) {
+                std::memcpy(g_settings + g_settings_used, &n, 4);
+                std::memcpy(g_settings + g_settings_used + 4, payload, n);
+                g_settings_used += 4 + n;
+            } else {
+                g_settings_dropped.fetch_add(1);   // logged by link_take_settings, not here
+            }
         } else if (rec.type == GT4_REC_HOST_CMD && n >= 4) {
             uint32_t cmd;
             std::memcpy(&cmd, payload, 4);
@@ -392,6 +409,7 @@ void link_poll() {
             }
             if (cmd == 2 || cmd == 3) kernel_set_paused(cmd == 2);
             if (cmd == 5) frame_forget_sent_contents();   // the host lost a texture content (runtime/frame.cpp)
+            if (cmd == 6 || cmd == 7) g_menu_command.store(cmd);   // the settings pages (runtime/menu, M5)
             if (cmd == 4 && n >= 12) {
                 uint32_t id, value;
                 std::memcpy(&id, payload + 4, 4);
@@ -557,6 +575,32 @@ void link_wait_for_host() {
     g_hdr->game_host_waits = g_hdr->game_host_waits + 1;
     g_hdr->game_host_wait_ms = g_hdr->game_host_wait_ms + (GetTickCount() - since);
 }
+
+bool link_take_settings(std::vector<uint8_t> &out) {
+    // Drops counted by link_poll, logged here on the pages' thread: no logging in the poll (a frozen thread may hold
+    // the log's lock).
+    if (const uint32_t dropped = g_settings_dropped.exchange(0))
+        log_warn("link: %u settings record(s) dropped (the pages had not taken the earlier ones)", dropped);
+    // The entry's size under the lock, the allocation outside it, then the copy under it again: the pages' thread is
+    // the only consumer, so the oldest entry is still the same one. KernelScope around each lock: link_poll takes this
+    // mutex in the interrupt handlers (see link_send).
+    uint32_t n;
+    {
+        KernelScope ks;
+        std::lock_guard<std::mutex> lock(g_settings_mutex);
+        if (g_settings_used < 4) return false;
+        std::memcpy(&n, g_settings, 4);
+    }
+    out.resize(n);
+    KernelScope ks;
+    std::lock_guard<std::mutex> lock(g_settings_mutex);
+    if (n) std::memcpy(out.data(), g_settings + 4, n);
+    std::memmove(g_settings, g_settings + 4 + n, g_settings_used - 4 - n);
+    g_settings_used -= 4 + n;
+    return true;
+}
+
+uint32_t link_take_menu_command() { return g_menu_command.exchange(0); }
 
 bool link_pad(int port, uint8_t out[18]) {
     KernelScope ks;   // link_poll takes this mutex in the interrupt handlers (see link_send)

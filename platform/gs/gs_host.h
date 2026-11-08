@@ -29,6 +29,11 @@ public:
         std::function<void(uint32_t rate, const int16_t* frames, size_t count)> audio;
         // The game's pad motors (GT4_REC_RUMBLE): port, small (0 / 1), large (0-255); called on the stream's thread.
         std::function<void(uint32_t port, uint32_t small, uint32_t large)> rumble;
+        // The settings pages (docs/modern/MENU_DESIGN.md 3.6), called on the stream's thread with the record's
+        // payload: a page's draw list (GT4_REC_UI) and its requests (GT4_REC_SETTINGS_SET); platform/ui/ui_records.h
+        // decodes them.
+        std::function<void(const uint8_t* payload, size_t size)> ui;
+        std::function<void(const uint8_t* payload, size_t size)> settingsSet;
     };
     // Starts the game or opens the replay.
     static std::unique_ptr<GsHost> create(const Options& options, std::string& error);
@@ -60,6 +65,10 @@ public:
     void sendPad(uint32_t port, bool connected, const uint8_t data[18]);
     // Stops or restarts the game's clock (its VBlanks, alarms and timers): the in-game settings menu.
     void setPaused(bool paused);
+    // The settings pages: a GT4_REC_SETTINGS payload (schema, values, a request's result: ui_records.h), and host
+    // command 6 (open the settings at the next safe point) or 7 (close them). Ignored without a live game.
+    void sendSettings(const std::vector<uint8_t>& payload);
+    void sendMenuCommand(uint32_t command);
     // The texture pack's replacements on or off (from the next frame; nothing without a pack).
     void setHdTextures(bool on);
     // A gameplay option of the game (runtime.h GameOption): sent when it differs from the last value sent.

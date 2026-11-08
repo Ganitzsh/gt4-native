@@ -3,6 +3,7 @@
 // pad state and GS events from it. Without --link the records can go to a capture file (--capture)
 // for gt4_host --replay, or nowhere.
 #include <cstdint>
+#include <vector>
 
 namespace gt4::rt {
 
@@ -51,5 +52,12 @@ void frame_forget_sent_contents();
 
 // The pad state the host sent (18 bytes, libpad2 layout); false if none yet.
 bool link_pad(int port, uint8_t out[18]);
+
+// The settings pages (docs/modern/MENU_DESIGN.md 3.6). The host's GT4_REC_SETTINGS payloads, oldest first, copied into
+// `out`; false when none is waiting. They are kept in a fixed 256 KiB buffer (link_poll may not allocate); one that
+// does not fit is dropped and logged.
+bool link_take_settings(std::vector<uint8_t> &out);
+// GT4_REC_HOST_CMD 6 (open the settings) or 7 (close them) received since the last call, the newest; 0 when none.
+uint32_t link_take_menu_command();
 
 }  // namespace gt4::rt

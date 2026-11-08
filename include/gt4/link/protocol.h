@@ -19,8 +19,9 @@
 #include <stdint.h>
 
 #define GT4_LINK_MAGIC 0x4B4E4C34u /* "4LNK" */
-#define GT4_LINK_VERSION 3u /* 2: GT4_REC_GFX_DATA references to set uploads the host keeps (gfx::kDataReference);
-                                3: the graphics stream may carry scene records (gfx::kScene, docs/modern/CONTRACTS.md (a)) */
+#define GT4_LINK_VERSION 4u /* 2: GT4_REC_GFX_DATA references to set uploads the host keeps (gfx::kDataReference);
+                                3: the graphics stream may carry scene records (gfx::kScene, docs/modern/CONTRACTS.md (a));
+                                4: the settings pages' records (GT4_REC_UI, _SETTINGS_SET, _SETTINGS; host commands 6, 7) */
 #define GT4_LINK_SIZE (128u << 20)
 #define GT4_LINK_G2H_SIZE (96u << 20) /* game -> host ring */
 #define GT4_LINK_H2G_SIZE (8u << 20)  /* host -> game ring */
@@ -41,11 +42,15 @@ enum Gt4LinkRecordType {
     GT4_REC_GFX = 13,       /* native records (include/gt4/gfx.h) that take effect now, not in the VIF1 stream's order */
     GT4_REC_DISPLAY = 14,   /* the display from the next VBlank on: include/gt4/gfx.h DisplayRecord */
     GT4_REC_RUMBLE = 15,    /* the pad's motors from now on: u32 port, u32 small (0 / 1), u32 large (0-255) */
+    GT4_REC_UI = 16,        /* a settings page's draw list (include/gt4/ui.h wire::UiHeader...); empty at close */
+    GT4_REC_SETTINGS_SET = 17, /* a settings page's request (include/gt4/ui.h wire::SetHeader, key, value) */
     /* host -> game */
     GT4_REC_PAD = 64,       /* u32 port, u32 connected, 18 bytes libpad2 data (DualShock 2 layout) */
     GT4_REC_GS_EVENT = 65,  /* u32 kind (0 FINISH, 1 SIGNAL, 2 LABEL), u32 id, u64 value */
     GT4_REC_GS_IMAGE = 66,  /* u32 id, u32 qwc, then the downloaded qwords */
-    GT4_REC_HOST_CMD = 67,  /* u32 command (1 quit, 2 pause, 3 resume, 4 gameplay option: u32 id, u32 value) */
+    GT4_REC_HOST_CMD = 67,  /* u32 command (1 quit, 2 pause, 3 resume, 4 gameplay option: u32 id, u32 value,
+                               5 texture contents lost, 6 open settings, 7 close settings) */
+    GT4_REC_SETTINGS = 68,  /* the settings' schema, values or a request's result (include/gt4/ui.h wire::SettingsHeader) */
 };
 
 /* Payload details as gt4_host consumes and produces them (docs/GS_BACKEND.md, "Link protocol"):
@@ -70,8 +75,17 @@ enum Gt4LinkRecordType {
  *                     id = low 32 bits of the register value, value = the full 64-bit value.
  *   GT4_REC_PAD       26 bytes: u32 port, u32 connected, 18 bytes of libpad2 data; sent every host frame.
  *   GT4_REC_HOST_CMD  1 (quit) when the host closes; the host terminates the game 3 s later if needed. 2 (pause)
- *                     and 3 (resume) around the host's settings menu: the game's bus clock stands still. 4: a
- *                     gameplay option (runtime.h GameOption) changed, or its value at start. */
+ *                     and 3 (resume) around the host's settings menu: the game's bus clock stands still (retired
+ *                     with that menu, MENU_DESIGN M9; the numbers stay reserved). 4: a gameplay option (runtime.h
+ *                     GameOption) changed, or its value at start. 5: the host lost a texture content it was
+ *                     counted on to keep; the game sends every content again (runtime/frame.cpp). 6: open the
+ *                     settings pages at the next safe point; 7: close them (the host is shutting down).
+ *   GT4_REC_UI        game -> host, once a game frame while a settings page is open, and one empty list at close:
+ *                     drawn with the FrameList of its vblank, kept on interpolated presents until the next list
+ *                     (docs/modern/MENU_DESIGN.md 3.6). At most 64 KiB; a longer list is dropped and counted.
+ *   GT4_REC_SETTINGS_SET  game -> host: set, revert or act on a setting by key; the host answers with a
+ *                     GT4_REC_SETTINGS result carrying the request's number, then the values that changed.
+ *   GT4_REC_SETTINGS  host -> game: the schema (at the game's request), values, or a request's result. */
 
 typedef struct Gt4LinkRecord {
     uint32_t type;

@@ -338,6 +338,16 @@ if(BUILD_TESTING)
   endif()
   add_test(NAME ui_menu COMMAND gt4_ui_menu_test ${CMAKE_CURRENT_SOURCE_DIR}/tests/ui)
 
+  # The settings pages' link records (include/gt4/ui.h, platform/ui/ui_records, MENU_DESIGN.md M1).
+  add_executable(gt4_ui_records_test tests/ui_records.cpp platform/ui/ui_records.cpp platform/ui/draw_list.cpp)
+  target_include_directories(gt4_ui_records_test PRIVATE platform/ui include)
+  if(MSVC)
+    target_compile_options(gt4_ui_records_test PRIVATE /W4)
+  else()
+    target_compile_options(gt4_ui_records_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  add_test(NAME ui_records COMMAND gt4_ui_records_test)
+
   # The pipeline cache's file: Vulkan's header checked against the GPU, the save replacing the old file (no GPU).
   add_executable(gt4_pipeline_cache_file_test tests/pipeline_cache_file.cpp platform/render/pipeline_cache_file.cpp)
   target_include_directories(gt4_pipeline_cache_file_test PRIVATE platform/render third_party)

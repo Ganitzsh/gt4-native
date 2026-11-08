@@ -797,6 +797,14 @@ void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload)
             rumbleWriter(v[0], v[1], v[2]);
         }
         break;
+    case GT4_REC_UI:             // a settings page's draw list (MENU_DESIGN.md 3.6)
+        ++counters.ui;
+        if (uiWriter) uiWriter(payload, size);
+        break;
+    case GT4_REC_SETTINGS_SET:   // a settings page's request
+        ++counters.ui;
+        if (settingsSetWriter) settingsSetWriter(payload, size);
+        break;
     default:
         ++counters.unknown;
         break;
