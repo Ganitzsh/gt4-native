@@ -88,6 +88,10 @@ literals; hexadecimal constants were already exact).
   garage), exported as `.psu` and brought in with `gt4_host --import-save`, it loads natively alike and resumes at
   Home, where it was saved. An empty save folder starts a new career (the name prompt), so those values come from the
   saves. A native save folder copied as is into a PCSX2 folder card is not seen (lane C): go through a card image or
-  a `.psu`. Left open: the test career was a fresh one; the save files are compressed or encrypted (8.0 bits a byte),
-  so no scan tells what else they hold. A host pointer no load ever follows would round-trip silently too: this shows
-  that no load depends on one, not that none is written.
+  a `.psu`. The same with a copy of the approved save (a career in the middle of the Pan Euro Championship): loaded
+  and saved natively, loaded and saved in PCSX2, imported and loaded natively, it shows the same career at each step
+  (the owner's Home: 13.7 %, 3,674 A-spec points, Days 300, 629,068 Cr, 26 JAN, the BMW M3 CSL '03, the championship
+  still running). Not compared: the garage list and the licences, which GT4 only opens after withdrawing from the
+  championship. Left open: the save files are compressed or encrypted (8.0 bits a byte), so no scan tells what else
+  they hold. A host pointer no load ever follows would round-trip silently too: this shows that no load depends on
+  one, not that none is written.
