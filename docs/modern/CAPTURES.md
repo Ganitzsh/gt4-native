@@ -67,6 +67,8 @@ then counts presents instead of the wall clock, and the HD texture pack decodes 
 instead of on its worker threads, so the same capture gives the same frames every run with both on
 (`tests/replay_determinism.py`; set `GT4_DETERMINISM_CAPTURE` to a capture with 3D, such as race7.cap, to run it).
 `tools/frame_diff.py` still turns both off by default.
+A comparison with interpolation or the HD pack on needs BOTH hosts built from 330c41b or later: an older host (they
+stay in build folders) still takes the wall clock and loads the pack in the background, so its frames vary run to run.
 
 For timings (`--profile-json`, `tools/perf_report.py`), the synchronous decode stalls the GS front end on the frame
 where a pack texture is first used: keep `texture.hd_pack=off` for a perf comparison, or skip the start of the run
