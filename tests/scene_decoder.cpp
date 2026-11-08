@@ -536,7 +536,9 @@ void moreCounters() {
     put(d, frameBegin(1));
     put(d, projection(1, 0));
     put(d, viewBegin(1, 1));
-    put(d, make<rec::Light>(rec::kLight));
+    auto light = make<rec::Light>(rec::kLight);
+    light.view = 1;
+    put(d, light);
     put(d, viewEnd(1, 0));
     put(d, make<rec::Emitter>(rec::kEmitter));
     put(d, make<rec::Vehicle>(rec::kVehicle));
@@ -694,6 +696,45 @@ void viewPackages() {
     check(!off.takeClosedView(), "no package unless asked for");
 }
 
+// a.5 rule 4: a Light names its view; it may come after that view's ViewEnd in the same frame (A7's course lamps, sent
+// after the main view and the mirror). The package keeps the lights before its ViewEnd; the frame has all, by view.
+void lightsByView() {
+    auto lightFor = [](uint16_t view, uint32_t id) {
+        auto l = make<rec::Light>(rec::kLight);
+        l.view = view;
+        l.id = id;
+        return l;
+    };
+    SceneDecoder d;
+    d.setViewPackages(true);
+    put(d, frameBegin(1));
+    put(d, projection(1, 0));
+    put(d, viewBegin(1, 1));
+    put(d, lightFor(1, 10));   // inside its view
+    put(d, viewEnd(1, 0));
+    auto main = d.takeClosedView();
+    put(d, viewBegin(2, 1));
+    put(d, lightFor(2, 20));
+    put(d, lightFor(1, 11));   // view 1's, inside view 2 (after view 1's end)
+    put(d, viewEnd(2, 0));
+    auto mirror = d.takeClosedView();
+    put(d, lightFor(1, 12));   // after both views (A7: after method 0x3F0)
+    put(d, lightFor(5, 50));   // a view not begun this frame: dropped
+    auto e = frameEnd(1, 2, 0, 1);
+    e.lights = 5;
+    put(d, e);
+    const SceneCounters& c = d.totals();
+    check(c.lights == 5 && c.lightsAfterViewEnd == 2 && c.lightViewUnknown == 1 && c.countsMismatch == 0 && !c.errorFree(),
+          "lights: two after their view's end, one naming no view (a gate), FrameEnd's count is what arrived");
+    check(main && main->lights.size() == 1 && main->lights[0].id == 10, "lights: the main view's package has those before its ViewEnd");
+    check(mirror && mirror->lights.size() == 1 && mirror->lights[0].id == 20, "lights: another view's light is not in a package");
+    auto f = d.takeFrame();
+    check(f && f->lights.size() == 4 && f->views[0].lightCount == 3 && f->views[1].lightCount == 1 &&
+              f->lights[f->views[0].firstLight].id == 10 && f->lights[f->views[0].firstLight + 1].id == 11 &&
+              f->lights[f->views[0].firstLight + 2].id == 12 && f->lights[f->views[1].firstLight].id == 20,
+          "lights: the frame has each view's lights together, in arrival order, the late ones too");
+}
+
 }  // namespace
 
 int main() {
@@ -709,6 +750,7 @@ int main() {
     throughStream();
     splitsAtVsync();
     viewPackages();
+    lightsByView();
     if (failures) std::fprintf(stderr, "%d failure(s)\n", failures);
     else std::printf("scene_decoder: all checks passed\n");
     return failures ? 1 : 0;

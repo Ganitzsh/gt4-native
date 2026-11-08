@@ -72,7 +72,8 @@ void SceneCounters::add(const SceneCounters& o) {
     runsAfterSameMatrix += o.runsAfterSameMatrix; matrixChecked += o.matrixChecked;
     matrixMismatch += o.matrixMismatch; matrixMaxError = std::max(matrixMaxError, o.matrixMaxError);
     viewportMismatch += o.viewportMismatch; guardUnexpected += o.guardUnexpected; cameraChecked += o.cameraChecked;
-    cameraMismatch += o.cameraMismatch; lights += o.lights; emitters += o.emitters; markers += o.markers;
+    cameraMismatch += o.cameraMismatch; lights += o.lights; lightsAfterViewEnd += o.lightsAfterViewEnd;
+    lightViewUnknown += o.lightViewUnknown; emitters += o.emitters; markers += o.markers;
     vehicles += o.vehicles; viewSplitTargets += o.viewSplitTargets; viewsUnbound += o.viewsUnbound;
     fallbackNotBound += o.fallbackNotBound; fallbackMeshPending += o.fallbackMeshPending;
     fallbackPipelinePending += o.fallbackPipelinePending; fallbackValidation += o.fallbackValidation;
@@ -132,7 +133,7 @@ void SceneDecoder::record(const uint8_t* payload, size_t bytes) {
         const auto r = as<rec::FrameEnd>(payload);
         closeInstance();
         const SceneFrame& f = *frame_;
-        if (r.frame != f.frame || r.views != f.views.size() || r.instances != f.instances.size() || r.lights != f.lights.size() ||
+        if (r.frame != f.frame || r.views != f.views.size() || r.instances != f.instances.size() || r.lights != c.lights ||
             r.emitters != f.emitters.size() || r.projections != f.projections.size())
             ++c.countsMismatch;
         frame_->begins = r.begins;
@@ -145,10 +146,17 @@ void SceneDecoder::record(const uint8_t* payload, size_t bytes) {
     case rec::kProjection: projection(as<rec::Projection>(payload)); break;
     case rec::kInstance: instance(as<rec::Instance>(payload)); break;
     case rec::kMarker: marker(as<rec::Marker>(payload)); break;
-    case rec::kLight:
+    case rec::kLight: {   // a.5 rule 4: it names its view, inside it or after its ViewEnd in the same frame
         ++c.lights;
-        frame_->lights.push_back(as<rec::Light>(payload));
+        const auto l = as<rec::Light>(payload);
+        if (!l.view || l.view > frame_->views.size() || frame_->views[l.view - 1u].id != l.view) {
+            ++c.lightViewUnknown;   // (a view this frame has not begun: dropped)
+            break;
+        }
+        if (frame_->views[l.view - 1u].closed) ++c.lightsAfterViewEnd;
+        frame_->lights.push_back(l);
         break;
+    }
     case rec::kEmitter:
         ++c.emitters;
         frame_->emitters.push_back(as<rec::Emitter>(payload));
@@ -192,6 +200,7 @@ void SceneDecoder::endFrame(bool closed) {
     }
     totals_.add(frame_->counters);
     if (closed) {
+        groupLights();
         frame_->complete = frame_->counters.countsMismatch == 0 && frame_->counters.viewsUnclosed == 0;
         done_ = std::move(frame_);
         lastCameras_ = std::move(cameras_);
@@ -204,6 +213,18 @@ void SceneDecoder::endFrame(bool closed) {
     cameras_.clear();
     objects_.clear();
     view_ = instance_ = runInstance_ = closed_ = -1;
+}
+
+void SceneDecoder::groupLights() {
+    SceneFrame& f = *frame_;
+    std::stable_sort(f.lights.begin(), f.lights.end(),
+                     [](const gfx::scene::Light& a, const gfx::scene::Light& b) { return a.view < b.view; });
+    for (ViewData& v : f.views) v.firstLight = v.lightCount = 0;
+    for (uint32_t k = 0; k < f.lights.size(); ++k) {   // (every light names a view this frame began: checked as it came)
+        ViewData& v = f.views[f.lights[k].view - 1u];
+        if (!v.lightCount) v.firstLight = k;
+        ++v.lightCount;
+    }
 }
 
 void SceneDecoder::projection(const rec::Projection& r) {
@@ -249,7 +270,6 @@ void SceneDecoder::viewBegin(const rec::ViewBegin& r) {
     }
     cameras_[key] = v.worldToView;
     v.firstInstance = static_cast<uint32_t>(frame_->instances.size());
-    v.firstLight = static_cast<uint32_t>(frame_->lights.size());
     frame_->views.push_back(v);
     view_ = static_cast<int>(frame_->views.size()) - 1;
 }
@@ -285,7 +305,8 @@ void SceneDecoder::package(const ViewData& v) {
     };
     named(v.projection);
     for (const InstanceData& i : p->instances) named(i.projection);
-    p->lights.assign(f.lights.begin() + v.firstLight, f.lights.begin() + v.firstLight + v.lightCount);
+    for (const gfx::scene::Light& l : f.lights)   // (those that came so far: a later one is not in it, a.5 rule 4)
+        if (l.view == v.id) p->lights.push_back(l);
     p->emitters = f.emitters;
     p->vehicles = f.vehicles;
     closedView_ = std::move(p);
@@ -294,7 +315,6 @@ void SceneDecoder::package(const ViewData& v) {
 void SceneDecoder::closeView(bool ended) {
     ViewData& v = frame_->views[view_];
     v.closed = ended;
-    v.lightCount = static_cast<uint32_t>(frame_->lights.size()) - v.firstLight;
     view_ = -1;
 }
 

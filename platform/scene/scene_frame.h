@@ -87,8 +87,9 @@ struct SceneCounters {
     float matrixMaxError = 0.0f;   // largest relative difference seen
     uint64_t viewportMismatch = 0, guardUnexpected = 0;
     uint64_t cameraChecked = 0, cameraMismatch = 0;
-    // lights, emitters, markers, vehicles
-    uint64_t lights = 0, emitters = 0, markers = 0, vehicles = 0;
+    // lights, emitters, markers, vehicles; lights after their view's ViewEnd (a.5 rule 4: reported), naming a view this
+    // frame has not begun (dropped)
+    uint64_t lights = 0, lightsAfterViewEnd = 0, lightViewUnknown = 0, emitters = 0, markers = 0, vehicles = 0;
     // filled by the front end and the renderer (A10's front-end half, B lane)
     uint64_t viewSplitTargets = 0, viewsUnbound = 0;
     uint64_t viewAuxiliaryDraws = 0, viewAuxiliaryReads = 0;   // a.5.7: tagged draws into auxiliary targets; principal draws sampling one
@@ -101,7 +102,7 @@ struct SceneCounters {
     bool errorFree() const {
         return bad == 0 && versionUnknown == 0 && unknownKind == 0 && framesUnclosed == 0 && countsMismatch == 0 &&
                viewsNested == 0 && viewEndWithoutBegin == 0 && viewsUnclosed == 0 && itemsMismatch == 0 && projectionUnknown == 0 &&
-               matrixMismatch == 0 && viewportMismatch == 0;
+               matrixMismatch == 0 && viewportMismatch == 0 && lightViewUnknown == 0;
     }
 };
 
@@ -123,7 +124,8 @@ struct ViewData {
     uint32_t target = 0, depth = 0;               // GS target ids, bound by the front end
     bool splitTargets = false;                    // its tagged draws went to two colour targets (never substituted)
     bool cut = false;                             // it had tagged draws in a partial FrameList (viewsCut: never substituted)
-    uint32_t firstInstance = 0, instanceCount = 0, firstLight = 0, lightCount = 0;
+    uint32_t firstInstance = 0, instanceCount = 0;
+    uint32_t firstLight = 0, lightCount = 0;      // its lights in SceneFrame::lights, by id, grouped at FrameEnd (a.5 rule 4)
     bool closed = false;                          // its ViewEnd arrived (false: nested or left open at FrameEnd)
     bool valid = false;                           // its own checks passed at its ViewEnd (a.8): instances, items, matrices,
                                                   // viewports, projections (viewSplitTargets is the front end's)
@@ -166,7 +168,7 @@ struct SceneView {
     ViewData view;                                // view.valid: the verdict at ViewEnd
     std::vector<InstanceData> instances;          // copies, in arrival order
     std::vector<ProjectionData> projections;      // the ones the view and its instances name
-    std::vector<gfx::scene::Light> lights;        // the view's (a.5.4)
+    std::vector<gfx::scene::Light> lights;        // the view's, as far as its ViewEnd (later ones: a.5 rule 4)
     std::vector<gfx::scene::Emitter> emitters;    // frame-wide records that arrived before this ViewEnd
     std::vector<gfx::scene::Vehicle> vehicles;    //   (later ones are not available to a partial substitution)
 };
