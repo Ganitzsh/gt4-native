@@ -761,11 +761,17 @@ coordinator's call) gives low to ultra `stereo`. `hrtf` is the player's choice (
 - Depends: D5, D13 if the output device decides `hrtf`. Acceptance:
   - `ORIG`; `DIFFTEST` (the tags come from game code); with `audio.spatial = original`, a session's `audio.wav`
     bit-identical to D5's host mix.
-  - Tags, on a race session with six cars: at least 99 % of the car key-ons tagged, a car key-on being one whose
-    sample start address lies in the race's car sound banks (the regions STRP loads for the entrants, logged at
-    load), so the rate doesn't depend on the tags; no BGM, UI or narration key-on tagged; counted per frame
-    (`voicesTagged`, `voicesUntagged`, `voicesNoPosition`). Gaps the note names (e.g. a shared tyre-squeal voice)
-    are listed with their share.
+  - Tags, on a race session with six cars, counted offline from a trace of STRP's loads into SPU RAM and every
+    key-on's sample start address (SSA). The entrants' own banks (two per entrant, from the cars' disc region)
+    hold only the engines; the tyre and other car effects play from banks shared with course, crowd and pit sounds
+    (lane D, 2026-11-08). So, two rates, each at least 99 %:
+    - engines: the key-ons whose SSA lies in the entrants' banks, tagged; this one doesn't depend on the tags;
+    - car effects: in the shared banks, the key-ons of samples that tagged voices also play, tagged. The shared
+      banks' other untagged samples are listed with their key-on counts, and the most played are identified (by
+      ear, or by the request that starts them) as not car sounds; the worst case, all of them car sounds, is
+      reported beside the rate;
+    - and no BGM, UI or narration key-on tagged. Counted per frame (`voicesTagged`, `voicesUntagged`,
+      `voicesNoPosition`); gaps the note names (e.g. a shared tyre-squeal voice) are listed with their share.
   - Direction: a session in which an AI car passes the player; in each 100 ms window where the car's |x| in the
     player car's frame (its right axis) exceeds 2 m, the sign of its tagged voices' left-right level difference
     matches the sign of x in at least 95 % of windows, for `stereo` and `hrtf` (x from the two cars' `Vehicle`
