@@ -264,6 +264,23 @@ int main(int argc, char** argv) {
         expect(fe.stats.readMismatchKindsSeen == 1 && fe.stats.readMismatches[0].targetPsm == PSMCT32 &&
                    fe.stats.readMismatches[0].readPsm == PSMCT16 && fe.stats.readMismatches[0].count == 1,
                "and counted as (CT32, CT16)");
+
+        // P2c: Photo Travel's focus probe reads 8 x 4 of its Z24 buffer as Z32: the same layout, so from the GPU's
+        // depths, as the GS's Z (the request says a Z buffer, its format and whether it is turned round).
+        Gif z = setup();
+        z.ad({{ZBUF_1, zbuf(0x70, PSMZ24, false)}});
+        sprite(z, 0, 0, 640, 448, rgbaq(1, 2, 3, 0x80));
+        z.ad({{BITBLTBUF, bitbltbuf(0, 0, 0, 0x70, 10, PSMZ32)}, {TRXPOS, trxpos(0, 0, 316, 220)}, {TRXREG, trxreg(8, 4)}, {TRXDIR, 1}});
+        fe.gif(3, static_cast<const uint8_t*>(z.data()), z.bytes());
+        expect(fe.readFromTarget() && fe.takeGpuRead(request) && request.depth && !request.inverted && request.targetPsm == PSMZ24 &&
+                   request.psm == PSMZ32 && request.x == 316 && request.y == 220 && request.width == 8 && request.height == 4,
+               "P2c: a Z32 read of a Z24 buffer is asked of the GPU's depths");
+        expect(fe.stats.depthReads == 1 && fe.stats.readMismatchKindsSeen == 1, "P2c: counted, not as a mismatch");
+        fe.cut(partial);
+        fe.setReadData(std::vector<uint8_t>(8 * 4 * 4, 0x12));
+        uint32_t zwords[32] = {};
+        fe.readTransfer(zwords, 8);
+        expect(zwords[0] == 0x12121212u && zwords[31] == 0x12121212u, "P2c: the GPU's Z is what the read returns");
     }
 
     // 2b. Scene views (CONTRACTS.md a.5 7, a.8; A10's front-end half): two tagged 3D batches of two views, the same
