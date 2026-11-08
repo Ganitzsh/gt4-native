@@ -73,7 +73,7 @@ void SceneCounters::add(const SceneCounters& o) {
     runsAfterSameMatrix += o.runsAfterSameMatrix; matrixChecked += o.matrixChecked;
     matrixMismatch += o.matrixMismatch; matrixMaxError = std::max(matrixMaxError, o.matrixMaxError);
     viewportMismatch += o.viewportMismatch; guardUnexpected += o.guardUnexpected; cameraChecked += o.cameraChecked;
-    cameraMismatch += o.cameraMismatch; lights += o.lights; lightsAfterViewEnd += o.lightsAfterViewEnd;
+    cameraMismatch += o.cameraMismatch; courseObjects += o.courseObjects; lights += o.lights; lightsAfterViewEnd += o.lightsAfterViewEnd;
     lightViewUnknown += o.lightViewUnknown; emitters += o.emitters; markers += o.markers;
     vehicles += o.vehicles; viewSplitTargets += o.viewSplitTargets; viewsUnbound += o.viewsUnbound;
     fallbackNotBound += o.fallbackNotBound; fallbackMeshPending += o.fallbackMeshPending;
@@ -365,7 +365,8 @@ void SceneDecoder::instance(const rec::Instance& r) {
             else d.previousObjectToWorld = d.objectToWorld;
             objects_[key] = d.objectToWorld;
         }
-        if (r.flags & rec::kInstCourse) {   // course objects are in world space (R1): objectToView is the camera
+        if (r.flags & rec::kInstCourseObject) ++c.courseObjects;   // (a placed course object: its own objectToWorld)
+        if (r.flags & rec::kInstCourse) {   // the course's world-space geometry (R1): objectToView is the camera
             ++c.cameraChecked;
             const float scale = std::max(largest(view->worldToView), 1.0f);
             // a non-finite camera (scale infinite: inf <= inf would pass) or object matrix (NaN compares false) counts

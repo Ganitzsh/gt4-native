@@ -90,6 +90,7 @@ struct SceneCounters {
     float matrixMaxError = 0.0f;   // largest relative difference seen
     uint64_t viewportMismatch = 0, guardUnexpected = 0;
     uint64_t cameraChecked = 0, cameraMismatch = 0;
+    uint64_t courseObjects = 0;   // instances flagged kInstCourseObject (A11a: placed course objects, not camera-checked)
     // lights, emitters, markers, vehicles; lights after their view's ViewEnd (a.5 rule 4: reported), naming a view this
     // frame has not begun (dropped)
     uint64_t lights = 0, lightsAfterViewEnd = 0, lightViewUnknown = 0, emitters = 0, markers = 0, vehicles = 0;

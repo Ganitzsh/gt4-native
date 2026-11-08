@@ -377,6 +377,9 @@ struct SceneFrameState {
     uint16_t views = 0, instances = 0, lights = 0, emitters = 0, projections = 0, begins = 0;
     DWORD thread = 0;   // the thread that opened the frame (the kick must be the same: A3's check)
     uint32_t flags = 0;  // the opening FrameBegin's (they stand for the frame)
+    int course = 0;      // the course's draws under way (gt4_scene_course: nested), its Cmds' Instances kInstCourse (A11a)
+    int coursePaused = 0;   // inside them, draws that are not world-space course (billboards facing the camera): unflagged
+    uint16_t courseTop = 0;   // gt4_matrix_stack_top when the outermost course bracket opened (kInstCourse's depth)
     uint16_t openView = 0, viewInstances = 0;
     uint16_t mainView = 0;   // the frame's last kViewMain view (A7: the glow pass's lights name it)
     bool haveProjection = false;
@@ -539,6 +542,25 @@ void gt4_scene_view_end(uint32_t context) {
     g_scene.openView = 0;
 }
 
+// The course's draws begin (1) or end (0) (CONTRACTS.md kInstCourse, A11a: 00396D40, CourseData::render_course,
+// RacePS2Base::render_course, the env faces' course list): Instances in between are course instances. Nested calls count.
+// (With scene records off it does nothing: if they go off between an open and its close, the count stays up until the
+// next FrameBegin resets the frame's state, which is per frame.)
+void gt4_scene_course(uint32_t context, int on) {
+    (void)context;
+    if (!gt4_scene_on()) return;
+    if (on && g_scene.course == 0) g_scene.courseTop = gt4_matrix_stack_top;
+    g_scene.course = on ? g_scene.course + 1 : (g_scene.course > 0 ? g_scene.course - 1 : 0);
+}
+
+// Inside the course's draws, draws that are not its world-space geometry pause the flag (1) and resume it (0): the
+// BillboardSet's camera-facing billboards (CourseData::render_course_2), whose objectToView is not the camera.
+void gt4_scene_course_pause(uint32_t context, int pause) {
+    (void)context;
+    if (!gt4_scene_on()) return;
+    g_scene.coursePaused = pause ? g_scene.coursePaused + 1 : (g_scene.coursePaused > 0 ? g_scene.coursePaused - 1 : 0);
+}
+
 // A marker (CONTRACTS.md a.4, a.5 5): around render_post_effect and the panels' render_panel, in the open frame; `view` the
 // view open at it (0 none).
 void gt4_scene_marker(uint32_t context, int kind) {
@@ -621,6 +643,15 @@ void gt4_scene_glow_lights(uint32_t context, uint32_t view, uint32_t glow) {
     }
 }
 
+// Inside the course bracket (and not paused): kInstCourse at the bracket's own matrix-stack depth, its world-space
+// geometry; kInstCourseObject at any other depth, a placed object whose display program pushed its own matrix (A11a,
+// measured on race_gt_pe2: every course Cmd at the bracket's depth matched the camera, every one a matrix deeper did
+// not). From the depth, never from the camera, so the camera check stays a check.
+static uint16_t courseFlag() {
+    if (g_scene.course <= 0 || g_scene.coursePaused != 0) return 0;
+    return gt4_matrix_stack_top == g_scene.courseTop ? gfx::scene::kInstCourse : gfx::scene::kInstCourseObject;
+}
+
 // One Cmd 0049D328 draws, after 0049E480 / 0049E548 and before its items (CONTRACTS.md a.4): its object-to-view (set 0
 // as 0049E480 picks it), the scales, its items, and the Projection of set 1 with the viewport the batch holds.
 void gt4_scene_cmd(uint32_t context, uint32_t cmd) {
@@ -632,7 +663,8 @@ void gt4_scene_cmd(uint32_t context, uint32_t cmd) {
     scene::Instance r{};
     r.prefix = {scene::kInstance, scene::kVersion};
     r.view = g_scene.openView;
-    r.flags = static_cast<uint16_t>((flag ? scene::kInstLighting : 0) | ((bits & 0x80) ? scene::kInstSkinned : 0));
+    r.flags = static_cast<uint16_t>((flag ? scene::kInstLighting : 0) | ((bits & 0x80) ? scene::kInstSkinned : 0) |
+                                    courseFlag());
     r.serial = static_cast<uint32_t>(g_scene.instances) + 1;   // (counted as it is appended)
     r.cmd = cmd;
     r.entrant = 0xFFFFFFFFu;

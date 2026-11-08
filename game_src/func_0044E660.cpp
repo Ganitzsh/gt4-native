@@ -77,6 +77,7 @@ static void envFaceScene(FaceSelf *self, FaceObj *obj, unsigned short *list, int
     ModelSet2__render(self->f5C, 0);
     func_004A5400();
     func_004A3230(2);
+    gt4_scene_course(spr_base(), 1);   /* the face's course list (f14; the sky above is f5C): kInstCourse, A11a */
     if (list != 0) {
         int i = *list;
         unsigned short *p = list + 1;
@@ -92,6 +93,7 @@ static void envFaceScene(FaceSelf *self, FaceObj *obj, unsigned short *list, int
     } else {
         ModelSet2__render(self->f14, 0);
     }
+    gt4_scene_course(spr_base(), 0);
     func_004A5400();
 }
 

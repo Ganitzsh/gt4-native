@@ -413,6 +413,9 @@ void checks() {
           "guardUnexpected");
     const auto moved = oneJob(none, rec::kInstCourse, translate(3.0f, 0.0f, 0.0f) * worldToView());
     check(moved.cameraChecked == 1 && moved.cameraMismatch == 1, "cameraMismatch: a course instance off the camera");
+    const auto placed = oneJob(none, rec::kInstCourseObject, translate(3.0f, 0.0f, 0.0f) * worldToView());
+    check(placed.courseObjects == 1 && placed.cameraChecked == 0 && placed.cameraMismatch == 0,
+          "kInstCourseObject: a placed course object is counted, not camera-checked (A11a)");
     {   // a NaN in the camera itself (worldToView): the course instance carries the same NaN, and it still counts
         SceneDecoder d;
         put(d, frameBegin(1));

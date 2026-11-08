@@ -873,8 +873,11 @@ enum InstanceFlags : uint16_t {
     kInstObjectKnown = 4,   // set / model / lod come from 00455708's context
     kInstCarBody = 8,       // sphere-map bodies 0x10A8 / 0x12C8 seen in the Cmd (set by the host if not known)
     kInstWheel = 16,
-    kInstCourse = 32,
+    kInstCourse = 32,          // the course's world-space geometry: inside the course bracket, at the bracket's own
+                               //   matrix-stack depth (A11a); objectToView = the view's camera (a.7's camera check)
     kInstSky = 64,
+    kInstCourseObject = 128,   // a placed course object: inside the course bracket at another matrix-stack depth (its
+                               //   display program pushed its own objectToWorld)
 };
 struct Instance {
     Prefix prefix;
