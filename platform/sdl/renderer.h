@@ -70,6 +70,9 @@ public:
     std::string textureHeapSummary() const;          // its texture memory blocks (hitch log)
     // Its GPU stages (the GT4_GPU_PROFILE labels) timed for --profile-json; the last finished frame's, in milliseconds.
     void setStageTiming(bool on);
+    // The GS scene's frame interpolation counts presents instead of the wall clock (main.cpp with --fixed-step:
+    // replays and sessions come out the same every run with display.frame_interpolation on).
+    void setFixedClock(bool on);
     std::vector<std::pair<std::string, double>> gsStages() const;
     double averageGpuMilliseconds() const;   // mean GPU time over every timed frame so far
     // The display pipeline's render graph passes in the last finished frame (names, GPU and CPU microseconds, GPU -1

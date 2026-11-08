@@ -82,6 +82,9 @@ public:
     // Presentation decoupled from the game's 60 Hz: at each display refresh between two game frames, the last one
     // drawn again with its moving 3D interpolated (display.frame_interpolation).
     void setInterpolation(bool on);
+    // The interpolation phase from the presents, not the wall clock (gt4_host --fixed-step: replays and sessions,
+    // one present a game frame): the same frames every run. Off: the display's clock, as a live game needs.
+    void setFixedClock(bool on);
     void setEffects(const SceneEffects& effects);
     bool antiAliasesItself() const override;
 

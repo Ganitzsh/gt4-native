@@ -619,8 +619,12 @@ int run(const Options& options) {
     const VkExtent2D headlessSize = options.size.width ? options.size
         : VkExtent2D{static_cast<uint32_t>(settings.windowWidth), static_cast<uint32_t>(settings.windowHeight)};
     auto makeRenderer = [&](const std::string& gpu) {
-        return windowed ? std::make_unique<Renderer>(sdlWindow, instance.instance, gpu, settings)
-                        : std::make_unique<Renderer>(instance.instance, headlessSize, gpu, settings);
+        auto made = windowed ? std::make_unique<Renderer>(sdlWindow, instance.instance, gpu, settings)
+                             : std::make_unique<Renderer>(instance.instance, headlessSize, gpu, settings);
+        // --fixed-step (replays, sessions): frame interpolation by the presents, not the wall clock, so a run gives the
+        // same frames every time with display.frame_interpolation on. A live game without it keeps the display's clock.
+        made->setFixedClock(options.fixedStep);
+        return made;
     };
     std::unique_ptr<Renderer> renderer = makeRenderer(settings.gpu);
     std::string activeGpu = settings.gpu;

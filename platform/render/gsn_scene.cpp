@@ -222,7 +222,13 @@ struct GsnScene::Impl {
     bool interpolate = true;
     std::chrono::steady_clock::time_point arrival{};
     float modelT = 1.0f, modelTPrevious = 0.0f;
+    // setFixedClock (gt4_host's main.cpp with --fixed-step: replays and sessions): the phase counts presents instead
+    // of the wall clock, a present being one 60 Hz tick of the game's clock, so from the first present after a
+    // list's arrival it is 1.0, the same in every run (the wall clock's phase there was the scheduler's timing: two
+    // replays of race7 with interpolation on had 1 frame of 100 alike).
+    bool fixedClock = false;
     float sinceArrival() const {
+        if (fixedClock) return 1.0f;
         return std::clamp(std::chrono::duration<float>(std::chrono::steady_clock::now() - arrival).count() * 60.0f, 0.0f, 1.0f);
     }
     vk::Pipeline velocityPass, taaPass;
@@ -2597,6 +2603,7 @@ void GsnScene::recordPrepass(VkCommandBuffer command, const SceneView& view) {
 }
 
 void GsnScene::setInterpolation(bool on) { impl->interpolate = on; }
+void GsnScene::setFixedClock(bool on) { impl->fixedClock = on; }
 
 bool GsnScene::Impl::copyRect(VkCommandBuffer command, const gsn::ReadRequest& request, Copied& c) {
     auto it = targets.find(request.target);

@@ -250,6 +250,7 @@ struct Renderer::Impl {
     std::optional<gt4::MenuView> menu;
     std::string message;
     Uint64 messageUntil = 0;   // SDL_GetTicks
+    bool fixedClock = false;   // setFixedClock: the GS scene's interpolation phase from presents (--fixed-step)
     std::vector<std::string> capturePaths;   // this frame written to each (a session's capture and --capture-frames can meet)
     gt4::vk::Buffer readback;
 
@@ -879,6 +880,7 @@ struct Renderer::Impl {
             gsnScene->setTemporal(settings.aa == gt4::AntiAliasing::Taa || settings.upscaler == gt4::Upscaler::Fsr2);
             gsnScene->setFieldMode(settings.fieldMode == gt4::FieldMode::Clean);
             gsnScene->setInterpolation(settings.frameInterpolation);
+            gsnScene->setFixedClock(fixedClock);
             // The scene stage's effects, by their settings' levels (original and off: none).
             auto level = [](gt4::EffectQuality q) {
                 switch (q) {
@@ -1056,6 +1058,10 @@ double Renderer::gpuMilliseconds() const { return impl->gpuMs; }
 std::string Renderer::textureHeapSummary() const { return impl->gsnScene ? impl->gsnScene->textureHeapSummary() : std::string(); }
 gt4::GsnScene::Counters Renderer::sceneCounters() const { return impl->gsnScene ? impl->gsnScene->counters() : gt4::GsnScene::Counters{}; }
 void Renderer::setStageTiming(bool on) { if (impl->gsnScene) impl->gsnScene->setStageTiming(on); }
+void Renderer::setFixedClock(bool on) {
+    impl->fixedClock = on;
+    if (impl->gsnScene) impl->gsnScene->setFixedClock(on);
+}
 std::vector<std::pair<std::string, double>> Renderer::gsStages() const {
     return impl->gsnScene ? impl->gsnScene->lastFrameStages() : std::vector<std::pair<std::string, double>>{};
 }
