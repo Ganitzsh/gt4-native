@@ -106,7 +106,8 @@ gt4_host --headless --size 1280x720 --session-dir build/sessions/<name> --no-aud
 
 PCSX2's software renderer is the reference for what the PS2 shows (menus, showroom, paused race, Photo Travel). It
 takes the keyboard focus on the console desktop: run it only with the coordinator's go, under the live-game lock and a
-heavy slot, and close it when done. The stills stay in `build/refs/` (Sony's frames: never committed or served).
+heavy slot, and close it when done. The stills stay in `build/refs/` and the BIOS in `build/pcsx2/bios/` (both Sony's:
+never committed or served).
 
 1. A portable PCSX2 copied into your clone's `build/pcsx2/` (with `portable.txt`), its BIOS from the owner's
    install, the ISO read in place. `inis/PCSX2.ini`: `[EmuCore/GS] Renderer = 13` (software),
