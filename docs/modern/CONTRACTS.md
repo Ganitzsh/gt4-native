@@ -46,6 +46,7 @@ void gt4_scene_frame_begin(void *context, unsigned int flags);   /* FrameEnd: th
 unsigned int gt4_scene_view_begin(void *context, int role, int flags, unsigned int pass);
 void gt4_scene_view_end(void *context);
 void gt4_scene_cmd(void *context, const void *cmd);
+void gt4_scene_marker(void *context, int kind);   /* MarkerKind, in the open frame (A5a) */
 ```
 
 - gcc 2.9 cannot include `gfx.h` (C++17), so the structs are restated in **`compat/game/gt4_scene.h`** (plain C,
@@ -315,7 +316,7 @@ Where each record is sent (tickets in PLAN.md):
 | object identity | 00455708 (draft) sets a runtime-global "model context" that A2 reads | A4 |
 | `Light` | 003B8EA0 (draft), 0x00341A30, car lamps from A6 | A7 |
 | `Emitter` | 0x003E7A58, 0x003C1430, 0x003C2780 | A8 |
-| `Marker` | around the post-effect and panel calls in `render_world` | A5 |
+| `Marker` | `kMarkPost*` at the start and end of render_post_effect (`game_src/func_0033F890.cpp`, virtual 105); `kMarkHud*` at the start and end of RaceBasic::render_panel (`game_src/func_0038B5A0.cpp`, which RaceSolitaire's calls and RaceSplitBattleBase's reaches per player). Both are reached through the race's vtable after `render_world`, so they are inside the kick's frame (a.5.1) | A5 |
 | `Vehicle` | where D-S6 finds the per-car state | A9 |
 
 ### a.5 Ordering within a frame, and against the existing records
