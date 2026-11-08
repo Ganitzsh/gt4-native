@@ -191,8 +191,12 @@ enum InstanceFlags : uint16_t {
     kInstObjectKnown = 4,   // set / model / lod come from 00455708's context
     kInstCarBody = 8,       // sphere-map bodies 0x10A8 / 0x12C8 seen in the Cmd (set by the host if not known)
     kInstWheel = 16,
-    kInstCourse = 32,       // set by the runtime while the course is drawn: 00396D40, 00396E10, 0044E528 (A11a)
+    kInstCourse = 32,       // the course's world-space geometry: a Cmd drawn inside the course bracket (00396D40,
+                            //   00396E10, 0044E528) at the bracket's own matrix-stack depth (A11a); objectToView =
+                            //   the view's worldToView
     kInstSky = 64,
+    kInstCourseObject = 128,   // a placed course object: inside the course bracket at any other matrix-stack depth
+                               //   (its display program pushed a transform of its own), so its own objectToWorld
 };
 struct Instance {
     Prefix prefix;
@@ -527,7 +531,7 @@ Where each record is sent (tickets in PLAN.md):
 | `matrixChecked`, `matrixMismatch`, `matrixMaxError` | per tagged job: `diag(axisScale·k, 1) · objectToView · projection.viewToClip` (k = shapeScale, or 1 when 0) against `ModelJob::matrix`; mismatch when the largest difference exceeds `1e-5 · max |entry|` (R1: 0 of 270,515, largest 2.3e-7) | `matrixMismatch == 0` |
 | `viewportMismatch` | per tagged job: the instance's `projection.viewportScale / viewportOffset / clamp` against `ModelJob::scale / offset / clamp` | 0 |
 | `guardUnexpected` | tagged jobs whose guard (qword 200, the clipping renderers' clip flags) is not (0.5, 0.5, 1, 1), the only value R1 saw | reported |
-| `cameraChecked`, `cameraMismatch` | course instances (`kInstCourse`) whose `objectToView` differs from their view's `worldToView` (R1: they are equal) | 0 |
+| `cameraChecked`, `cameraMismatch` | course geometry instances (`kInstCourse`, not `kInstCourseObject`) whose `objectToView` differs from their view's `worldToView` (R1: they are equal) | 0 |
 | `jobsUntaggedInView` | untagged model jobs into a bound view's target between its `ViewBegin` and the Light command | reported; the substitution keeps drawing them on the GS path |
 | `viewSplitTargets` (by reason, a.5.7), `viewsUnbound` | binding | 0 for main views |
 | `viewAuxiliaryDraws`, `viewAuxiliaryReads` | tagged draws into a view's auxiliary targets; principal draws sampling one (a.5.7), by view role | reported |

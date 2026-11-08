@@ -216,9 +216,17 @@ far passes, called directly from 0033EAB8; it never calls `render_course`); `Cou
 (the mirror, split screen, 003403B8, 00397048); and the env faces' course list in 0044E528 (its `ModelSet2` calls
 on `scene->f14`, not the sky's `f5C`). That makes A3's camera check real (`cameraChecked` counts course instances;
 until A11a it checks nothing), and B7 relies on a validated `worldToView`. The sky (00396B80) stays unflagged;
-`kInstSky` can be set the same way later. Depends: A2. Acceptance: `REL`; `ORIG`; on a race capture with records,
-`cameraChecked > 0` in every race frame, in the main view and the env faces, and `cameraMismatch == 0`; car, wheel
-and sky instances never flagged.
+`kInstSky` can be set the same way later.
+- **Course geometry and placed course objects** (lane A, measured): about 10 % of the course's Cmds come from model
+  display programs (00455708, from `render_course_2` 00396F00) that push a matrix of their own: placed objects at
+  their own position, scale and rotation. All of them sit one level deeper on the matrix stack than the course
+  bracket did when it opened; every course Cmd at the bracket's own depth matched the camera. So `kInstCourse` is a
+  Cmd inside the bracket at the bracket's depth (the runtime notes `gt4_matrix_stack_top` when the outermost bracket
+  opens), and one at any other depth is `kInstCourseObject` (CONTRACTS a.4). The flag is set from the stack depth,
+  never by comparing with the camera, so the camera check stays a real check.
+Depends: A2. Acceptance: `REL`; `ORIG`; on a race capture with records, `cameraChecked > 0` in every race frame, in
+the main view and the env faces, and `cameraMismatch == 0` over `kInstCourse`; `kInstCourseObject` counted; car,
+wheel and sky instances never flagged.
 
 **A11b: Course section index (S).** `render_model` 0x00397188 sets the runtime's current section, which A2 writes
 into `Instance::section`. **Parked with N2** (only N2's parts b and c need it); it is built if N2 reopens. Depends:
@@ -923,8 +931,9 @@ is done once per mesh, and it works for other emissive props too.
   match something else there: the acceptance checks a second course.
 - **Extraction:** for each course mesh (B5) with glow geometry, the centre and size of each lamp-head cluster,
   cached with the mesh. A star-shaped glow may be several crossed quads, so quads whose centres coincide (within a
-  fraction of their size) are one lamp. Course instances draw with `objectToView` equal to the view's `worldToView`
-  (A3's camera check, real since A11a), so mesh positions are world positions.
+  fraction of their size) are one lamp. The lamps are cached in the mesh's own space, and the lamp pass places them
+  through each instance's `objectToView`, so placed course objects (`kInstCourseObject`, their own transform) and the
+  course's world-space geometry are both right.
 - **How it is built** (lane F's design on B6):
   - **The scene split** is on whenever `lighting.night = enhanced`, not only with `render.scene`: B6's ids exist only
     with the split. One settings function decides it beside `sceneRecordsWanted` (`settings_scene.cpp`, lane C
