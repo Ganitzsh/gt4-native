@@ -13,7 +13,7 @@
 #include "cpu_profile.h"
 #include "ps2_pad.h"
 #include "input_map.h"
-#include "response.h"
+#include "pad_devices.h"
 #include "chord_guard.h"
 #include "renderer.h"
 #include "save_import.h"
@@ -460,48 +460,6 @@ std::string gamepadCommand(gt4::Settings& s, SDL_GamepadButton button) {
 // game has sent any, bit 8 the small motor, bits 0-7 the large one.
 std::atomic<uint32_t> g_rumble[2];
 
-// The keyboard and the SDL gamepad now (standard layout), for the pad map (platform/input/input_map.h).
-gt4::input::Snapshot readInput(SDL_Gamepad* gamepad) {
-    gt4::input::Snapshot s;
-    int count = 0;
-    if (const bool* keys = SDL_GetKeyboardState(&count))
-        for (int k = 0; k < count && k < SDL_SCANCODE_COUNT; ++k) s.keys[k] = keys[k];
-    if (gamepad) {
-        s.gamepad = true;
-        for (int b = 0; b < SDL_GAMEPAD_BUTTON_COUNT; ++b) s.buttons[b] = SDL_GetGamepadButton(gamepad, static_cast<SDL_GamepadButton>(b));
-        for (int a = 0; a < SDL_GAMEPAD_AXIS_COUNT; ++a)
-            s.axes[a] = static_cast<float>(SDL_GetGamepadAxis(gamepad, static_cast<SDL_GamepadAxis>(a))) / 32767.0f;
-    }
-    return s;
-}
-
-// The response's settings (input.response, input.steer.*, input.pedal.*; the settings give percent).
-gt4::input::ResponseConfig responseConfig(const gt4::Settings& s) {
-    gt4::input::ResponseConfig c;
-    c.modern = s.inputResponse == gt4::InputResponse::Modern;
-    c.steer = {s.steerDeadzone / 100.0f, s.steerOuterDeadzone / 100.0f, s.steerLinearity, s.steerSensitivity,
-               s.steerSaturation / 100.0f};
-    c.pedal = {s.pedalDeadzone / 100.0f, s.pedalOuterDeadzone / 100.0f, s.pedalLinearity, 1.0f, 1.0f};
-    c.steerSmoothingMs = s.steerSmoothing;
-    c.pedalSmoothingMs = s.pedalSmoothing;
-    c.keyRateMs = s.steerKeyRate;
-    return c;
-}
-
-// The game's pad `port` from the keyboard (pad 1 only) and the gamepad (docs/GS_BACKEND.md, "Input"): the PS2
-// mapping, through the action map (tests/input_map.cpp checks it gives the same bytes as the readPad before it, for
-// every input), then the pad's response (platform/input/response.h; input.response = original leaves it as it is).
-// Called once a frame per pad, dt the time since the last frame in seconds.
-gt4::ps2::PadInput readPad(SDL_Gamepad* gamepad, int port, const gt4::Settings& settings, float dt) {
-    static const gt4::input::Map map = gt4::input::originalMap();
-    static gt4::input::Response response[2] = {gt4::input::Response(map), gt4::input::Response(map)};
-    gt4::input::Snapshot s = readInput(gamepad);
-    if (port) std::fill(std::begin(s.keys), std::end(s.keys), false);   // (pad 2: its gamepad only)
-    gt4::ps2::PadInput in = gt4::input::apply(map, s);
-    response[port & 1].step(in, s, responseConfig(settings), dt);
-    return in;
-}
-
 // GT4_HOST_KEYS=FRAME:KEY,... (unattended checks of the settings menu): presses KEY (escape up down left right
 // return backspace pageup pagedown f1) when FRAME frames have been presented. It also enables the menu
 // without a window.
@@ -723,9 +681,17 @@ int run(const Options& options) {
         session->record("renderer", "\"gpu\":" + jsonQuote(gpu.name) + ",\"gpu_type\":" + jsonQuote(gpu.type) + ",\"driver\":" +
                         jsonQuote(gpu.driver) + ",\"headless\":" + (windowed ? "false" : "true"));
     }
-    SDL_Gamepad* gamepad = nullptr;
-    SDL_Gamepad* gamepad2 = nullptr;   // pad 2: a second gamepad (SDL_EVENT_GAMEPAD_ADDED)
-    bool pad2Sent = false;             // pad 2 sent as connected, so its removal is told to the game
+    // The game's two pads: the gamepads, the ports they hold, their profiles (input_profiles.ini beside settings.ini,
+    // interactive runs only: other runs have the defaults) and responses (platform/sdl/pad_devices.h). A session takes
+    // only its virtual pads.
+    std::string profilesPath;
+    if (interactive && !settingsPath.empty()) {
+        const std::filesystem::path settingsFile(std::u8string(settingsPath.begin(), settingsPath.end()));
+        const std::u8string p = (settingsFile.parent_path() / "input_profiles.ini").u8string();
+        profilesPath.assign(p.begin(), p.end());
+    }
+    gt4::PadDevices pads(profilesPath, session != nullptr);
+    bool pad2Sent = false;            // pad 2 sent as connected, so its removal is told to the game
     uint32_t rumbleApplied[2] = {};    // g_rumble as last given to the gamepads (and a session's events)
     Uint64 rumbleSentAt[2] = {};
     Uint64 padLast = 0;                // when the pads were last read (their response's dt)
@@ -847,17 +813,15 @@ int run(const Options& options) {
                 renderer->displayChanged();
                 break;
             case SDL_EVENT_GAMEPAD_ADDED:
-                // The first gamepad is pad 1 (with the keyboard), a second one pad 2: the PS2's two ports. A session
-                // has its virtual pad as pad 1 and opens no real one.
-                if (session) break;
-                if (!gamepad) gamepad = SDL_OpenGamepad(event.gdevice.which);
-                else if (!gamepad2 && SDL_GetGamepadID(gamepad) != event.gdevice.which) gamepad2 = SDL_OpenGamepad(event.gdevice.which);
+                // The PS2's two ports: a gamepad takes the port it held last, else the first free one (pad 1 has the
+                // keyboard too). A session's are its virtual pads.
+                pads.added(event.gdevice.which);
                 break;
             case SDL_EVENT_GAMEPAD_REMOVED:
-                if (gamepad && SDL_GetGamepadID(gamepad) == event.gdevice.which) { SDL_CloseGamepad(gamepad); gamepad = nullptr; }
-                if (gamepad2 && SDL_GetGamepadID(gamepad2) == event.gdevice.which) { SDL_CloseGamepad(gamepad2); gamepad2 = nullptr; }
+                pads.removed(event.gdevice.which);
                 break;
             case SDL_EVENT_GAMEPAD_BUTTON_DOWN: {
+                SDL_Gamepad* gamepad = pads.gamepad(0);
                 if (!menuEnabled || !gamepad || SDL_GetGamepadID(gamepad) != event.gbutton.which) break;
                 const auto button = static_cast<SDL_GamepadButton>(event.gbutton.button);
                 const bool chord = (button == SDL_GAMEPAD_BUTTON_START && SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_BACK)) ||
@@ -995,7 +959,7 @@ int run(const Options& options) {
                 const float padDt = options.fixedStep ? 1.0f / 60.0f
                                     : padLast ? std::min(static_cast<float>(padNow - padLast) * 1e-9f, 0.1f) : 0.0f;
                 padLast = padNow;
-                gt4::ps2::PadInput input = readPad(session ? session->gamepad() : gamepad, 0, settings, padDt);
+                gt4::ps2::PadInput input = pads.read(0, settings, padDt);
                 if (menuEnabled) chordGuard.filter(input, SDL_GetTicks());
                 if (padHeldBack) {
                     bool held = std::fabs(input.leftX) > 0.3f || std::fabs(input.leftY) > 0.3f;
@@ -1013,11 +977,11 @@ int run(const Options& options) {
                     for (int i = 0; i < 18; ++i) std::snprintf(hex + 2 * i, 3, "%02x", pad[i]);
                     session->record("pad", std::string("\"port\":0,\"bytes\":\"") + hex + "\"");
                 }
-                // Pad 2: a second gamepad (no keyboard), held back like pad 1. Without one, port 2 is empty: the game
-                // sees no controller there, as on a PS2 (runtime/iop.cpp scePad2GetState); told once when it goes.
-                // (in a session: its second virtual pad, button2 / axis2)
-                if (SDL_Gamepad* second = session ? session->gamepad2() : gamepad2) {
-                    gt4::ps2::PadInput input2 = readPad(second, 1, settings, padDt);
+                // Pad 2: the gamepad holding port 2 (no keyboard), held back like pad 1. Without one, port 2 is empty:
+                // the game sees no controller there, as on a PS2 (runtime/iop.cpp scePad2GetState); told once when it
+                // goes. (in a session: its second virtual pad, button2 / axis2)
+                if (pads.connected(1)) {
+                    gt4::ps2::PadInput input2 = pads.read(1, settings, padDt);
                     if (menu.isOpen() || padHeldBack) input2 = gt4::ps2::PadInput{};
                     gt4::ps2::encodePad(input2, pad);
                     gs->sendPad(1, true, pad);
@@ -1040,7 +1004,7 @@ int run(const Options& options) {
                                                       ",\"large\":" + std::to_string(v & 0xFF));
                     rumbleApplied[p] = v;
                     rumbleSentAt[p] = now;
-                    if (SDL_Gamepad* target = session ? nullptr : (p == 0 ? gamepad : gamepad2))
+                    if (SDL_Gamepad* target = session ? nullptr : pads.gamepad(p))
                         SDL_RumbleGamepad(target, static_cast<Uint16>((v & 0xFF) * 257), (v & 0x100) ? 0xFFFF : 0,
                                           motorOn ? 2000 : 0);
                 }
@@ -1056,7 +1020,7 @@ int run(const Options& options) {
         // The settings menu: held directions repeat; the view follows the settings (keys change them too).
         if (menu.isOpen()) {
             using Input = gt4::SettingsMenu::Input;
-            if (gamepad) {
+            if (SDL_Gamepad* gamepad = pads.gamepad(0)) {
                 const float y = static_cast<float>(SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTY)) / 32767.0f;
                 const int stick = y < -0.6f ? -1 : y > 0.6f ? 1 : 0;
                 if (stick != stickHeld) {
@@ -1086,7 +1050,7 @@ int run(const Options& options) {
         } else if (interactive) {
             float stick = keyboardStick;
             bool action = keyboardAction;
-            if (gamepad) {
+            if (SDL_Gamepad* gamepad = pads.gamepad(0)) {
                 const float axis = static_cast<float>(SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX)) / 32768.0f;
                 if (std::fabs(axis) > 0.12f) stick = axis;
                 action |= SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_SOUTH);
@@ -1354,8 +1318,6 @@ int run(const Options& options) {
             }
         }
     }
-    if (gamepad) SDL_CloseGamepad(gamepad);
-    if (gamepad2) SDL_CloseGamepad(gamepad2);
     if (options.frames && frames < options.frames && !gameExited)
         throw std::runtime_error("Window closed before the requested frames were presented");
     if (options.smoke && (!firstResize || !minimized || !restored || !sawMinimized))

@@ -107,6 +107,25 @@ struct Session::Impl {
             require(SDL_SetJoystickVirtualAxis(j, i, i >= SDL_GAMEPAD_AXIS_LEFT_TRIGGER ? -32768 : 0), "virtual axis");
         SDL_UpdateJoysticks();
     }
+    // Pad 1's joystick, plugged in again (neutral) on first use after an "unplug" (D13's hot-plug test).
+    SDL_Joystick* pad1() {
+        if (!joystick) {
+            id = attachPad("GT4 automation controller", joystick, gamepad);
+            neutral(joystick);
+            event("pad1", "\"plugged\":true,\"controller\":" + std::to_string(id));
+        }
+        return joystick;
+    }
+    void unplug1() {
+        if (!joystick) return;
+        SDL_CloseGamepad(gamepad);
+        SDL_CloseJoystick(joystick);
+        SDL_DetachVirtualJoystick(id);
+        gamepad = nullptr;
+        joystick = nullptr;
+        id = 0;
+        event("pad1", "\"plugged\":false");
+    }
     // Pad 2's joystick, plugged in (neutral) on first use.
     SDL_Joystick* pad2() {
         if (!joystick2) {
@@ -166,7 +185,7 @@ struct Session::Impl {
     // "reset": every button up and every axis at rest, on pad 1 and, when it is plugged in, pad 2 (a button2 held
     // without its release would otherwise survive a reset).
     void reset() {
-        neutral(joystick);
+        if (joystick) neutral(joystick);
         if (joystick2) neutral(joystick2);
     }
     void submit(const int16_t* samples, uint32_t frames) {
@@ -222,14 +241,15 @@ struct Session::Impl {
             auto axis = SDL_GetGamepadAxisFromString(name.c_str());
             if (axis < 0 || axis >= SDL_GAMEPAD_AXIS_COUNT || value < -32768 || value > 32767)
                 throw std::runtime_error("Invalid axis or value");
-            require(SDL_SetJoystickVirtualAxis(op == "axis" ? joystick : pad2(), axis, static_cast<Sint16>(value)), "virtual axis");
+            require(SDL_SetJoystickVirtualAxis(op == "axis" ? pad1() : pad2(), axis, static_cast<Sint16>(value)), "virtual axis");
         } else if (op == "button" || op == "button2") {
             std::string name; int value;
             if (!(input >> name >> value)) throw std::runtime_error(op + " NAME 0|1 required");
             auto which = button(name);
             if (which < 0 || which >= 15 || (value != 0 && value != 1)) throw std::runtime_error("Invalid button or state");
-            require(SDL_SetJoystickVirtualButton(op == "button" ? joystick : pad2(), which, value != 0), "virtual button");
+            require(SDL_SetJoystickVirtualButton(op == "button" ? pad1() : pad2(), which, value != 0), "virtual button");
         } else if (op == "unplug2") unplug2();
+        else if (op == "unplug") unplug1();
         else if (op == "reset") reset();
         else if (op == "capture") {
             std::string name; input >> name;

@@ -18,7 +18,8 @@ public:
     bool tick(Renderer& renderer, SDL_Window* window, uint32_t frame);
     float horizontal() const;
     bool action() const;
-    // The virtual gamepad, which also plays the game's pad 1 in a game session.
+    // The virtual gamepad, which also plays the game's pad 1 in a game session; null after "unplug" until the next
+    // "button" or "axis" plugs it in again.
     SDL_Gamepad* gamepad() const;
     // The game's pad 2: a second virtual gamepad, plugged in by the first "button2"/"axis2" command and removed by
     // "unplug2"; null while there is none (port 2 empty).
