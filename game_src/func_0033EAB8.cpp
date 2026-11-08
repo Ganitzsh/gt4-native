@@ -176,7 +176,9 @@ extern "C" void func_0033EAB8(char *self, void *buf, void *cur, void *aux, f32 t
         { bool on = hasFlag(scene, 0x8000); V *e = method(self, 0x3F0); ((FnIF)e->fn)(self + e->d, on, t); }
         gt4_scene_glow_lights(spr_base(), mainView, rb);   /* A7: the glow pass's lamps, as listed by now (method 0x3F0) */
         if (hasFlag(scene, 0x200000)) { V *e = method(self, 0x3F8); ((Fn)e->fn)(self + e->d); }
+        gt4_scene_marker(spr_base(), 7);   /* kMarkFlareBegin: the flare's read (A5b) */
         func_003B8848(rb);
+        gt4_scene_marker(spr_base(), 8);   /* kMarkFlareEnd */
         if (!Pitmen__isNotRenderOthersPeriod(self + 0x3628, index)) func_003C2838(self + 0x3238);
     }
     { V *e = method(self, 0x3E8); ((FnPPPF)e->fn)(self + e->d, buf, cur, aux, t); }

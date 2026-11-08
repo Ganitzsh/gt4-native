@@ -1,4 +1,8 @@
 /* compiler: ee-gcc2.96-no-strict-aliasing */
+/* (A5b) the flare pass's draws (003B88C8: the samples the game reads back, and the glows) between kMarkFlareBegin and
+ * kMarkFlareEnd (CONTRACTS.md a.4). Nothing is sent while scene records are off. */
+#include "gt4_gfx.h"
+#include "spr.h"
 #define I(p,o) (*(int *)((char *)(p)+(o)))
 #define F(p,o) (*(float *)((char *)(p)+(o)))
 #define P(p,o) (*(char **)((char *)(p)+(o)))
@@ -250,7 +254,9 @@ extern "C" void func_0033F2E8(char *self, int *rs, void *tex, int unused0, float
         if(Pitmen__isNotRenderOthersPeriod(self+0x3628,*(short *)(view+I(view,0x9bc)*0x19c+0x1c)))
             func_003E7CC8(self+0x31d0,tex,0,*(short *)(view+I(view,0x9bc)*0x19c+0x1c));
         else func_003E7CC8(self+0x31d0,tex,0,-1);
+        gt4_scene_marker(spr_base(), 7);   /* kMarkFlareBegin */
         func_003B88C8(self+0xda0);
+        gt4_scene_marker(spr_base(), 8);   /* kMarkFlareEnd */
     }
     if(I(self,0xe33c)) {
         ((View *)view)->render(P(self,0x6c),rs);
