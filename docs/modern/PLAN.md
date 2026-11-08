@@ -175,7 +175,11 @@ store to the lists' counts). The light-glow pass 003B88C8 draws from two per-fra
     read 003B8848 and the glow draws (003B88C8 from 0033F2E8). The `Light`s are sent right after, tagged with the
     main view's id (CONTRACTS a.5 rule 4). F2 reads them from the frame's `SceneFrame` by view id.
 - **Step 2, headlight spots:** each headlight's direction and cone from the car body (A9's record, D6), so the
-  headlights light the road ahead and not around the car. R2's verdict on 003B8EA0 only if its terms are needed.
+  headlights light the road ahead and not around the car. In lane A's runs the player's car showed no lamps in
+  `entries[]` in a time trial once the race ran (perhaps the in-car or bumper view hides them; whether the
+  player's car is there in a B-spec race isn't established). So this step's spots are the sure source for the
+  player's headlights. Captures for F2's car lamps are B-spec or races with other cars. R2's verdict on 003B8EA0
+  only if its terms are needed.
   The car lights' reflections (0x00341A30) are not sent as lights: they would light the scene twice, and N3 handles
   their sprites.
 Depends: A3; step 2 also A6, A9, D6. Acceptance:
