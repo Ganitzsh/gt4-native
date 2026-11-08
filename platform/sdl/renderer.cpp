@@ -1061,13 +1061,14 @@ const GpuInfo& Renderer::gpu() const { return impl->info; }
 double Renderer::gpuMilliseconds() const { return impl->gpuMs; }
 std::string Renderer::textureHeapSummary() const { return impl->gsnScene ? impl->gsnScene->textureHeapSummary() : std::string(); }
 gt4::GsnScene::Counters Renderer::sceneCounters() const { return impl->gsnScene ? impl->gsnScene->counters() : gt4::GsnScene::Counters{}; }
-void Renderer::setStageTiming(bool on) { if (impl->gsnScene) impl->gsnScene->setStageTiming(on); }
+// (the GS back end's stages come from the render graph's pass timings: GsnScene::stagesOf)
+void Renderer::setStageTiming(bool on) { if (on) impl->passTimingWanted = true; }
 void Renderer::setFixedClock(bool on) {
     impl->fixedClock = on;
     if (impl->gsnScene) impl->gsnScene->setFixedClock(on);
 }
 std::vector<std::pair<std::string, double>> Renderer::gsStages() const {
-    return impl->gsnScene ? impl->gsnScene->lastFrameStages() : std::vector<std::pair<std::string, double>>{};
+    return gt4::GsnScene::stagesOf(impl->passTimes);
 }
 const std::vector<gt4::rg::PassTiming>& Renderer::passTimings() const {
     impl->passTimingWanted = true;   // (from the next finished frame on; empty before)

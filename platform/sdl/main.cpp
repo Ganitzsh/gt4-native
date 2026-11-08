@@ -1251,7 +1251,8 @@ int run(const Options& options) {
                     // the GS back end's GPU stages of its last finished frame (the GT4_GPU_PROFILE labels)
                     renderer->setStageTiming(true);
                     std::string gsPasses;
-                    for (const auto& [label, ms] : renderer->gsStages()) item(gsPasses, label.c_str(), "gpu_us", ms * 1000.0);
+                    for (const auto& [label, ms] : renderer->gsStages())   // (-1: a pass of it not timed)
+                        item(gsPasses, label.c_str(), "gpu_us", ms < 0.0 ? -1.0 : ms * 1000.0);
                     // the display pipeline's render graph passes in its last finished frame (CONTRACTS b.7): GPU -1 when
                     // not timed; several passes can share a name (bloom: one a mip), perf_report.py adds them up
                     std::string passes;

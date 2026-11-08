@@ -14,6 +14,8 @@
 
 namespace gt4 {
 
+namespace rg { struct PassTiming; }
+
 // The scene stage's effects on the game's 3D scenes (docs/NATIVE_RENDERER.md); 0 switches each off.
 struct SceneEffects {
     float reflections = 0.0f;        // screen-space reflections: the share of the Fresnel term shown, 0..1
@@ -81,12 +83,9 @@ public:
     // half (the PS2's picture without the bob); true = clean: the lower field's extra last line (the line a TV hides) is
     // not shown, and where the fields differ (something moved between them) the current field is shown alone.
     void setFieldMode(bool clean);
-    // The GPU's time per labelled stage (the GT4_GPU_PROFILE labels), for gt4_host --profile-json: on, the frames
-    // are timestamped as with GT4_GPU_PROFILE=1 without its reports; lastFrameStages() gives the last finished frame's
-    // stages and milliseconds (empty when off, or before a frame finished). Both on the thread that records this scene
-    // (Renderer::draw: gt4_host's main loop), as profileFrame writes the stages while it records.
-    void setStageTiming(bool on);
-    std::vector<std::pair<std::string, double>> lastFrameStages() const;
+    // The GPU's time per labelled stage (the GT4_GPU_PROFILE=1 labels, in milliseconds; -1: not timed), for gt4_host
+    // --profile-json, from the render graph's pass timings of one frame (the GS back end's passes are the graph's).
+    static std::vector<std::pair<std::string, double>> stagesOf(const std::vector<rg::PassTiming>& passes);
     // Presentation decoupled from the game's 60 Hz: at each display refresh between two game frames, the last one
     // drawn again with its moving 3D interpolated (display.frame_interpolation).
     void setInterpolation(bool on);

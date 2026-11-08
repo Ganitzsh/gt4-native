@@ -365,11 +365,9 @@ struct GsnScene::Impl {
         std::map<std::string, uint64_t> counts;
         uint64_t frames = 0;
         std::chrono::steady_clock::time_point since = std::chrono::steady_clock::now();
-        bool quiet = false;   // on through setStageTiming only: no report printed
-        std::vector<std::pair<std::string, double>> last;   // the last finished frame's labels and milliseconds
     } profile;
     void tally(const char* what, uint64_t n = 1) {
-        if (profile.on && !profile.quiet) profile.counts[what] += n;   // (only printed: not counted for --profile-json)
+        if (profile.on) profile.counts[what] += n;
     }
     int markSlot = -1;   // the slot of the frame being profiled (-1: none, e.g. a read's own submission)
     void mark(VkCommandBuffer command, const char* label) {
@@ -391,14 +389,6 @@ struct GsnScene::Impl {
                                       VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
                 const double period = device.properties.limits.timestampPeriod * 1e-6;
                 for (size_t k = 1; k < t.size(); ++k) profile.milliseconds[l[k - 1]] += double(t[k] - t[k - 1]) * period;
-                // (the frame on its own, by label: GsnScene::lastFrameStages)
-                profile.last.clear();
-                for (size_t k = 1; k < t.size(); ++k) {
-                    const double ms = double(t[k] - t[k - 1]) * period;
-                    auto it = std::find_if(profile.last.begin(), profile.last.end(), [&](const auto& e) { return e.first == l[k - 1]; });
-                    if (it != profile.last.end()) it->second += ms;
-                    else profile.last.emplace_back(l[k - 1], ms);
-                }
                 ++profile.frames;
             }
             l.clear();
@@ -406,7 +396,7 @@ struct GsnScene::Impl {
             // beside the host's perf lines).
             const auto now = std::chrono::steady_clock::now();
             if (now - profile.since >= std::chrono::seconds(10)) {
-                if (!profile.quiet) printProfile();
+                printProfile();
                 profile.milliseconds.clear();
                 profile.counts.clear();
                 profile.frames = 0;
@@ -459,7 +449,7 @@ struct GsnScene::Impl {
         makeMipSamplers(16.0f);
     }
 
-    // The GPU profile's timestamps (GT4_GPU_PROFILE, or setStageTiming).
+    // The GPU profile's timestamps (GT4_GPU_PROFILE).
     bool startProfile() {
         if (profile.pool) return true;
         VkQueryPoolCreateInfo q{};
@@ -494,7 +484,7 @@ struct GsnScene::Impl {
     }
     ~Impl() {
         vkDeviceWaitIdle(device.device);
-        if (!profile.quiet) printProfile();
+        printProfile();
         if (framesSkipped) std::printf("Frames skipped behind the game: %llu\n", static_cast<unsigned long long>(framesSkipped));
         if (counters.flareDrawsSkipped || counters.glareDrawsSkipped)
             std::printf("N4 draws skipped onto the picture: flare %llu, glare %llu\n",
@@ -994,7 +984,7 @@ struct GsnScene::Impl {
     // A list's commands split at its Light commands: runs of the others (Range, [from, to)) and each Light alone
     // (from: its index). Only the commands' kinds decide it (GsnScene::buildPrepass splits a list before it runs).
     struct Segment {
-        enum class Kind { Range, Light } kind = Kind::Range;
+        enum class Kind { Range, Light, Effect } kind = Kind::Range;
         size_t from = 0, to = 0;
     };
     static void segments(const gsn::FrameList& list, std::vector<Segment>& out);
@@ -1053,6 +1043,7 @@ struct GsnScene::Impl {
     void beginPending(VkCommandBuffer command, uint32_t slot, VkExtent2D extent, bool profiled, bool scaled = false);
     void decideScale(VkExtent2D extent);   // the pending lists' render scale; the targets dropped when it changes
     void pendingTargets(VkCommandBuffer command, uint32_t slot);   // list `listIndex`
+    void pendingUploads(VkCommandBuffer command, uint32_t slot);   // (after pendingTargets)
     void pendingDraws(VkCommandBuffer command, uint32_t slot);
     void pendingListEnd(VkCommandBuffer command);
     void endPending(VkCommandBuffer command);
@@ -1147,18 +1138,23 @@ void GsnScene::Impl::segments(const gsn::FrameList& list, std::vector<Segment>& 
     out.clear();
     const size_t n = list.commands.size();
     // (a Light naming no light, skipped by the commands' loop, stays inside its range: no pass of its own, and the
-    // render pass open across it stays inside one graph pass, as the loop had it)
+    // render pass open across it stays inside one graph pass, as the loop had it; an Effect naming no effect too)
     auto light = [&](size_t at) {
         return list.commands[at].kind == gsn::FrameList::Command::Kind::Light && list.commands[at].index < list.lights.size();
     };
+    // An effect (the colour grading) is a segment of its own, for its own pass and timing (ticket B4 step 4): its first
+    // act is the render pass's end, which the range before it now makes (executeRange ends its render pass).
+    auto effect = [&](size_t at) {
+        return list.commands[at].kind == gsn::FrameList::Command::Kind::Effect && list.commands[at].index < list.effects.size();
+    };
     for (size_t at = 0; at < n;) {
-        if (light(at)) {
-            out.push_back({Segment::Kind::Light, at, at + 1});
+        if (light(at) || effect(at)) {
+            out.push_back({light(at) ? Segment::Kind::Light : Segment::Kind::Effect, at, at + 1});
             ++at;
             continue;
         }
         size_t to = at + 1;
-        while (to < n && !light(to)) ++to;
+        while (to < n && !light(to) && !effect(to)) ++to;
         out.push_back({Segment::Kind::Range, at, to});
         at = to;
     }
@@ -2999,18 +2995,43 @@ void GsnScene::setAnisotropy(int anisotropy) { impl->makeMipSamplers(static_cast
 
 void GsnScene::setTemporal(bool on) { impl->temporal = on; }
 void GsnScene::setFieldMode(bool clean) { impl->fieldClean = clean; }
-void GsnScene::setStageTiming(bool on) {
-    Impl::Profile& p = impl->profile;
-    if (on && !p.on) {
-        p.on = impl->startProfile();
-        p.quiet = true;   // (GT4_GPU_PROFILE prints its reports; this only keeps the frames' stages)
-    } else if (!on && p.quiet) {
-        p.on = false;
-        for (auto& slotLabels : p.labels) slotLabels.clear();   // (turned on again: no stale queries read)
-        p.last.clear();
+// GT4_GPU_PROFILE=1's labels from the render graph's pass timings of one frame (ticket B4 step 4; lane C keeps
+// --profile-json's "gs_passes" under these labels for one release, so a comparison across the change holds them to the
+// gate, then drops it for the graph's own pass names). A label's time is the sum of its passes', -1 when one of them was
+// not timed (perf_report leaves it out then). Close to the marks' but not the same: a mark took the time since the mark
+// before it, so "colour grading" held the draws before the grading, which now go to "draws".
+std::vector<std::pair<std::string, double>> GsnScene::stagesOf(const std::vector<rg::PassTiming>& passes) {
+    static const std::pair<const char*, const char*> kLabels[] = {
+        {"gs: frame", "new targets"}, {"gs: new targets", "new targets"}, {"gs: list end", "new targets"},
+        {"gs: texture uploads", "texture uploads"},
+        {"gs: 3D batches", "draws"}, {"gs: draws", "draws"}, {"gs: draws end", "draws"}, {"gs: scene stage", "draws"},
+        {"gs: frame again", "draws"},
+        {"gs: colour grading", "colour grading"},
+        {"scene: motion vectors", "motion vectors"},
+        {"scene: lighting (occlusion)", "lighting"}, {"scene: lighting", "lighting"}, {"scene: lighting (copy back)", "lighting"},
+        {"scene: reflections (trace)", "reflections"}, {"scene: reflections", "reflections"},
+        {"scene: reflections (copy back)", "reflections"},
+        {"scene: fog", "fog"}, {"scene: fog (copy back)", "fog"},
+        {"scene: temporal resolve", "temporal resolve"},
+        {"scene: motion blur", "motion blur"}, {"scene: motion blur (copy back)", "motion blur"},
+        {"scene: focus", "depth of field"}, {"scene: focus (copy back)", "depth of field"},
+    };
+    std::vector<std::pair<std::string, double>> out;
+    for (const rg::PassTiming& p : passes) {
+        const char* label = nullptr;
+        for (const auto& [name, mapped] : kLabels)
+            if (p.name == name) {
+                label = mapped;
+                break;
+            }
+        if (!label) continue;
+        const double ms = p.gpuMicroseconds < 0.0 ? -1.0 : p.gpuMicroseconds / 1000.0;
+        auto it = std::find_if(out.begin(), out.end(), [&](const auto& e) { return e.first == label; });
+        if (it == out.end()) out.emplace_back(label, ms);
+        else if (it->second >= 0.0) it->second = ms < 0.0 ? -1.0 : it->second + ms;
     }
+    return out;
 }
-std::vector<std::pair<std::string, double>> GsnScene::lastFrameStages() const { return impl->profile.last; }
 void GsnScene::setEffects(const SceneEffects& effects) { impl->effects = effects; }
 bool GsnScene::antiAliasesItself() const { return impl->temporal; }
 
@@ -3150,6 +3171,7 @@ void GsnScene::Impl::executePending(VkCommandBuffer command, uint32_t slot, VkEx
     beginPending(command, slot, extent, profiled);
     for (listIndex = 0; listIndex < pending.size(); ++listIndex) {
         pendingTargets(command, slot);
+        pendingUploads(command, slot);
         pendingDraws(command, slot);
         pendingListEnd(command);
     }
@@ -3200,7 +3222,7 @@ void GsnScene::Impl::decideScale(VkExtent2D extent) {
     }
 }
 
-// List `listIndex`: made current (`frame`), its targets made or cleared, its textures uploaded.
+// List `listIndex`: made current (`frame`), its targets made or cleared.
 void GsnScene::Impl::pendingTargets(VkCommandBuffer command, uint32_t slot) {
     std::swap(frame, pending[listIndex]);
     // (a new list: from the previous frame's state, where the one before ended)
@@ -3223,6 +3245,10 @@ void GsnScene::Impl::pendingTargets(VkCommandBuffer command, uint32_t slot) {
         counters.targets += created.size();
     }
     mark(command, "new targets");
+}
+
+// The current list's textures uploaded.
+void GsnScene::Impl::pendingUploads(VkCommandBuffer command, uint32_t slot) {
     {
         GT4_STAGE_SCOPE("render: texture uploads");
         uploadTextures(command, slot);
@@ -3743,11 +3769,15 @@ void GsnScene::Impl::buildPending(rg::Graph& graph, uint32_t slot, VkExtent2D ex
         }
     };
     for (size_t i = 0; i < s.pending.size(); ++i) {
-        graph.pass(read ? "read: uploads" : "gs: uploads", keep, [&s, slot, i](rg::PassContext& c) {
+        graph.pass(read ? "read: new targets" : "gs: new targets", keep, [&s, slot, i](rg::PassContext& c) {
             FrameScopes scopes(s);
             assert(s.pending.size() == s.pendingBuilt && i < s.pending.size());   // (lane A: nothing changes the lists in between)
             s.listIndex = i;
             s.pendingTargets(c.command, slot);
+        });
+        graph.pass(read ? "read: texture uploads" : "gs: texture uploads", keep, [&s, slot](rg::PassContext& c) {
+            FrameScopes scopes(s);
+            s.pendingUploads(c.command, slot);
         });
         for (const gsn::Target& t : s.pending[i].targets) {   // (as pendingTargets will)
             bool dropped = false;
@@ -3766,6 +3796,12 @@ void GsnScene::Impl::buildPending(rg::Graph& graph, uint32_t slot, VkExtent2D ex
         for (const Impl::Segment& g : split) {
             if (g.kind == Impl::Segment::Kind::Light) {
                 sceneStage(s.pending[i], g.from);
+            } else if (g.kind == Impl::Segment::Kind::Effect) {
+                graph.pass(read ? "read: colour grading" : "gs: colour grading", keep, [&s, slot, from = g.from, to = g.to](rg::PassContext& c) {
+                    FrameScopes scopes(s);
+                    GT4_STAGE_SCOPE("render: the lists' draws");
+                    s.executeRange(c.command, slot, from, to);
+                });
             } else {
                 graph.pass(read ? "read: draws" : "gs: draws", keep, [&s, slot, from = g.from, to = g.to](rg::PassContext& c) {
                     FrameScopes scopes(s);
