@@ -179,10 +179,171 @@ void PadDevices::rebuild(int port) {
 
 ps2::PadInput PadDevices::read(int port, const Settings& settings, float dt) {
     Port& p = port_[port];
-    const input::Snapshot s = readInput(p.gamepad);
+    input::Snapshot s = readInput(p.gamepad);
+    // a binding being captured: that device's input is watched, and kept from the game until it is done
+    if (capture_.on && !capture_.done) {
+        if (port == 0 && capture_.key == profiles_[0].key) {
+            watchCapture(s, true, capture_.key);
+            std::fill(std::begin(s.keys), std::end(s.keys), false);
+        } else if (p.profile >= 0 && profiles_[p.profile].key == capture_.key) {
+            watchCapture(s, false, capture_.key);
+            s.gamepad = false;
+        }
+    }
     ps2::PadInput in = input::apply(p.map, s);
-    p.response.step(in, s, responseConfig(settings), dt);
+    p.response.step(in, s, responseConfig(settingsFor(port, settings)), dt);
     return in;
+}
+
+const Settings& PadDevices::settingsFor(int port, const Settings& global) const {
+    const Port& p = port_[port];
+    const input::Profile* keyboard = port == 0 ? &profiles_[0] : nullptr;
+    const input::Profile* gamepad = p.profile >= 0 ? &profiles_[p.profile] : nullptr;
+    if ((!keyboard || keyboard->overrides.empty()) && (!gamepad || gamepad->overrides.empty())) return global;
+    p.settings = deviceSettings(global, keyboard, gamepad);
+    return p.settings;
+}
+
+int PadDevices::profileIndex(const std::string& key) const {
+    for (size_t i = 0; i < profiles_.size(); ++i)
+        if (profiles_[i].key == key) return static_cast<int>(i);
+    return -1;
+}
+
+std::vector<PadDevices::Device> PadDevices::devices() const {
+    std::vector<Device> out;
+    for (size_t i = 0; i < profiles_.size(); ++i) {
+        Device d;
+        d.key = profiles_[i].key;
+        d.name = profiles_[i].name;
+        d.type = profiles_[i].type;
+        if (i == 0) d.port = 0;
+        for (int p = 0; p < input::Ports::kPorts && i != 0; ++p)
+            if (port_[p].gamepad && port_[p].profile == static_cast<int>(i)) d.port = p;
+        out.push_back(d);
+    }
+    return out;
+}
+
+std::string PadDevices::deviceValue(const std::string& key, const std::string& setting) const {
+    const int i = profileIndex(key);
+    if (i < 0) return {};
+    for (const auto& [name, value] : profiles_[i].overrides)
+        if (name == setting) return value;
+    return {};
+}
+
+std::string PadDevices::setDeviceValue(const std::string& key, const std::string& setting, const std::string& value) {
+    const int i = profileIndex(key);
+    if (i < 0) return "no device " + key;
+    auto& o = profiles_[i].overrides;
+    auto at = std::find_if(o.begin(), o.end(), [&](const auto& e) { return e.first == setting; });
+    if (value.empty()) {   // cleared: the global value again
+        if (!deviceSetting(setting)) return "not a setting a device can have: input." + setting;
+        if (at != o.end()) o.erase(at);
+    } else {
+        if (std::string error = checkDeviceSetting(setting, value); !error.empty()) return error;
+        if (at != o.end()) at->second = value;
+        else o.emplace_back(setting, value);
+    }
+    save();
+    return {};
+}
+
+std::string PadDevices::bindings(const std::string& key, uint32_t action) const {
+    const int i = profileIndex(key);
+    return i < 0 || action >= input::kActionCount ? std::string() : input::bindingText(profiles_[i].map.bindings[action]);
+}
+
+std::string PadDevices::setBindings(const std::string& key, uint32_t action, const std::string& text) {
+    const int i = profileIndex(key);
+    if (i < 0) return "no device " + key;
+    if (action >= input::kActionCount) return "no such action";
+    std::vector<input::Binding> list;
+    std::string error;
+    if (!input::parseBindings(text, list, &error)) return error;
+    const bool keyboard = profiles_[i].type == input::DeviceType::Keyboard;
+    for (const input::Binding& b : list)
+        if ((b.source == input::Source::Key) != keyboard) return keyboard ? "only keys bind on the keyboard" : "keys bind on the keyboard";
+    input::Profile candidate = profiles_[i];
+    candidate.map.bindings[action] = list;
+    const input::Check check = input::checkProfile(candidate);
+    if (!check.ok()) {
+        std::string why;
+        for (const auto& r : check.refused) why += (why.empty() ? "" : "; ") + r;
+        return why;
+    }
+    profiles_[i] = std::move(candidate);
+    for (int p = 0; p < input::Ports::kPorts; ++p) rebuild(p);
+    save();
+    return {};
+}
+
+std::string PadDevices::resetDevice(const std::string& key) {
+    const int i = profileIndex(key);
+    if (i < 0) return "no device " + key;
+    const input::Profile& old = profiles_[i];
+    profiles_[i] = input::defaultProfile(old.type, old.key, old.name);
+    for (int p = 0; p < input::Ports::kPorts; ++p) rebuild(p);
+    save();
+    return {};
+}
+
+bool PadDevices::beginCapture(const std::string& key, uint32_t action) {
+    if (profileIndex(key) < 0 || action >= input::kActionCount) return false;
+    capture_ = Capture{};
+    capture_.on = true;
+    capture_.key = key;
+    capture_.action = action;
+    return true;
+}
+
+void PadDevices::cancelCapture() { capture_ = Capture{}; }
+
+bool PadDevices::takeCapture(Captured& out) {
+    if (!capture_.on || !capture_.done) return false;
+    out.key = capture_.key;
+    out.action = capture_.action;
+    out.binding = capture_.result;
+    capture_ = Capture{};
+    return true;
+}
+
+// What changed on the captured device since the capture began: a key pressed (the keyboard), or a button pressed or an
+// axis moved past half its travel (a gamepad; on a stick action its direction is the binding's sign).
+void PadDevices::watchCapture(const input::Snapshot& s, bool keyboard, const std::string&) {
+    if (!capture_.started) {
+        capture_.start = s;
+        capture_.started = true;
+        return;
+    }
+    input::Binding b;
+    if (keyboard) {
+        for (int k = 0; k < SDL_SCANCODE_COUNT; ++k)
+            if (s.keys[k] && !capture_.start.keys[k]) {
+                b = {input::Source::Key, k, 1.0f, 0.0f};
+                capture_.result = b;
+                capture_.done = true;
+                return;
+            }
+        return;
+    }
+    if (!s.gamepad) return;
+    for (int k = 0; k < SDL_GAMEPAD_BUTTON_COUNT; ++k)
+        if (s.buttons[k] && !capture_.start.buttons[k]) {
+            capture_.result = {input::Source::Button, k, 1.0f, 0.0f};
+            capture_.done = true;
+            return;
+        }
+    const bool stick = capture_.action >= input::kLeftX;
+    for (int a = 0; a < SDL_GAMEPAD_AXIS_COUNT; ++a) {
+        const float v = s.axes[a];
+        if (std::fabs(v) > 0.5f && std::fabs(v - capture_.start.axes[a]) > 0.5f) {
+            capture_.result = {input::Source::Axis, a, stick && v < 0.0f ? -1.0f : 1.0f, stick ? 0.08f : 0.0f};
+            capture_.done = true;
+            return;
+        }
+    }
 }
 
 namespace {

@@ -537,7 +537,8 @@ don't rescale (`kStickDeadZone`, `input_map.cpp:62`), so steering jumps from 0 t
   the interface: the devices, get / set / clear an override validated by the option table, bindings with
   `checkProfile`'s refusals, reset), and through lane M's records as the keys `input.device.<key>.<setting>`. A
   device key holds no dot (the host splits the key there); clearing an override is a set with an empty value, so
-  lane M's records need no new kind.
+  lane M's records need no new kind. A new binding is captured on the host, since the game sees only the PS2 pad's
+  state: `beginCapture` / `cancelCapture`, and the captured input goes through `checkProfile` like any binding.
   - **`original` stays the PS2 behaviour:** while a gate is at `original` in the globals (`input.response`,
     `input.haptics`), every device override under it is ignored. A device may still choose `original` under a
     `modern` global. `detectPreset` ignores device overrides, as it does `ui.*`.

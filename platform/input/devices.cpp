@@ -214,6 +214,7 @@ std::string formatProfiles(const std::vector<Profile>& profiles) {
         for (uint32_t a = 0; a < kActionCount; ++a)
             if (!sameBindings(p.map.bindings[a], defaults.map.bindings[a]))
                 out += std::string(actionName(a)) + " = " + bindingText(p.map.bindings[a]) + "\n";
+        for (const auto& [setting, value] : p.overrides) out += setting + " = " + value + "\n";
     }
     return out;
 }
@@ -239,6 +240,7 @@ std::vector<Profile> parseProfiles(std::string_view text, std::vector<std::strin
             const std::string_view kind = inside.substr(0, space);
             const std::string key = space == std::string_view::npos ? std::string() : std::string(trim(inside.substr(space)));
             DeviceType type;
+            if (key.find('.') != std::string::npos) { warn("a device key with a dot: [" + std::string(inside) + "]"); continue; }
             if (kind == "keyboard" && key.empty()) type = DeviceType::Keyboard;
             else if (kind == "gamepad" && !key.empty()) type = DeviceType::Gamepad;
             else if (kind == "wheel" && !key.empty()) type = DeviceType::Wheel;
@@ -253,7 +255,18 @@ std::vector<Profile> parseProfiles(std::string_view text, std::vector<std::strin
         const std::string_view name = trim(line.substr(0, eq)), value = trim(line.substr(eq + 1));
         if (name == "name") { current->name = std::string(value); continue; }
         const int action = indexOf(kActions, name);
-        if (action < 0) { warn("unknown action '" + std::string(name) + "'"); continue; }
+        if (action < 0) {
+            // a setting of the device's own (validated and gated by the host): a name with a dot, or one of these
+            if (name.find('.') != std::string_view::npos || name == "response" || name == "haptics" || name == "trigger_effects") {
+                auto at = std::find_if(current->overrides.begin(), current->overrides.end(),
+                                       [&](const auto& o) { return o.first == name; });
+                if (at != current->overrides.end()) at->second = std::string(value);
+                else current->overrides.emplace_back(std::string(name), std::string(value));
+                continue;
+            }
+            warn("unknown action '" + std::string(name) + "'");
+            continue;
+        }
         std::vector<Binding> bindings;
         std::string error;
         if (!parseBindings(value, bindings, &error)) { warn(std::string(name) + ": " + error); continue; }
