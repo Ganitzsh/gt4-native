@@ -330,9 +330,16 @@ The scene target's other draws between the view's passes (R5's clears, Z-only dr
     in `sceneView()` beside B6's ids (lane A's file, lane A reviews). The render thread doesn't search by tag.
   - **Shaders:** the transform, the lighting chain bodies and GS Z move from `gsn_models.comp` into includes
     (`gt4_transform.glsl`, `gt4_lighting.glsl`). `gsn_models.comp` keeps its decode and calls them, and
-    `modern_parity.vert` calls the same functions on the mesh's object-space vertices and the item's constants (a
-    per-frame buffer, about 300 bytes an item). Same operations on the same values, so Z is equal (R3), and the
-    normals' scaling is made the same operation in both.
+    `modern_parity.vert` calls the same functions on the mesh's object-space vertices and the item's job: it binds
+    the frame's batch words already on the GPU (`gsn_models.comp`'s Jobs and Words) and reads the job's constants,
+    lighting rows and tables there, so no per-item buffer is built. Only position, ST, colour and normal come from
+    the mesh. Same operations on the same values, so Z is equal (R3), and the normals' scaling is made the same
+    operation in both.
+  - **Quirks kept** (lane B): the dot model with the next-normal bit (0x0290) adds the next vertex's N.L terms in
+    batch order, so the mesh cache keeps a next normal per vertex for such items and welds on it too. Flat shading
+    takes the last vertex's colour: the provoking vertex set to last (`VK_EXT_provoking_vertex`; without it, the
+    colour duplicated per triangle; checked on the Odin's driver too). The clipping renderers' per-triangle hiding
+    and renderers 4 and 5's facing cull are the rasterizer's clip and cull mode.
   - **Where:** `GsnScene::executeRange`, at a Draw command holding such runs, only with `render.scene = parity`
     (`--set` only, never in a preset, named in the settings text as a parity check, not a mode). Without it
     nothing changes. A Draw can merge several jobs, of several instances (`model()` merges consecutive jobs of
