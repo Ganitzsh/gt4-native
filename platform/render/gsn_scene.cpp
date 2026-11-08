@@ -8,6 +8,7 @@
 #include "../scene/scene_frame.h"
 #include "lights_cluster.h"
 #include "lights_gather.h"
+#include "parity_view.h"
 
 #include <algorithm>
 #include <cassert>
@@ -53,6 +54,15 @@ struct DrawConstants {
     float sourceScale[2];      // a texture from a target: that target's render pixels per GS pixel (else scale's)
 };
 static_assert(sizeof(DrawConstants) == 88);
+// B7's parity draws (modern_parity.vert, gsn_common.glsl under GSN_PARITY): the draw's constants, then the item's job and
+// gsn_models.comp's t and tPrevious.
+struct ParityConstants {
+    DrawConstants draw;
+    uint32_t job;
+    float t, tPrevious;
+    uint32_t pad;
+};
+static_assert(sizeof(ParityConstants) == 104);
 
 // The temporal anti-aliasing's sub-pixel offsets: Halton (2, 3), 8 phases, in render pixels from the centre.
 constexpr float kHalton[8][2] = {{0.0f, -1.0f / 6.0f},   {-0.25f, 1.0f / 6.0f}, {0.25f, -7.0f / 18.0f}, {-0.375f, -1.0f / 18.0f},
@@ -183,6 +193,20 @@ struct GsnScene::Impl {
     float night = 0.0f;                        // 0: off; else the added light's strength
     // N4 (GsnScene::setSkippedBrackets): the marked brackets whose draws are not drawn (bit gsn::kBracketFlare, kBracketGlare)
     uint8_t skippedBrackets = 0;
+    // B7's parity path (render.scene = parity, GsnScene::setParity; render/modern/parity_view.h): the substituted views'
+    // items drawn from the mesh cache by modern_parity.vert. The arena holds the meshes' raw vertices and triangles
+    // (host-visible: a check, not a mode); paritySpans the current list's items, by draw, parityAt each draw's first.
+    bool parity = false;
+    render::ParityView parityView;
+    vk::Buffer parityVertices, parityIndices;
+    std::vector<render::ParitySpan> paritySpans;
+    std::vector<uint32_t> parityAt;   // per draw (FrameList::draws), and one past: [parityAt[d], parityAt[d + 1]) its spans
+    std::unordered_map<uint32_t, vk::Pipeline> parityPipelines;
+    uint64_t paritySpansOutside = 0;   // spans not inside their draw's vertices (drawn on the GS path; should be 0)
+    bool parityResetDue = false;       // the arena filled: emptied at the next frame's first list (nothing in flight reads it)
+    uint64_t parityListsFull = 0;      // lists left wholly on the GS path because the arena filled
+    void planParity();
+    vk::Pipeline& parityPipeline(uint32_t blendKey, uint32_t mask, bool depth, bool exports);
     vk::Pipeline nightLumPass;
     render::LightClusters clusters;
     vk::Image nightLocal;                      // (sum of log luminance, count) per 8 x 8 block
@@ -345,9 +369,10 @@ struct GsnScene::Impl {
     // (colour / 255 as 8-bit RGB) once the GPU is done with it.
     struct Dump {
         uint64_t vblank = 0;
-        std::vector<std::pair<uint32_t, vk::Buffer>> images;   // target id, its pixels (RGBA16F)
+        std::vector<std::pair<uint32_t, vk::Buffer>> images;   // target id, its pixels (RGBA16F; a Z buffer's depth: float)
         std::vector<VkExtent2D> extents;
         std::vector<uint32_t> bps;
+        std::vector<uint8_t> depth;                            // 1: a Z buffer (GT4_GSN_DUMP_DEPTH=1)
     } dump;
     void writeDump();
     // GT4_GPU_PROFILE=1 (performance work): GPU timestamps between labelled points of the frames executed here
@@ -542,6 +567,20 @@ struct GsnScene::Impl {
         for (auto& [id, h] : histories)
             for (vk::Image& i : h.image) vk::destroy(device, i);
         for (auto& [key, p] : pipelines) vk::destroy(device, p);
+        for (auto& [key, p] : parityPipelines) vk::destroy(device, p);
+        vk::destroy(device, parityVertices);
+        vk::destroy(device, parityIndices);
+        if (parity) {   // B7's fallbacks by reason (PLAN B7's acceptance lists them)
+            const render::ParityStats& s = parityView.stats();
+            std::printf("Parity path: %llu of %llu items drawn from the mesh cache; on the GS path: mesh 0 %llu, mesh evicted %llu, "
+                        "items differ %llu, outside their draw %llu; views not substituted %llu; meshes placed %llu, lists with the "
+                        "arena full %llu%s\n",
+                        static_cast<unsigned long long>(s.drawn), static_cast<unsigned long long>(s.items),
+                        static_cast<unsigned long long>(s.meshNone), static_cast<unsigned long long>(s.meshGone),
+                        static_cast<unsigned long long>(s.itemsDiffer), static_cast<unsigned long long>(paritySpansOutside),
+                        static_cast<unsigned long long>(s.viewsNotSubstituted), static_cast<unsigned long long>(s.meshesPlaced),
+                        static_cast<unsigned long long>(parityListsFull), device.provokingLast ? "" : " (triangles rotated: no last provoking vertex)");
+        }
         vk::destroy(device, display);
         vk::destroy(device, stencilPrep);
         for (VkSampler s : samplers)
@@ -557,6 +596,12 @@ struct GsnScene::Impl {
                              (exports ? 1u << 24 : 0);
         auto it = pipelines.find(key);
         if (it != pipelines.end()) return it->second;
+        const vk::GraphicsDesc desc = drawDesc(blendKey, mask, depth, topology, exports);
+        ++counters.pipelines;
+        return pipelines[key] = vk::createGraphics(device, desc);
+    }
+    // A GS draw's pipeline description (pipeline(); parityPipeline() changes its vertex stage).
+    vk::GraphicsDesc drawDesc(uint32_t blendKey, uint32_t mask, bool depth, gsn::Topology topology, bool exports) const {
         vk::GraphicsDesc desc;
         desc.vertex = shaders::gsn_vert();
         desc.fragment = exports ? shaders::gsn_frag_export() : shaders::gsn_frag();
@@ -597,8 +642,7 @@ struct GsnScene::Impl {
                          VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE, VK_DYNAMIC_STATE_STENCIL_OP, VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK,
                          VK_DYNAMIC_STATE_STENCIL_WRITE_MASK, VK_DYNAMIC_STATE_STENCIL_REFERENCE};
         desc.name = "gsn draw";
-        ++counters.pipelines;
-        return pipelines[key] = vk::createGraphics(device, desc);
+        return desc;
     }
 
     // Whether a draw maps its texture's texels 1:1 onto GS pixels (within 3 %) on both axes.
@@ -930,6 +974,8 @@ struct GsnScene::Impl {
         uint32_t slot = 0;                          // the frame slot (executeBegin, executeLight)
         vk::Buffer* vertices = nullptr;   // the list's vertices (vertexBuffers)
         uint32_t modelBase = 0;           // where the GPU's vertices start
+        vk::Buffer* jobs = nullptr;       // the list's 3D batches (modelJobs, modelData; B7's parity draws read them too)
+        vk::Buffer* words = nullptr;
         vk::Barriers b;
         bool rendering = false;
         uint32_t boundColour = 0, boundDepth = 0;
@@ -1176,6 +1222,60 @@ void GsnScene::Impl::segments(const gsn::FrameList& list, std::vector<Segment>& 
     }
 }
 
+// B7's parity path: the list's items the mesh cache draws (paritySpans, parityAt by draw). The arena is host-visible and
+// filled as meshes are first drawn; when full, the rest of the frame stays on the GS path and the arena is emptied before
+// the next frame's first list records anything (after the GPU is idle: earlier frames' draws read it).
+constexpr uint32_t kParityVertices = 1u << 20, kParityIndices = 4u << 20;   // 76 MiB and 16 MiB
+
+void GsnScene::Impl::planParity() {
+    paritySpans.clear();
+    parityAt.assign(frame.draws.size() + 1, 0);
+    if (!parity || frame.views.empty() || frame.models.empty() || !ex.jobs) return;
+    if (!parityVertices.buffer) {
+        parityVertices = vk::createBuffer(device, VkDeviceSize(kParityVertices) * sizeof(scene::MeshRawVertex),
+                                          VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true);
+        parityIndices = vk::createBuffer(device, VkDeviceSize(kParityIndices) * 4, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, true);
+        parityView.setArena(static_cast<scene::MeshRawVertex*>(parityVertices.mapped), kParityVertices,
+                            static_cast<uint32_t*>(parityIndices.mapped), kParityIndices, !device.provokingLast);
+    }
+    if (parityResetDue && listIndex == 0) {
+        vkDeviceWaitIdle(device.device);
+        parityView.reset();
+        parityResetDue = false;
+    }
+    if (!parityView.plan(frame, paritySpans)) {
+        paritySpans.clear();
+        parityResetDue = true;
+        ++parityListsFull;
+        return;
+    }
+    for (const render::ParitySpan& s : paritySpans) ++parityAt[s.draw + 1];
+    for (size_t d = 1; d < parityAt.size(); ++d) parityAt[d] += parityAt[d - 1];
+}
+
+vk::Pipeline& GsnScene::Impl::parityPipeline(uint32_t blendKey, uint32_t mask, bool depth, bool exports) {
+    const uint32_t key = blendKey | (mask << 16) | (depth ? 1u << 20 : 0) | (exports ? 1u << 24 : 0);
+    auto it = parityPipelines.find(key);
+    if (it != parityPipelines.end()) return it->second;
+    vk::GraphicsDesc desc = drawDesc(blendKey, mask, depth, gsn::Topology::Triangles, exports);
+    desc.vertex = shaders::modern_parity_vert();
+    desc.fragment = exports ? shaders::gsn_frag_parity_export() : shaders::gsn_frag_parity();
+    desc.vertices.stride = sizeof(scene::MeshRawVertex);
+    desc.vertices.attributes = {{0, 0, VK_FORMAT_R32G32B32_UINT, offsetof(scene::MeshRawVertex, position)},
+                                {1, 0, VK_FORMAT_R32G32B32_UINT, offsetof(scene::MeshRawVertex, st)},
+                                {2, 0, VK_FORMAT_R32G32B32A32_UINT, offsetof(scene::MeshRawVertex, colour)},
+                                {3, 0, VK_FORMAT_R32G32_UINT, offsetof(scene::MeshRawVertex, next)},
+                                {4, 0, VK_FORMAT_R32_UINT, offsetof(scene::MeshRawVertex, flags)},
+                                {5, 0, VK_FORMAT_R32G32B32_UINT, offsetof(scene::MeshRawVertex, before)},
+                                {6, 0, VK_FORMAT_R32G32B32_UINT, offsetof(scene::MeshRawVertex, before) + 12}};
+    desc.types = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
+    desc.pushSize = sizeof(ParityConstants);
+    desc.provokingLast = device.provokingLast;
+    desc.name = "gsn parity draw";
+    ++counters.pipelines;
+    return parityPipelines[key] = vk::createGraphics(device, desc);
+}
+
 // Before the list's commands: its vertices, its 3D batches, and the state the commands use (ex).
 void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
     ex = ExecuteState{};
@@ -1197,6 +1297,8 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
         std::memcpy(jobs.mapped, frame.models.data(), frame.models.size() * sizeof(gfx::ModelJob));
         vk::Buffer& data = buffer(modelData, slot, frame.modelData.size() * 4, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
         std::memcpy(data.mapped, frame.modelData.data(), frame.modelData.size() * 4);
+        ex.jobs = &jobs;
+        ex.words = &data;
         vk::bind(command, models);
         vk::Descriptors()
             .storageBuffer(0, jobs.buffer, 0, frame.models.size() * sizeof(gfx::ModelJob))
@@ -1217,6 +1319,7 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
         vkCmdPipelineBarrier2(command, &d);
         tally("3D batches on the GPU", frame.models.size());
     }
+    planParity();   // (B7: which of the list's jobs the mesh cache draws; none unless render.scene = parity)
     // (the commands' state: ex, made anew above)
     // GT4_GPU_PROFILE=2: a render pass's time under its target's name (block address, size in GS pixels, format).
     ex.passLabel = [this](uint32_t id) -> const char* {
@@ -2401,8 +2504,59 @@ void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t
                 recorded.pushed = true;
                 tally("constant pushes");
             }
-            vkCmdDraw(command, d.count, 1, d.modeled ? modelBase + d.first : d.first, 0);
-            tally("draws");
+            if (d.modeled && cmd.index + 1 < parityAt.size() && parityAt[cmd.index] != parityAt[cmd.index + 1]) {
+                // B7: the draw's jobs drawn from the mesh cache where the plan has them, the rest from gsn_models.comp's
+                // vertices, in the draw's own order (each job's vertices are contiguous, in the runs' order)
+                uint32_t cursor = d.first;
+                const uint32_t end = d.first + d.count;
+                auto gsRange = [&](uint32_t from, uint32_t to) {
+                    if (from >= to) return;
+                    if (boundPipeline != p.pipeline) {   // (back from a parity draw: the GS draw's bindings again)
+                        vk::bind(command, p);
+                        const VkDeviceSize zero = 0;
+                        vkCmdBindVertexBuffers(command, 0, 1, &vertices.buffer, &zero);
+                        vk::Descriptors().sampled(0, view, sampler).push(command, p);
+                        vk::pushConstants(command, p, pk);
+                        boundPipeline = p.pipeline;
+                    }
+                    vkCmdDraw(command, to - from, 1, modelBase + from, 0);
+                    tally("draws");
+                };
+                for (uint32_t i = parityAt[cmd.index]; i < parityAt[cmd.index + 1]; ++i) {
+                    const render::ParitySpan& sp = paritySpans[i];
+                    if (sp.first < cursor || sp.first + sp.count > end) {   // (not inside the draw: left to the GS path)
+                        if (pass == 0) ++paritySpansOutside;
+                        continue;
+                    }
+                    gsRange(cursor, sp.first);
+                    vk::Pipeline& pp = parityPipeline(blendKey, ps.mask, hasDepth, stencilMode == 3);
+                    if (boundPipeline != pp.pipeline) {
+                        vk::bind(command, pp);
+                        const VkDeviceSize zero = 0;
+                        vkCmdBindVertexBuffers(command, 0, 1, &parityVertices.buffer, &zero);
+                        vkCmdBindIndexBuffer(command, parityIndices.buffer, 0, VK_INDEX_TYPE_UINT32);
+                        boundPipeline = pp.pipeline;
+                    }
+                    vk::Descriptors()
+                        .sampled(0, view, sampler)
+                        .storageBuffer(1, ex.jobs->buffer, 0, frame.models.size() * sizeof(gfx::ModelJob))
+                        .storageBuffer(2, ex.words->buffer, 0, frame.modelData.size() * 4)
+                        .push(command, pp);
+                    // (the renderers' cull, hidden test and ADC: modern_parity.vert, per triangle as gsn_models.comp)
+                    const ParityConstants pc{pk, sp.job, modelT, modelTPrevious, 0};
+                    vk::pushConstants(command, pp, pc);
+                    vkCmdDrawIndexed(command, sp.indexCount, 1, sp.firstIndex, static_cast<int32_t>(sp.vertexOffset), 0);
+                    tally("parity draws");
+                    cursor = sp.first + sp.count;
+                }
+                gsRange(cursor, end);
+                // (the parity pipeline's bindings and constants differ: the next draw binds and pushes its own)
+                recorded.view = VK_NULL_HANDLE;
+                recorded.pushed = false;
+            } else {
+                vkCmdDraw(command, d.count, 1, d.modeled ? modelBase + d.first : d.first, 0);
+                tally("draws");
+            }
         }
     }
     // A range ends with its render pass ended: a valid Light (the scene stage) or the list's end follows it (segments()
@@ -2739,6 +2893,17 @@ void GsnScene::Impl::writeDump() {
         auto& [id, buffer] = dump.images[k];
         const VkExtent2D e = dump.extents[k];
         char name[96];
+        if (dump.depth[k]) {   // "GSZ1", width, height, then the floats (Z over 2^32, as gsn.vert writes it)
+            std::snprintf(name, sizeof name, "gsn_%llu_%u_bp%04x_z.f32", static_cast<unsigned long long>(dump.vblank), id, dump.bps[k]);
+            if (FILE* f = std::fopen(name, "wb")) {
+                const uint32_t header[3] = {0x315A5347u, e.width, e.height};
+                std::fwrite(header, sizeof header, 1, f);
+                std::fwrite(buffer.mapped, 4, size_t(e.width) * e.height, f);
+                std::fclose(f);
+            }
+            vk::destroy(device, buffer);
+            continue;
+        }
         std::snprintf(name, sizeof name, "gsn_%llu_%u_bp%04x.ppm", static_cast<unsigned long long>(dump.vblank), id, dump.bps[k]);
         if (FILE* f = std::fopen(name, "wb")) {
             std::fprintf(f, "P6\n%u %u\n255\n", e.width, e.height);
@@ -2781,6 +2946,7 @@ void GsnScene::Impl::writeDump() {
     dump.images.clear();
     dump.extents.clear();
     dump.bps.clear();
+    dump.depth.clear();
 }
 
 GsnScene::GsnScene(const vk::Device& device, VkCommandPool pool) : impl(std::make_unique<Impl>(device, pool)) {}
@@ -3009,6 +3175,7 @@ void GsnScene::setScale(uint32_t scale) { impl->scaleSetting = scale; }
 void GsnScene::setAnisotropy(int anisotropy) { impl->makeMipSamplers(static_cast<float>(anisotropy)); }
 
 void GsnScene::setTemporal(bool on) { impl->temporal = on; }
+void GsnScene::setParity(bool on) { impl->parity = on; }
 void GsnScene::setFieldMode(bool clean) { impl->fieldClean = clean; }
 // GT4_GPU_PROFILE=1's labels from the render graph's pass timings of one frame (ticket B4 step 4; lane C keeps
 // --profile-json's "gs_passes" under these labels for one release, so a comparison across the change holds them to the
@@ -3289,14 +3456,35 @@ void GsnScene::Impl::pendingListEnd(VkCommandBuffer command) {
         readbacksRecorded.push_back(std::move(c));
     }
     retireTextures();
+    // GT4_GSN_DUMP=VBLANK: the first frame drawn at or after that VBlank; GT4_GSN_DUMP_EVERY=N: then again every N VBlanks;
+    // GT4_GSN_DUMP_DEPTH=1: the Z buffers too, as floats (B7's Z comparison: render.scene = parity against original).
     static const long dumpAt = std::getenv("GT4_GSN_DUMP") ? std::strtol(std::getenv("GT4_GSN_DUMP"), nullptr, 10) : -1;
-    static bool dumped = false;   // the first frame drawn at or after that VBlank
-    if (frame.displayed && (frame.dump || (!dumped && dumpAt >= 0 && static_cast<long>(frame.vblank) >= dumpAt))) {
-        dumped = dumped || !frame.dump;
+    static const long dumpEvery = std::getenv("GT4_GSN_DUMP_EVERY") ? std::strtol(std::getenv("GT4_GSN_DUMP_EVERY"), nullptr, 10) : 0;
+    static const bool dumpDepth = [] { const char* e = std::getenv("GT4_GSN_DUMP_DEPTH"); return e && *e == '1'; }();
+    static long dumpNext = dumpAt;   // (-1: done)
+    // (not while an earlier dump waits to be written: its copies may be in this submission still)
+    if (frame.displayed && dump.images.empty() && (frame.dump || (dumpNext >= 0 && static_cast<long>(frame.vblank) >= dumpNext))) {
+        if (!frame.dump) dumpNext = dumpEvery > 0 ? static_cast<long>(frame.vblank) + dumpEvery : -1;
         dump.vblank = frame.vblank;
         vk::Barriers b;
         for (auto& [id, t] : targets) {
-            if (t.depth || !t.image.valid()) continue;
+            if (!t.image.valid()) continue;
+            if (t.depth) {
+                if (!dumpDepth) continue;
+                vk::Buffer buffer = vk::createBuffer(device, VkDeviceSize(t.image.extent.width) * t.image.extent.height * 4,
+                                                     VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, true);
+                b.image(t.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_READ_BIT);
+                b.flush(command);
+                VkBufferImageCopy copy{};
+                copy.imageSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
+                copy.imageExtent = {t.image.extent.width, t.image.extent.height, 1};
+                vkCmdCopyImageToBuffer(command, t.image.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer.buffer, 1, &copy);
+                dump.images.emplace_back(id, buffer);
+                dump.extents.push_back(t.image.extent);
+                dump.bps.push_back(0);
+                dump.depth.push_back(1);
+                continue;   // (vk::toDepth moves it back before its next use)
+            }
             vk::Buffer buffer = vk::createBuffer(device, VkDeviceSize(t.image.extent.width) * t.image.extent.height * 8,
                                                  VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, true);
             b.image(t.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_READ_BIT);
@@ -3310,6 +3498,7 @@ void GsnScene::Impl::pendingListEnd(VkCommandBuffer command) {
             dump.images.emplace_back(id, buffer);
             dump.extents.push_back(t.image.extent);
             dump.bps.push_back(0);
+            dump.depth.push_back(0);
         }
         for (const gsn::Target& t : frame.targets)
             for (size_t k = 0; k < dump.images.size(); ++k)

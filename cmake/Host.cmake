@@ -49,6 +49,10 @@ gt4_shader(gs_frame_frag ${S}/gs_frame.frag frag)
 gt4_shader(gsn_vert ${S}/gsn.vert vert)
 gt4_shader(gsn_frag ${S}/gsn.frag frag)
 gt4_shader(gsn_frag_export ${S}/gsn.frag frag DEFINES GSN_STENCIL_EXPORT=1)
+# B7's parity path (render.scene = parity): a view's items from the mesh cache, through gsn.frag's GSN_PARITY variants.
+gt4_shader(modern_parity_vert ${S}/modern_parity.vert vert)
+gt4_shader(gsn_frag_parity ${S}/gsn.frag frag DEFINES GSN_PARITY=1)
+gt4_shader(gsn_frag_parity_export ${S}/gsn.frag frag DEFINES GSN_PARITY=1 GSN_STENCIL_EXPORT=1)
 gt4_shader(gsn_display_frag ${S}/gsn_display.frag frag)
 gt4_shader(gsn_stencil_frag ${S}/gsn_stencil.frag frag)
 gt4_shader(gsn_reinterpret_comp ${S}/gsn_reinterpret.comp comp)
@@ -308,6 +312,7 @@ add_executable(gt4_host
     platform/render/test_scene.cpp
     platform/render/gsn_scene.cpp
     platform/render/modern/lights_cluster.cpp
+    platform/render/modern/parity_view.cpp
     platform/render/overlay.cpp
     platform/render/fsr2.cpp
     platform/render/smaa_textures.cpp
@@ -392,6 +397,10 @@ if(BUILD_TESTING)
   add_executable(gt4_mesh_cache_test tests/mesh_cache.cpp)
   target_link_libraries(gt4_mesh_cache_test PRIVATE gt4_mesh_cache gt4_ps2gfx)
   add_test(NAME mesh_cache COMMAND gt4_mesh_cache_test ${GT4_MESH_CAPTURES})
+add_executable(gt4_parity_view_test tests/parity_view.cpp platform/render/modern/parity_view.cpp)
+target_include_directories(gt4_parity_view_test PRIVATE platform/render/modern)
+target_link_libraries(gt4_parity_view_test PRIVATE gt4_gsnative gt4_mesh_cache)
+add_test(NAME parity_view COMMAND gt4_parity_view_test)
 add_executable(gt4_material_table_test tests/material_table.cpp)
 target_link_libraries(gt4_material_table_test PRIVATE gt4_mesh_cache)
 add_test(NAME material_table COMMAND gt4_material_table_test)

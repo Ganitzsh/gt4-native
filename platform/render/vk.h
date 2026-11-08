@@ -27,6 +27,7 @@ struct Device {
     bool anisotropy = false;
     bool dualSourceBlend = false;   // VkPhysicalDeviceFeatures::dualSrcBlend, enabled when supported
     bool stencilExport = false;     // VK_EXT_shader_stencil_export, enabled when supported (GT4_STENCIL_EXPORT=0: not)
+    bool provokingLast = false;     // VK_EXT_provoking_vertex's provokingVertexLast (B7: else the triangles rotated)
     VkPipelineCache pipelineCache = VK_NULL_HANDLE;   // every pipeline made through it (openPipelineCache)
     uint32_t memoryType(uint32_t bits, VkMemoryPropertyFlags flags) const;
     uint32_t maxSamples(uint32_t requested) const;
@@ -187,6 +188,7 @@ struct GraphicsDesc {
     VkFormat stencil = VK_FORMAT_UNDEFINED;
     std::vector<VkPipelineColorBlendAttachmentState> blendStates;
     std::vector<VkDynamicState> dynamics;
+    bool provokingLast = false;   // the last vertex provokes (VK_EXT_provoking_vertex; Device::provokingLast)
 };
 Pipeline createGraphics(const Device& device, const GraphicsDesc& desc);
 

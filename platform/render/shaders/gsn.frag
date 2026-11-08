@@ -25,6 +25,12 @@ layout(location = 6) in vec3 inStqW;
 layout(location = 7) in float inFogW;
 layout(location = 8) in float inW;
 layout(location = 9) flat in uint inHomogeneous;
+#if defined(GSN_PARITY)
+// B7's parity path (modern_parity.vert): inHomogeneous's bit 1 a flat-shaded triangle, its colour the provoking (the
+// strip's last) vertex's, and bit 2 that vertex's ADC bit (the triangle not drawn: culled, hidden, or its fog word past
+// the byte), as gsn_models.comp decides them.
+layout(location = 10) flat in vec4 inFlatColour;
+#endif
 
 layout(location = 0, index = 0) out vec4 outColour;
 layout(location = 0, index = 1) out vec4 outFactor;
@@ -204,9 +210,16 @@ vec3 atGsPoint(vec3 value) {
 }
 
 void main() {
+#if defined(GSN_PARITY)
+    if ((inHomogeneous & 4u) != 0u) discard;
+    const bool homogeneous = (inHomogeneous & 1u) != 0u;
+    const float r = 1.0 / inW;
+    const vec4 colour = (inHomogeneous & 2u) != 0u ? inFlatColour : homogeneous ? inColourW * r : inColour;
+#else
     const bool homogeneous = inHomogeneous != 0u;
     const float r = 1.0 / inW;
     const vec4 colour = homogeneous ? inColourW * r : inColour;
+#endif
     const vec3 stqIn = homogeneous ? inStqW * r : inStq;
     const vec4 cv = floor(colour * 255.0 + 0.5);
     vec4 c = cv;
