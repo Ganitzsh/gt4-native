@@ -706,8 +706,18 @@ held; GT4's volume files are inflated on the game thread; no load time is measur
     time goes (`runtime/link.cpp` lane C's, lane A reviewing; a host change by the lane that owns its file). On a
     PS2 the read is sub-frame, so a faster read is closer to the original and applies to `original` too, on the
     coordinator's condition: only if `ORIG` on `race7`, `race_grid43` and `race_boot` stays identical, since a
-    faster read must not change which frame the game sees its result in. Target: the race load's waiting under
-    0.2 s; the reads' bytes unchanged (`GT4_READ_HASH`); lap times and AI unchanged.
+    faster read must not change which frame the game sees its result in. Target (restated, lane C's measurement,
+    2026-11-09): the race load's **blocked time, its VBlanks without a new frame**, under 0.2 s; the reads' bytes
+    unchanged (`GT4_READ_HASH`); lap times and AI unchanged. `GT4_LOAD_STATS`' 'waiting' (wall time minus disc and
+    CPU) also counts the loading frames GT4 draws at the VBlank rate (21 frames, 0.35 s), its own pacing, which
+    (c) doesn't change, so it can't be the target.
+  - (a) done (lane C, 38bbb77): the reads wait on a high-resolution timer, not `Sleep(1)`. The race load went from
+    41-44 VBlanks with 20-22 blocked to 28 with 7 blocked (about 0.12 s): under the target on the desktop.
+  - (b) measured: the 7 blocked VBlanks are the host's own serve time inside the reads, mostly the scene's warm-up
+    paid by the first reads (one present of 147 ms: 27 textures uploaded, 3 pipelines created, the pipeline cache
+    on). Taking it out of the reads (textures before the read, pipelines from the cache) is a follow-up for lane
+    B, not a D10 gate, after the R6 re-baseline and P2c's depth texture (the coordinator): bounded by those 7
+    VBlanks on the desktop, it is judged on the Odin's device run, where uploads and pipeline creation cost more.
 - Acceptance: the load times (race and menus) reported before and after, against those targets; `ORIG` unchanged in
   its picture and the game's pacing (faster reads shorten `original`'s loads too, which is the point; the frame in
   which the game sees each read's result is unchanged); saves and replays unaffected (session test).
