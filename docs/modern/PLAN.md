@@ -65,8 +65,8 @@ ARCHITECTURE.md section 1) and the CPU-side tests (B5's mesh check, A10's decode
 | Lane | Owns | Shared files it may touch, and in which order |
 |---|---|---|
 | A. Scene extraction | `game_src/` hooks, `runtime/native/pgl.cpp`, `runtime/frame.cpp`, `runtime/runtime.h`, `runtime/kernel.cpp` (from P4), `compat/game/gt4_scene.h`, `include/gt4/gfx.h` scene section, `platform/scene/scene_decoder.*`, `scene_frame.h` | `stream.cpp`, `stream.h`, `gs_host.cpp` (QueuedTarget): A1, A10. `gs_frontend.*`: A10 **after E2**. `protocol.h`: A1 **before D2**. `runtime/gs.cpp` `on_frame` (ticks deferred during a walk, CONTRACTS a.5.1): A3 |
-| B. Renderer | `platform/render/graph/`, `platform/render/modern/`, `platform/scene/mesh_cache.*`, `material_table.*`, `scene_cache.*`, `platform/gs/vif1.*` (the mesh cache's input; lane A reviews, since A1 and A10 use its runs; P1, lane C, removes its stream path), `pipeline.cpp`, `gsn_scene.cpp`, `vk.*`, shaders; for P2, the target, page and palette parts of `gs_frontend.*` and `gs_memory.*` (lane A reviews) | `renderer.cpp`, `main.cpp`: B2 **first** (day one) |
-| C. Platform, ARM64, tooling | the settings table (from lane E, 2026-11-08): `platform/sdl/settings.{h,cpp}`, `settings_table.h`, the presets and the shared parts (`settings_display.cpp`, `settings_render.cpp`, `settings_effects.cpp`, `settings_scene.cpp`). The per-module files stay with the lanes that add to them (`settings_input.cpp`, `settings_audio.cpp` lane D; `settings_lighting.cpp` lane F; a future `settings_ui.cpp` lane M), lane C reviewing each change for the table's rules (preset membership, `original` unchanged, `unusedReason`), `cmake/`, `tools/build_*`, `tools/package_game.py`, `tools/frame_diff.py`, `tools/perf_report.py`, `platform/core/`, `link_host.cpp`, `docs/modern/CAPTURES.md`, `platform/gsnative/texture_pack.*`, `platform/sdl/session.*` and `tools/host_session.py` (the test harness), `runtime/link.cpp` (lane A reviews every change: its async reads and tick deferral) | `main.cpp`, `renderer.cpp`: C1 **after B2** |
+| B. Renderer | `platform/render/graph/`, `platform/render/modern/`, `platform/scene/mesh_cache.*`, `material_table.*`, `scene_cache.*`, `platform/gs/vif1.*` (the mesh cache's input; lane A reviews, since A1 and A10 use its runs; P1, lane C, removes its stream path), `pipeline.cpp`, `gsn_scene.cpp`, `vk.*`, shaders (except the display stages' and upscalers', lane C's from B16); for P2, the target, page and palette parts of `gs_frontend.*` and `gs_memory.*` (lane A reviews) | `renderer.cpp`, `main.cpp`: B2 **first** (day one) |
+| C. Platform, ARM64, tooling | the settings table (from lane E, 2026-11-08): `platform/sdl/settings.{h,cpp}`, `settings_table.h`, the presets and the shared parts (`settings_display.cpp`, `settings_render.cpp`, `settings_effects.cpp`, `settings_scene.cpp`). The per-module files stay with the lanes that add to them (`settings_input.cpp`, `settings_audio.cpp` lane D; `settings_lighting.cpp` lane F; a future `settings_ui.cpp` lane M), lane C reviewing each change for the table's rules (preset membership, `original` unchanged, `unusedReason`), `cmake/`, `tools/build_*`, `tools/package_game.py`, `tools/frame_diff.py`, `tools/perf_report.py`, `platform/core/`, `link_host.cpp`, `docs/modern/CAPTURES.md`, `platform/gsnative/texture_pack.*`, `platform/sdl/session.*` and `tools/host_session.py` (the test harness), `runtime/link.cpp` (lane A reviews every change: its async reads and tick deferral); the display stages and upscalers (from lane B, 2026-11-08, the coordinator; lane B reviews): `platform/render/display_feature.*`, `platform/render/upscale/` (the upscaler interface and its backends, with `fsr2.*`, `fsr2_shaders.cpp` and `ffx_compat.h` moved in), `easu.comp`, `rcas.comp`, `taa.comp`, the upscaler options in `settings_render.cpp` | `main.cpp`, `renderer.cpp`: C1 **after B2**. `pipeline.cpp` (lane B's): B16's jitter call and `resolveConfig`'s `selfResolved` rule only, lane B reviewing |
 | D. Systems | `platform/input/`, `platform/audio/`, `runtime/memcard.cpp`, `platform/saves/`, `runtime/iop.cpp`, `runtime/audio.cpp` | `main.cpp`: D1 **after C1**. `protocol.h`: D2 **after A1**. `stream.cpp`: D5 **after A10** |
 | E. UI | no agent; its files moved on 2026-11-08 (the coordinator): the settings table to lane C, `overlay.*`, `settings_menu.*` and `layer2d.*` to lane M. Its remaining tickets E5 (SDF font), E6 (2D layer), E7 and E9 (HUD) go to lane M with their files (the coordinator), lane C reviewing | `gs_frontend.cpp` `textureFor` (E2), `gsn_display.frag` (E3): day one, **before A10** |
 | F. Night lighting | `include/gt4/render/light_list.h`, `shaders/light_list.glsl`, `platform/render/modern/lights_*`, `tools/frame_metrics.py`, the Route 5 tickets | `gsn_scene.cpp` scene stage: F2 **after B4** |
@@ -533,13 +533,28 @@ markers; pipeline bloom, exposure and tone map on linear light; HDR10 metadata. 
 pattern.
 
 
-**B16: Free render scale and jitter for modern views; upscaler interface (M).** With B8's in-place drawing, the
-render scale is the scene target's: B16 decides a free scale for the scene target as a whole. Depends: B8.
-Acceptance: `ORIG` (integer scales kept on the GS path); `VAL`; render scale 67 % at 4K upscaled by FSR 2 without
-TAA ghosting on the flyover (review), motion vectors exact (velocity debug view).
+**B16: Upscaler interface and jitter (M; lane C, moved from lane B on 2026-11-08, lane B reviewing).** In order,
+after D10 (c) and R13: (1) CONTRACTS b.9 states `DisplayInputs`, the seam between the scene side (lane B) and the
+display side (lane C): at a render extent R, colour; velocity in render pixels, current to previous, the jitter
+removed; depth in its stated convention (today the GS path's float, Z times 2^-32, not reverse-Z); the reactive and
+transparency masks; reset; the jitter as applied. The display side takes those and the output extent, nothing
+else. (2) `platform/render/upscale/`: the `Upscaler` interface, FSR 2 moved in unchanged as its first backend.
+(3) The jitter sequence (`pipeline.cpp`) one call to the selected upscaler (phase count, offset), and
+`resolveConfig`'s `selfResolved` rule for any temporal upscaler. The display side works at any R; until B16b the
+scene delivers integer scales. Depends: B3. Acceptance: `ORIG`; `PRESETS`, and the FSR 2 and TAA presets' frames
+identical to before the move; `VAL`; `PERF` unchanged.
 
+**B16b: Free render scale for the scene target (M; lane B).** With B8's in-place drawing, the render scale is the
+scene target's: a free (non-integer) scale for the scene target as a whole, behind `DisplayInputs`
+(`gsn_scene.cpp`: `ensureTarget`/`decideScale`, the scissor and exact-target paths, copies and reinterpretations
+between targets, the reads' downscale). `original` never takes a fractional scale. Depends: B8 (its last
+`gsn_scene.cpp` commit), B16 (1). Acceptance: `ORIG` (integer scales kept on the GS path); `VAL`; render scale
+67 % at 4K upscaled by FSR 2 without TAA ghosting on the flyover (review), motion vectors exact (velocity debug
+view).
 
-**B17: FSR 3.1, DLSS, XeSS (M).** Depends: B16, R13. Acceptance: each where available; `VAL`; `PERF`.
+**B17: FSR 3.1, DLSS, XeSS (M; lane C, moved from lane B on 2026-11-08, lane B reviewing).** Backends of B16's
+interface: FSR 3.1 first, at today's integer scales; DLSS and XeSS only if R13 clears them. Depends: B16, R13
+(B16b for fractional scales). Acceptance: each where available; `VAL`; `PERF`.
 
 **B18: GPU particles from emitters (M).** Depends: A8, B22. Acceptance: `VAL`; smoke and sparks at the emitters
 (review against the GS path's sprites); in the reactive mask.

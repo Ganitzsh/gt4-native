@@ -276,9 +276,11 @@ names the source. List its draws for A5b.
 
 ## R13: Upscaler SDKs (blocks B17)
 
+Lane C (2026-11-08), before any SDK enters the repo.
+
 **Question.** Can FSR 3.1 (Vulkan), DLSS (Streamline or the NGX Vulkan SDK) and XeSS (Vulkan) be built and
-redistributed under this project's licence and release policy (docs/RELEASE_POLICY.md), and on which
-architectures (DLSS: x64 only)?
+redistributed under this project's licence and release policy (docs/RELEASE_POLICY.md), what may go in the zip
+and the tar, and on which architectures and systems (DLSS: x64 only)?
 
 **Method.** Read each SDK's licence and redistribution terms; check against the release policy; a build test of
 each on x64.
