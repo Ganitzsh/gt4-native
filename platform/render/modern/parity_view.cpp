@@ -2,6 +2,7 @@
 #include "parity_view.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 
 namespace gt4::render {
@@ -132,7 +133,8 @@ void ParityView::plan(const gsn::FrameList& list, std::vector<ParitySpan>& spans
         // Roles never substituted (CONTRACTS.md a.5): the HUD's 3D, menus' 3D, and an env face's copy into the shared env
         // map (kViewEnvCopy: after the face's ViewEnd, pass = face): the GS path draws them.
         const uint8_t role = view.package->view.role;
-        if (role == gfx::scene::kViewHud || role == gfx::scene::kViewMenu || role == gfx::scene::kViewEnvCopy) {
+        static const bool r8AllRoles = [] { const char* e = std::getenv("GT4_R8_ALL_ROLES"); return e && *e == '1'; }();   // SPIKE R8
+        if (!r8AllRoles && (role == gfx::scene::kViewHud || role == gfx::scene::kViewMenu || role == gfx::scene::kViewEnvCopy)) {
             ++counters.viewsOfRoleKept;
             continue;
         }

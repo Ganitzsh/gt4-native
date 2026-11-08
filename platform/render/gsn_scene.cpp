@@ -15,6 +15,7 @@
 #include <cassert>
 #include <bit>
 #include <chrono>
+#include <set>
 #include <bit>
 #include <memory>
 #include <array>
@@ -111,6 +112,8 @@ bool destAlphaBlend(uint32_t A, uint32_t B, uint32_t D, VkBlendFactor& src, VkBl
 }
 
 }  // namespace
+
+namespace r8 { void report(); }   // SPIKE R8 (defined before planSides)
 
 struct GsnScene::Impl {
     const vk::Device& device;
@@ -638,6 +641,7 @@ struct GsnScene::Impl {
         vk::destroy(device, sideResetPass);
         vk::destroy(device, sideViewPass);
         vk::destroy(device, sideVeilPass);
+        r8::report();   // SPIKE R8
         if (hybrid)
             std::printf("Hybrid side channels: %llu passes (%llu with a reset), %llu items drawn, %llu blended draws marking veiled\n",
                         static_cast<unsigned long long>(sidePasses), static_cast<unsigned long long>(sideResets),
@@ -1349,6 +1353,64 @@ void GsnScene::Impl::planParity() {
 // B8 step 2: where this list's side-channel passes run (before each Z clear of a substituted view's Z buffer, and at its
 // Light), and its items' SideItems. A Z clear is a draw into the view's Z buffer that writes Z unconditionally (the test
 // off or ALWAYS): R5's clear sprites and its alpha-test-never Z-only fills.
+
+// SPIKE R8 (local, never pushed): material classes from GT4's lighting bodies (RISKS R8). With hybrid on:
+// GT4_R8=1 counts the substituted items per lighting body (ModelJob::chain >> 16) by kind (course, car, other) and view
+// role, with their distinct material ids, and reads each main-view course batch's light matrix (qwords 201..203: four
+// directions, one per lane; 205..208 their colours) through its objectToView into view space: per lane, the mean
+// direction, the largest angle between a list's batches, the mean colour; printed every 100 lists and at exit.
+// GT4_R8_BODY=1 writes 0x10000 | body into the material channel, so GT4_SIDE_VIEW=material colours each body (legend
+// at exit, gsn_side_view.frag's hue).
+namespace r8 {
+const bool on = [] { const char* e = std::getenv("GT4_R8"); return e && *e == '1'; }();
+const bool bodyView = [] { const char* e = std::getenv("GT4_R8_BODY"); return e && *e == '1'; }();
+const long dumpLists = [] { const char* e = std::getenv("GT4_R8_DUMP"); return e ? std::strtol(e, nullptr, 10) : 0L; }();
+struct Body {
+    uint64_t items = 0, course = 0, car = 0, other = 0, lit = 0;
+    std::map<int, uint64_t> roles;
+    std::set<uint32_t> materials;
+};
+std::map<uint32_t, Body> bodies;
+struct Lane {
+    double dir[3] = {}, colour[3] = {};
+    uint64_t batches = 0, lists = 0;
+    double worst = 0.0, worstSum = 0.0;
+};
+Lane lanes[4], window[4];
+uint64_t listsSeen = 0;
+float word(const std::vector<uint32_t>& data, uint32_t base, uint32_t q, uint32_t c) {
+    const size_t at = size_t(base) + q * 4 + c;
+    return at < data.size() ? std::bit_cast<float>(data[at]) : 0.0f;
+}
+void printLanes(const char* what, const Lane* l) {
+    for (int i = 0; i < 4; ++i) {
+        if (!l[i].batches) continue;
+        double d[3], n = 0;
+        for (int k = 0; k < 3; ++k) n += l[i].dir[k] * l[i].dir[k];
+        n = std::sqrt(n);
+        for (int k = 0; k < 3; ++k) d[k] = n > 0 ? l[i].dir[k] / n : 0;
+        std::printf("R8 %s lane %d: %llu batches in %llu lists, mean view dir (%.3f %.3f %.3f), largest spread in a list %.2f deg "
+                    "(mean %.2f), mean colour (%.3f %.3f %.3f)\n", what, i, (unsigned long long)l[i].batches, (unsigned long long)l[i].lists,
+                    d[0], d[1], d[2], l[i].worst, l[i].lists ? l[i].worstSum / double(l[i].lists) : 0.0,
+                    l[i].colour[0] / l[i].batches, l[i].colour[1] / l[i].batches, l[i].colour[2] / l[i].batches);
+    }
+}
+void report() {
+    if (!on) return;
+    std::printf("R8 bodies (items: total, course, car, other; roles; distinct materials; GT4_SIDE_VIEW hue):\n");
+    for (const auto& [body, b] : bodies) {
+        std::string roles;
+        for (const auto& [role, n] : b.roles) roles += " " + std::to_string(role) + ":" + std::to_string(n);
+        const uint32_t h = (0x10000u | body) * 2654435761u;
+        std::printf("R8 body %04X: %llu items (%llu with a lighting chain), course %llu, car %llu, other %llu; roles%s; %zu materials; hue %.2f %.2f %.2f\n", body,
+                    (unsigned long long)b.items, (unsigned long long)b.lit, (unsigned long long)b.course, (unsigned long long)b.car, (unsigned long long)b.other,
+                    roles.c_str(), b.materials.size(), float(h & 255u) / 255.0f * 0.8f + 0.2f,
+                    float((h >> 8) & 255u) / 255.0f * 0.8f + 0.2f, float((h >> 16) & 255u) / 255.0f * 0.8f + 0.2f);
+    }
+    printLanes("all", lanes);
+}
+}  // namespace r8
+
 void GsnScene::Impl::planSides() {
     sideBounds.clear();
     sideNext = 0;
@@ -1423,9 +1485,79 @@ void GsnScene::Impl::planSides() {
                 for (int c = 0; c < 4; ++c) item.objectToView[r][c] *= in.axisScale[r] * k;
         }
         item.material = s.material;
+        if (r8::on || r8::bodyView) {   // SPIKE R8
+            const gfx::ModelJob& job = s.job < frame.models.size() ? frame.models[s.job] : gfx::ModelJob{};
+            const uint32_t body = job.chain >> 16;
+            if (r8::bodyView) item.material = 0x10000u | body;
+            if (r8::on && view.package && s.instance < view.package->instances.size()) {
+                const scene::InstanceData& in = view.package->instances[s.instance];
+                r8::Body& b = r8::bodies[body];
+                ++b.items;
+                if (job.chain & 1) ++b.lit;
+                if (in.flags & gfx::scene::kInstCourse) ++b.course;
+                else if (in.entrant != 0xFFFFFFFFu) ++b.car;
+                else ++b.other;
+                ++b.roles[view.package->view.role];
+                if (b.materials.size() < 100000) b.materials.insert(s.material);
+            }
+        }
         out[i] = item;
     }
     sideItems = &items;
+    if (r8::on) {   // SPIKE R8: the main view's course batches' light lanes, in view space
+        double dirs[4][64][3];
+        int counts[4] = {};
+        std::set<std::pair<uint32_t, uint32_t>> seen;   // (view, instance): one batch per instance
+        for (size_t i = 0; i < paritySpans.size(); ++i) {
+            const render::ParitySpan& s = paritySpans[i];
+            const gsn::FrameList::ViewOnList& view = frame.views[s.view];
+            if (!view.package || view.package->view.role != gfx::scene::kViewMain || s.instance >= view.package->instances.size()) continue;
+            const scene::InstanceData& in = view.package->instances[s.instance];
+            if (s.job >= frame.models.size()) continue;
+            const gfx::ModelJob& job = frame.models[s.job];
+            const uint32_t body = job.chain >> 16;   // the N.L bodies only (gt4_lighting.glsl): the others' 201..208 aren't lights
+            const bool nl = body != 0 && body != 0x0B0u && body != 0xCA8u && body != 0xEA0u && body != 0x10A8u && body != 0x12C8u &&
+                            body != 0x1608u && body != 0x1508u && body != 0x16F8u;
+            if (!(job.chain & 1) || !nl || !seen.insert({s.view, s.instance}).second) continue;
+            for (int lane = 0; lane < 4; ++lane) {
+                const float o[3] = {r8::word(frame.modelData, job.data, 201, lane), r8::word(frame.modelData, job.data, 202, lane),
+                                    r8::word(frame.modelData, job.data, 203, lane)};
+                double v[3] = {};
+                for (int r = 0; r < 3; ++r)
+                    for (int c = 0; c < 3; ++c) v[r] += double(in.objectToView.m[c][r]) * o[c];
+                const double n = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+                if (n < 1e-6) continue;
+                if (long(r8::listsSeen) < r8::dumpLists)
+                    std::printf("R8 dump list %llu inst %u body %04X lane %d: obj (%.3f %.3f %.3f) view (%.3f %.3f %.3f) colour (%.2f %.2f %.2f) ambient (%.2f %.2f %.2f)\n",
+                                (unsigned long long)r8::listsSeen, s.instance, job.chain >> 16, lane, o[0], o[1], o[2], v[0] / n, v[1] / n, v[2] / n,
+                                r8::word(frame.modelData, job.data, 205 + lane, 0), r8::word(frame.modelData, job.data, 205 + lane, 1),
+                                r8::word(frame.modelData, job.data, 205 + lane, 2), r8::word(frame.modelData, job.data, 204, 0),
+                                r8::word(frame.modelData, job.data, 204, 1), r8::word(frame.modelData, job.data, 204, 2));
+                r8::Lane& l = r8::lanes[lane];
+                for (int k = 0; k < 3; ++k) {
+                    v[k] /= n;
+                    l.dir[k] += v[k];
+                    l.colour[k] += r8::word(frame.modelData, job.data, 205 + lane, k);
+                }
+                ++l.batches;
+                if (counts[lane] < 64) { for (int k = 0; k < 3; ++k) dirs[lane][counts[lane]][k] = v[k]; ++counts[lane]; }
+            }
+        }
+        for (int lane = 0; lane < 4; ++lane) {
+            if (counts[lane] < 1) continue;
+            double worst = 0.0;
+            for (int a = 0; a < counts[lane]; ++a)
+                for (int b = a + 1; b < counts[lane]; ++b) {
+                    const double d = dirs[lane][a][0] * dirs[lane][b][0] + dirs[lane][a][1] * dirs[lane][b][1] + dirs[lane][a][2] * dirs[lane][b][2];
+                    worst = std::max(worst, std::acos(std::clamp(d, -1.0, 1.0)) * 57.29577951308232);
+                }
+            r8::Lane& l = r8::lanes[lane];
+            ++l.lists;
+            l.worst = std::max(l.worst, worst);
+            l.worstSum += worst;
+        }
+        if (++r8::listsSeen % 100 == 0) r8::printLanes("so far", r8::lanes);
+    }
 }
 
 vk::Pipeline& GsnScene::Impl::parityPipeline(uint32_t blendKey, uint32_t mask, bool depth, bool exports) {
