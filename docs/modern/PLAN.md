@@ -519,11 +519,12 @@ front end); the Odin's device run (the provoking vertex, logged).
 - **Acceptance status** (lane B, 2026-11-08, on eea04c2): `ORIG` identical against b.10 alone (`race7` 1-100,
   `race_grid43` 1-700, `race_boot` 3800-4914, every frame, largest error 0); `PARITY` on `race_grid43` and `race_boot`
   (differences of 1 or 2 levels, inside the scene rectangle); `VAL` clean; night items checked on lane A's `a6r_r5`.
-  `race7` has no scene records, so hybrid draws nothing there: `PARITY` is owed on `race_pe2_r` instead (the
-  coordinator), which lane C records with scene records on lane A's `race_gt_pe2.txt` route (CAPTURES.md); `race7`
-  stays as it is. Also owed: `PERF` from a quiet window (the CPU side: front end +31 %, render thread +27 % outside
-  one), and the Odin run. R9's two every-frame readers (the luminance probe, the flare samples) are GS-only by default
-  and are checked before hybrid enters a preset (step 4).
+  `race7` has no scene records, so hybrid draws nothing there; in its place (the coordinator), `PARITY` on lane C's
+  `race_pe2_r` (PE race 2, fields, 300 frames, scene records on lane A's `race_gt_pe2.txt` route; f90214e, judged from
+  frame 20): 279 of 281 frames identical, largest error 1; 445,543 of 459,838 items from the mesh cache, 0 differ.
+  `race7` stays as it is. Still owed: `PERF` from a quiet window (the CPU side: front end +31 %, render thread +27 %
+  outside one), and the Odin run. R9's two every-frame readers (the luminance probe, the flare samples) are GS-only by
+  default and are checked before hybrid enters a preset (step 4).
 
 **B9: Mirror, env-map, reflection, showroom and photo views (M).** The road reflection is no view today
 (`kInstReflection`, out of the binding, A6): B9 first measures its readers on a wet course and makes it a
