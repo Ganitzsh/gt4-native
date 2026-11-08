@@ -69,6 +69,8 @@ struct ParityStats {
     uint64_t items = 0;            // tagged items of the lists' substituted views
     uint64_t drawn = 0;            // drawn from the mesh cache
     uint64_t viewsNotSubstituted = 0;   // views cut or not valid (no ids: B6), wholly on the GS path (views, not items)
+    uint64_t viewsForReadSync = 0;      // B8 step 4: views on the GS path because their list was cut for a game read
+    uint64_t viewsForReadAsync = 0;     // ... because an asynchronous read names their target
     uint64_t meshNone = 0;         // mesh 0: skinned, a billboard run, a key-frame blend, or still decoding
     uint64_t meshGone = 0;         // evicted before the render thread read it
     uint64_t itemsDiffer = 0;      // the mesh's items do not match the instance's runs (should not happen)
@@ -91,6 +93,12 @@ public:
     // order (v - 2, v - 1, v), the mesh's turned ones (Mesh::turned) turned back: the rasterizer interpolates Z from the
     // vertices in their order, and the turned odd triangles gave other Z at GT4's coplanar layers.
     void plan(const gsn::FrameList& list, std::vector<ParitySpan>& spans, std::vector<uint8_t>& staging, std::vector<ParityCopy>& copies);
+    // B8 step 4, the read switch (PLAN B8; RISKS R9 as a per-reader table): a game read of a view's picture must see the
+    // PS2's, so a view whose list holds one draws on the GS path (its items left out). An asynchronous read
+    // (FrameList::readbacks; its list is cut too) leaves the views of the target it names; a list cut with no readback
+    // was cut for a synchronous read (its target not known here) and leaves all its views. Every reader is GS-only until R9 checks it; off (false), the switch lets
+    // the reads see the substituted picture (R9's checks).
+    void setReadSwitch(bool on) { readSwitch = on; }
     // A frame is done (after its lists): meshes unused for unusedFrames are retired, and ranges retired framesInFlight
     // frames ago are freed.
     void endFrame();
@@ -110,7 +118,7 @@ private:
     bool makeRoom(uint64_t bytes);     // retires the least recently used meshes not drawn in the frames in flight
     BlockRanges ranges;
     uint32_t unusedFrames, framesInFlight;
-    bool rotate = false;
+    bool rotate = false, readSwitch = true;
     uint64_t frame = 0;
     std::unordered_map<scene::MeshId, Placed> placed;
     std::vector<std::pair<uint64_t, BlockRanges::Range>> retired;   // (the frame it was retired at, its range)

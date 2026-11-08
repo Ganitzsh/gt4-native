@@ -133,6 +133,21 @@ void ParityView::plan(const gsn::FrameList& list, std::vector<ParitySpan>& spans
             ++counters.viewsNotSubstituted;
             continue;
         }
+        if (readSwitch) {   // (B8 step 4: a game read sees the PS2's picture)
+            // An asynchronous read cuts its list too (not displayed), so the readbacks decide first: only the views of
+            // the target they name. A list cut with none was cut for a synchronous read (its target unknown here).
+            if (!list.readbacks.empty()) {
+                bool read = false;
+                for (const gsn::FrameList::Readback& r : list.readbacks) read = read || r.request.target == view.target;
+                if (read) {
+                    ++counters.viewsForReadAsync;
+                    continue;
+                }
+            } else if (!list.displayed) {
+                ++counters.viewsForReadSync;
+                continue;
+            }
+        }
         for (uint32_t k = 0; k < view.ids.size(); ++k) {
             const scene::InstanceIds& ids = view.ids[k];
             counters.items += ids.materialCount;

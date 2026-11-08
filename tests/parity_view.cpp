@@ -57,6 +57,7 @@ int main() {
         l.models.resize(3);
         l.draws.resize(2);
         l.sceneCache = std::move(scenes);
+        l.displayed = true;   // (a list cut for a game read is not: the read switch's case below)
         auto view = std::make_shared<scene::SceneView>();
         view->instances.resize(1);
         gsn::FrameList::ViewOnList v;
@@ -144,6 +145,29 @@ int main() {
         differ.views[0].items[1].modelVertexCount = 3;
         small.plan(differ, spans, st, cp);
         check(spans.size() == 1 && small.stats().itemsDiffer == 1, "an item whose runs differ: not drawn here");
+        // B8 step 4, the read switch: a list cut for a read, or an asynchronous read of the view's target: the GS path
+        gsn::FrameList cut = makeList(cache);
+        cut.displayed = false;
+        small.plan(cut, spans, st, cp);
+        check(spans.empty() && small.stats().viewsForReadSync == 1, "a list cut for a game read: its views on the GS path");
+        gsn::FrameList async = makeList(cache);
+        async.views[0].target = 7;
+        async.readbacks.push_back({});
+        async.readbacks[0].request.target = 7;
+        small.plan(async, spans, st, cp);
+        check(spans.empty() && small.stats().viewsForReadAsync == 1, "an asynchronous read of the view's target: the GS path");
+        async.readbacks[0].request.target = 8;
+        small.plan(async, spans, st, cp);
+        check(spans.size() == 2, "a read of another target: the view substituted");
+        async.displayed = false;   // (an asynchronous read cuts its list too: still only the named target's views)
+        small.plan(async, spans, st, cp);
+        check(spans.size() == 2 && small.stats().viewsForReadSync == 1, "cut for an asynchronous read of another target: substituted");
+        async.readbacks[0].request.target = 7;
+        small.plan(async, spans, st, cp);
+        check(spans.empty() && small.stats().viewsForReadAsync == 2, "cut for an asynchronous read of the view's target: the GS path");
+        small.setReadSwitch(false);
+        small.plan(cut, spans, st, cp);
+        check(spans.size() == 2, "the switch off (R9's checks): the read sees the substituted picture");
         gsn::FrameList gone = makeList(std::make_shared<scene::SceneCache>(1));   // (another cache: the id names nothing there)
         render::ParityView fresh;
         fresh.plan(gone, spans, st, cp);
