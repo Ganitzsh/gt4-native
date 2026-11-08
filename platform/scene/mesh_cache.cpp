@@ -66,13 +66,30 @@ DecodedBatch decodeBatch(const gfx::ModelJob& job, const uint32_t* words) {
     out.animated = unpack == 3 || unpack == 4;
     out.normals = lit && body != 0x0B0;
     const float t = vuFloat(qword(words, kWeight)[3]), rest = 1.0f - t;
+    // The raw words' flags, as gsn_models.comp runs the chain: the routine decodes k < NLOOP, the body lights those
+    // (the fade an even number: one more when NLOOP is odd), and the N.L model's quirk reads the next vertex's normal.
+    const uint32_t litCount = !lit ? 0 : body == 0x16F8 ? std::min<uint32_t>((job.nloop + 1) & ~1u, 257) : job.nloop;
+    const bool modelBody = body != 0x0B0 && body != 0xCA8 && body != 0xEA0 && body != 0x10A8 && body != 0x12C8 && body != 0x1608 &&
+                           body != 0x1508 && body != 0x16F8;   // the N.L model (gt4_lighting.glsl lightVertex's last case)
+    const bool nextNormal = lit && modelBody && (job.dot & kDotNextNormal) != 0;
     out.vertices.resize(count);
+    out.raw.resize(count);
     out.starts.assign(count, 0);
     for (uint32_t k = 0; k < count; ++k) {
         MeshVertex& v = out.vertices[k];
         const uint32_t* p = qword(words, kPositions + k);
         const uint32_t* st = qword(words, kSt + k);
         const uint32_t* c = qword(words, kColors + k);
+        MeshRawVertex& r = out.raw[k];
+        std::memcpy(r.position, p, sizeof r.position);
+        std::memcpy(r.st, st, sizeof r.st);
+        std::memcpy(r.colour, c, sizeof r.colour);
+        r.flags = (k < litCount ? kRawLit : 0) | (lit && k < job.nloop ? kRawDecoded : 0);
+        // (the strip's index and the two vertices before it: set below, once the strips are walked)
+        if (nextNormal && k < litCount) {   // (else 0: welding is not split by a value no one reads)
+            std::memcpy(r.next, qword(words, kColors + k + 1), sizeof r.next);
+            if (k + 1 < job.nloop) r.flags |= kRawNextDecoded;
+        }
         // As sent (the chain's routine leaves the vertices past NLOOP, and all of them when it has none).
         for (int i = 0; i < 3; ++i) v.position[i] = vuFloat(p[i]);
         v.st[0] = vuFloat(st[0]);
@@ -126,12 +143,21 @@ DecodedBatch decodeBatch(const gfx::ModelJob& job, const uint32_t* words) {
     for (const uint32_t length : lengths) {
         for (uint32_t j = 0; j < length && first + j < count; ++j) {
             const uint32_t v = first + j;
+            MeshRawVertex& r = out.raw[v];
+            r.flags |= (j < 2 ? kRawStart : 0) | (j & 1 ? kRawOdd : 0);
+            if (j >= 2) {
+                for (uint32_t b = 0; b < 2; ++b) {
+                    std::memcpy(r.before[b], qword(words, kPositions + v - 1 - b), sizeof r.before[b]);
+                    if (lit && v - 1 - b < job.nloop) r.flags |= b ? kRawBefore2Decoded : kRawBefore1Decoded;
+                }
+            }
             if (j < 2) {
                 out.starts[v] = 1;
                 continue;
             }
             if ((j - 2) & 1) out.triangles.insert(out.triangles.end(), {v - 1, v - 2, v});
             else out.triangles.insert(out.triangles.end(), {v - 2, v - 1, v});
+            out.turned.push_back(static_cast<uint8_t>((j - 2) & 1));
         }
         first += length;
     }
@@ -139,30 +165,39 @@ DecodedBatch decodeBatch(const gfx::ModelJob& job, const uint32_t* words) {
 }
 
 namespace {
+struct WeldKey {   // a vertex decoded and as sent: welded only when both are equal
+    MeshVertex vertex;
+    MeshRawVertex raw;
+};
 struct VertexHash {
-    size_t operator()(const MeshVertex& v) const { return static_cast<size_t>(XXH3_64bits(&v, sizeof v)); }
+    size_t operator()(const WeldKey& v) const { return static_cast<size_t>(XXH3_64bits(&v, sizeof v)); }
 };
 struct VertexEqual {
-    bool operator()(const MeshVertex& a, const MeshVertex& b) const { return !std::memcmp(&a, &b, sizeof a); }
+    bool operator()(const WeldKey& a, const WeldKey& b) const { return !std::memcmp(&a, &b, sizeof a); }
 };
-static_assert(sizeof(MeshVertex) == 36, "no padding: vertices are hashed and compared as bytes");
+static_assert(sizeof(MeshVertex) == 36 && sizeof(MeshRawVertex) == 76 && sizeof(WeldKey) == 112,
+              "no padding: vertices are hashed and compared as bytes");
 }  // namespace
 
 Mesh buildMesh(const std::vector<BatchCopy>& items) {
     Mesh mesh;
     mesh.key = meshKey(items);
-    std::unordered_map<MeshVertex, uint32_t, VertexHash, VertexEqual> welded;
+    std::unordered_map<WeldKey, uint32_t, VertexHash, VertexEqual> welded;
     for (const BatchCopy& item : items) {
         const DecodedBatch batch = decodeBatch(item.job, item.words);
         std::vector<uint32_t> remap(batch.vertices.size());
         for (size_t k = 0; k < batch.vertices.size(); ++k) {
-            auto [it, added] = welded.try_emplace(batch.vertices[k], static_cast<uint32_t>(mesh.vertices.size()));
-            if (added) mesh.vertices.push_back(batch.vertices[k]);
+            auto [it, added] = welded.try_emplace(WeldKey{batch.vertices[k], batch.raw[k]}, static_cast<uint32_t>(mesh.vertices.size()));
+            if (added) {
+                mesh.vertices.push_back(batch.vertices[k]);
+                mesh.raw.push_back(batch.raw[k]);
+            }
             remap[k] = it->second;
         }
         MeshItem m;
         m.firstIndex = static_cast<uint32_t>(mesh.indices.size());
         for (const uint32_t i : batch.triangles) mesh.indices.push_back(remap[i]);
+        mesh.turned.insert(mesh.turned.end(), batch.turned.begin(), batch.turned.end());
         m.indexCount = static_cast<uint32_t>(mesh.indices.size()) - m.firstIndex;
         m.renderer = item.job.renderer;
         m.chain = item.job.chain;
@@ -207,8 +242,12 @@ MeshKey meshKey(const BatchRef* items, size_t count) {
         std::memcpy(tag, items[i].words + kTag * 4, sizeof tag);
         tag[1] &= ~kTagPrimNotGeometry;
         XXH3_64bits_update(&state, tag, sizeof tag);
-        const uint32_t fields[5] = {job.count, job.nloop, job.renderer, job.chain, job.prim & ~kPrimNotGeometry};
+        // The next-normal bit (the raw vertices keep the next normal only with it), and the normal the mesh's last lit vertex
+        // reads as its next (qword 128 + min(NLOOP, count)), which the words hashed above may not hold.
+        const uint32_t fields[6] = {job.count, job.nloop, job.renderer, job.chain, job.prim & ~kPrimNotGeometry, job.dot & kDotNextNormal};
         XXH3_64bits_update(&state, fields, sizeof fields);
+        if (job.dot & kDotNextNormal)   // (the last lit vertex's next: qword 128 + NLOOP, or 128 + count when NLOOP is past it)
+            XXH3_64bits_update(&state, words + ((kColors + std::min(job.nloop, job.count)) % 256) * 4, 8);
     }
     key.packets = XXH3_64bits_digest(&state);
     if (count) {
