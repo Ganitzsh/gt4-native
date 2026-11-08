@@ -176,6 +176,39 @@ int main(int argc, char** argv) {
         expect(colour == 3, "three colour surfaces, three targets");
     }
 
+    // 1c. A set's page under a draw (P2a step 3): the draw puts nothing into memory (the GPU drew it); a partial upload
+    // into the page puts the set's bytes in first, so a read of the part neither touched gets the set's bytes, as before.
+    {
+        gt4::gsn::GsFrontend fe;
+        std::vector<uint32_t> texels(64 * 32);
+        for (uint32_t i = 0; i < texels.size(); ++i) texels[i] = 0x01000000u | i;
+        const gt4::gfx::TexSetRecord r{1, 0xABCD, 0, 1, 32, 1};
+        const gt4::gfx::TexSetUpload u{8192u | 1u << 16 | uint32_t(PSMCT32) << 24, 64, 32, 0x100000, 64 * 32 * 4 / 16};
+        std::vector<uint8_t> payload(sizeof r + sizeof u + texels.size() * 4);
+        std::memcpy(payload.data(), &r, sizeof r);
+        std::memcpy(payload.data() + sizeof r, &u, sizeof u);
+        std::memcpy(payload.data() + sizeof r + sizeof u, texels.data(), texels.size() * 4);
+        fe.texSet(payload.data(), payload.size());   // (page 256, holding the set)
+        Gif g = setup();
+        g.ad({{FRAME_1, frame(0x100, 1, PSMCT32)}});
+        sprite(g, 0, 0, 32, 16, rgbaq(9, 9, 9, 0x80));
+        fe.gif(3, static_cast<const uint8_t*>(g.data()), g.bytes());
+        expect(fe.stats.setPagesWritten == 0, "a draw over a set's page puts nothing into memory");
+        const uint32_t four[8] = {0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7};
+        Gif up;
+        up.upload(8192, 1, PSMCT32, 4, 2, four, sizeof four);
+        up.ad({{BITBLTBUF, bitbltbuf(0, 0, 0, 8192, 1, PSMCT32)}, {TRXPOS, trxpos(0, 0, 48, 24)}, {TRXREG, trxreg(4, 2)}, {TRXDIR, 1}});
+        fe.gif(3, static_cast<const uint8_t*>(up.data()), up.bytes());
+        expect(fe.stats.setPagesWritten == 1 && fe.stats.setPagesByCause[gt4::gsn::GsFrontend::kForWrite] == 1,
+               "a partial upload into it puts the set's page in first");
+        uint32_t words[8] = {};
+        fe.readTransfer(words, 2);
+        bool same = true;
+        for (uint32_t y = 0; y < 2; ++y)
+            for (uint32_t x = 0; x < 4; ++x) same &= words[y * 4 + x] == texels[(24 + y) * 64 + 48 + x];
+        expect(same, "the part neither the draw nor the upload touched reads as the set's bytes");
+    }
+
     // 2. GS -> host reads: uploaded pixels come from GS memory; drawn ones are asked of the GPU.
     {
         gt4::gsn::GsFrontend fe;

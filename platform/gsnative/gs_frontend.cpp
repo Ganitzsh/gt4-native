@@ -368,7 +368,7 @@ void GsFrontend::clutWritten(const gfx::Texture& texture) {
     if (nativeTextures) {
         const uint32_t page = (t.cbp / 32) & 511;
         const SetPage& sp = setPages[page];
-        const bool held = sp.id && !sp.materialized && pages[page].serial == sp.serial;
+        const bool held = sp.id && !sp.materialized && memorySerial[page] == sp.serial;
         auto content = held ? setContents.find(sp.hash) : setContents.end();
         if (content != setContents.end()) {
             GsMemory::Tex0 own = t;
@@ -560,6 +560,7 @@ void GsFrontend::restoreMemory(const void* data) {
     std::memcpy(mem.data(), data, GsMemory::kBytes);
     for (uint32_t page = 0; page < pages.size(); ++page) {
         pages[page] = {0, ++serial};
+        memorySerial[page] = serial;
         ++pageGeneration[page];
     }
     ++uploads;
@@ -592,6 +593,7 @@ void GsFrontend::memoryWritten(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t 
                     uploadPages.push_back(page);
                 }
                 pages[page] = {0, ++serial};
+                memorySerial[page] = serial;
             }
         }
 }
@@ -982,7 +984,8 @@ void GsFrontend::markWritten(uint32_t targetId, uint32_t bp, uint32_t bw, uint32
     const uint32_t first = std::min(x0 / pw, perRow - 1), last = std::min(x1 / pw, perRow - 1);
     for (uint32_t py = y0 / ph; py <= y1 / ph; ++py)
         for (uint32_t px = first; px <= last; ++px) {
-            materializePage(bp / 32 + py * perRow + px, kForDraw);   // (a draw over part of a set's page keeps the rest)
+            // (no set page into memory: a draw changes the page's owner, not memory, where the set's content stays
+            // valid for whatever reads or writes memory there later, P2a)
             PageOwner& p = pages[(bp / 32 + py * perRow + px) & 511];
             if (p.target != targetId) ++ownerChanges;
             p = {targetId, ++serial};
@@ -1067,6 +1070,7 @@ void GsFrontend::texSet(const uint8_t* payload, size_t bytes) {
                         if (extra && !(bp % 32)) break;
                         const uint32_t page = (bp / 32 + py * perRow + px + extra) & 511;
                         pages[page] = {0, ++serial};
+                        memorySerial[page] = serial;
                         ++pageGeneration[page];
                         setPages[page] = {slot.id, serial, false, slot.hash, slot.lo};
                     }
@@ -1224,7 +1228,7 @@ void GsFrontend::loadSetContent(uint64_t hash, const SetContent& sc) {
 void GsFrontend::materializePage(uint32_t page, MaterializeCause cause) {
     page &= 511;
     SetPage& sp = setPages[page];
-    if (!sp.id || sp.materialized || pages[page].serial != sp.serial) return;
+    if (!sp.id || sp.materialized || memorySerial[page] != sp.serial) return;
     sp.materialized = true;
     auto content = setContents.find(sp.hash);
     if (content == setContents.end()) return;

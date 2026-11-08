@@ -575,8 +575,9 @@ private:
     // native textures, those uploads (after their set record: source, base) are left out.
     bool nativeTextures = true;
     std::vector<std::pair<uint32_t, uint32_t>> setUploadsToo;
-    // Each page's set (its id) and the write serial the set's upload had there: the page holds the set's content while
-    // nothing wrote it since (pages[page].serial unchanged).
+    // Each page's set (its id) and the write serial the set's upload had there: the page holds the set's texture while
+    // nothing wrote it since (pages[page].serial unchanged: holdsSet), and its content in memory while nothing wrote
+    // memory there since (memorySerial unchanged: a draw makes a target the page's owner, not new memory; P2a).
     struct SetPage {
         uint32_t id = 0;
         uint64_t serial = 0;
@@ -585,6 +586,9 @@ private:
         uint32_t lo = 0;
     };
     std::vector<SetPage> setPages = std::vector<SetPage>(512);
+    // The serial of each page's last write into graphics memory (uploads, transfers, copies, sets, a restored state);
+    // draws, which the GPU makes, leave it.
+    std::vector<uint64_t> memorySerial = std::vector<uint64_t>(512);
     bool holdsSet(uint32_t block, uint32_t id) const {
         const uint32_t page = (block / 32) & 511;
         return setPages[page].id == id && pages[page].serial == setPages[page].serial;
