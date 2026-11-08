@@ -52,7 +52,7 @@ NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" el
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DECOMP_INPUTS = ["src", "include", "config", "project.toml"]
-NATIVE_INPUTS = ["game_src", "compat", "runtime", "include", "tools/game_cc.py", "tools/game_link.py",
+NATIVE_INPUTS = ["game_src", "compat", "runtime", "platform/ui", "include", "tools/game_cc.py", "tools/game_link.py",
                  "tools/draft_natives.py", "tools/game_toolchain", "tools/objcache.py"]
 
 

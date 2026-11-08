@@ -193,9 +193,9 @@ sets a flag; the hub opens at the next hooked update that sees it.
   `MenuControl`s and the race's `RaceInput` all read through it), and the page engine reads the same link pad
   bytes. After close, the pad stays neutral to GT4 until every button is up (the host's `padHeldBack` rule, moved
   into the game), so the closing button never acts in GT4.
-- The page uses GT4's own confirm and back buttons as GT4's menus read them (Cross confirm, Circle / Triangle back
-  per D13's list) [I: M0 reads GT4's menu key table]. Shoulders change tabs, the D-pad and left stick move, held
-  directions repeat with GT4's menu repeat timing (measured in M0).
+- The page uses GT4's own confirm and back buttons as GT4's menus read them: Cross and Circle confirm, Triangle
+  goes back (measured in M0). Shoulders change tabs, the D-pad and left stick move, held directions repeat with
+  GT4's menu repeat timing: 20 VBlanks, then every 6 (measured in M0's second run).
 - Remapping (D13) happens on the host before the pad record, so pages and GT4 see the same mapped pad.
 - Mouse and keyboard on PC: the host maps keys to the pad as today; pointer input is sent as a `UiPointer` record
   and hit-tested by the engine against its own layout (M12, later).
@@ -207,7 +207,9 @@ sets a flag; the hub opens at the next hooked update that sees it.
   for the duration, as `func_0022F6A0` does around a sync.
 - **Races.** GT4's own pause holds the simulation. The host's bus-clock pause (`HOST_CMD` 2 and 3) is no longer
   used for the menu: GT4 keeps running its frame, its menu sounds and our page. M9 retires commands 2 and 3 (their
-  numbers stay reserved) unless something else is found using them.
+  numbers stay reserved) unless something else is found using them. A page never opens over a running race: the
+  pad focus gives GT4 a neutral pad (no throttle, no steering), so in a race a page is only ever over GT4's pause
+  (M7). M5's page host opens only while a menu project runs; an open asked for in a race waits for one.
 - **Checks** (M5's acceptance): GT4's menu cursor, page and project unchanged after close; race time, lap, positions
   and the car's state identical before and after a pause with the settings opened (the vehicle record, A9, or
   D6's fields).
@@ -320,8 +322,8 @@ Mockup: `menu/mock_settings.svg`.
 ### 4.2 Navigation, controller first
 
 - D-pad / left stick move; Left / Right change a value (held: repeat, accelerating on sliders); Cross confirms or
-  opens; Circle / Triangle back (GT4's mapping); L1 / R1 tabs; Square resets the row to its preset value; Start
-  closes the hub from any depth. Keyboard: arrows, Enter, Backspace, Q / E, Esc.
+  opens, and so does Circle; Triangle goes back (GT4's mapping, M0); L1 / R1 tabs; Square resets the row to its
+  preset value; Start closes the hub from any depth. Keyboard: arrows, Enter, Backspace, Q / E, Esc.
 - Focus is never lost: closing a sub-page returns to the row that opened it; reopening the hub returns to the last
   tab and row.
 - Every row has a one-line help text and, where it helps, a picture in the detail panel (for example the preset
@@ -469,8 +471,9 @@ or listed as hidden, from day one; a set through the bridge equals `setOption`; 
 
 **M5: Game-side page host (M).** `runtime/menu/menu_host.*`, the pad focus in `runtime/iop.cpp` (lane D reviews),
 sounds through `func_0023F8C8`. Depends: M0, M1, M2. Acceptance: session test (`tools/host_session.py`): with a
-page open GT4 receives a neutral pad on both ports, the closing button never reaches GT4, GT4's menu sounds play
-(the session's audio), and GT4's page, cursor and project are unchanged after close.
+page open GT4 receives a neutral pad on both ports, the closing button never reaches GT4, the page's sounds go
+through GT4's call by GT4's names (logged; that they are heard is M9's, below), and GT4's page, cursor and project are
+unchanged after close; `ORIG` and `STREAM` with no page opened (the hook runs every VBlank in every preset).
 
 **M6: Options entry (S).** Hooks in copies of 00109D00 and 0010FE40. Depends: M5. Acceptance: session test from the
 approved save: the pre-race quick menu's Options opens the hub (screenshot), *GT4 options* opens GT4's screen, and
@@ -495,7 +498,9 @@ the host for replay and the test scene. The tests that go with the old menu move
 stay, its menu cases are replaced by M2's golden draw lists; `GT4_HOST_KEYS` (docs/RENDERING.md:70, `scriptedKeys`),
 how menu checks run unattended today, sends command 6 and the page's keys, and a session command `open_settings`
 does the same. Depends: M3, M4, M5. Acceptance: `CTEST`; `ORIG`; Guide and the chord in a race pause through GT4
-and open Settings, a short Start alone still pauses GT4; the replay and test scene open the host-run hub.
+and open Settings, a short Start alone still pauses GT4; the replay and test scene open the host-run hub; the pages'
+sounds heard (moved from M5: in the game's own mix, `GT4_AUDIO_WAV`, the map's sequenced music hides a menu sound,
+GT4's own included), by an A/B of two runs with the same inputs, one moving a page's cursor and one not.
 
 **M10: Style guide and the first asset set (M).** `docs/modern/menu/STYLE.md` (section 5.1, extended), the prompts
 and assets of the hub and pause screens, the review of section 5.4. Depends: M3 (to see them drawn). Acceptance:

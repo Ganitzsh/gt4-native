@@ -158,7 +158,7 @@ int main(int argc, char** argv) {
         menu.hold(Input::Down, false);
     }
 
-    // Repeat: first after 0.35 s, then every 0.11 s.
+    // Repeat: first after 20 VBlanks (0.333 s), then every 6 (0.1 s), as GT4's menus.
     {
         Menu menu;
         menu.setSchema(schema());
@@ -186,9 +186,10 @@ int main(int argc, char** argv) {
         for (int i = 0; i < 100; ++i) sets += static_cast<int>(menu.tick(0.01f).requests.size());   // 1.0 s
         const int slow = sets;
         sets = 0;
-        for (int i = 0; i < 44; ++i) sets += static_cast<int>(menu.tick(0.01f).requests.size());    // 0.44 s more
-        // At 0.11 s the next 0.44 s would give 2 or 3; at 0.04 s the last four steps to 200 come by 1.13 s.
-        check(slow == 6 && sets == 4, "Step repeats: 6 in the first second, then one every 0.04 s up to the maximum");
+        for (int i = 0; i < 13; ++i) sets += static_cast<int>(menu.tick(0.01f).requests.size());    // 0.13 s more
+        // Slow repeats at 0.33, 0.43 ... 0.93 s (7, so 170); at 0.04 s the last three steps to 200 come at 1.04,
+        // 1.08 and 1.12 s, where 0.1 s would give one (1.03 s).
+        check(slow == 7 && sets == 3, "Step repeats: 7 in the first second, then one every 0.04 s up to the maximum");
         menu.hold(Input::Right, false);
         check(menu.page()->rows[2].value == "200", "the held Right stops at the maximum");
     }

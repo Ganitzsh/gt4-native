@@ -12,6 +12,7 @@
 #include "kernel.h"
 #include "link.h"
 #include "log.h"
+#include "menu/menu_host.h"
 #include "runtime.h"
 
 #include <windows.h>
@@ -647,6 +648,10 @@ extern "C" int gt4_replace_scePad2Read(int id, uint8_t *data) {
                 }
             }
     }
+    // The settings pages (runtime/menu, MENU_DESIGN 3.3): while one is open it reads this pad and GT4 gets a neutral
+    // one, on every reader (the pad thread, the menus' MenuControl, the race's input); after it closes, until the
+    // closing press is released. Last, so the pages see the same mapped and scripted pad GT4 would have.
+    menu::pad_focus(id & 1, data);
     return 18;
 }
 extern "C" int gt4_replace_scePad2GetButtonProfile(int, uint8_t *profile) {

@@ -66,10 +66,11 @@ struct Output {
 };
 
 // The repeat of a held direction (MENU_DESIGN 4.2), seconds: first after `delay`, then every `interval`; a Step
-// row's Left / Right go to `fastInterval` once held for `accelerateAfter`. (Outside Menu: GCC refuses a nested
+// row's Left / Right go to `fastInterval` once held for `accelerateAfter`. `delay` and `interval` are GT4's own, 20
+// and 6 VBlanks (measured in its menus, docs/modern/spikes/M0-menu-flow.md 7). (Outside Menu: GCC refuses a nested
 // struct's default member initialisers in a default argument of the enclosing class.)
 struct MenuTiming {
-    float delay = 0.35f, interval = 0.11f, fastInterval = 0.04f, accelerateAfter = 1.0f;
+    float delay = 20.0f / 60.0f, interval = 6.0f / 60.0f, fastInterval = 0.04f, accelerateAfter = 1.0f;
     float confirmSeconds = 15.0f;   // the keep-or-revert dialog
     float transition = 0.2f;        // page and tab fades (0 with reduce motion)
 };

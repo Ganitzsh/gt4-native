@@ -1,6 +1,6 @@
 # M0: GT4's menu flow, measured (lane M)
 
-Status: answered for M6, M7 and M8, with three open points (end of this note). 2026-11-08.
+Status: answered for M5, M6, M7 and M8, with page detection open for M8 (end of this note). 2026-11-08.
 
 **Method.** Local instrumentation, never pushed: copies of six matched functions with a `gt4_logf` line each
 (`func_0010B290`, sequence 1's call of `startProject` 00109D00; `func_0010FE40`, the quick menus' project loop;
@@ -52,8 +52,9 @@ so it shows the next project the finished one chose.
 
 - Through `MSound::play`: `ok` (confirm), `cancel` (back), `disable` (refused). One handle, 0x8C0458, in every
   project of the run (the global sound object).
-- **Cursor moves log nothing**: those sounds are played inside the widgets, not through `MSound::play` [U: which
-  function]. The pause page's sounds don't go through it either (the strobe's `PLAY_SOUND`, `RacePause::callFunction`).
+- **Cursor moves log nothing there**: those sounds are played inside the widgets, not through `MSound::play`. The
+  pause page's sounds don't go through it either (the strobe's `PLAY_SOUND`, `RacePause::callFunction`). Section 7:
+  every menu sound, the widgets' included, goes through `func_0023F8C8`, and the cursor's is named `cursor`.
 
 ## 4. The race pause (Pan Euro race 2, GT mode)
 
@@ -83,14 +84,36 @@ so it shows the next project the finished one chose.
   limit of 0 in GT mode, the time-limit point of MENU_DESIGN 3.2 applies only to modes that set one.
 - **The pad chord**: GT4 used neither Select nor Start on the map and in Home, and Select + Start was never seen as
   a GT4 input, so the chord stays Select + Start (lane C's point; L3 + R3 is not needed).
-- **Sounds**: the hub plays `ok`, `cancel` and `disable` by name on the global handle; the cursor sound needs the
-  widgets' own call (open point 2).
+- **Sounds**: the hub plays `cursor`, `ok`, `cancel` and `disable` by name through `func_0023F8C8` (section 7).
 
 ## 6. Open points (each before the ticket named)
 
 1. **Page detection** (M8): which page of `gtmode` (map, Home, event maps) and of `boot` (opening, mode select) is
    up. Candidates in matched code: `MGame.major_menu_page` (001626B0) and the page natives `pushPage` 0022BCE0 and
    `closePage` 0022BD98 (0022BC20 is a corrected draft: not hooked). One more logging run.
-2. **The cursor sound** (M5): the call the widgets make when the cursor moves.
-3. **`MRenderContext + 0x6E0` and the menu repeat timing** (M5): not measured; GT4's pointer glides
-   (CAPTURES.md), so the repeat is measured on our own page against GT4's list behaviour.
+   Section 7: the major menu page is not it (nothing sets it between the map and Home).
+2. ~~The cursor sound~~ (M5): answered, section 7.
+3. ~~The menu repeat timing~~ (M5): answered, section 7. `MRenderContext + 0x6E0` was not needed: GT4's page under
+   ours gets a neutral pad, and no page of this run has a timer.
+
+## 7. The second run (for M5, 2026-11-08)
+
+**Method.** As above, with three more local copies of matched functions logging (never pushed):
+`func_0023F8C8` (the sound by name every menu sound ends in), `func_0042FC10` (where the scripts'
+`MGame.set_major_menu_page` stores the name, `G + 0xB8C`, 32 bytes; `get_major_menu_page` 001626B0 reads it back
+as `game + 0x3AEF4`) and `func_00109B38` (the menu game object's update), on the six of the first run. Release game
+from e703d0e plus that commit (`hook_lint` 0 mismatches), host from an empty folder (ctest 49/49). One headless live
+session from a copy of `odin-saves-pe-race2`: the map, a dialog on it, Home, back to the map.
+
+- **The menu update** (`func_00109B38`): the menu game object's, once a VBlank (300 calls in 5.0 s, steady), under
+  the object's lock, calling the current project's update (its vtable + 0x200). The project pointer stays the same
+  across the map, its dialogs and Home (one project, `gtmode`). M5 ticks the pages there.
+- **Sounds**: every one of the run went through `func_0023F8C8(handle, name)`, the scripts' (`MSound::play`) and the
+  widgets' alike: `cursor` (a move on the map, in a dialog, in Home's list), `ok`, `cancel`, `disable`. The handle
+  was always 0x8C0458, and `func_0023F8C8` ignores it (it calls `func_004857C8(name)`), so a page plays GT4's
+  sounds by name. `mRootWindow::onKeyPress` plays the root window's sound name when the focus moves.
+- **Repeat** (a held D-pad on the map's icons and in Home's list, the `cursor` sounds' times): the first repeat
+  0.33 s after the press, then every 0.09-0.11 s: **20 VBlanks, then every 6** (the log's clock has ~16 ms steps).
+- **The map's D-pad** moves between icons (with that repeat); GT4's pointer glides only with the stick.
+- **The major menu page** was never set in this run (map, dialogs, Home and back): it is not the page detection
+  M8 needs. Open point 1 stays open for M8.

@@ -104,6 +104,10 @@ def compile_runtime(out):
         sub = os.path.relpath(dirpath, rt)
         prefix = "" if sub == "." else sub.replace(os.sep, "_") + "_"
         files += [(os.path.join(dirpath, n), prefix + n) for n in sorted(names)]
+    # The settings pages' engine (platform/ui: the page model, layout and UI records), the same sources the host
+    # builds: runtime/menu runs it in the game (docs/modern/MENU_DESIGN.md 3.1). Only its .cpp files; no SDL or GPU.
+    ui = os.path.join(ROOT, "platform", "ui")
+    files += [(os.path.join(ui, n), "ui_" + n) for n in sorted(os.listdir(ui)) if n.endswith(".cpp")]
     for src, name in files:
         obj = os.path.join(objdir, os.path.splitext(name)[0] + (".s.o" if name.endswith(".s") else ".o"))
         if name.endswith(".cpp"):
@@ -111,8 +115,9 @@ def compile_runtime(out):
             # -Werror=return-type: a function that can flow off its end without a return is undefined behaviour, which GCC
             # turns into unreachable code (lane D's D14 crash, 2026-11-08: a lost "return true" ran into the next function)
             cmd = [tool("g++"), "-c", "-std=c++20", "-O2", "-g", "-msse2", "-mfpmath=sse", "-mstackrealign", "-Wall",
-                   "-Wextra", "-Werror=return-type"] + prefix_map + ["-I", rt, "-I", os.path.join(ROOT, "include"), "-I",
-                                              os.path.join(FFMPEG, "include"), src, "-o", obj]
+                   "-Wextra", "-Werror=return-type"] + prefix_map + [
+                   "-I", rt, "-I", os.path.join(ROOT, "include"), "-I", ui, "-I", os.path.join(FFMPEG, "include"),
+                   src, "-o", obj]
         elif name.endswith(".c"):
             cmd = [tool("gcc"), "-c", "-std=gnu11", "-O2", "-g", "-msse2", "-mfpmath=sse", "-Wall", "-Werror=return-type",
                    "-Werror=implicit-function-declaration"] + prefix_map + [
@@ -184,9 +189,11 @@ def compile_eeorig(out, gen):
 
 
 def name_newer_headers(rt, obj):
-    # the runtime's own headers and the shared ones (include/gt4: the record layouts both ends use)
+    # the runtime's own headers (runtime/menu's too), the page engine's (platform/ui) and the shared ones (include/gt4:
+    # the record layouts both ends use)
     t = os.path.getmtime(obj)
-    shared = [os.path.join(ROOT, "include", "gt4"), os.path.join(ROOT, "include", "gt4", "link")]
+    shared = [os.path.join(ROOT, "include", "gt4"), os.path.join(ROOT, "include", "gt4", "link"),
+              os.path.join(rt, "menu"), os.path.join(ROOT, "platform", "ui")]
     paths = [os.path.join(rt, h) for h in os.listdir(rt) if h.endswith(".h")]
     for d in shared:
         if os.path.isdir(d):
