@@ -147,12 +147,13 @@ the night Route 5 race nor a day Pan Euro race set it, so that live check stays 
 found, like the warning lamps at the Route 5 pit entry.
 
 **A6: Further views (M).** Env-map passes 0044E660 / 0044EB10 (`kViewEnvFace`), the road reflection
-(`render_reflection` 003411D0, `kViewReflection`), showroom jitter passes, Photo Travel. `Instance` records for
-the draw paths that run after a Cmd (CONTRACTS a.5.3): 00497838's pre-built shapes, placed by position (what
-their `objectToView` is), and 0049FAC8's Cmd-like models, checking that their 0049E480 / 0049E548 composition
-follows R1's rule. Depends: A3, R6. Acceptance: `REL`; `ORIG`; `SCENE` on the showroom and photo captures; each
-env face's views bound to the 128 x 256 env target; `runsAfterInstance == 0` in race frames once both paths send
-`Instance`s.
+(`render_reflection` 003411D0, `kViewReflection`), showroom jitter passes, Photo Travel. `Instance` records for the
+untagged draw paths: the car light effects (`render_cars` 00340950 -> 0049B330 -> 0038F5D0 -> 0038F408's radial fan
+or 0049C0D8 -> 0049BBF0, found with A7 step 1b), and those that run after a Cmd (CONTRACTS a.5.3): 00497838's
+pre-built shapes, placed by position (what their `objectToView` is), and 0049FAC8's Cmd-like models, checking that
+their 0049E480 / 0049E548 composition follows R1's rule. Depends: A3, R6. Acceptance: `REL`; `ORIG`; `SCENE` on the
+showroom and photo captures; each env face's views bound to the 128 x 256 env target; `runsAfterInstance == 0` in
+race frames once both paths send `Instance`s.
 
 **A7: Light records (M).** Sources, corrected by lane A from the code (2026-11-08, a scan of the ELF for every
 store to the lists' counts). The light-glow pass 003B88C8 draws from two per-frame lists in its object:
@@ -184,6 +185,26 @@ store to the lists' counts). The light-glow pass 003B88C8 draws from two per-fra
     by view id.
   - The glow-quad check passes (lane A, the same race): 53,546 of 53,546 flare-pass glows (003B88C8's additive
     stars, mostly car lamps; not the street-lamp draw F2b reads) have a `Light` at their centre.
+- **Step 1b, the street lamps: course billboards** (lane A, 2026-11-08, correcting its own earlier reading). The
+  street-lamp glows are `BillboardSet__render` (004506F0) billboards, from `CourseData::render_course_2` (00396F00):
+  one quad each through 0049C0D8, flushed by 0049BBF0 (one type, one texture, tall quads up to y 10.7 above the
+  road). No Cmd draws them, so their runs were untagged and B6 never saw them (lane F, F2b). Two parts:
+  - **An `Instance` per batch run** inside the billboard context (a `game_src` copy of the matched 004506F0 sets it
+    around its 0049C0D8 / 0049BBF0 calls): each run gets its own `Instance` just before it, items = 1,
+    `objectToView` = set 0 (the quads are built in world space facing the camera), flag `kInstBillboard`. A flush
+    may split into several runs (a VU1 batch takes a limited number of quads), and nothing has to predict how many.
+    A flush's runs share one draw state and texture, so they get one material; the runs are tagged, B6 gives them a
+    material, and F2b's classifier sets the glow class. The quads are rebuilt every frame, so they are per-frame:
+    `SceneCache::assign` skips the mesh request for `kInstBillboard` (no key hashed, mesh 0, counted in
+    `meshesPerFrame`) and still assigns the materials. That is B6 code: lane B writes it (`scene_cache.cpp`), lane A
+    reviews; without it each flush would decode and cache a new mesh every frame. B7 then draws them on the GS path,
+    counted as mesh 0. A flush never mixes billboard types, by
+    construction: `BillboardSet__render` flushes when the type changes and at a tab entry (0x8000).
+  - **A `kSrcBillboard` light per billboard** from its entry (world position `e->f4, f8 + h/2, fC` through set 0, the
+    item's width and height). The flush's billboards are kept in a small fixed buffer during the batch and sent
+    right after the flush's first `Instance`, with `id` = that instance's serial and the main view as their view
+    (inside the view: a.5 rule 4's plain case). The host keeps one as `kSrcCourseGlow` only when that instance's
+    material has the glow class, so tree billboards light nothing (CONTRACTS a.4).
 - **Step 2, headlight spots:** each headlight's direction and cone from the car body (A9's record, D6), so the
   headlights light the road ahead and not around the car. In lane A's runs the player's car showed no lamps in
   `entries[]` in a time trial once the race ran (perhaps the in-car or bumper view hides them; whether the
@@ -933,28 +954,21 @@ Acceptance: `ORIG`; `VAL`; `PERF(<= 1 ms)` at 1440 x 1080; on a night capture la
 them (review against PCSX2 stills: the scene otherwise unchanged); on the lamps capture with the car moving, N1
 shows no new step above 4 % (N2's bar) from the added light.
 
-**F2b: Course lamps from the mesh cache (M, lane F; lane B reviews the mesh-cache use).** Few street lamps come as
-game records (A7 step 1a: about 1.6 course lights a frame on Route 5, against about 116 lamp-head quads in the
-street-lamp draw a frame, F2b step 0: R11's draw 309, which is course geometry and not a flare-pass draw). Their
-glows are most likely course geometry: lamp-head quads with a glow texture or an additive blend, drawn through the
-course's Cmds. The host finds them once per course mesh and synthesises their lights. No new game hook is needed, it
-is done once per mesh, and it works for other emissive props too.
-- **Step 0 (half a day):** on a Route 5 night capture, find how the lamp-head glows are drawn: the course meshes'
-  draw states (texture, blend; B6's `MaterialKey`) of the draws on the lamp heads. Also R11's open point, target
-  37's producer: if the light image is drawn from the lamp heads themselves, the same geometry names them.
-  If the lamp heads aren't separate geometry (the glow baked into the post's texture, or only in the lit-road
-  layer), step 0 reports back to the architect before any extraction is written.
-- **Step 0's answer** (lane F, `r5_ss_ab.cap`; `spikes/R11.md`): the street-lamp glows are one modeled draw a frame
-  onto the scene target. Its signature: blend (Cs - Cd) As + Cd, alpha test EQUAL 128, z test GEQUAL with z write,
-  textured, renderer 3, lighting body 0. The lamp heads are separate geometry, so extraction goes ahead.
-- **The glow class** is that draw-state signature plus the texture's identity (B6's `MaterialKey`, not the host
-  texture id, which differs between runs). Another night course may use another texture, or the signature may
-  match something else there: the acceptance checks a second course.
-- **Extraction:** for each course mesh (B5) with glow geometry, the centre and size of each lamp-head cluster,
-  cached with the mesh. A star-shaped glow may be several crossed quads, so quads whose centres coincide (within a
-  fraction of their size) are one lamp. The lamps are cached in the mesh's own space, and the lamp pass places them
-  through each instance's `objectToView`, so placed course objects (`kInstCourseObject`, their own transform) and the
-  course's world-space geometry are both right.
+**F2b: Course lamps (M, lane F; lane B reviews).** The street lamps' glows are course billboards (A7 step 1b), not
+mesh geometry: GT4 builds their quads every frame facing the camera. So the lamps come from the billboards' own
+entries, game-side, with exact centres and sizes, and the host keeps those whose material its classifier calls glow.
+- **Step 0's answer** (lane F, `r5_ss_ab.cap`; `spikes/R11.md`): the lamp glows are one draw a frame onto the scene
+  target, with the signature blend (Cs - Cd) As + Cd, alpha test EQUAL 128, z test GEQUAL with z write, textured,
+  renderer 3, body 0. Lane A then traced its jobs to `BillboardSet__render` (A7 step 1b).
+- **The glow class** is that draw-state signature plus a computed check of the texture (B6's `MaterialKey`, never the
+  host texture id). Another night course may use another texture, or the signature may match something else there:
+  the acceptance checks a second course.
+- **The lights:** each `kSrcBillboard` candidate whose `kInstBillboard` instance has the glow class becomes a
+  `kSrcCourseGlow` light; the rest are dropped and counted. A lamp named both by `entries2[]` (A7 step 1a) and as a
+  billboard gets one light: the game record's position and blink, the billboard's size. They are one lamp when they
+  lie within the billboard's half-size of each other in view space.
+- Extracting lamps from course meshes is not built: no glow geometry was found in them. It comes back only if a later
+  course shows glow geometry the billboards don't cover.
 - **How it is built** (lane F's design on B6):
   - **The scene split** is on whenever `lighting.night = enhanced`, not only with `render.scene`: B6's ids exist only
     with the split. One settings function decides it beside `sceneRecordsWanted` (`settings_scene.cpp`, lane C
@@ -971,16 +985,18 @@ is done once per mesh, and it works for other emissive props too.
     (`FrameList::sceneCache`, CONTRACTS a.8), so the cache's lifetime follows the lists. A lookup of an id the cache
     has dropped returns nothing and is counted; the cache keeps an entry at least 8 frames after its last use, more
     than the lists in flight.
-  - **The lamp pass** (lane F's files, a call in `nightFinish`, lane B reviews): for the main view's instances with
-    a mesh, each item whose material has the glow bit gives its lamps, cached by (`MeshKey`, item), to view space
-    through `diag(axisScale x k, 1) x objectToView` (a.7's matrix without the projection). The mirror stays unlit
-    (c.3).
-- **Lights:** each frame, for the course instances drawn in a view, their lamps go into that view's light list as
-  `kSrcCourseGlow`, synthesised by the host (`GpuLight` without `kFromGame`). Colour comes from the glow texture's
-  mean times the vertex colour. Range and intensity are set per class in `light_sources.cpp`, tuned against
-  references under `lighting.night`. Only drawn sections get lights, as GT4 culls them.
-- Depends: B5, B6, A2, A11a, F0, F1. Acceptance:
-  - `CTEST`: extraction on a synthetic mesh with glow quads gives the expected centres;
+  - **The lamp pass** (lane F's files, a call in `nightFinish`, lane B reviews): for the main view, each
+    `kSrcBillboard` candidate is kept or dropped by its instance's material class, the kept ones already in view
+    space. The mirror stays unlit (c.3). Colour is the glow texture's mean (kept with the material's class) times
+    the candidate's own colour when A7 step 1b sends one (the billboard item's, if its entry has one), else the
+    texture's mean alone; range and intensity per class in `light_sources.cpp`, tuned against references under
+    `lighting.night`.
+    Only drawn sections get lights, as GT4 culls them.
+- The classifier meets these materials for the first time on the first night frame, so that frame judges a burst
+  of new keys; the summaries are per texture identity, so it is cheap after that.
+- Depends: A7 step 1b, B6 (`kInstBillboard` instances per-frame, lane B), F0, F1. Acceptance:
+  - `CTEST`: the classification and the promotion on a synthetic frame (glow and tree billboards, a lamp also in
+    `entries2[]`);
   - on the Route 5 night capture, every lamp-head glow drawn has a light whose projection lands inside its quad
     (misses = 0 over the run) and no light sits where no glow is drawn. "Drawn" means the glow's draw was
     submitted that frame, not that pixels survived: a lamp head behind a building is still lit, correctly. The
@@ -988,9 +1004,9 @@ is done once per mesh, and it works for other emissive props too.
   - on a second night course (one of lane F's sessions), the same: no miss and no light where no glow is drawn;
   - the gather's dropped count (`GatherStats::dropped`, lights over the list's cap) is 0 on the capture: a dropped
     lamp would show as a dark patch that the miss check, which only asks that the light exists, can't see;
-  - compared with A7's `kSrcCourseGlow` records on lane A's `glow_r5.cap`: where both name a lamp, it gets one
-    light, not two (which one wins is decided from the comparison);
-  - the per-frame cost reported (0 extraction after a mesh's first sight), and `PERF` with night enhanced against
+  - tree billboards (non-glow) light nothing, counted as dropped;
+  - a lamp named by `entries2[]` and as a billboard gets one light;
+  - the per-frame cost reported, and `PERF` with night enhanced against
     night off in a night race: the split now runs there, so B6's front-end cost lands there too (lane A), measured;
   - `ORIG` unchanged; with scene records off nothing runs.
 

@@ -197,6 +197,8 @@ enum InstanceFlags : uint16_t {
     kInstSky = 64,
     kInstCourseObject = 128,   // a placed course object: inside the course bracket at any other matrix-stack depth
                                //   (its display program pushed a transform of its own), so its own objectToWorld
+    kInstBillboard = 256,      // one batch run of BillboardSet__render 004506F0 (items 1): camera-facing quads
+                               //   built every frame, objectToView = the camera (set 0); never course geometry
 };
 struct Instance {
     Prefix prefix;
@@ -230,6 +232,10 @@ enum LightSource : uint8_t {
     kSrcSun = 6,
     kSrcWarning = 7,         // 003B88C8's entries2[], a source with blink > 0 (warning lamps; A7 step 1a)
     kSrcCarLamp = 8,         // a car lamp whose group is not known (entries[], A7 step 1a): point, no direction
+    kSrcBillboard = 9,       // a course billboard's centre and size (A7 step 1b), id = the serial of its flush's
+                             //   first kInstBillboard instance, sent right after it. A candidate, not a light: the
+                             //   host keeps it as kSrcCourseGlow when that instance's material has the glow class
+                             //   (F2b), else drops it
     kSrcOther = 15,
 };
 struct Light {
@@ -332,9 +338,9 @@ Where each record is sent (tickets in PLAN.md):
 | `FrameEnd` | the runtime, at the frame's kick (004A11F8, `runtime/frame.cpp`), after `walk(list)`, when a frame is open | A3 |
 | `ViewBegin` / `ViewEnd` | main: after 0033EAB8's camera load (a `game_src` copy of 0033EAB8, or a hook at the camera's +0x18 call), `ViewEnd` before `render_back_mirror`; mirror: `game_src/func_00341E50.cpp` (after every main-view instance, so views never nest); env-map passes 0044E660 (before the main view); menus 00217058 (`kViewMenu`); the HUD's 3D widget 003BE3C8 (`kViewHud`); showroom and Photo Travel per R6 | A3, A6 |
 | `Projection` | `game_src/func_0049D328.cpp`, before the `Instance`, when set 1 (as 0049E480 picks it) or the viewport / clamp the batch holds (the runtime's copy of the last qwords 197..199 written by 0049E548) differ from the last `Projection` sent this frame (a 64 + 48-byte compare); also for each view's camera load, before its `ViewBegin` | A2, A3 |
-| `Instance` | `game_src/func_0049D328.cpp`, after 0049E480 / 0049E548, before the item loop; A and B read as 0049E480 picks them (by `s->current`) even when it does not run (R1: it recomposed for 16 % of the Cmds) | A2 |
+| `Instance` | `game_src/func_0049D328.cpp`, after 0049E480 / 0049E548, before the item loop; A and B read as 0049E480 picks them (by `s->current`) even when it does not run (R1: it recomposed for 16 % of the Cmds); and one per batch run inside `BillboardSet__render` 004506F0's billboard context, flagged `kInstBillboard`, just before the run (A7 step 1b) | A2, A7 |
 | object identity | 00455708 (draft) sets a runtime-global "model context" that A2 reads | A4 |
-| `Light` | step 1a: 003B88C8's `entries2[]` (course lamps and warning lamps) and `entries[]` (car lamps), read right before 003B88C8 draws them (in 0033F2E8, inside the flare bracket; the course sources are added after 0033EAB8's method 0x3F0), tagged with the main view's id (a.5 rule 4); step 2: headlight spots from the car body (A9). The host also finds course lamps in the course meshes (PLAN F2b), one light per lamp where both name it | A7 |
+| `Light` | step 1a: 003B88C8's `entries2[]` (course lamps and warning lamps) and `entries[]` (car lamps), read right before 003B88C8 draws them (in 0033F2E8, inside the flare bracket; the course sources are added after 0033EAB8's method 0x3F0), tagged with the main view's id (a.5 rule 4); step 1b: each billboard of `BillboardSet__render` as a `kSrcBillboard` candidate (its entry's world position and item size through set 0); step 2: headlight spots from the car body (A9). A lamp named both by `entries2[]` and as a billboard gets one light (PLAN F2b) | A7 |
 | `Emitter` | 0x003E7A58, 0x003C1430, 0x003C2780 | A8 |
 | `Marker` | `kMarkPost*` at the start and end of render_post_effect (`game_src/func_0033F890.cpp`, virtual 105); `kMarkHud*` at the start and end of RaceBasic::render_panel (`game_src/func_0038B5A0.cpp`, which RaceSolitaire's calls and RaceSplitBattleBase's reaches per player). Both are reached through the race's vtable after `render_world`, so they are inside the kick's frame (a.5.1) | A5 |
 | `Vehicle` | the kick (`send_frame_end`, `runtime/frame.cpp`), in `FrameEnd`'s own `GT4_REC_GFX` block, before `FrameEnd`: one per running car, in entrant order, each padded to whole qwords; fields from the car state D6 found (R14) | A9 (D6 emits, lane A reviews) |
