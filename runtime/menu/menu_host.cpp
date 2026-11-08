@@ -1,6 +1,7 @@
 #include "menu_host.h"
 
 #include "gt4/link/protocol.h"
+#include "guest.h"
 #include "kernel.h"
 #include "link.h"
 #include "log.h"
@@ -66,6 +67,39 @@ uint32_t pressed_bits(const uint8_t data[18]) {
     if (data[5] < 0x40) bits |= 1u << kUp;
     if (data[5] > 0xC0) bits |= 1u << kDown;
     return bits;
+}
+
+// ---- Start on GT mode's map (M8; MENU_DESIGN 3.2 point 2; the layout: docs/modern/spikes/M0-menu-flow.md 9)
+
+// The VBlank + 1 at which the menu tick last saw GT mode's map up under ui.entry = integrated (0: not up). The pad
+// thread takes Start from GT4 only while it is that fresh, so a map seen before a load or a race never holds Start.
+std::atomic<uint32_t> g_map_seen{0};
+constexpr uint32_t kMapFreshFrames = 2;
+std::atomic<bool> g_map_start{false};    // a Start press taken from GT4 on the map, for the menu tick
+std::atomic<bool> g_start_held[2];   // Start down at each port's last read (any pad reader's thread)
+
+bool guest_word(uint32_t a, uint32_t &out) {
+    if ((a & 3) || !in_guest_ram(a, 4)) return false;
+    out = guest_ref<uint32_t>(a);
+    return true;
+}
+
+// Whether the menu project `uc` (an update context) shows GT mode's map, at rest, with nothing over it. Read-only:
+// its render context (uc + 0xBC, whose + 0x10 points back) keeps its pages on a stack (+ 0x28 begin, + 0x2C end);
+// the top is a root window whose + 0xE0 names it, + 0x98 bit 0x00100000 marks the active page, and + 0x00 is 2 at
+// rest (3 under a dialog, 4-7 opening or closing). getCurrentPage's slot (+ 0x38) is the last page opened, not the
+// top (a closed dialog stays in it), so the stack is read.
+bool on_gtmode_map(uint32_t uc) {
+    uint32_t rc = 0, back = 0, begin = 0, end = 0, top = 0, state = 0, flags = 0, name = 0;
+    if (!guest_word(uc + 0xBC, rc) || !guest_word(rc + 0x10, back) || back != uc) return false;
+    if (!guest_word(rc + 0x28, begin) || !guest_word(rc + 0x2C, end) || end <= begin || end - begin > 0x100 ||
+        !guest_word(end - 4, top))
+        return false;
+    if (!guest_word(top, state) || state != 2 || !guest_word(top + 0x98, flags) || !(flags & 0x00100000u) ||
+        !guest_word(top + 0xE0, name) || !in_guest_ram(name, 4))
+        return false;
+    const char *s = static_cast<const char *>(guest_ptr(name));
+    return s[0] == 'M' && s[1] == 'A' && s[2] == 'P' && s[3] == 0;
 }
 
 // GT4_REC_HOST_CMD's settings commands (protocol.h): open them at the next safe point, close them.
@@ -457,7 +491,18 @@ namespace gt4::rt::menu {
 
 bool pad_focus(int port, uint8_t data[18]) {
     const int focus = g_focus.load();
-    if (focus == kGame) return false;
+    // Start on GT mode's map opens the hub (M8): its press is taken from GT4 there (GT4 does nothing with Start on
+    // the map: M0, M8) and the menu tick opens the hub.
+    const int pt = port & 1;
+    const bool start = !(data[0] & (1u << kStart));
+    const bool start_edge = !g_start_held[pt].exchange(start) && start;
+    if (focus == kGame) {
+        const uint32_t seen = g_map_seen.load();
+        if (!start || !seen || kernel_frame_count() + 1 - seen > kMapFreshFrames) return false;
+        if (start_edge) g_map_start.store(true);
+        data[0] |= static_cast<uint8_t>(1u << kStart);
+        return true;
+    }
     // A pause page no longer ticked (its pause gone without gt4_pause_end) never holds the race's pad: GT4 has it
     // back, and the next tick that takes the page closes it.
     const uint32_t paused = g_pause_open.load();
@@ -519,6 +564,11 @@ extern "C" int gt4_menu_tick(uint32_t project) {
         done = true;
     }
     const bool asked = g_open_requested.exchange(false);
+    // GT mode's map under ui.entry = integrated: Start opens the hub (M8). Only while no page is open.
+    const bool map = !p.menu.isOpen() && project && gt4_game_option(static_cast<int>(kOptionUiEntry)) == 1 &&
+                     on_gtmode_map(project);
+    g_map_seen.store(map ? kernel_frame_count() + 1 : 0u);
+    const bool map_start = g_map_start.exchange(false) && map;
     if (!p.menu.isOpen()) {
         // GT4's Options, started under ui.entry = integrated, opens the hub at its first update. Another project
         // running instead means it has already ended: nothing to open.
@@ -531,6 +581,11 @@ extern "C" int gt4_menu_tick(uint32_t project) {
         if (entry && project == entry) {
             g_entry_project.store(0u);
             open_page(p, project, entry, "GT4's Options");
+            return sound;
+        }
+        if (map_start) {
+            g_map_seen.store(0u);
+            open_page(p, project, 0, "Start on the map");
             return sound;
         }
         // An open asked for while no menu project runs (a race, a load: GT4's menu object idles) waits for one; the

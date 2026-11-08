@@ -20,10 +20,12 @@ enum MenuSound : int { kSoundNone = 0, kSoundCursor = 1, kSoundOk = 2, kSoundCan
 // row): the hook ends GT4's Options as GT4's own exit from it does (next project = last, the result left empty; M0).
 constexpr int kLeaveProject = 0x100;
 
-// On the pad thread (gt4_replace_scePad2Read, after the host's mapping and the scripted presses): while a page is
-// open, keeps the port's bytes for the page and gives GT4 a neutral pad; after the page closes, a port that the page
-// read stays neutral to GT4 until all its buttons are up and its sticks are centred, so the closing press never
-// acts in GT4. Returns whether `data` was replaced.
+// On every guest thread that reads the pad (gt4_replace_scePad2Read: the pad thread, GT4's MenuControls, the race's
+// input; after the host's mapping and the scripted presses): while a page is open, keeps the port's bytes for the page
+// and gives GT4 a neutral pad; after the page closes, a port that the page read stays neutral to GT4 until all its
+// buttons are up and its sticks are centred, so the closing press never acts in GT4. With no page open, on GT mode's
+// map under ui.entry = integrated (as the menu tick last saw it, at most two VBlanks ago), Start's press is taken from
+// GT4 and opens the hub at the next menu tick (M8). Returns whether `data` was replaced.
 bool pad_focus(int port, uint8_t data[18]);
 
 // The items a race pause enables, as game_src/func_003C3820.cpp hands them to gt4_pause_tick (RacePause + 0x28,
