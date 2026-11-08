@@ -356,7 +356,8 @@ public:
         // N4: Draws made inside a bracket (index kBracketFlare, kBracketGlare; a merged extension is not counted again), by
         // the rule that marked them (into the main view's principal target; else into a screen-sized one), and those left
         // unmarked (another target: the samples); scene frames that ended with a bracket open (an End missing: 0 expected)
-        uint64_t bracketPrincipal[3] = {}, bracketScreen[3] = {}, bracketKept[3] = {};
+        // (a buffer the display showed lately counts apart: bracketDisplayed)
+        uint64_t bracketPrincipal[3] = {}, bracketScreen[3] = {}, bracketDisplayed[3] = {}, bracketKept[3] = {};
         uint64_t bracketsOpenAtEnd = 0;
         // B6 (scene cache): instances given ids, their items, and the time sceneView spent on them (the front-end
         // thread's added cost, PERF: at most 0.5 ms a race frame)
@@ -612,6 +613,11 @@ private:
     // and the bracket a draw into `colour` gets (`rule`: 0 none or kept, 1 principal target, 2 screen-sized)
     uint8_t sceneBrackets = 0;
     std::vector<uint16_t> sceneMainViews;
+    // the targets the display records showed lately, and the frame count then (N4: the picture, rule 3 of bracketFor)
+    struct ShownTarget {
+        uint32_t id = 0;
+        uint64_t at = 0;
+    } shownTargets[4];
     uint8_t bracketFor(uint32_t colour, uint8_t& rule) const;
     void countBracket(uint8_t rule);
     bool sceneVsyncInFrame = false;               // a VSync came while the scene frame was open (its markers: unchecked)

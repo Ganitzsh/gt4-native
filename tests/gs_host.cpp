@@ -585,6 +585,48 @@ int main(int argc, char** argv) {
         expect(fe.stats.bracketScreen[kBracketFlare] == 2, "N4: that draw counted by the size rule");
         expect(fe.stats.bracketsOpenAtEnd == 1, "N4: a frame ending with a bracket open is counted");
     }
+    // 2e'. N4 and the displayed buffer: the race shows a 640 x 224 field, under the size rule's 384 lines. A buffer the
+    // display showed at the last VSync is the picture (rule 3); another 640 x 224 buffer, never shown, is not.
+    {
+        gt4::gsn::GsFrontend fe;
+        Gif g = setup();
+        fe.gif(3, static_cast<const uint8_t*>(g.data()), g.bytes());
+        auto record = [&](const auto& r) { fe.sceneRecord(reinterpret_cast<const uint8_t*>(&r), sizeof r); };
+        auto field = [&](uint32_t fbp) {   // a 640 x 224 sprite into the buffer at page fbp
+            Gif s2;
+            s2.ad({{FRAME_1, frame(fbp, 10, PSMCT32)}, {ZBUF_1, zbuf(0x70, PSMZ24, true)}, {TEST_1, test(true, 1)}, {TEX0_1, 0},
+                   {SCISSOR_1, scissor(0, 639, 0, 223)}});
+            sprite(s2, 0, 0, 640, 224, rgbaq(255, 200, 100, 0x80));
+            fe.gif(3, static_cast<const uint8_t*>(s2.data()), s2.bytes());
+        };
+        field(0);                          // the field buffer at 0 (displayRecord's DISPFB), shown at a VSync
+        field(0x100);                      // another 640 x 224 buffer, never shown
+        fe.display(displayRecord());
+        gt4::gsn::FrameList shownList;
+        fe.vsync(1, shownList);
+        gt4::gfx::scene::FrameBegin b{};
+        b.prefix = {gt4::gfx::scene::kFrameBegin, gt4::gfx::scene::kVersion};
+        record(b);
+        gt4::gfx::scene::Marker m{};
+        m.prefix = {gt4::gfx::scene::kMarker, gt4::gfx::scene::kVersion};
+        m.marker = gt4::gfx::scene::kMarkFlareBegin;
+        record(m);
+        field(0);
+        field(0x100);
+        m.marker = gt4::gfx::scene::kMarkFlareEnd;
+        record(m);
+        fe.sceneFrame(std::make_unique<gt4::scene::SceneFrame>());
+        gt4::gsn::FrameList list;
+        fe.cut(list);
+        std::string marks;
+        for (const auto& c : list.commands)
+            if (c.kind == gt4::gsn::FrameList::Command::Kind::Draw) marks += char('0' + list.draws[c.index].bracket);
+        expect(shownList.display.target1 != 0, "N4: the display shows the field buffer at 0");
+        expect(marks == "10", ("N4: the shown 224-line buffer is the picture, the other one is not (got " + marks + ")").c_str());
+        expect(fe.stats.bracketDisplayed[gt4::gsn::kBracketFlare] == 1 && fe.stats.bracketScreen[gt4::gsn::kBracketFlare] == 0 &&
+                   fe.stats.bracketKept[gt4::gsn::kBracketFlare] == 1,
+               "N4: counted as a displayed buffer, the other as kept");
+    }
 
     // 2f. gsn::carryOver's textures (a skipped list's, moved into the next): a reset in the next list drops them (they
     // came before it), a reset in the skipped list keeps them after it, and without a reset both lists' go in order.

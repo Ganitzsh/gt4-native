@@ -1204,9 +1204,10 @@ std::string GsHost::summary() const {
                 << s.markersNotChecked;
         // N4: Draws made inside the flare's and glare's brackets, by the rule that marked them; frames ending with one open
         for (const auto& [name, k] : {std::pair<const char*, uint8_t>{"flare", gsn::kBracketFlare}, {"glare", gsn::kBracketGlare}})
-            if (s.bracketPrincipal[k] || s.bracketScreen[k] || s.bracketKept[k])
+            if (s.bracketPrincipal[k] || s.bracketScreen[k] || s.bracketDisplayed[k] || s.bracketKept[k])
                 out << "; " << name << " bracket draws onto the principal " << s.bracketPrincipal[k] << ", screen-sized "
-                    << s.bracketScreen[k] << ", kept (another target) " << s.bracketKept[k];
+                    << s.bracketScreen[k] << ", a displayed buffer " << s.bracketDisplayed[k] << ", kept (another target) "
+                    << s.bracketKept[k];
         if (s.bracketsOpenAtEnd) out << "; scene frames ending with a bracket open " << s.bracketsOpenAtEnd;
         // B6: the scene cache's ids (instances and items given them, the front-end time, the caches' totals, and whether
         // the same object kept its ids)

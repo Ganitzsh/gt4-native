@@ -2439,6 +2439,11 @@ void GsFrontend::finishBinding(ViewBinding& b) {
 // a small target the game reads back: never marked. The flare's bracket wins should both be open. A main view with no
 // tagged draw is never decided (finishBinding): its draws in a bracket fall to the size rule (its principal would be
 // screen-sized anyway). Outside a scene frame nothing is marked (the brackets close with it: sceneFrame).
+// The displayed buffer itself is named by the display records: a target the display showed in the last 8 VSyncs is the
+// picture (rule 3). The race's displayed buffer is a 640 x 224 field (the flare's glows go there, after the scene's copy
+// and before the HUD; nothing samples it after), which the size rule takes only when the menus had drawn it 448 tall
+// before the race, not when a mid-run recording first sees it in the race. (A retired target whose id is reused stays
+// "shown" up to 8 frames: harmless, as the brackets are open only during the flare and glare passes.)
 uint8_t GsFrontend::bracketFor(uint32_t colour, uint8_t& rule) const {
     rule = 0;
     const uint8_t open = (sceneBrackets >> kBracketFlare) & 1 ? kBracketFlare : (sceneBrackets >> kBracketGlare) & 1 ? kBracketGlare : 0;
@@ -2455,6 +2460,11 @@ uint8_t GsFrontend::bracketFor(uint32_t colour, uint8_t& rule) const {
             return open;
         }
     }
+    for (const ShownTarget& s : shownTargets)
+        if (s.id == colour && s.at + 8 >= frameCount) {
+            rule = 3;
+            return open;
+        }
     return 0;
 }
 
@@ -2462,7 +2472,7 @@ uint8_t GsFrontend::bracketFor(uint32_t colour, uint8_t& rule) const {
 void GsFrontend::countBracket(uint8_t rule) {
     const uint8_t open = (sceneBrackets >> kBracketFlare) & 1 ? kBracketFlare : (sceneBrackets >> kBracketGlare) & 1 ? kBracketGlare : 0;
     if (!open || !sceneOpen) return;
-    (rule == 1 ? stats.bracketPrincipal : rule == 2 ? stats.bracketScreen : stats.bracketKept)[open]++;
+    (rule == 1 ? stats.bracketPrincipal : rule == 2 ? stats.bracketScreen : rule == 3 ? stats.bracketDisplayed : stats.bracketKept)[open]++;
 }
 
 void GsFrontend::sceneRecord(const uint8_t* payload, size_t bytes) {
@@ -2862,6 +2872,18 @@ void GsFrontend::vsync(uint64_t vblank, FrameList& out) {
     d.target2 = displayed(shown.circuit[1]);
     for (Target& t : targets)
         if (t.id == d.target1 || t.id == d.target2) t.lastUsed = frameCount;
+    for (const uint32_t id : {d.target1, d.target2}) {   // (N4: the buffers shown lately are the picture; bracketFor)
+        if (!id) continue;
+        size_t slot = 0;
+        for (size_t i = 0; i < std::size(shownTargets); ++i) {
+            if (shownTargets[i].id == id) {
+                slot = i;
+                break;
+            }
+            if (shownTargets[i].at < shownTargets[slot].at) slot = i;
+        }
+        shownTargets[slot] = {id, frameCount};
+    }
     clearSceneJobs();   // (B6: as at a cut)
     sceneViewsFrom = 0;
     std::swap(out, frame);
