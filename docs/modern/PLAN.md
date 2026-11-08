@@ -802,6 +802,26 @@ new game hook is needed, it is done once per mesh, and it works for other emissi
   cached with the mesh. A star-shaped glow may be several crossed quads, so quads whose centres coincide (within a
   fraction of their size) are one lamp. Course instances draw with `objectToView` equal to the view's `worldToView`
   (A3's camera check, real since A11a), so mesh positions are world positions.
+- **How it is built** (lane F's design on B6):
+  - **The scene split** is on whenever `lighting.night = enhanced`, not only with `render.scene`: B6's ids exist only
+    with the split. One settings function decides it beside `sceneRecordsWanted` (`settings_scene.cpp`, lane C
+    reviews), read where `GT4_GSN_SCENE_SPLIT` is read today (`gs_host.cpp`, lane A reviews). The split changes no
+    pixel (A10), and `original` has night off.
+  - **A texture summary at decode:** when a texture's level 0 is decoded, the front end keeps 16 bytes (mean colour
+    weighted by alpha, centre-to-rim luminance, the fraction of texels at alpha 0x80) under its identity, retired
+    with it; `GsFrontend::textureSummary(identity, out)` reads it. Lane F writes it in lane A's file, lane A reviews.
+    It summarises the game's texture, never a pack's replacement, so the verdict doesn't depend on the pack.
+  - **The classifier** (`platform/render/modern/glow_classifier.cpp`, lane F): the signature, then the summary's
+    scores, set the material's glow bit and keep its colour by `MaterialId`. Each verdict is logged once, with the
+    texture's size and scores. Installed through `GsFrontend::setSceneClassifier`, lane A reviewing.
+  - **The render thread's access:** each list with a scene frame carries a `shared_ptr` to the scene cache
+    (`FrameList::sceneCache`, CONTRACTS a.8), so the cache's lifetime follows the lists. A lookup of an id the cache
+    has dropped returns nothing and is counted; the cache keeps an entry at least 8 frames after its last use, more
+    than the lists in flight.
+  - **The lamp pass** (lane F's files, a call in `nightFinish`, lane B reviews): for the main view's instances with
+    a mesh, each item whose material has the glow bit gives its lamps, cached by (`MeshKey`, item), to view space
+    through `diag(axisScale x k, 1) x objectToView` (a.7's matrix without the projection). The mirror stays unlit
+    (c.3).
 - **Lights:** each frame, for the course instances drawn in a view, their lamps go into that view's light list as
   `kSrcCourseGlow`, synthesised by the host (`GpuLight` without `kFromGame`). Colour comes from the glow texture's
   mean times the vertex colour. Range and intensity are set per class in `light_sources.cpp`, tuned against
@@ -815,7 +835,8 @@ new game hook is needed, it is done once per mesh, and it works for other emissi
   - on a second night course (one of lane F's sessions), the same: no miss and no light where no glow is drawn;
   - the gather's dropped count (`GatherStats::dropped`, lights over the list's cap) is 0 on the capture: a dropped
     lamp would show as a dark patch that the miss check, which only asks that the light exists, can't see;
-  - the per-frame cost reported (0 extraction after a mesh's first sight);
+  - the per-frame cost reported (0 extraction after a mesh's first sight), and `PERF` with night enhanced against
+    night off in a night race: the split now runs there, so B6's front-end cost lands there too (lane A), measured;
   - `ORIG` unchanged; with scene records off nothing runs.
 
 **F3: Clustered lighting in the deferred and forward passes (M).** Depends: F1, B10, B22. Acceptance: `VAL`;

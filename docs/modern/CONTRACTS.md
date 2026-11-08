@@ -645,6 +645,7 @@ read, then the one that receives `FrameEnd`. (Race route: 38 reads in about 4900
                                                   //   their capacity with the list)
   };
   // FrameList gains: std::vector<ViewOnList> views;   (SceneViews pooled, below)
+  //   and std::shared_ptr<const SceneCache> sceneCache;   (B6's caches, read-only on the render thread: F2b, B7)
   ```
   - The package can't hold the binding: it is made before the front end binds any of the view's draws, and it
     is const once shared. So the binding goes beside it on the list.
