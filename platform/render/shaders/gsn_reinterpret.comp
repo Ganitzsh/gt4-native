@@ -7,6 +7,10 @@
 // At a render scale above 1 the result has scaleX x scaleY texels per GS texel: texel (u, v)'s sub-texel
 // (i, j) reads sub-pixel (i, j) of the GS pixels involved, so that byte and palette tricks, which move
 // whole GS pixels around, keep the detail inside them (gsn.frag samples it with kSnap).
+// P2c, zmode bit 0: a Z buffer read as a Z texture of its own layout (`target` its depth plane): each texel is the
+// depth of the GS pixel holding it as the GS's Z, floor(depth x 2^32) clamped to the format's largest (the draws
+// write float(Z) x 2^-32), turned round (max - Z) under bit 1, then laid out as the colour format of its size:
+// Z32 as CT32, Z24 as CT24 (alpha from TEXA), Z16 / Z16S as CT16.
 #extension GL_GOOGLE_include_directive : require
 #include "gsn_swizzle.glsl"
 
@@ -24,6 +28,8 @@ layout(push_constant) uniform Reinterpret {
     uint indexStart;                // targetBw == 0: the indices from GS memory, one byte per texel, from this word
     uint scaleY;                    // render pixels per GS pixel down (scaleX across): the result's
     uint sourceScale, clutScale;    // the source target's and the palette target's (x | y << 8): their own
+    uint zmode;                     // P2c: 1 a Z texture | 2 the Z buffer turned round | the Z buffer's psm << 8
+    uint pad0, pad1, pad2;
 } p;
 
 const uint kMask = (4u << 20) - 1u;
@@ -72,12 +78,46 @@ uint expand16(uint c) {
     return r | (g << 8) | (b << 16) | (a << 24);
 }
 
+// P2c: the texel's Z from the Z buffer. The texture and the buffer share a layout and their bases are whole pages
+// apart (the front end checks), so the texel's page relative to the buffer and its place in that page name the pixel.
+uint zTexel(uvec2 t) {
+    const bool z16 = (p.psm & 2u) != 0u;   // Z16 0x32, Z16S 0x3A: 64 x 64 pages; Z32 / Z24: 64 x 32
+    const uint ph = z16 ? 64u : 32u;
+    const uint page = ((p.tbp - p.targetBp) >> 5) + (t.x >> 6) + (t.y / ph) * p.tbw;   // (columns past the width: the next row)
+    const uint x = (page % p.targetBw) * 64u + (t.x & 63u), y = (page / p.targetBw) * ph + (t.y % ph);
+    if (y >= p.targetHeight) return 0u;   // (past the buffer the GS reads whatever is there: 0)
+    const uvec2 scale = uvec2(p.sourceScale & 0xFFu, p.sourceScale >> 8), at = sub * scale / uvec2(p.scaleX, p.scaleY);
+    const float depth = texelFetch(target, ivec2(x * scale.x + at.x, y * scale.y + at.y), 0).r;
+    const uint zpsm = (p.zmode >> 8) & 0xFFu;
+    const uint most = zpsm == 0x30u ? 0xFFFFFFFFu : zpsm == 0x31u ? 0xFFFFFFu : 0xFFFFu;
+    // (the largest float below 2^32 for Z32: float(0xFFFFFFFF) rounds up to 2^32, past a uint)
+    const float limit = zpsm == 0x30u ? 4294967040.0 : float(most);
+    uint z = uint(min(floor(max(depth, 0.0) * 4294967296.0), limit));
+    if ((p.zmode & 2u) != 0u) z = most - z;
+    return z;
+}
+
 void main() {
     const uvec2 texel = gl_GlobalInvocationID.xy;
     const uvec2 scale = uvec2(p.scaleX, p.scaleY);
     if (texel.x >= p.width * scale.x || texel.y >= p.height * scale.y) return;
     const uvec2 t = texel / scale;
     sub = texel % scale;
+    if ((p.zmode & 1u) != 0u) {
+        const uint z = zTexel(t);
+        uint colour;
+        if (p.psm == 0x30u) {
+            colour = z;   // Z32 as CT32: the top byte the alpha
+        } else if (p.psm == 0x31u) {   // Z24 as CT24: TA0, or 0 for black under AEM
+            const uint rgb = z & 0xFFFFFFu;
+            const uint a = ((p.texa & 0x10000u) != 0u && rgb == 0u) ? 0u : p.texa & 0xFFu;
+            colour = rgb | (a << 24);
+        } else {
+            colour = expand16(z & 0xFFFFu);   // Z16 / Z16S as CT16
+        }
+        imageStore(result, ivec2(texel), unpackUnorm4x8(colour));
+        return;
+    }
     // The texel's byte (and nibble) in GS memory.
     uint byteAddress, shift = 0u;
     const bool four = p.psm == 0x14u || p.psm == 0x24u || p.psm == 0x2Cu;
