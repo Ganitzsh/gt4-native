@@ -586,6 +586,53 @@ int main(int argc, char** argv) {
         expect(fe.stats.bracketsOpenAtEnd == 1, "N4: a frame ending with a bracket open is counted");
     }
 
+    // 2f. gsn::carryOver's textures (a skipped list's, moved into the next): a reset in the next list drops them (they
+    // came before it), a reset in the skipped list keeps them after it, and without a reset both lists' go in order.
+    {
+        using gt4::gsn::FrameList;
+        auto texture = [](uint32_t id, uint32_t version) {
+            gt4::gsn::TextureImage t;
+            t.id = id;
+            t.version = version;
+            return t;
+        };
+        auto ids = [](const FrameList& l) {
+            std::vector<uint32_t> out;
+            for (const auto& t : l.textures) out.push_back(t.id * 10 + t.version);
+            return out;
+        };
+        {   // the next list resets: the skipped list's uploads and retirements are gone with it
+            FrameList dropped, into;
+            dropped.textures.push_back(texture(1, 1));
+            dropped.retiredTextures.push_back(2);
+            into.resetTextures = true;
+            into.textures.push_back(texture(3, 1));
+            gt4::gsn::carryOver(dropped, into);
+            expect(ids(into) == std::vector<uint32_t>{31}, "carryOver: a reset in the next list drops the skipped list's uploads");
+            expect(into.retiredTextures.empty(), "carryOver: ... and its retirements");
+            expect(into.resetTextures, "carryOver: the next list's reset stays");
+        }
+        {   // the skipped list resets: the reset, its uploads, then the next list's
+            FrameList dropped, into;
+            dropped.resetTextures = true;
+            dropped.textures.push_back(texture(1, 1));
+            dropped.retiredTextures.push_back(2);
+            into.textures.push_back(texture(3, 1));
+            gt4::gsn::carryOver(dropped, into);
+            expect(ids(into) == (std::vector<uint32_t>{11, 31}), "carryOver: a reset in the skipped list keeps its uploads, before the next list's");
+            expect(into.resetTextures, "carryOver: the skipped list's reset moves in");
+            expect(into.retiredTextures == std::vector<uint32_t>{2}, "carryOver: the skipped list's retirements move in");
+        }
+        {   // no reset: both lists' uploads in order, the later version of a texture last
+            FrameList dropped, into;
+            dropped.textures.push_back(texture(5, 1));
+            into.textures.push_back(texture(5, 2));
+            gt4::gsn::carryOver(dropped, into);
+            expect(ids(into) == (std::vector<uint32_t>{51, 52}), "carryOver: without a reset, the skipped list's uploads first");
+            expect(!into.resetTextures, "carryOver: no reset made up");
+        }
+    }
+
     // 3. A capture replayed through GsHost (no game: reads stay in memory): one displayed list per VBlank.
     {
         const std::filesystem::path dir = outputDir.empty() ? gt4::test::uniqueTempPath("gt4_gs_host_test") : std::filesystem::path(outputDir);

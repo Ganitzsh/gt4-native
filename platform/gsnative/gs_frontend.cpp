@@ -117,6 +117,14 @@ void carryOver(FrameList& dropped, FrameList& into) {
         into.readbacks.insert(into.readbacks.begin(), dropped.readbacks.begin(), dropped.readbacks.end());
         dropped.readbacks.clear();
     }
+    // The next list starts with every earlier texture gone (GsFrontend::resetTextures): the dropped list's uploads and
+    // retirements came before that reset, which the front end has applied, so they go with the list. Moved in, they would
+    // be uploaded after the reset and never retired (the front end forgot those ids). A reset in the dropped list alone
+    // keeps the order below: the reset, its uploads, then the next list's.
+    if (into.resetTextures) {
+        dropped.textures.clear();
+        dropped.retiredTextures.clear();
+    }
     if (!dropped.textures.empty()) {
         for (auto& t : into.textures) dropped.textures.push_back(std::move(t));   // the later version wins
         into.textures = std::move(dropped.textures);
