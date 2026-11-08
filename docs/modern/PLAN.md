@@ -140,8 +140,10 @@ in command order after it; the draws between `HudBegin/End` are the HUD (`GT4_GS
 markers: the lit-road layer is course geometry with no call site of its own, so N3 finds it by a B6 material class
 instead (`kMarkLampBands*` stay reserved and are never sent). Depends: A3, R12. Acceptance: `REL`; `ORIG`;
 `hook_lint` 0; on a night race with records, no frame ends with a bracket open, and with N4's marking the flare
-bracket's draws onto the picture and its kept samples are counted (the samples never land on the picture); the glare
-bracket on a day race, since 0033F1C8 applies 003BADF8's settings only when their flag bit is set.
+bracket's draws onto the picture and its kept samples are counted (the samples never land on the picture). The glare
+bracket is checked on a race whose glare settings have flag bit 0 set (0033F1C8 calls 003BADF8 only then): neither
+the night Route 5 race nor a day Pan Euro race set it, so that live check stays open until a course with glare is
+found, like the warning lamps at the Route 5 pit entry.
 
 **A6: Further views (M).** Env-map passes 0044E660 / 0044EB10 (`kViewEnvFace`), the road reflection
 (`render_reflection` 003411D0, `kViewReflection`), showroom jitter passes, Photo Travel. `Instance` records for
