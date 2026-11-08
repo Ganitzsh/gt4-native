@@ -307,7 +307,7 @@ std::vector<std::string> loadSettings(Settings& settings, const std::string& pat
         const auto* option = find(qualified);
         if (!option || !option->persistent) { warnings.push_back(where + "unknown option " + qualified); continue; }
         if (auto error = setOption(settings, qualified, value); !error.empty()) warnings.push_back(where + error);
-        seen.push_back(qualified);
+        else seen.push_back(qualified);   // (a refused value is as if the line were missing)
     }
     settings.preset = detectPreset(settings);
     // A follower the file does not set (written before it existed) takes the loaded preset's value: an original

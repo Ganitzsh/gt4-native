@@ -148,6 +148,8 @@ int main() {
               "an original file that sets ui.entry = integrated keeps it");
         auto [clean4, old4] = loadText("version = 1\n[graphics]\npreset = high\n");
         check(clean4 && old4.uiEntry == UiEntry::Integrated, "a high file without ui.entry is integrated");
+        auto [clean5, old5] = loadText("version = 1\n[graphics]\npreset = original\n[ui]\nentry = bogus\n");
+        check(!clean5 && old5.uiEntry == UiEntry::Hotkey, "a refused ui.entry is as if missing: the original preset's hotkey");
     }
 
     // lighting.night (settings_lighting.cpp, PLAN.md F2): original by default and in the original preset, which
