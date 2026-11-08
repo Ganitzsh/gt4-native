@@ -122,6 +122,10 @@ struct Reinterpretation {
     // When the CLUT was loaded from a 32-bit target (GT4 renders palettes and then uses them): that target,
     // read on the GPU instead of `clut`.
     uint32_t clutTarget = 0, clutTargetBp = 0, clutTargetBw = 0;
+    // A Z buffer read as a Z-format texture of its own layout (P2c): `target` is the Z buffer, each texel its depth as
+    // the GS's Z, floor(depth x 2^32) at most the format's largest, turned round (max - Z) while the game has inverted
+    // the buffer in place (Target::inverted); no CLUT.
+    bool depth = false, depthInverted = false;
 };
 
 // A surface (docs/modern/PLAN.md P2a): what names a render target. A frame or Z buffer at a block address and a width
@@ -374,6 +378,7 @@ public:
         // reads of a target in another format than the GPU builds, decoded from memory without what was drawn (textureFor;
         // PLAN P2's reinterpretation fallbacks: 0 expected on the captures)
         uint64_t readFallbacks = 0;
+        uint64_t depthTextures = 0;   // of `reinterpreted`, Z buffers read as Z textures, built on the GPU (P2c)
         uint64_t byAddress = 0;   // textures still named by graphics-memory address (lookups)
         uint64_t droppedDraws = 0;   // past the target limit (targetFor)
         uint64_t targetsReused = 0;  // slots given to a new buffer at the limit
