@@ -4,7 +4,9 @@
 #include "host_mixer.h"
 #include "gt4/link/protocol.h"
 
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -117,6 +119,102 @@ int main() {
     expect(same, "the host's output is the game's own mix, sample for sample");
     expect(loud && host.stats().unmatched == 0 && host.stats().images > 0,
            "voices heard, every stream 1 sample matched");
+
+    // D9, audio.spatial: tags after every image. A second game and host pair, the same voices, three ways:
+    // original with tags, stereo without tags (an older game) and stereo with tags.
+    {
+        // voice 0 (core 0) a car's, its group to the right and behind (x 0.6, z 0.8); voice 1 (core 1) untagged;
+        // voice 2 (core 0) a car's without a direction
+        std::vector<uint8_t> tags(GT4_SPU2_TAG_VOICES * sizeof(Gt4Spu2Tag), 0);
+        auto* t = reinterpret_cast<Gt4Spu2Tag*>(tags.data());
+        for (uint32_t i = 0; i < GT4_SPU2_TAG_VOICES; ++i) t[i].entrant = t[i].group = 0xFF;
+        t[0] = Gt4Spu2Tag{2, 0, 1, 0, {0.6f, 0.0f, 0.8f}};
+        t[2] = Gt4Spu2Tag{3, 1, 0, 0, {0.0f, 0.0f, 0.0f}};
+        // the three voices keyed; voice 0 at VOLL 0x3000 and VOLR 0x7000 (0x6000 and -0x2000: GT4's rear inversion)
+        auto keyed = [&](int n, uint16_t voll, uint16_t volr) {
+            std::vector<uint8_t> im = image(n, true, 0x0800);
+            uint8_t* r = im.data() + (n & 1) * 0x1D0 + 8 + 16 * n;
+            put16(r + 4, voll);
+            put16(r + 6, volr);
+            return im;
+        };
+        struct Run {
+            std::vector<int16_t> out;
+            audio::HostMixer::Stats stats;
+        };
+        auto session = [&](audio::Spatial mode, bool sendTags, int voices, int first = 0) {
+            Run run;
+            audio::HostMixer h([&](uint32_t, const int16_t* frames, size_t count) {
+                run.out.insert(run.out.end(), frames, frames + 2 * count);
+            });
+            h.setSpatial(mode);
+            spu::Spu2 g(ram.data());
+            std::vector<uint8_t> w(4 + spu::kRamBytes);
+            std::memcpy(w.data() + 4, ram.data(), spu::kRamBytes);
+            h.record(GT4_REC_SPU2_RAM, w.data(), static_cast<uint32_t>(w.size()));
+            const std::vector<uint8_t> state = g.saveState();
+            const std::vector<uint8_t> st = regs(GT4_SPU2_STATE, 0, state.data(), state.size());
+            h.record(GT4_REC_SPU2_REGS, st.data(), static_cast<uint32_t>(st.size()));
+            for (int f = 0; f < 30; ++f) {
+                if (f == 0) {
+                    const uint16_t volumes[3][2] = {{0x3000, 0x7000}, {0x2800, 0x2800}, {0x1800, 0x1800}};
+                    for (int n = first; n < voices; ++n) {
+                        const std::vector<uint8_t> im = keyed(n, volumes[n][0], volumes[n][1]);
+                        const std::vector<uint8_t> r = regs(GT4_SPU2_IMAGE, 0, im.data(), im.size());
+                        h.record(GT4_REC_SPU2_REGS, r.data(), static_cast<uint32_t>(r.size()));
+                        if (sendTags) {
+                            const std::vector<uint8_t> tr = regs(GT4_SPU2_TAGS, GT4_SPU2_TAG_VOICES, tags.data(),
+                                                                 tags.size());
+                            h.record(GT4_REC_SPU2_REGS, tr.data(), static_cast<uint32_t>(tr.size()));
+                        }
+                    }
+                }
+                const std::vector<uint8_t> r = regs(GT4_SPU2_RUN, 800);
+                h.record(GT4_REC_SPU2_REGS, r.data(), static_cast<uint32_t>(r.size()));
+                std::vector<int16_t> silence(1600, 0);
+                h.audio(1, spu::kRate, silence.data(), 800);
+            }
+            run.stats = h.stats();
+            return run;
+        };
+        auto power = [](const std::vector<int16_t>& s, int channel) {
+            double p = 0;
+            for (size_t i = channel; i < s.size(); i += 2) p += double(s[i]) * s[i];
+            return p;
+        };
+        const Run plain = session(audio::Spatial::kOriginal, false, 3);
+        const Run original = session(audio::Spatial::kOriginal, true, 3);
+        const Run older = session(audio::Spatial::kStereo, false, 3);
+        const Run stereo = session(audio::Spatial::kStereo, true, 3);
+        expect(original.out == plain.out, "original with tags is the D5 mix, bit for bit");
+        expect(older.out == plain.out && older.stats.voicesTagged == 0 && older.stats.framesWithoutTags == 30,
+               "stereo from an older game (no tags): every voice in the bed, the D5 mix");
+        expect(stereo.stats.tagRecords == 3 && stereo.stats.voicesTagged == 30 && stereo.stats.voicesNoPosition == 30 &&
+                   stereo.stats.voicesUntagged == 30 && stereo.stats.voicesPanned == 30,
+               "the voices counted by their tags, a frame each");
+        // the bed alone (the untagged voice and the one without a direction): stereo leaves it as original mixes it
+        expect(session(audio::Spatial::kStereo, true, 3, 1).out == session(audio::Spatial::kOriginal, true, 3, 1).out,
+               "the bed alone: stereo is original, bit for bit");
+        // the car's voice alone: panned right at the power of its two volumes, no inverted side
+        const Run carOriginal = session(audio::Spatial::kOriginal, true, 1);
+        const Run carStereo = session(audio::Spatial::kStereo, true, 1);
+        const double pl = power(carStereo.out, 0), pr = power(carStereo.out, 1);
+        const double ol = power(carOriginal.out, 0), orr = power(carOriginal.out, 1);
+        expect(pr > 3.0 * pl, "stereo: the car's voice is on the right, where its group is");
+        expect(std::fabs((pl + pr) / (ol + orr) - 1.0) < 0.01, "stereo keeps the voice's power (GT4's level)");
+        double corr = 0;
+        for (size_t i = 0; i + 1 < carStereo.out.size(); i += 2)
+            corr += double(carStereo.out[i]) * carStereo.out[i + 1];
+        expect(corr > 0, "stereo: no side inverted");
+        // the gains themselves
+        const float right[3] = {1, 0, 0}, ahead[3] = {0, 0, -1}, none[3] = {0, 0, 0};
+        const spu::Spu2::VoiceGain r = audio::stereoGain(0x6000, -0x2000, right);
+        const spu::Spu2::VoiceGain a = audio::stereoGain(0x4000, 0x4000, ahead);
+        const spu::Spu2::VoiceGain z = audio::stereoGain(0x4000, 0x4000, none);
+        expect(r.on && r.left == 0 && std::abs(r.right - 25905) <= 1, "a voice to the right: all on the right");
+        expect(a.left == a.right && std::abs(a.left - 0x4000) <= 1, "ahead: centred, the same gains as GT4's");
+        expect(z.left == z.right, "no direction: centred");
+    }
 
     // stream 0 (audio.mixer = game) goes to the output as it is
     {

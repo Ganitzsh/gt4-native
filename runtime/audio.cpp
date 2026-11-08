@@ -240,6 +240,8 @@ void spu_apply(const uint8_t *image) {
         voice_tags(tags);
         const uint32_t tagHead[2] = {GT4_SPU2_TAGS, 48};
         link_send(GT4_REC_SPU2_REGS, tagHead, sizeof tagHead, tags, sizeof tags);
+        static uint64_t images = 0;
+        voice_tags_positions(++images);   // (GT4_TRACE_D9=3 only)
     }
 }
 

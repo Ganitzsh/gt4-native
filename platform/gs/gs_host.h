@@ -76,6 +76,8 @@ public:
     // audio.interpolation for the host's SPU2 mixer (platform/audio/host_mixer.h): 0 original, 1 cubic, 2 sinc;
     // any time.
     void setAudioInterpolation(uint32_t mode);
+    // audio.spatial for the host's SPU2 mixer (PLAN.md D9): 0 original, 1 stereo; any time.
+    void setAudioSpatial(uint32_t mode);
     // The front end's scene split (A10; sceneSplitWanted in the settings, or GT4_GSN_SCENE_SPLIT=1): from the next VSync.
     // Live and in replays alike.
     void setSceneSplit(bool on);

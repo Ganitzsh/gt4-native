@@ -234,7 +234,7 @@ std::string unusedReason(const Settings& settings, std::string_view key) {
         (key == "effects.bloom" || key == "post.bloom_intensity" || key == "post.tonemapper" || key == "post.auto_exposure"))
         return "not used with render.gs = native: the game's frames carry its own glare and colour grade";
     // (platform/audio/host_mixer: only the host's mixer interpolates other than the original)
-    if (key == "audio.interpolation" && settings.audioMixer == AudioMixer::Game)
+    if ((key == "audio.interpolation" || key == "audio.spatial") && settings.audioMixer == AudioMixer::Game)
         return "not used with audio.mixer = game: the game mixes its own sound";
     return {};
 }

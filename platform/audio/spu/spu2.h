@@ -97,6 +97,14 @@ public:
     void mix(int32_t* stereo, int n, bool dryOnly);
     // mix()'s interpolation (the host's audio.interpolation); kLinear unless set.
     Interpolation interpolation = Interpolation::kLinear;
+    // mix()'s volumes in place of a voice's VOLL / VOLR (the host's audio.spatial, PLAN.md D9), by hardware voice
+    // (core * 24 + voice): `on` takes `left` and `right` (Q15, as the registers' volumes) for the dry and the effect
+    // sends alike. Null (the game, audio.spatial = original): every voice mixes with its registers, as always.
+    struct VoiceGain {
+        bool on = false;
+        int32_t left = 0, right = 0;
+    };
+    const VoiceGain* gains = nullptr;
     // The next frame (the frame clock's): the key-on gaps below count frames.
     void tick() { ++counters.frame; }
 

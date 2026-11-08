@@ -102,6 +102,15 @@ enum Gt4LinkRecordType {
 
 enum Gt4Spu2Kind { GT4_SPU2_STATE = 0, GT4_SPU2_IMAGE = 1, GT4_SPU2_RUN = 2, GT4_SPU2_TAGS = 3 };   /* SPU2_REGS' kinds */
 
+/* One hardware voice's tag in GT4_SPU2_TAGS (core * 24 + voice; runtime/audio_tags.h VoiceTag, the same bytes):
+ * entrant and group 0xFF untagged; flags bit 0: `direction` holds the group's direction (GT4's H block, x right, y,
+ * z ahead negative, in its listener's frame). */
+typedef struct Gt4Spu2Tag {
+    uint8_t entrant, group, flags, pad;
+    float direction[3];
+} Gt4Spu2Tag;
+#define GT4_SPU2_TAG_VOICES 48u
+
 typedef struct Gt4LinkRecord {
     uint32_t type;
     uint32_t size; /* payload bytes after this header */

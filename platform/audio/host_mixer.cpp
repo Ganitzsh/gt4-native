@@ -4,6 +4,8 @@
 #include "gt4/link/protocol.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 
@@ -35,9 +37,25 @@ void wavHeader(std::FILE* f, uint32_t bytes) {
 
 }  // namespace
 
+spu::Spu2::VoiceGain stereoGain(int32_t left, int32_t right, const float direction[3]) {
+    const double power = std::sqrt(double(left) * left + double(right) * right);
+    const double x = direction[0], z = direction[2], length = std::sqrt(x * x + z * z);
+    // the left-right part of the direction, -1 (left) to 1 (right); ahead and behind alike (no rear inversion)
+    const double pan = length > 0.0 && std::isfinite(length) ? std::clamp(x / length, -1.0, 1.0) : 0.0;
+    const double angle = (pan + 1.0) * 0.78539816339744831;   // 0 .. pi / 2
+    auto q15 = [](double g) { return static_cast<int32_t>(std::lround(std::min(g, 32767.0))); };
+    spu::Spu2::VoiceGain g;
+    g.on = true;
+    g.left = q15(power * std::cos(angle));
+    g.right = q15(power * std::sin(angle));
+    return g;
+}
+
 HostMixer::HostMixer(Sink sink) : sink_(std::move(sink)), ram_(spu::kRamBytes, 0), spu_(ram_.data()) {
     const char* reverb = std::getenv("GT4_REVERB");   // the game's switch, the same on both sides
     dryOnly_ = reverb && !std::strcmp(reverb, "off");
+    const char* trace = std::getenv("GT4_TRACE_D9");
+    trace_ = trace && *trace && *trace != '0';
     if (const char* path = std::getenv("GT4_HOST_AUDIO_WAV"); path && *path) {
         wav_ = std::fopen(path, "wb");
         if (wav_) wavHeader(wav_, 0);
@@ -77,6 +95,7 @@ void HostMixer::record(uint32_t type, const uint8_t* p, uint32_t size) {
         const uint32_t kind = rd32(p), value = rd32(p + 4);
         const uint8_t* data = p + 8;
         const uint32_t bytes = size - 8;
+        if (kind == GT4_SPU2_IMAGE) ++imagesSeen_;
         if (kind == GT4_SPU2_STATE) {
             synced_ = spu_.loadState(data, bytes);
             pending_.clear();
@@ -90,19 +109,84 @@ void HostMixer::record(uint32_t type, const uint8_t* p, uint32_t size) {
         if (kind == GT4_SPU2_IMAGE && bytes >= spu::kImageBytes) {
             spu_.apply(data);
             ++stats_.images;
+            tagsFresh_ = false;   // until this image's tags come (never, from an older game)
+        } else if (kind == GT4_SPU2_TAGS && value == GT4_SPU2_TAG_VOICES && bytes >= sizeof tags_) {
+            std::memcpy(tags_, data, sizeof tags_);
+            tagsFresh_ = true;
+            ++stats_.tagRecords;
+            stats_.tagBytes += size;
         } else if (kind == GT4_SPU2_RUN && value > 0 && value <= spu::kRate) {
             scratch_.assign(2 * static_cast<size_t>(value), 0);
             spu_.tick();
             spu_.interpolation = static_cast<spu::Interpolation>(interpolation_.load());
+            spatialGains();
+            const auto t0 = std::chrono::steady_clock::now();
             spu_.mix(scratch_.data(), static_cast<int>(value), dryOnly_);
+            const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
+            stats_.mixMicroseconds += us;
+            stats_.mixMicrosecondsMax = std::max(stats_.mixMicrosecondsMax, us);
             pending_.insert(pending_.end(), scratch_.begin(), scratch_.end());
             stats_.samplesMixed += value;
+            ++stats_.runs;
         }
         return;
     }
     default:
         return;
     }
+}
+
+void HostMixer::spatialGains() {
+    spu_.gains = nullptr;
+    if (!tagsFresh_) {   // an older game, or an image whose tags didn't come: every voice in the bed
+        ++stats_.framesWithoutTags;
+        return;
+    }
+    const bool stereo = static_cast<Spatial>(spatial_.load()) == Spatial::kStereo;
+    bool any = false;
+    for (uint32_t hw = 0; hw < GT4_SPU2_TAG_VOICES; ++hw) {
+        gains_[hw].on = false;
+        const spu::Voice& v = spu_.core[hw / 24].v[hw % 24];
+        if (v.phase == spu::kOff) continue;
+        const Gt4Spu2Tag& t = tags_[hw];
+        if (t.entrant == 0xFF) {
+            ++stats_.voicesUntagged;
+            continue;
+        }
+        if (!(t.flags & 1)) {
+            ++stats_.voicesNoPosition;
+            continue;
+        }
+        ++stats_.voicesTagged;
+        if (!stereo || (v.voll & 0x8000) || (v.volr & 0x8000)) continue;   // (sweep mode: the bed)
+        gains_[hw] = stereoGain(static_cast<int16_t>(v.voll << 1), static_cast<int16_t>(v.volr << 1), t.direction);
+        ++stats_.voicesPanned;
+        any = true;
+    }
+    if (any) spu_.gains = gains_.data();
+    if (!trace_) return;
+    // each car's tagged voices: the power left and right as mixed, and at GT4's volumes (envelope included)
+    double mixed[8][2] = {}, gt4[8] = {};
+    int voices[8] = {};
+    for (uint32_t hw = 0; hw < GT4_SPU2_TAG_VOICES; ++hw) {
+        const spu::Voice& v = spu_.core[hw / 24].v[hw % 24];
+        const Gt4Spu2Tag& t = tags_[hw];
+        if (v.phase == spu::kOff || t.entrant >= 8 || !(t.flags & 1)) continue;
+        const double e = v.env / 32768.0;
+        const double l = static_cast<int16_t>(v.voll << 1) / 32768.0, r = static_cast<int16_t>(v.volr << 1) / 32768.0;
+        const bool panned = gains_[hw].on;
+        const double ml = panned ? gains_[hw].left / 32768.0 : l, mr = panned ? gains_[hw].right / 32768.0 : r;
+        mixed[t.entrant][0] += e * e * ml * ml;
+        mixed[t.entrant][1] += e * e * mr * mr;
+        gt4[t.entrant] += e * e * (l * l + r * r);
+        ++voices[t.entrant];
+    }
+    auto db = [](double p) { return p > 1e-12 ? 10.0 * std::log10(p) : -120.0; };
+    for (int c = 0; c < 8; ++c)
+        if (voices[c])
+            std::printf("d9h: img %llu frame %llu entrant %d voices %d left %.2f right %.2f gt4 %.2f\n",
+                        static_cast<unsigned long long>(imagesSeen_), static_cast<unsigned long long>(stats_.runs), c,
+                        voices[c], db(mixed[c][0]), db(mixed[c][1]), db(gt4[c]));
 }
 
 void HostMixer::audio(uint32_t stream, uint32_t rate, const int16_t* frames, size_t count) {

@@ -66,6 +66,21 @@ int main() {
         check(setOption(a, "audio.interpolation", "sinc").empty() && a.audioInterpolation == AudioInterpolation::Sinc,
               "audio.interpolation parses");
     }
+    {   // audio.spatial (PLAN.md D9): the host mixer's too, and original in every preset while the game mixes
+        Settings a;
+        check(a.audioSpatial == AudioSpatial::Original && !unusedReason(a, "audio.spatial").empty(),
+              "audio.spatial is original and unused with audio.mixer = game");
+        check(setOption(a, "audio.mixer", "host").empty() && unusedReason(a, "audio.spatial").empty(),
+              "audio.spatial used with audio.mixer = host");
+        check(setOption(a, "audio.spatial", "stereo").empty() && a.audioSpatial == AudioSpatial::Stereo,
+              "audio.spatial parses");
+        check(!setOption(a, "audio.spatial", "hrtf").empty(), "audio.spatial has no hrtf yet (D9 step 3)");
+        for (Preset preset : {Preset::Original, Preset::Low, Preset::Medium, Preset::High, Preset::Ultra}) {
+            Settings t;
+            applyPreset(t, preset);
+            check(t.audioSpatial == AudioSpatial::Original, "every preset leaves audio.spatial original");
+        }
+    }
     check(setOption(s, "render.msaa", "8").empty() && s.msaa == 8, "msaa 8");
     check(!setOption(s, "render.scale", "300").empty(), "render scale is limited to 200 %");
     check(!setOption(s, "render.sharpness", "nan").empty(), "NaN is rejected");

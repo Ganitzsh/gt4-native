@@ -1117,6 +1117,9 @@ int run(const Options& options) {
             gs->setHdTextures(settings.hdTextures);
             gs->setSceneSplit(gt4::sceneSplitWanted(settings));   // (B6's ids for F2b's lamps, B7/B8's views; live and replays)
             gs->sendRequests();
+            // the host's SPU2 mixer (audio.mixer = host; D5, D9): live and in replays of a capture that carries it
+            gs->setAudioInterpolation(static_cast<uint32_t>(settings.audioInterpolation));
+            gs->setAudioSpatial(static_cast<uint32_t>(settings.audioSpatial));
             if (gs->live()) {
                 gs->setPaused(menu.isOpen());
                 gs->setGameOption(0, static_cast<uint32_t>(settings.aiCatchUp));   // runtime.h kOptionAiCatchUp
@@ -1141,7 +1144,6 @@ int run(const Options& options) {
                 gs->setGameOption(8, settings.audioMixer == gt4::AudioMixer::Host ? 1u : 0u);
                 gs->setGameOption(9, static_cast<uint32_t>(settings.uiEntry));   // kOptionUiEntry (MENU_DESIGN 3.2)
                 gs->setGameOption(10, static_cast<uint32_t>(settings.uiPause));  // kOptionUiPause (MENU_DESIGN M7)
-                gs->setAudioInterpolation(static_cast<uint32_t>(settings.audioInterpolation));   // (the host's mixer)
                 sendPads(false);
                 // The pads' motors and triggers: GT4's own rumble (its Options > Vibration decides whether it sends any;
                 // D2) and, with input.haptics = physics, what the player's car does (D14, platform/input/haptics.h),

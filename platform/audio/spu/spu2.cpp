@@ -344,7 +344,8 @@ template <bool kMix> void Spu2::run(int32_t* mix, int n, bool dryOnly) {
             if constexpr (kMix) {
                 const bool dry_l = cr.vmixl >> k & 1, dry_r = cr.vmixr >> k & 1;
                 const bool wet_l = cr.vmixel >> k & 1, wet_r = cr.vmixer >> k & 1;
-                const int32_t vl = volume(v.voll), vr = volume(v.volr);
+                const VoiceGain* g = gains && gains[24 * c + k].on ? &gains[24 * c + k] : nullptr;
+                const int32_t vl = g ? g->left : volume(v.voll), vr = g ? g->right : volume(v.volr);
                 // without the reverb, effect-only voices come back dry at the effect return volume
                 gl = dry_l ? vl : (!fx && (wet_l || wet_r)) ? vl * std::abs(cr.evol[0]) >> 15 : 0;
                 gr = dry_r ? vr : (!fx && (wet_l || wet_r)) ? vr * std::abs(cr.evol[1]) >> 15 : 0;

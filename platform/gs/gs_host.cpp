@@ -1164,6 +1164,10 @@ void GsHost::setAudioInterpolation(uint32_t mode) {
     if (impl->mixer && mode <= 2) impl->mixer->setInterpolation(static_cast<spu::Interpolation>(mode));
 }
 
+void GsHost::setAudioSpatial(uint32_t mode) {
+    if (impl->mixer && mode <= 1) impl->mixer->setSpatial(static_cast<audio::Spatial>(mode));
+}
+
 void GsHost::setGameOption(uint32_t id, uint32_t value) {
     if (!impl->link || !impl->link->running() || id >= GT4_GAME_OPTION_COUNT || impl->gameOptions[id] == value)
         return;
@@ -1240,6 +1244,16 @@ std::string GsHost::summary() const {
         if (gs >= 0.0) out << " GS thread " << (gs - (fromStart ? h.cpuStart.gsThread : 0.0)) / double(frames) << " ms";
     }
     if (h.target && h.target->blankFrames) out << "; " << h.target->blankFrames << " VBlanks with no display";
+    if (h.mixer && h.mixer->stats().runs) {   // the host's SPU2 mixer (audio.mixer = host; PLAN.md D5, D9)
+        const auto& m = h.mixer->stats();
+        const double runs = static_cast<double>(m.runs);
+        out << "; host mixer: " << m.runs << " frames, " << m.samplesMixed << " samples, " << m.unmatched
+            << " stream 1 values unmatched, the mix " << m.mixMicroseconds / runs << " us a frame (at most "
+            << m.mixMicrosecondsMax << "); tags " << m.tagRecords << " (" << m.tagBytes << " bytes), "
+            << m.framesWithoutTags << " frames without; voices a frame: " << m.voicesTagged / runs << " tagged ("
+            << m.voicesPanned / runs << " panned), " << m.voicesUntagged / runs << " untagged, "
+            << m.voicesNoPosition / runs << " tagged without a direction";
+    }
     if (h.target && h.target->frontend().stats.named) {
         const auto& s = h.target->frontend().stats;
         out << "; texture pack: " << s.named << " textures looked up, " << s.found << " found, " << s.replaced << " drawn replaced";

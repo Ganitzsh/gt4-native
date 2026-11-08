@@ -29,4 +29,9 @@ int voice_tags(VoiceTag out[48]);
 // sound objects, and every 300 frames the cars' links and H blocks. `image`: SPUP fno 4's register image.
 void voice_tags_trace(const uint8_t *image);
 
+// GT4_TRACE_D9=3 (D9 step 2's direction check): after the `image`-th register image sent to the host (counted from
+// 1), each car's position along the player car's body rows (forward, right, up; metres), from the vehicle data of the
+// Vehicle records. The host's GT4_TRACE_D9 lines carry the same image count, so the two logs join exactly.
+void voice_tags_positions(uint64_t image);
+
 }  // namespace gt4::rt

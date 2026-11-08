@@ -1,18 +1,25 @@
 // GT4's voices tagged with their car (audio_tags.h; docs/modern/spikes/D9-voices-to-entrants.md).
 #include "audio_tags.h"
 
+#include "gt4/link/protocol.h"
 #include "guest.h"
 #include "kernel.h"
 #include "log.h"
 #include "vehicle.h"
 
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
 
 namespace gt4::rt {
+// the bytes the host reads (protocol.h Gt4Spu2Tag)
+static_assert(sizeof(VoiceTag) == sizeof(Gt4Spu2Tag) && offsetof(VoiceTag, flags) == offsetof(Gt4Spu2Tag, flags) &&
+              offsetof(VoiceTag, position) == offsetof(Gt4Spu2Tag, direction));
+static_assert(GT4_SPU2_TAG_VOICES == 48);
+
 namespace {
 
 // RaceCarSound (RaceEntryCar + 0x2900): its sound groups, each an H block (the listener-relative position GT4 keeps,
@@ -223,6 +230,17 @@ int voice_tags(VoiceTag out[48]) {
     }
     return tagged;
 }
+void voice_tags_positions(uint64_t image) {
+    static const bool on = g_trace && std::getenv("GT4_TRACE_D9")[0] == '3';
+    if (!on) return;
+    std::lock_guard<std::mutex> lock(g_mutex);
+    const uint32_t now = kernel_frame_count();
+    for (const Car &c : g_cars)
+        if (c.entryCar && c.hasRel && now - c.frame <= kStale)
+            log_info("d9: img %llu entrant %d axes %.2f %.2f %.2f", static_cast<unsigned long long>(image),
+                     c.entrant, c.rel[0], c.rel[1], c.rel[2]);   // (the player's body rows: forward, right, up)
+}
+
 void voice_tags_trace(const uint8_t *image) {
     if (!g_trace) return;
     // key-ons in this image, by hardware voice (core c's mask at c * 0x1D0 + 0x1B4, flag 0x800)
@@ -372,9 +390,10 @@ void voice_tags_trace(const uint8_t *image) {
             // records' (right, forward in the player car's axes), in degrees clockwise from ahead
             const uint32_t h = c.entryCar + kCarSound + kGroups[0].h;
             const double hx = guest_ref<float>(h + 4), hz = guest_ref<float>(h + 12);
-            log_info("d9:   entrant %d azimuth: H %.0f, Vehicle %.0f (player's axes: right %.1f, forward %.1f, "
+            // (the player's body rows: 0 forward, 1 right, 2 up; D9 step 2's direction check confirmed row 1)
+            log_info("d9:   entrant %d azimuth: H %.0f, Vehicle %.0f (player's axes: forward %.1f, right %.1f, "
                      "up %.1f)",
-                     c.entrant, std::atan2(hx, -hz) * 57.29578, std::atan2(c.rel[0], c.rel[1]) * 57.29578, c.rel[0],
+                     c.entrant, std::atan2(hx, -hz) * 57.29578, std::atan2(c.rel[1], c.rel[0]) * 57.29578, c.rel[0],
                      c.rel[1], c.rel[2]);
         }
     }
