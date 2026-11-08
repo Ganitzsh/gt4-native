@@ -622,7 +622,9 @@ int run(const Options& options) {
         auto made = windowed ? std::make_unique<Renderer>(sdlWindow, instance.instance, gpu, settings)
                              : std::make_unique<Renderer>(instance.instance, headlessSize, gpu, settings);
         // --fixed-step (replays, sessions): frame interpolation by the presents, not the wall clock, so a run gives the
-        // same frames every time with display.frame_interpolation on. A live game without it keeps the display's clock.
+        // same frames every time with display.frame_interpolation on. Live sessions (--session-dir without --realtime)
+        // too, on purpose: they are scripted tests that want the same frames, so each present shows the newest game
+        // frame there. A player's run (a window, no --session-dir) keeps the display's clock and interpolates.
         made->setFixedClock(options.fixedStep);
         return made;
     };
