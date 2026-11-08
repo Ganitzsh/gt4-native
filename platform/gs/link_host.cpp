@@ -317,6 +317,22 @@ GameLink::~GameLink() {
         if (!waitFor(3000)) {
             std::printf("Link: gt4_game did not quit; terminating it\n");
             kill(impl->pid, SIGTERM);
+            waitFor(1000);
+            // A signal reaches the launcher only: under Proton's Wine on the Odin it is start.exe, and the Windows
+            // processes it started outlive it (checked on the device, 2026-11-08). wineserver -k ends every process
+            // of the prefix: WINESERVER as the launcher needs it (Proton: <proton>/files/bin-arm64/wineserver), else
+            // "wineserver" on the PATH; the environment, and so WINEPREFIX, is the host's, as the launcher's was.
+            const char* server = std::getenv("WINESERVER");
+            std::string wineserver = server && *server ? server : "wineserver";
+            char kArg[] = "-k";
+            char* argv[] = {wineserver.data(), kArg, nullptr};
+            pid_t killer = -1;
+            if (posix_spawnp(&killer, argv[0], nullptr, nullptr, argv, environ) == 0) {
+                int status = 0;
+                while (waitpid(killer, &status, 0) < 0 && errno == EINTR) {}
+            } else {
+                std::printf("Link: could not run %s -k; Windows processes may be left\n", wineserver.c_str());
+            }
             if (!waitFor(1000)) kill(impl->pid, SIGKILL);
         }
     }
