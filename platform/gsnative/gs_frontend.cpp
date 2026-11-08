@@ -1036,7 +1036,7 @@ void GsFrontend::texSet(const uint8_t* payload, size_t bytes) {
     });
 }
 
-void GsFrontend::exportSets(const std::function<void(const gfx::TexSetRecord&, const std::vector<gfx::TexSetUpload>&,
+size_t GsFrontend::exportSets(const std::function<void(const gfx::TexSetRecord&, const std::vector<gfx::TexSetUpload>&,
                                                      const std::vector<uint8_t>&)>& out) const {
     // the contents kept with no set holding them (id 0, in the order they went), then each set in graphics memory
     // with its uploads at its slot; a content's bytes with the first set that holds it
@@ -1052,9 +1052,13 @@ void GsFrontend::exportSets(const std::function<void(const gfx::TexSetRecord&, c
         r.sent = exported.insert(hash).second ? 1u : 0u;
         out(r, c->second.uploads, r.sent ? c->second.bytes : none);
     }
+    size_t missing = 0;
     for (const gfx::SetSlots::Slot& slot : setSlots.all()) {
         auto c = setContents.find(slot.hash);
-        if (c == setContents.end()) continue;
+        if (c == setContents.end()) {
+            ++missing;
+            continue;
+        }
         gfx::TexSetRecord r{};
         r.id = slot.id;
         r.hashLow = static_cast<uint32_t>(slot.hash);
@@ -1067,6 +1071,7 @@ void GsFrontend::exportSets(const std::function<void(const gfx::TexSetRecord&, c
             u.destination = (u.destination & ~0x3FFFu) | (((u.destination & 0x3FFF) - c->second.base + slot.lo) & 0x3FFF);
         out(r, uploads, r.sent ? c->second.bytes : none);
     }
+    return missing;
 }
 
 // A set's content into assetMemory at the slot it was first sent at (once while it stays there).

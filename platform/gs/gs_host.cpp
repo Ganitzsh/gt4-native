@@ -703,7 +703,7 @@ struct GsHost::Impl {
                         recorder->out->write(GT4_REC_GFX_DATA, data.data(), static_cast<uint32_t>(data.size()));
                     });
                     // the native texture sets in graphics memory (docs/NATIVE_V2.md), as set records with their bytes
-                    target->frontend().exportSets([&](const gfx::TexSetRecord& r, const std::vector<gfx::TexSetUpload>& uploads,
+                    const size_t setsMissing = target->frontend().exportSets([&](const gfx::TexSetRecord& r, const std::vector<gfx::TexSetUpload>& uploads,
                                                       const std::vector<uint8_t>& bytes) {
                         size_t at = 0;
                         for (const gfx::TexSetUpload& u : uploads) {
@@ -724,6 +724,11 @@ struct GsHost::Impl {
                         std::memcpy(block.data() + sizeof hd + sizeof r, uploads.data(), uploads.size() * sizeof(gfx::TexSetUpload));
                         recorder->out->write(GT4_REC_GFX, block.data(), static_cast<uint32_t>(block.size()));
                     });
+                    // (a set in graphics memory whose content the front end no longer holds is not in the state: its
+                    // textures replay from whatever the slot holds; lane F's r5_ss_ab2.cap, frames 154-161)
+                    if (setsMissing)
+                        std::printf("GS: recording from here: %zu texture sets in graphics memory without their content, "
+                                    "left out of the state\n", setsMissing);
                     // the model packets' contents the runtime counts on the host having (content only, sent 2)
                     stream->exportModels([&](uint64_t hash, const std::vector<uint8_t>& bytes) {
                         std::vector<uint8_t> data(8 + bytes.size());
