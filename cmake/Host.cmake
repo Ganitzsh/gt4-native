@@ -617,6 +617,8 @@ add_test(NAME material_table COMMAND gt4_material_table_test)
     # The frame comparison tool (tools/frame_diff.py, ticket C1) on synthetic frames, with and without numpy.
     add_test(NAME frame_diff_selftest
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/frame_diff.py --selftest)
+    # The machine's slots (tools/slot.py): a live holder kept, a dead or reused one removed, on a temporary folder.
+    add_test(NAME slot_selftest COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/slot.py --self-test)
     # A replay comes out the same every run with frame interpolation and the HD pack on (C1): a capture with 3D
     # replayed twice, every frame bit for bit. Needs GT4_DETERMINISM_CAPTURE (captures are not in the repository)
     # and a Vulkan GPU; skipped (77) without the capture.
