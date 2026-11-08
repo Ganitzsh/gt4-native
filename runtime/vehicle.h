@@ -20,7 +20,7 @@ constexpr uint32_t kMaxCars = 6, kDynamics = 0x104, kWheels = 0x164, kWheelStrid
 gfx::scene::Vehicle decode_vehicle(const uint8_t *a, uint8_t entrant);
 
 // The conductor's guest address, 0 when no race runs (found by the cars' back pointer, kept while it holds). While
-// there is none, each call scans 1 MiB of the guest RAM at most, and a pass that found nothing waits a second. The
+// there is none, each call scans 256 KiB of the guest RAM at most, and a pass that found nothing waits a second. The
 // state is per thread.
 uint32_t vehicle_conductor();
 
