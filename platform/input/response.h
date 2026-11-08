@@ -20,7 +20,7 @@ namespace gt4::input {
 
 // One axis' shape, in fractions of travel (the settings give percent).
 struct Shape {
-    float deadzone = 0.05f;    // inner: below it 0, above it rescaled from 0
+    float deadzone = 0.0f;     // inner: below it 0, above it rescaled from 0 (none by default: GT4 has its own band)
     float outer = 0.02f;       // full output this far before the end of travel
     float linearity = 1.0f;    // exponent: above 1, finer near the centre
     float sensitivity = 1.0f;  // gain before the limit: above 1, full output comes early

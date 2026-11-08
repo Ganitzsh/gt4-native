@@ -16,8 +16,9 @@ void inputOptions(std::vector<Option>& o) {
     o.push_back(enumOption("input.response", &Settings::inputResponse, {"original", "modern"},
         "How the sticks and pedals respond. original = as before: the sticks cut at 8 % of their travel and jump "
         "from there, nothing else (the input.steer and input.pedal options are not used). modern = the steering "
-        "and the pedals through the dead zones, curve and filters below, the keys' steering ramped. GT4 itself has "
-        "no dead zone and a linear stick, so this is the whole response."));
+        "and the pedals through the dead zones, curve and filters below, the keys' steering ramped. GT4 adds a centre "
+        "band of its own (the wheels stay straight up to about a quarter of a side's travel at a standstill), so the "
+        "steering's dead zone defaults to 0."));
     o.push_back(floatOption("input.steer.deadzone", &Settings::steerDeadzone, 0.0f, 30.0f,
         "Steering (left stick X), percent of travel each side: below it the wheels stay straight, above it the "
         "steering starts from straight (the rest of the travel rescaled, no jump)."));

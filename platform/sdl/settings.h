@@ -129,7 +129,9 @@ struct Settings {
     TriggerTravel triggerTravel = TriggerTravel::Game;   // sent to the game (kOptionTriggerTravel)
     // (input.response is a graphics-preset member: original in the original preset, modern in the others)
     InputResponse inputResponse = InputResponse::Modern;
-    float steerDeadzone = 5.0f;         // percent of travel
+    // percent of travel; 0 by default: GT4's own band (about 25 % of a side at a standstill, the D12 live
+    // measurement) already swallows a stick's noise, and a host dead zone on top only adds to it
+    float steerDeadzone = 0.0f;
     float steerOuterDeadzone = 2.0f;    // percent
     float steerLinearity = 1.0f;        // exponent
     float steerSensitivity = 1.0f;      // gain

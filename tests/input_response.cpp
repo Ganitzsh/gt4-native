@@ -58,19 +58,20 @@ void sweep(const input::Shape& shape, const char* name) {
 }  // namespace
 
 int main() {
-    const input::Shape defaults;   // 5 % inner, 2 % outer, linear
-    sweep(defaults, "defaults");
+    sweep(input::Shape{}, "defaults (no inner dead zone)");
+    const input::Shape fivePercent{0.05f, 0.02f, 1.0f, 1.0f, 1.0f};   // 5 % inner, 2 % outer, linear
+    sweep(fivePercent, "5 % inner");
     sweep({0.05f, 0.02f, 2.0f, 1.0f, 1.0f}, "linearity 2");
     sweep({0.30f, 0.30f, 3.0f, 1.0f, 1.0f}, "the widest dead zones, linearity 3");
     sweep({0.0f, 0.0f, 1.0f, 1.0f, 1.0f}, "no dead zones");
 
     // the dead zone's edge: 0 there, the first step above it one byte
-    expect(input::shapeMagnitude(0.05f, defaults) == 0.0f, "0 at the inner edge");
+    expect(input::shapeMagnitude(0.05f, fivePercent) == 0.0f, "0 at the inner edge");
     int first = 128;
-    for (int raw = 1; raw <= 32767 && first == 128; ++raw) first = steerByte(raw / 32767.0f, defaults);
+    for (int raw = 1; raw <= 32767 && first == 128; ++raw) first = steerByte(raw / 32767.0f, fivePercent);
     expect(first == 129, "the first byte above the edge is one step");
     // the outer dead zone: full lock from 98 % of travel
-    expect(steerByte(0.98f, defaults) == 255 && steerByte(0.97f, defaults) < 255, "full lock from the outer dead zone");
+    expect(steerByte(0.98f, fivePercent) == 255 && steerByte(0.97f, fivePercent) < 255, "full lock from the outer dead zone");
     // sensitivity: full lock earlier; saturation: the most lock
     expect(steerByte(0.6f, {0.05f, 0.02f, 1.0f, 2.0f, 1.0f}) == 255, "sensitivity 2: full lock past half travel");
     expect(steerByte(1.0f, {0.05f, 0.02f, 1.0f, 1.0f, 0.5f}) == ps2::padAxis(0.5f), "saturation 50 %");
