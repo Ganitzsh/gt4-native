@@ -363,6 +363,7 @@ public:
         uint64_t sceneInstances = 0, sceneItems = 0;
         uint64_t meshesNew = 0, meshesPending = 0, materialsNew = 0, meshesSkinned = 0, meshesPerFrame = 0;   // totals
         double sceneCacheMicroseconds = 0.0;
+        double sceneCacheCpuMicroseconds = 0.0;   // the same span in the thread's CPU time (scene::threadCpuMicroseconds)
     } stats;
     // B6's caches (null until the split is first on): their own counters, for the host's summary.
     scene::SceneCache* sceneCache() { return sceneCache_.get(); }

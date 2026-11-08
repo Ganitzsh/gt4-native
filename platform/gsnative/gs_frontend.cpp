@@ -2531,7 +2531,12 @@ void GsFrontend::sceneView(std::shared_ptr<const scene::SceneView> view) {
     const bool cut = id && id <= viewBindings.size() && viewBindings[id - 1u].cut;
     if (sceneSplit && !cut && view->view.valid) {
         const auto started = std::chrono::steady_clock::now();
-        if (!sceneCache_) sceneCache_ = std::make_unique<scene::SceneCache>();
+        const double cpuStarted = scene::threadCpuMicroseconds();
+        if (!sceneCache_) {
+            sceneCache_ = std::make_unique<scene::SceneCache>();
+            static const bool cacheLog = [] { const char* e = std::getenv("GT4_SCENE_CACHE_LOG"); return e && *e == '1'; }();
+            sceneCache_->setTrackObjects(cacheLog);   // (the "same ids" check: B6's acceptance reads it with the log)
+        }
         if (!frame.spareIds.empty()) {
             v.ids = std::move(frame.spareIds.back());
             frame.spareIds.pop_back();
@@ -2575,6 +2580,7 @@ void GsFrontend::sceneView(std::shared_ptr<const scene::SceneView> view) {
             stats.sceneItems += sceneItems.size();
         }
         stats.sceneCacheMicroseconds += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - started).count();
+        stats.sceneCacheCpuMicroseconds += scene::threadCpuMicroseconds() - cpuStarted;
     }
     v.package = std::move(view);
     frame.views.push_back(std::move(v));
@@ -2735,22 +2741,24 @@ void GsFrontend::sceneFrame(std::unique_ptr<scene::SceneFrame> f) {
     static const bool cacheLog = [] { const char* e = std::getenv("GT4_SCENE_CACHE_LOG"); return e && *e == '1'; }();
     if (cacheLog && sceneCache_) {
         static uint64_t lastInstances = 0, lastItems = 0;
-        static double lastMicroseconds = 0.0;
+        static double lastMicroseconds = 0.0, lastCpuMicroseconds = 0.0;
         std::vector<scene::MaterialId> distinct(f->materials);
         std::sort(distinct.begin(), distinct.end());
         distinct.erase(std::unique(distinct.begin(), distinct.end()), distinct.end());
         size_t meshes = 0;
         for (const scene::InstanceData& in : f->instances) meshes += in.mesh != 0;
         std::printf("scene cache: vblank %u: %llu instances (%zu with a mesh), %llu items, %zu materials; meshes new %llu, pending %llu, "
-                    "skinned %llu, per-frame %llu; materials new %llu; %.0f us\n",
+                    "skinned %llu, per-frame %llu; materials new %llu; %.0f us (cpu %.0f us)\n",
                     f->vblank, static_cast<unsigned long long>(stats.sceneInstances - lastInstances), meshes,
                     static_cast<unsigned long long>(stats.sceneItems - lastItems), distinct.size(),
                     static_cast<unsigned long long>(sceneCacheCounters.meshesNew), static_cast<unsigned long long>(sceneCacheCounters.meshesPending),
                     static_cast<unsigned long long>(sceneCacheCounters.meshesSkinned), static_cast<unsigned long long>(sceneCacheCounters.meshesPerFrame),
-                    static_cast<unsigned long long>(sceneCacheCounters.materialsNew), stats.sceneCacheMicroseconds - lastMicroseconds);
+                    static_cast<unsigned long long>(sceneCacheCounters.materialsNew), stats.sceneCacheMicroseconds - lastMicroseconds,
+                    stats.sceneCacheCpuMicroseconds - lastCpuMicroseconds);
         lastInstances = stats.sceneInstances;
         lastItems = stats.sceneItems;
         lastMicroseconds = stats.sceneCacheMicroseconds;
+        lastCpuMicroseconds = stats.sceneCacheCpuMicroseconds;
     }
     sceneCacheCounters = {};
     if (sceneCache_) sceneCache_->endFrame();

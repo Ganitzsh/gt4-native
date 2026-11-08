@@ -25,6 +25,11 @@ struct ItemSource {
     uint32_t palette = 0;                    // its texture's palette version where the identity does not hold it
 };
 
+// The calling thread's CPU time so far, in microseconds (B6's PERF line, PLAN 066b528: the front-end thread's cost without
+// the preemption a wall clock counts). Windows counts cycles (QueryThreadCycleTime), converted at the rate measured once
+// against the steady clock (a 20 ms spin at the first call); Linux reads CLOCK_THREAD_CPUTIME_ID.
+double threadCpuMicroseconds();
+
 // The parts of an item's key (CONTRACTS.md a.8 MaterialKey); exposed for the tests.
 uint32_t materialState(const ItemSource& item);   // blend, tests, fog, texture function, filter, wrap
 MaterialKey materialKey(const ItemSource& item);
@@ -54,6 +59,7 @@ public:
         size_t objects = 0;   // distinct (object, view) pairs seen with a mesh
     };
     Stats stats() const { Stats s = objectCounts; s.objects = seen.size(); return s; }
+    void setTrackObjects(bool on) { trackObjects = on; }   // the check above (off by default: it costs a hash a sighting)
 
 private:
     struct Seen {
@@ -62,6 +68,7 @@ private:
     };
     std::unordered_map<uint64_t, Seen> seen;
     std::function<uint32_t(const ItemSource&)> classifier;
+    bool trackObjects = false;
     Stats objectCounts;
     MeshCache meshCache;
     MaterialTable materialTable;

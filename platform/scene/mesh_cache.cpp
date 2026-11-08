@@ -189,7 +189,20 @@ MeshKey meshKey(const BatchRef* items, size_t count) {
         // The tag and the job's PRIM without the bits that change the pixels but not the geometry (fog, blend, antialiasing,
         // context): GT4 draws the same object into its views with those set differently (B6: the main view and the mirrors
         // gave one object three meshes). The item's MeshItem::prim is the first decode's: the per-frame state is the draw's.
-        XXH3_64bits_update(&state, items[i].words, kTag * 16);
+        // What decodeBatch reads: the strips (qword 64 .w, then one qword each from 65), and the first `count` vertices'
+        // positions, ST and colours (B6: the key costs a third or less of hashing qwords 0..191, and words a batch leaves
+        // from an earlier one no longer split it). A batch past its regions' 64 qwords is hashed whole, as before.
+        const uint32_t* words = items[i].words;
+        const uint32_t vertices = std::min<uint32_t>(job.count, 256);
+        const uint32_t stripQwords = 1 + (words[kSt * 4 + 3] & 0xFFFF);
+        if (vertices <= 64 && stripQwords <= 64) {
+            XXH3_64bits_update(&state, &vertices, sizeof vertices);
+            XXH3_64bits_update(&state, words + kPositions * 4, size_t(vertices) * 16);
+            XXH3_64bits_update(&state, words + kSt * 4, size_t(std::max(vertices, stripQwords)) * 16);
+            XXH3_64bits_update(&state, words + kColors * 4, size_t(vertices) * 16);
+        } else {
+            XXH3_64bits_update(&state, words, kTag * 16);
+        }
         uint32_t tag[4];
         std::memcpy(tag, items[i].words + kTag * 4, sizeof tag);
         tag[1] &= ~kTagPrimNotGeometry;
@@ -329,7 +342,9 @@ void MeshCache::endFrame() {
     if (counters.bytes <= budgetBytes) return;
     std::sort(held.begin(), held.end(), [](const Entry* a, const Entry* b) { return a->lastUsed < b->lastUsed; });
     for (Entry* e : held) {
-        if (counters.bytes <= budgetBytes || e->lastUsed == frame - 1) break;   // never what the last frame used
+        // never what the last 8 frames used: lists still in flight name them (CONTRACTS a.8, F2b: a render-thread lookup
+        // of a dropped id finds nothing and is counted, but within 8 frames it never happens; the lists sorted oldest first)
+        if (counters.bytes <= budgetBytes || frame - e->lastUsed < 8) break;
         evict(*e);
     }
 }

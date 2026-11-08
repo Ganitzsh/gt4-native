@@ -8,20 +8,21 @@ namespace gt4::scene {
 
 size_t MaterialKeyHash::operator()(const MaterialKey& k) const { return static_cast<size_t>(XXH3_64bits(&k, sizeof k)); }
 
-MaterialId MaterialTable::id(const MaterialKey& key, const std::function<uint32_t()>& classify) {
+MaterialId MaterialTable::id(const MaterialKey& key, const std::function<uint32_t()>& classify, bool* made) {
     std::lock_guard<std::mutex> guard(lock);
     ++counters.requests;
     auto it = ids.find(key);
+    if (made) *made = it == ids.end();
     if (it != ids.end()) {
         entries[it->second - 1].lastUsed = frame;
         return it->second;
     }
     entries.push_back(Entry{key, frame, classify ? classify() : 0u, false});
-    const MaterialId made = static_cast<MaterialId>(entries.size());
-    ids.emplace(key, made);
+    const MaterialId id = static_cast<MaterialId>(entries.size());
+    ids.emplace(key, id);
     ++counters.created;
     ++counters.held;
-    return made;
+    return id;
 }
 
 uint32_t MaterialTable::classes(MaterialId id) const {

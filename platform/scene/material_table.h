@@ -30,7 +30,7 @@ class MaterialTable {
 public:
     // The id for this key (0 never): its own while held, a new one the first time (counted in Stats::created). A new id
     // takes the class bits `classify` gives (called only then, under the table's lock), kept with it (classes()).
-    MaterialId id(const MaterialKey& key, const std::function<uint32_t()>& classify = {});
+    MaterialId id(const MaterialKey& key, const std::function<uint32_t()>& classify = {}, bool* made = nullptr);
     uint32_t classes(MaterialId id) const;   // 0: none, or unknown
     // The key an id stands for; false when the id is unknown or dropped.
     bool key(MaterialId id, MaterialKey& out) const;
