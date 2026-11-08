@@ -40,6 +40,7 @@ enum Gt4LinkRecordType {
     GT4_REC_GFX_DATA = 12,  /* bytes a native record refers to (include/gt4/gfx.h): u32 game address, u32 bytes, then the bytes */
     GT4_REC_GFX = 13,       /* native records (include/gt4/gfx.h) that take effect now, not in the VIF1 stream's order */
     GT4_REC_DISPLAY = 14,   /* the display from the next VBlank on: include/gt4/gfx.h DisplayRecord */
+    GT4_REC_RUMBLE = 15,    /* the pad's motors from now on: u32 port, u32 small (0 / 1), u32 large (0-255) */
     /* host -> game */
     GT4_REC_PAD = 64,       /* u32 port, u32 connected, 18 bytes libpad2 data (DualShock 2 layout) */
     GT4_REC_GS_EVENT = 65,  /* u32 kind (0 FINISH, 1 SIGNAL, 2 LABEL), u32 id, u64 value */

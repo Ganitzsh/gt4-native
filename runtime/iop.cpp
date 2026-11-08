@@ -3,6 +3,7 @@
 // calls (reboot, module loads: all succeed), libcdvd's init, the pad (libpad2/libvib/libdbc) and the
 // memory card (libmc), and the SDK's DelayThread / GetTimerSystemTime / iWakeupThread.
 #include "audio.h"
+#include "gt4/link/protocol.h"
 #include "pad_pedals.h"
 #include "guest.h"
 #include "image.h"
@@ -635,11 +636,39 @@ extern "C" int gt4_replace_scePad2GetButtonProfile(int, uint8_t *profile) {
     std::memset(profile, 0xFF, 4);  // every DualShock 2 button, with pressure
     return 4;
 }
+// libvib for a DUALSHOCK 2: two actuators, 0 the small motor (on/off: 1 bit) and 1 the large one (0-255: 8 bits),
+// profile byte 0x03 (one byte). The game sends their values packed from bit 0 in the order of the profile's bits
+// (sceVibSetActParam); each change goes to the host as GT4_REC_RUMBLE (its SDL rumble, D2). GT4_TRACE_VIB=1 logs the
+// raw profile and data the game sends.
 extern "C" int gt4_replace_sceVibGetProfile(int, uint8_t *profile) {
     std::memset(profile, 0, 16);
-    return 0;
+    profile[0] = 0x03;
+    return 1;
 }
-extern "C" int gt4_replace_sceVibSetActParam(int, int, const uint8_t *, int, const uint8_t *) { return 1; }
+extern "C" int gt4_replace_sceVibSetActParam(int socket, int profileSize, const uint8_t *profile, int dataSize,
+                                             const uint8_t *data) {
+    const int port = socket & 1;
+    uint32_t small = 0, large = 0;
+    if (profile && data && profileSize >= 1 && dataSize >= 1) {
+        const uint32_t bits = data[0] | (dataSize > 1 ? uint32_t(data[1]) << 8 : 0u);
+        int at = 0;
+        if (profile[0] & 1) small = bits & 1, at = 1;
+        if (profile[0] & 2) large = (bits >> at) & 0xFF;
+    }
+    static const bool trace = std::getenv("GT4_TRACE_VIB") != nullptr;
+    static uint32_t last[2][2] = {};
+    if (trace && (last[port][0] != small || last[port][1] != large))
+        log_info("vib: port %d, profile %d bytes %02x, data %d bytes %02x %02x: small %u, large %u", port, profileSize,
+                 profile && profileSize > 0 ? profile[0] : 0, dataSize, data && dataSize > 0 ? data[0] : 0,
+                 data && dataSize > 1 ? data[1] : 0, small, large);
+    if (last[port][0] != small || last[port][1] != large) {
+        last[port][0] = small;
+        last[port][1] = large;
+        const uint32_t payload[3] = {static_cast<uint32_t>(port), small, large};
+        if (link_active()) link_send(GT4_REC_RUMBLE, payload, sizeof payload);
+    }
+    return 1;
+}
 
 // ---- memory card: runtime/memcard.cpp
 
