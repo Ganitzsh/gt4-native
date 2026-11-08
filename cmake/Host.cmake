@@ -554,6 +554,11 @@ if(BUILD_TESTING)
   target_include_directories(gt4_lights_gather_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include platform/render/modern)
   target_compile_definitions(gt4_lights_gather_test PRIVATE $<$<BOOL:${WIN32}>:_CRT_SECURE_NO_WARNINGS>)
   add_test(NAME lights_gather COMMAND gt4_lights_gather_test)
+  # The course's lamps from its meshes (ticket F2b): quads of a mesh item merged into lamps, CPU only.
+  add_executable(gt4_course_lamps_test tests/course_lamps.cpp platform/render/modern/course_lamps.cpp)
+  target_include_directories(gt4_course_lamps_test PRIVATE platform/render/modern)
+  target_link_libraries(gt4_course_lamps_test PRIVATE gt4_mesh_cache)
+  add_test(NAME course_lamps COMMAND gt4_course_lamps_test)
   # The night artefact metrics (tools/frame_metrics.py, ticket N1) on synthetic frames; skipped (77) without
   # Python 3 and numpy.
   find_package(Python3 COMPONENTS Interpreter QUIET)
