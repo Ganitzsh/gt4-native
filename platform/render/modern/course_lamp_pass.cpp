@@ -11,6 +11,11 @@ namespace gt4::render {
 void CourseLampPass::lights(const scene::SceneFrame& frame, uint16_t view, const LampSources& sources,
                             std::vector<gfx::scene::Light>& out, Stats* stats) {
     Stats s;
+    // Bounded: material and mesh ids are never reused, so these grow with the ids dropped; the lamps are keyed by
+    // content. Cleared past their bounds (refilled from the tables and the meshes at the next sight).
+    if (materials.size() > 100000) materials.clear();
+    if (keys.size() > 100000) keys.clear();
+    if (lampsByItem.size() > 4096) lampsByItem.clear();
     if (!view || view > frame.views.size()) {
         if (stats) *stats = s;
         return;

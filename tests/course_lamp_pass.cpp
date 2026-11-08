@@ -83,6 +83,10 @@ int main() {
     expect(glowTexture(glowSum).glow, "a glow texture passes");
     expect(flatSum.known && near(flatSum.centreToRim, 1.0f, 0.05f) && !glowTexture(flatSum).glow, "a flat texture does not");
     expect(!glowTexture(scene::TextureSummary{}).glow, "no summary: not a glow");
+    const std::vector<uint32_t> bigTex = texture(512, true);   // sampled every 4th texel each way
+    const scene::TextureSummary bigSum = scene::summarizeTexture(bigTex.data(), 512, 512);
+    expect(bigSum.width == 512 && glowTexture(bigSum).glow && near(bigSum.centreToRim, glowSum.centreToRim, 0.2f * glowSum.centreToRim),
+           "a large glow, sampled on a stride, scores as the small one");
 
     // 2. The signature.
     gfx::Context c;
