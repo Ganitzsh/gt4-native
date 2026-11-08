@@ -1928,7 +1928,16 @@ void GsFrontend::model(const gfx::ModelJob& in, const uint32_t* words) {
     const bool moving = (in.flags & 4) != 0;
     // its scene view (CONTRACTS.md a.5 7, a.8: the stream's decoder put its instance in pad[0], that instance's view in
     // pad[1]): the view is bound to the colour target of its first tagged draw, and counted split if another follows
-    const uint16_t view = static_cast<uint16_t>(in.pad[0] ? in.pad[1] : 0);
+    const uint16_t tagged = static_cast<uint16_t>(in.pad[0] ? in.pad[1] : 0);
+    // A6: a car light map's draw (kInstLightMap, gfx::kJobLightMap in pad[1]) is out of the binding (a.5.7): render-to-
+    // texture into the car's reflection map, treated as untagged and counted with the targets it writes
+    const bool lightMap = tagged && (in.pad[1] & gfx::kJobLightMap) && sceneOpen;
+    if (lightMap) {
+        ++stats.viewLightMapDraws;
+        std::vector<uint32_t>& seen = stats.lightMapTargets;
+        if (std::find(seen.begin(), seen.end(), colour) == seen.end() && seen.size() < 64) seen.push_back(colour);
+    }
+    const uint16_t view = lightMap ? 0 : tagged;
     if (view > kViews && sceneOpen) ++stats.viewsPastLimit;   // (not bound: counted apart from viewsUnbound)
     if (view && view <= kViews && sceneOpen) {
         if (viewBindings.size() < view) viewBindings.resize(view);

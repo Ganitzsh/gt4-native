@@ -418,6 +418,25 @@ void checks() {
           "kInstCourseObject: a placed course object is counted, not camera-checked (A11a)");
     const auto billboard = oneJob(none, rec::kInstBillboard, translate(3.0f, 0.0f, 0.0f) * worldToView());
     check(billboard.billboards == 1 && billboard.cameraChecked == 0, "kInstBillboard: a billboard run is counted, not camera-checked (A7)");
+    const auto lightMap = oneJob(none, rec::kInstLightMap, translate(3.0f, 0.0f, 0.0f) * worldToView());
+    check(lightMap.lightMaps == 1 && lightMap.cameraChecked == 0 && lightMap.errorFree(),
+          "kInstLightMap: a light map's run is counted, not camera-checked (A6)");
+    {   // its job's tag: the view with gfx::kJobLightMap, so the front end leaves it out of the binding (a.5.7)
+        auto tagOf = [](uint16_t flags) {
+            SceneDecoder d;
+            put(d, frameBegin(1));
+            put(d, projection(1, 0));
+            put(d, viewBegin(1, 1));
+            const auto i = instance(1, 1, worldToView(), 1, flags);
+            put(d, i);
+            d.batchRun();
+            gt4::gfx::ModelJob j = jobFor(i);
+            d.job(j);
+            return j.pad[1];
+        };
+        check(tagOf(rec::kInstLightMap) == (1u | gt4::gfx::kJobLightMap) && tagOf(0) == 1u,
+              "kInstLightMap: its jobs carry the view and kJobLightMap; others the view alone");
+    }
     {   // a NaN in the camera itself (worldToView): the course instance carries the same NaN, and it still counts
         SceneDecoder d;
         put(d, frameBegin(1));

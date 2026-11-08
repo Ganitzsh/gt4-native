@@ -3,7 +3,12 @@
  * renderLayer (+0xD0, 00390728: flag, time) and setup (+0xF0, 00390F70: two ints, time) take their ints first; the
  * draft declared the float first, the same call on the EE (floats in their own registers) but not natively: each
  * extra layer of a car (rc.count >= 2) got the time's bits as its flag and ~0 as its time (drawn where the car
- * was, or untransformed when the time was 0), and setup's driver and crew the same. */
+ * was, or untransformed when the time was 0), and setup's driver and crew the same.
+ * A6: each car's light-map pass (0038F5D0: the course lamps near the car as fans in its reflection texture) runs in a
+ * light-map context with the car's entrant (car +0x544), so its batch runs are kInstLightMap Instances
+ * (runtime/native/pgl.cpp; CONTRACTS.md a.5.7). */
+#include "gt4_gfx.h"
+#include "spr.h"
 #define I(p,o) (*(int *)((char *)(p)+(o)))
 #define U(p,o) (*(unsigned *)((char *)(p)+(o)))
 #define F(p,o) (*(float *)((char *)(p)+(o)))
@@ -334,7 +339,9 @@ extern "C" void func_00340950(char *self, GSBuffer *buffer, int mode, int effect
             Vec3 pos=(*it)->node->position(time);
             Camera camera;
             camera.position(pos);
+            gt4_scene_light_map(spr_base(),1,(unsigned char)car[0x544]);
             func_0038F5D0(&rc,&target,buffer,&camera,*it==focus);
+            gt4_scene_light_map(spr_base(),0,0);
         }
         bool simple=false;
         func_0038EFF8(&rc);

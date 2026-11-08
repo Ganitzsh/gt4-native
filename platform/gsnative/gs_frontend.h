@@ -361,6 +361,8 @@ public:
         // ask for main views
         uint64_t splitByRole[16] = {}, unboundByRole[16] = {}, cutByRole[16] = {};
         uint64_t auxDrawsByRole[16] = {}, auxReadsByRole[16] = {};   // a.5.7
+        uint64_t viewLightMapDraws = 0;           // A6: draws of kInstLightMap runs, out of the binding (a.5.7)
+        std::vector<uint32_t> lightMapTargets;    // the targets they wrote (at most 64 kept)
         uint64_t splitByReason[6] = {};   // views split, by a.5.7's reason (1..5; a view counts once per reason)
         uint64_t splitSummaryFull = 0;    // views split because their binding summary was full (not a.5.7 rule 5)
         uint64_t viewsPastLimit = 0;      // tagged draws naming a view id past kViews (a bad record: never bound)

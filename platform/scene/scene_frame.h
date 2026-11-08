@@ -92,6 +92,7 @@ struct SceneCounters {
     uint64_t cameraChecked = 0, cameraMismatch = 0;
     uint64_t courseObjects = 0;   // instances flagged kInstCourseObject (A11a: placed course objects, not camera-checked)
     uint64_t billboards = 0;      // instances flagged kInstBillboard (A7 step 1b: one per BillboardSet batch run)
+    uint64_t lightMaps = 0;       // instances flagged kInstLightMap (A6: one per batch run of a car's light map)
     // lights, emitters, markers, vehicles; lights after their view's ViewEnd (a.5 rule 4: reported), naming a view this
     // frame has not begun (dropped)
     uint64_t lights = 0, lightsAfterViewEnd = 0, lightViewUnknown = 0, emitters = 0, markers = 0, vehicles = 0;

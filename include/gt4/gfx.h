@@ -597,11 +597,12 @@ struct ModelJob {
     uint32_t fogRegister;  // FOG's F for XYZ2 (no fog in the vertices)
     float originX, originY, u, v;   // XYOFFSET (pixels), UV (texels)
     uint32_t prim;         // the batch's PRIM (its tag sets it)
-    uint32_t pad[2];
+    uint32_t pad[2];       // the host's tags (CONTRACTS.md a.8): its instance's position + 1, its view (| kJobLightMap)
     float matrix[4][4], scale[4], offset[4], clamp[4], guard[4];
     float previousMatrix[4][4], previousScale[4], previousOffset[4];
 };
 static_assert(sizeof(ModelJob) == 64 + 14 * 16);
+inline constexpr uint32_t kJobLightMap = 1u << 16;   // in ModelJob::pad[1]: a car light map's run (A6, a.5.7)
 inline constexpr uint32_t kModelWords = 1024;   // a batch: 256 qwords
 
 // The texture sets in graphics memory, as the runtime's frame walker and the host both keep them (in the order of
@@ -880,6 +881,10 @@ enum InstanceFlags : uint16_t {
                                //   display program pushed its own objectToWorld)
     kInstBillboard = 256,      // a batch run of BillboardSet__render 004506F0 (A7 step 1b): camera-facing quads built
                                //   every frame, objectToView = the camera; per-frame to B6 (mesh 0), never course
+    kInstLightMap = 512,       // one batch run of a car's light map (0038F5D0, from render_cars, A6): the fans of the
+                               //   course lamps near the car, drawn into the car's reflection texture, not the view's
+                               //   target; objectToView = set 0 as the pass set it (the car's camera, orthographic);
+                               //   entrant = the car. Out of the binding (CONTRACTS.md a.5.7)
 };
 struct Instance {
     Prefix prefix;

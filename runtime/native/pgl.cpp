@@ -383,6 +383,9 @@ struct SceneFrameState {
     uint16_t courseTop = 0;   // gt4_matrix_stack_top when the outermost course bracket opened (kInstCourse's depth)
     int billboards = 0;       // BillboardSet__render's group draws under way (A7 step 1b): each batch run an Instance
     int billboardsPaused = 0;   // inside them, a model's display program (a 0x8000 entry): its Cmd's own Instances
+    int lightMaps = 0;          // a car's light-map pass under way (A6: 0038F5D0, opened by render_cars): each
+                                // batch run an Instance flagged kInstLightMap
+    uint32_t lightMapEntrant = 0xFFFFFFFFu;   // that car's entrant
     uint32_t flushSerial = 0;   // the serial of the current flush's first billboard Instance (0: none yet)
     uint16_t billboardCount = 0;   // the flush's billboards kept (g_billboards)
     uint16_t openView = 0, viewInstances = 0;
@@ -715,6 +718,17 @@ void gt4_scene_billboards_pause(uint32_t context, int on) {
                                   : (g_scene.billboardsPaused > 0 ? g_scene.billboardsPaused - 1 : 0);
 }
 
+// A6 (CONTRACTS.md kInstLightMap, a.5.7's light-map draws): render_cars (game_src/func_00340950.cpp) opens this around
+// each car's light-map pass (0038F5D0: the fans of the course lamps near the car, drawn into the car's reflection
+// texture). Its batch runs are each an Instance of their own (items 1, objectToView = set 0 as the pass set it: the
+// car's camera, orthographic), flagged kInstLightMap, entrant = the car's.
+void gt4_scene_light_map(uint32_t context, int on, uint32_t entrant) {
+    (void)context;
+    if (!gt4_scene_on()) return;
+    g_scene.lightMaps = on ? g_scene.lightMaps + 1 : (g_scene.lightMaps > 0 ? g_scene.lightMaps - 1 : 0);
+    g_scene.lightMapEntrant = on ? entrant : 0xFFFFFFFFu;
+}
+
 // A billboard of the current flush: its world centre (the entry's x, its base y plus half the item's height, z) and half
 // sizes, through set 0 into view space, and its item's colour, kept for gt4_scene_billboard_flush. The half width is
 // the item's +0 as it is: 004506F0 spans the quad over +- D_00846590 (the camera's unit right vector) x that value.
@@ -778,18 +792,18 @@ void gt4_scene_billboard_flush(uint32_t context) {
 
 }  // extern "C"
 
-// A billboard batch run's Instance (inside the billboard context, before the run's kBatchRun): items 1, objectToView = set 0,
-// kInstBillboard; the flush's first one names its candidates.
-static void sceneBillboardInstance(uint32_t context) {
+// The Instance of a batch run with no Cmd (before the run's kBatchRun): a billboard run (kInstBillboard; the flush's
+// first one names its candidates) or a car light map's (kInstLightMap); items 1, objectToView = set 0.
+static void sceneRunInstance(uint32_t context, uint16_t flags, uint32_t entrant) {
     namespace scene = gfx::scene;
     float set0[16], set1[16];
     currentSets(set0, set1);
     scene::Instance r{};
     r.prefix = {scene::kInstance, scene::kVersion};
     r.view = g_scene.openView;
-    r.flags = scene::kInstBillboard;
+    r.flags = flags;
     r.serial = static_cast<uint32_t>(g_scene.instances) + 1;   // (counted as it is appended)
-    r.entrant = 0xFFFFFFFFu;
+    r.entrant = entrant;
     std::memcpy(r.objectToView, set0, sizeof r.objectToView);
     const bool axisScaled = guest_ref<uint8_t>(kSpr + 0xE) != 0;
     for (int i = 0; i < 3; ++i) r.axisScale[i] = axisScaled ? sprFloats(0xBD0)[i] : 1.0f;
@@ -797,7 +811,7 @@ static void sceneBillboardInstance(uint32_t context) {
     r.matrixSet = guest_ref<uint8_t>(kSpr + 1);
     r.section = 0xFFFF;
     r.projection = sceneProjection(context, set1, g_batchViewport, g_scene.openView);
-    if (!g_scene.flushSerial) g_scene.flushSerial = r.serial;
+    if (flags == scene::kInstBillboard && !g_scene.flushSerial) g_scene.flushSerial = r.serial;
     sceneAppend(context, &r, sizeof r);
     if (g_scene.openView) ++g_scene.viewInstances;
 }
@@ -1027,8 +1041,12 @@ void gt4_gfx_effect_end(uint32_t context) {
 
 // The batch run (itop 0xFFFFFFFF: the lighting chain the last run had).
 void gt4_gfx_batch_run(uint32_t context, uint32_t entry, uint32_t itop) {
-    if (g_scene.billboards && !g_scene.billboardsPaused && g_scene.inFrame && gt4_scene_on())
-        sceneBillboardInstance(context);   // (A7 step 1b)
+    if (g_scene.inFrame && gt4_scene_on()) {
+        if (g_scene.lightMaps)   // (A6: a car's light map)
+            sceneRunInstance(context, gfx::scene::kInstLightMap, g_scene.lightMapEntrant);
+        else if (g_scene.billboards && !g_scene.billboardsPaused)   // (A7 step 1b)
+            sceneRunInstance(context, gfx::scene::kInstBillboard, 0xFFFFFFFFu);
+    }
     const gfx::BatchRun r{entry, itop};
     append(context, gfx::kBatchRun, &r, sizeof r);
 }

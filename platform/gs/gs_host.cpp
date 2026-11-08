@@ -1238,6 +1238,8 @@ std::string GsHost::summary() const {
         byRole("split", s.splitByRole);
         byRole("auxiliary draws", s.auxDrawsByRole);
         byRole("auxiliary reads", s.auxReadsByRole);
+        if (s.viewLightMapDraws) out << "; " << s.viewLightMapDraws << " light-map draws (out of the binding) into "
+                                     << s.lightMapTargets.size() << " targets";
         std::string reasons;
         for (int r = 1; r <= 5; ++r)
             if (s.splitByReason[r]) reasons += (reasons.empty() ? "" : " ") + std::to_string(r) + ":" + std::to_string(s.splitByReason[r]);

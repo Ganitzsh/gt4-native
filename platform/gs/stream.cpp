@@ -795,7 +795,7 @@ std::string GraphicsStream::describe() const {
             << " runs after an instance (" << s.runsAfterSameMatrix << " with its matrix), matrices " << s.matrixChecked << " checked, "
             << s.matrixMismatch << " mismatched (largest " << s.matrixMaxError << "), " << s.viewportMismatch
             << " viewports mismatched, " << s.guardUnexpected << " guards unexpected, cameras " << s.cameraChecked
-            << " checked, " << s.cameraMismatch << " mismatched (" << s.courseObjects << " placed course objects), " << s.billboards << " billboard runs; " << s.lights << " lights (" << s.lightsAfterViewEnd
+            << " checked, " << s.cameraMismatch << " mismatched (" << s.courseObjects << " placed course objects), " << s.billboards << " billboard runs, " << s.lightMaps << " light-map runs; " << s.lights << " lights (" << s.lightsAfterViewEnd
             << " after their view's end, " << s.lightViewUnknown << " naming no view begun); " << s.bad << " bad, " << s.versionUnknown << " version unknown, "
             << s.unknownKind << " kind unknown, " << s.outsideFrame << " outside a frame; " << sceneVsyncsInFrame_
             << " VSyncs inside a frame, " << sceneListsWithFrames_ << " FrameLists with two frames";
