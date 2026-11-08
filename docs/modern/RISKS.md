@@ -302,6 +302,12 @@ decomp.
 
 ## R16: Audio reply timing if the mixer moves to the host (blocks D5)
 
+**Status: answered** (lane D, `spikes/R16-audio-reply-timing.md`, 2026-11-08): the replies can't come even one
+frame late. With them delayed by one frame a race has 86-88 % more key-ons and 4-5x key-ons onto releasing voices
+(2.4-2.5x at two and four frames): the driver keys voices again from a status that still shows them stopped, and its
+re-key gap moves by exactly the delay. No voice ran short, but what is heard changes. So D5 answers from a game-side
+voice model in the same call (PLAN D5).
+
 **Question.** GT4's sound driver frees voices by ENVX/ENDX replies. With the mix on the host, how late can those
 replies arrive before GT4 runs out of voices or cuts sounds?
 

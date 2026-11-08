@@ -517,9 +517,16 @@ on main.
 **D2: Rumble (S).** `iop.cpp:572-576` profile and motor bytes, `GT4_REC_RUMBLE` in `protocol.h`, SDL rumble.
 Depends: A1 (protocol.h). Acceptance: session test reads the rumble record values; a pad rumbles in a race (manual).
 
-**D5: Audio mixer on the host (L).** SPU2 image and RAM records (`stream.cpp:766-768`), `platform/audio/`,
-ENVX/ENDX reply path. Depends: A10 (stream.cpp), R16. Acceptance: the host mix within -60 dB of the game-side mix
-on a session's audio over 60 s (`original` interpolation); no voice frees early (GT4's voice counts in its log).
+**D5: Audio mixer on the host (L).** SPU2 image and RAM records (`stream.cpp:766-768`), `platform/audio/`.
+The ENVX/ENDX replies come from a game-side voice model, in the same SPUP call as today (R16: not even one frame
+late). The model keeps key state, ADSR / ENVX, and the address through the ADPCM loop and end flags at the voice's
+pitch (ENDX): `audio.cpp` without decoding, interpolation, volume, reverb and the mix. The host mixer plays the same
+voices from the register image, with any latency. The envelope and address code is one source compiled into both,
+so the game's replies and the host's voices agree by construction. Depends: A10 (stream.cpp), R16. Acceptance: the
+host mix within -60 dB of the game-side mix on a session's audio over 60 s (`original` interpolation); the
+driver's key-on counts within the run-to-run spread of today's (2-8 %; one frame late gives 1.9x), and its main
+re-key gap still at 2 frames with about today's count (a stale reply shows as a peak at 3 or 4), so no voice frees
+early.
 
 **D6: Vehicle state discovery (L).** RISKS R14, then the fields of `scene::Vehicle`. Depends: R14. Acceptance: per
 wheel load and slip plotted over a lap, consistent with the car's motion; documented addresses.
