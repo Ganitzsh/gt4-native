@@ -80,7 +80,7 @@ ARCHITECTURE.md section 1) and the CPU-side tests (B5's mesh check, A10's decode
 | D. Systems | `platform/input/`, `platform/audio/`, `runtime/memcard.cpp`, `platform/saves/`, `runtime/iop.cpp`, `runtime/audio.cpp` | `main.cpp`: D1 **after C1**. `protocol.h`: D2 **after A1**. `stream.cpp`: D5 **after A10** |
 | E. UI | no agent; its files moved on 2026-11-08 (the coordinator): the settings table to lane C, `overlay.*`, `settings_menu.*` and `layer2d.*` to lane M. Its remaining tickets E5 (SDF font), E6 (2D layer), E7 and E9 (HUD) go to lane M with their files (the coordinator), lane C reviewing | `gs_frontend.cpp` `textureFor` (E2), `gsn_display.frag` (E3): day one, **before A10** |
 | F. Night lighting | `include/gt4/render/light_list.h`, `shaders/light_list.glsl`, `platform/render/modern/lights_*`, `tools/frame_metrics.py`, the Route 5 tickets | `gsn_scene.cpp` scene stage: F2 **after B4** |
-| M. Menus (docs/modern/MENU_DESIGN.md) | `platform/ui/` (page engine, UI draw list, UI renderer, SDF text), `platform/render/modern/layer2d.*`, `platform/render/overlay.*`, `settings_menu.*` (deleted by M9), `runtime/menu/`, `assets/ui/`, `tools/ui_assets.py`, `include/gt4/ui.h`, the menu-flow `game_src` copies (00109D00, 0010FE40, 0038B428, 0038B2B0, and 00109B38, the menu game object's update where the pages tick); lane C reviews the host-side UI files | `protocol.h`: M1 took link version 4 (ba5c358); a later change to what the game sends takes the next one. `runtime/link.cpp` (lane C's, lane A reviews). `runtime/iop.cpp` (lane D reviews). `main.cpp` (lane C's order) |
+| M. Menus (docs/modern/MENU_DESIGN.md) | `platform/ui/` (page engine, UI draw list, UI renderer, SDF text), `platform/render/modern/layer2d.*`, `platform/render/overlay.*`, `settings_menu.*` (deleted by M9), `runtime/menu/`, `assets/ui/`, `tools/ui_assets.py`, `include/gt4/ui.h`, the menu-flow `game_src` copies (00109D00, 0010FE40, 003C3820 `RacePause::update`, and 00109B38, the menu game object's update where the pages tick); lane C reviews the host-side UI files | `protocol.h`: M1 took link version 4 (ba5c358); a later change to what the game sends takes the next one. `runtime/link.cpp` (lane C's, lane A reviews). `runtime/iop.cpp` (lane D reviews). `main.cpp` (lane C's order) |
 
 `settings.cpp` / `settings.h`: E1 splits the option table into per-module files on day one; after that each lane
 adds its options in its own file (`settings_scene.cpp`, `settings_input.cpp`, `settings_audio.cpp`,
@@ -1213,7 +1213,7 @@ changes, `ORIG` and `STREAM` with records off and no page opened. In order:
 | **M4** Settings bridge | S-M | M1, M2, E1 |
 | **M5** Game-side page host (`runtime/menu/`; the pad focus in `iop.cpp`, lane D reviews) | M | M0, M1, M2 |
 | **M6** Options entry (a copy of 00109D00: both ways into GT4's Options reach `startProject`; the hub opens over GT4's Options, whose project runs the menu update the pages tick in) | S | M5 |
-| **M7** Native pause page (hooks in copies of 0038B428, 0038B2B0) | M | M5, M0 |
+| **M7** Native pause page (a copy of 003C3820 `RacePause::update`, which every mode's `updatePause` reaches) | M | M5, M0 |
 | **M8** Start on the GT mode map | S | M5, M0 |
 | **M9** Host wiring; the old menu deleted (the pad chord kept; host commands 2, 3 retired) | S-M | M3, M4, M5 |
 | **M10** Style guide and the first asset set (the owner's sign-off) | M | M3 |

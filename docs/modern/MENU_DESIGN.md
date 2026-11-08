@@ -15,7 +15,8 @@ Mockups (our own drawings, no game imagery): `docs/modern/menu/mock_*.svg`.
 1. **Native pages in GT4's menu flow, not an overlay.** The page logic, navigation, input focus, GT4's menu sounds
    and frame pacing run **in the game process**, as native C++ hooked into matched code: the project flow
    (`startProject` 00109D00, which both ways into GT4's Options reach, M6) and the race pause
-   (`RaceBasic::pauseStart` 0038B428 / `updatePause` 0038B2B0). GT4's scripted menus on the disc are not edited.
+   (`RacePause::update` 003C3820, which every mode's `updatePause` reaches, M7). GT4's scripted menus on the disc
+   are not edited.
 2. **The host owns the pixels.** The game sends a draw list each frame (rectangles, asset IDs, text, at a virtual
    1920 x 1080 canvas with anchors); the host draws it at output resolution with its own images and SDF fonts.
    Nothing new goes into guest memory, GS memory or GT4's font pages.
@@ -110,7 +111,7 @@ points placed where GT4's **native** code already branches on a menu choice or a
  game_src hooks (matched code)                            settings (owner of every value; settings_table.h)
    startProject 00109D00  ->  menu: hub over "option"        ^ SettingsSet           | SettingsSchema/Values
    menu update 00109B38   ->  menu tick, sounds, leave       |                       v
-   pauseStart/updatePause ->  menu::pause page            runtime/menu (the game side)
+   RacePause::update      ->  menu: pause page            runtime/menu (the game side)
  runtime/menu/  (page host in the game)                      page engine (platform/ui, shared)
    page engine (platform/ui, shared)  --GT4_REC_UI-->     platform/ui/ui_renderer: assets, SDF text,
    input focus (pad to GT4 neutral)                         at output resolution, after the display pipeline
@@ -138,7 +139,7 @@ The game decides what is on screen and when; the host decides how it looks at th
 | Page engine | `platform/ui/menu_model.{h,cpp}`, `menu_layout.{h,cpp}`, `draw_list.h` | M | New | Pages, tabs, rows, focus, repeat, transitions; lays out at 1920 x 1080 with anchors; emits a `DrawList`. No I/O. Built into the runtime and the host. |
 | UI records | `include/gt4/link/protocol.h`, `include/gt4/ui.h` | M (A, D review) | Changed / New | Section 3.6. |
 | Game-side page host | `runtime/menu/menu_host.{h,cpp}` | M | New | Ticks the engine once a game frame, owns input focus, plays sounds, holds the race pause, talks to the host. |
-| Flow hooks | `game_src/func_00109B38.cpp` (M5), `func_00109D00.cpp` (M6), `func_0038B428.cpp`, `func_0038B2B0.cpp` (copies of matched code) | M (A reviews) | New | One call each into `runtime/menu` (section 3.2). `tools/hook_lint.py` clean. No copy of `func_0010FE40`: its `"option"` reaches `startProject` too (M6). |
+| Flow hooks | `game_src/func_00109B38.cpp` (M5), `func_00109D00.cpp` (M6), `func_003C3820.cpp` (M7) (copies of matched code) | M (A reviews) | New | One call each into `runtime/menu` (section 3.2). `tools/hook_lint.py` clean. No copy of `func_0010FE40`: its `"option"` reaches `startProject` too (M6). |
 | Pad focus | `runtime/iop.cpp` `gt4_replace_scePad2Read` | D's file, M's change | Changed (one test) | Neutral pad to GT4 while a page owns the pad. |
 | Settings bridge | `platform/ui/settings_schema.{h,cpp}` (host) | M (C reviews) | New | Builds the schema from `describe()` plus the page layout table (section 4); applies `SettingsSet`. |
 | UI renderer | `platform/ui/ui_renderer.{h,cpp}` on `platform/render/modern/layer2d.*` | M (C reviews) | New | Draws a `DrawList`: textured quads, nine-slices, gradients, SDF text (E5), at output resolution, HDR at paper white. |
@@ -169,12 +170,28 @@ Each hook is a `game_src` copy of a matched function with one added call, guarde
    ours, drawn beside GT4's list and reached with a button its prompt shows, since GT4's scripted lists are not
    edited (M8 says which case M0 found).
 3. **The mode select at game start.** Its Options item as in 1. If it has none [U], Start there as in 2.
-4. **The race pause.** `ui.pause = native` (presets low to ultra): the hook in `pauseStart` keeps GT4's pause
-   (the race frozen by `RaceBase + 0xCD8`, the course clock stopped) but opens our **pause page** instead of
-   `pause.strb`: Continue, Retry (when GT4 allows it: `RETRYENABLE`), Settings, Screen (brightness and contrast,
-   written to `race_color_correction` as the strobe does), Exit (with GT4's confirmation). `updatePause` returns
-   GT4's own codes (3, 5, 4), so the race code after it is unchanged. While Settings is open the pause object is
-   not updated, so its time limit does not run. `ui.pause = gt4` keeps `pause.strb` and adds no item.
+4. **The race pause.** `ui.pause = native` (presets low to ultra from M9, 3.8): the copy of `RacePause::update`
+   (003C3820) keeps GT4's pause (the race frozen by `RaceBase + 0xCD8`, the course clock stopped) but answers with
+   our **pause page** instead of `pause.strb`, which never starts (`+0xC` stays 0, so `RacePause::render` draws
+   nothing). The page offers only the items the pause object enables, as the strobe reads them, in GT4's order
+   (Continue, Retry, Exit, Screen, as the object enables them; M7 measured Continue, Exit, Screen Settings in GT
+   mode, and puts Retry where a mode with Retry shows it), then Settings last: Retry when `+0x28` (`RETRYENABLE`);
+   Exit, confirmed with Continue preselected when `+0x2C` (`CONFIRMEXIT`); Screen when `+0x30`
+   (`SCREENSETTINGENABLE`: brightness and contrast, -5 to 5 as GT4's sliders, written where `SETVAL` writes them,
+   `D_00622F4C + 0x39E34`, or `+ 0x39E44` when `+0x34`); Settings, the host's tabs after the pause tab. Triangle on
+   the pause's pages continues, as anywhere in GT4's pause (M0). The answers are GT4's codes (1 open, 3 continue, 4
+   exit, 5 retry), so each mode's `updatePause` switch and all after it are GT4's; the race's continue and exit
+   events (`0x16`, `0x17`) and the time limit (2) end the page with the pause. With `ui.pause = gt4` the copy runs
+   as GT4's function (DIFFTEST) and `pause.strb` shows as before.
+
+   Modes covered: no class derives from `RacePause`, and its `update` is reached only through the pause's vtable,
+   from `RaceBasic::updatePause` 0038B2B0 (GT mode, arcade, championship, free practice, license, machine test,
+   training, LAN, net and split battle, arcade demo) and `RaceFreeRun::updatePause` (free run); both switches take
+   2 to 5. `SimplePause` (`RaceSolitaire`, `RaceSinglePlayer`; it has no menu) stays GT4's in both settings.
+
+   **A deliberate difference, native only:** GT4's time limit (`PauseBase::setTimeLimit`; 0, none, in GT mode, M0)
+   counts the frames without input. Our page clears the count on input, as the strobe's input step does, and on
+   every frame a Settings tab is shown: changing settings must never run out the clock and end the race.
 5. **Anywhere: Guide, Esc, the pad chord.** Guide is often taken on the target devices (Steam's button on a Deck,
    Home under gamescope on the Odin), so a pad-only player needs the chord: Select + Start as today, or L3 + R3 if
    M0 finds GT4 uses Select + Start. `ChordGuard`'s rule stays: the chord's buttons never reach GT4, a short Start
@@ -307,7 +324,8 @@ Options in `original` sees GT4's `"option"` project start and `pause.strb` load.
 - The page runs at GT4's 60 Hz frame (the host interpolates the motion).
 - The pad GT4 and the page read is the PS2 pad record (18 bytes, 8-bit axes); finer input for the page (pointer,
   text) comes as its own records.
-- The race pause time limit (`PauseBase::setTimeLimit`) applies to GT4's pause page; ours stops it while open.
+- The race pause time limit (`PauseBase::setTimeLimit`) applies to our pause page as to GT4's, but not while a
+  Settings tab is shown (3.2, point 4).
 - GT4's own values keep GT4's ranges and steps (volumes, colour correction).
 
 ---
@@ -494,10 +512,13 @@ menu's Options opens the hub (screenshot), *GT4 options* opens GT4's screen, and
 with the race still startable; the top menu the same; `ui.entry = hotkey` opens GT4's `"option"` as before (project
 log); `STREAM` with a page open (lane A: the UI list's rate, up to about 3.8 MB/s).
 
-**M7: Native pause page (M).** Hooks in copies of 0038B428 and 0038B2B0; `ui.pause = gt4` in every preset until M9
-(3.8). Depends: M5, M0. Acceptance: session test with `--set ui.pause=native` in a race: pause, Settings, change a
-live option, close, Continue: race time, lap and car state identical to a run that paused without opening Settings
-(D6's fields or A9); Retry and Exit give GT4's results; brightness and contrast stored as GT4's pause stores them;
+**M7: Native pause page (M).** A copy of `RacePause::update` 003C3820 (3.2, point 4); `ui.pause = gt4` in every
+preset until M9 (3.8). Depends: M5, M0. Acceptance: `DIFFTEST` (a `game_src` copy); `ORIG`; session tests with
+`--set ui.pause=native`: a pause in GT mode (`RaceBasic::updatePause`'s switch), in free run (`RaceFreeRun`'s own
+switch) and in a mode with Retry, whose answer 5 must reach its switch; in GT mode: pause, Settings, change a live
+option, close, Continue: race time, lap and car state identical to a run that paused without opening Settings (D6's
+fields or A9); Retry and Exit give GT4's results; brightness and contrast stored as GT4's pause stores them. A
+`SimplePause` mode (`RaceSolitaire` or `RaceSinglePlayer`) under `native` shows GT4's own pause, unchanged.
 `ui.pause = gt4` loads `pause.strb` as before.
 
 **M8: Start on the GT mode map (S).** The map detection and the button from M0. Depends: M5, M0. Acceptance:
@@ -541,7 +562,7 @@ about progression later.
 ### 7.2 Order and lanes
 
 - Lane M owns (PLAN 549aacf) `platform/ui/`, `runtime/menu/`, `assets/ui/`, `tools/ui_assets.py`, the menu-flow
-  `game_src` copies (00109D00, 0010FE40, 0038B428, 0038B2B0), `include/gt4/ui.h`, a future `settings_ui.cpp`, and
+  `game_src` copies (00109D00, 0010FE40, 003C3820, 00109B38), `include/gt4/ui.h`, a future `settings_ui.cpp`, and
   `settings_menu.*`, `layer2d.*`, `overlay.*`, the UI draw list and SDF text, with lane C reviewing; and the tickets
   E5, E6, E7 and E9. So E5 before M3 is lane M's own order.
 - Shared files: `protocol.h` serialised with P1 and P3a (section 3.6; A, D review); `runtime/link.cpp` (C's, A
@@ -569,7 +590,7 @@ about progression later.
 | Unknown script behaviour around our hooks (what `"option"` leaves, Start on the map) | M6, M8 | M0 first; hooks restore exactly the state M0 logs; session tests compare G before and after |
 | Adhoc VM coverage | none added | we run no new script; the VM only runs GT4's own scripts as today |
 | Drafts on the path | `RacePause::callFunction` (0 % matched), 0022BC20 (corrected draft) | not hooked; our hooks are on matched code only |
-| Vtable reachability of the pause (`RaceBasic` slots 149 / 150) | M7 | the copies replace the functions at their addresses (all race modes alike); M7 runs a pause in each mode GT4 uses `RacePause` for and in `RaceSolitaire`'s `SimplePause` |
+| Vtable reachability of the pause | M7 | one copy of `RacePause::update`, which no class overrides and both `updatePause`s reach through the pause's vtable (3.2, point 4); M7 runs a pause in GT mode, in free run and in a mode with Retry, and checks a `SimplePause` mode is GT4's |
 | The pad bits GT4 maps to Start (`0x40`, `0x80`) come from its controller config | M5, M8 | the page reads the pad record and GT4's mapping (M0), never a fixed bit |
 | A page left open when GT4 changes sequence (a race ends, a timer) | M5 | the page host closes on any sequence or project change and logs it |
 | `original` drift | all | `ui.entry = hotkey`, `ui.pause = gt4`; `ORIG` and `STREAM` with no page opened |
