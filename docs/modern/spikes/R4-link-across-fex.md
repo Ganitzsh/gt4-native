@@ -140,7 +140,29 @@ given: on Linux, give them as Wine paths (`Z:\home\...`) or relative to the work
 
 Not run here: the POSIX link against the real game. WSL has no Wine; the probe on the device covers the link itself.
 
-**Unverified on the device: what the owner's test covers.** In order, each with what to look at:
+## The package on the Odin (2026-11-08, main-ad19cd4, run by the coordinator)
+
+`GT4-Native-main-ad19cd4-linux-arm64.tar.gz` (the release game and the aarch64 host of origin/main ad19cd4) unpacked
+in `~/Games/GT4-Native-linux`, the .iso linked into `game/`, the saves copied, then from ssh:
+`./gt4-native.sh --headless --size 640x448 --frames 1800 --capture`.
+
+**Device-verified** (the numbers refer to the list below):
+- 1: `gt4-native.sh` found a Proton (proton-cachyos or Steam's ARM64, the script's pick) and started the game with it.
+- 2: the first start made the prefix (`~/.local/share/gt4-native/prefix`, with `drive_c`).
+- 3: the game opened its files through the `Z:\` paths (`game/CORE.GT4.elf` was already there).
+- 5, in part: Vulkan on "Adreno (TM) 830 (integrated)"; 1,800 frames rendered at 1.70 ms of GPU a frame; one hitch
+  of 218 ms at the first scene (202 ms recording: the targets and the first pipelines), then none. The frame
+  comparison against the x64 frames is not run yet.
+- 8, quitting from the game: "gt4_game exited with code 0", and no Wine or .exe process 5 s after the exit.
+- 9, in part: 60.0 game frames a second and 60.0 new frames shown a second at steady state, through the intro movie
+  (frame 1,800 shows the producer credit, as expected). Not yet in a race.
+- The SPU's reverb on, and the intro movie playing (its sound was not listened to: headless).
+
+**Still unverified on the device** (needs the owner holding it): the window under gamescope (4), sound out of the
+speakers (6), the built-in controls (7), quitting from Steam (8), the speed in a race (9), the Steam shortcut (10),
+the files beside the host (11).
+
+**The owner's test, in order, each with what to look at:**
 1. `gt4-native.sh` finds the Odin's Proton (it prints which; `GT4_PROTON=<folder>` otherwise). host.log beside the
    host says `Link: started ... with wine`.
 2. The first start makes the prefix with Proton's Wine run directly (not Proton's own `proton` script): how long it
