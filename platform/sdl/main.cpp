@@ -988,9 +988,12 @@ int run(const Options& options) {
                 gs->setGameOption(6, static_cast<uint32_t>(settings.triggerTravel)); // kOptionTriggerTravel
                 // Nothing reaches the game while the menu is open, nor afterwards until every button is up
                 // (the button that closed the menu would act in the game).
-                // the frame's time for the pads' response (its filters and the keys' ramp), a tenth of a second at most
+                // the frame's time for the pads' response (its filters and the keys' ramp): a 60 Hz tick under
+                // --fixed-step (replays and sessions: the same pad bytes every run), else the wall clock, a tenth of a
+                // second at most
                 const Uint64 padNow = SDL_GetTicksNS();
-                const float padDt = padLast ? std::min(static_cast<float>(padNow - padLast) * 1e-9f, 0.1f) : 0.0f;
+                const float padDt = options.fixedStep ? 1.0f / 60.0f
+                                    : padLast ? std::min(static_cast<float>(padNow - padLast) * 1e-9f, 0.1f) : 0.0f;
                 padLast = padNow;
                 gt4::ps2::PadInput input = readPad(session ? session->gamepad() : gamepad, 0, settings, padDt);
                 if (menuEnabled) chordGuard.filter(input, SDL_GetTicks());
