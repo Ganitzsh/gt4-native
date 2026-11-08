@@ -6,9 +6,13 @@
 //   CPU     the game process's CPU time over the load (all its threads: inflating GT4.VOL's files, parsing, the
 //           frames it still draws, audio);
 //   frames  the frames the game drew (frame kicks) against the VBlanks: a loading screen paced by whole frames draws
-//           few while the wall time runs.
-// What is neither disc nor CPU is waiting: the frame clock, a lock, the host. Off without the variable: nothing is
-// timed, nothing logged.
+//           few while the wall time runs;
+//   blocked the VBlanks without a new frame (VBlanks less frames drawn) and their time at 59.94 Hz: the game kept
+//           from its frame (a waited read, a lock). PLAN D10 (c)'s target: the race load's under 0.2 s. It assumes
+//           a screen drawn every VBlank: on one GT4 paces at 30 fps, half its VBlanks count with nothing blocking.
+// What is neither disc nor CPU is waiting: the frame clock (the loading frames GT4 draws at the VBlank rate count
+// here too, so a load that draws every frame still shows some), a lock, the host. Off without the variable: nothing
+// is timed, nothing logged.
 #include "load_stats.h"
 
 #include "log.h"
@@ -94,10 +98,14 @@ void load_stats_vblank(uint32_t vblank) {
     const Load &l = g_load, &e = g_end;
     const double wall = e.wall - l.wall, cpu = e.cpu - l.cpu, io = static_cast<double>(e.ioUs - l.ioUs) * 1e-6;
     const double mb = static_cast<double>(e.ioBytes - l.ioBytes) / (1 << 20);
+    const uint32_t vblanks = e.first - l.first + 1;
+    const uint64_t frames = e.kicks - l.kicks;
+    const uint64_t blocked = frames < vblanks ? vblanks - frames : 0;
     log_info("load: VBlanks %u-%u (%u, %.2f s): disc %.2f s (%.1f MiB in %llu reads, %.0f MiB/s), CPU %.2f s, "
-             "frames drawn %llu, waiting %.2f s",
-             l.first, e.first, e.first - l.first + 1, wall, io, mb, static_cast<unsigned long long>(e.ioReads - l.ioReads),
-             io > 0 ? mb / io : 0.0, cpu, static_cast<unsigned long long>(e.kicks - l.kicks),
+             "frames drawn %llu, blocked %llu (%.2f s), waiting %.2f s",
+             l.first, e.first, vblanks, wall, io, mb, static_cast<unsigned long long>(e.ioReads - l.ioReads),
+             io > 0 ? mb / io : 0.0, cpu, static_cast<unsigned long long>(frames),
+             static_cast<unsigned long long>(blocked), static_cast<double>(blocked) / 59.94,
              wall - io - cpu > 0.0 ? wall - io - cpu : 0.0);   // (CPU of several threads can exceed the wall time)
 }
 
