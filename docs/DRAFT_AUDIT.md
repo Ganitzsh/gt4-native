@@ -64,13 +64,12 @@ literals; hexadecimal constants were already exact).
   on the original. 0026F0A8 is not checked: armed, but it first runs at the route's very end (line 8,952 of the
   trace's 9,035) and the recording run did not reach it. Of the 55: 36 agree on every call, 2 agree where they
   do not stop, 9 stop on syscalls (they wait on other threads: untestable in eeref), 2 are `known`. 6 differ
-  for reasons outside the draft: three replays follow host pointers left in guest RAM and derail; 002F4A10's
-  draft is `void` and the original's `v0` is a leftover its callers ignore; 00316EA8 stores, where the original
-  stores PS2 addresses (`00317BF0`, and `0068FD50`/`00697678` in its data), addresses in the native image's
-  `.text` above the guest section (`gt4fn_00317BF0`'s entry, and code inside `gt4fn_005D52C0` and
-  `gt4fn_005D0B10`); 00214D28's differing words are all in the block its matched callee 0055FB40 fills. No new
-  draft bug.
-- **Host addresses in guest RAM.** Native code uses those 00316EA8 values as host pointers, which works only
-  while host addresses fit the guest's 32-bit fields; original code (eeref, `GT4_ORIG`) reads them as PS2
-  pointers and cannot follow them, which is what derails the three replays above. A 32-bit-host assumption to
-  keep in mind for a 64-bit host (P3, R17), not a draft bug.
+  for reasons outside the draft: three replays follow host pointers left in guest RAM and derail; 00316EA8 and
+  002F4A10 store, where the original stores PS2 addresses (`00317BF0`; `0068FD50`, `00697678`, `0069ECC8`,
+  `0069D9C8` in its data), addresses in the native image's `.text` above the guest section (`gt4fn_00317BF0`'s
+  entry; `0235CF0C`, `0235C004` and code inside `gt4fn_005D52C0` and `gt4fn_005D0B10`); 00214D28's differing
+  words are all in the block its matched callee 0055FB40 fills. No new draft bug.
+- **Host addresses in guest RAM.** Native code uses those values as pointers into its own `.text`, just above the
+  guest RAM (0x02000000); original code (eeref, `GT4_ORIG`) reads them as PS2 pointers and cannot follow them
+  (`0235CF0C`, where the three replays above derail). For R17: guest RAM beyond 32 MB would collide with the native
+  image there. Not a draft bug.
