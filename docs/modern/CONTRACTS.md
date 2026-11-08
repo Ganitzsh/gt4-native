@@ -544,7 +544,12 @@ struct MaterialKey {         // GT4's material: what the batch's pixels depend o
     uint32_t body;           // ModelJob::chain >> 16 (lighting body)
     uint32_t dot;            // ModelJob::dot
     uint32_t state;          // hash of the DrawState fields that matter (blend, tests, fog, filter)
-    uint64_t colours;        // hash of the material colour qwords (0049E228)
+    uint64_t colours;        // 0. The batch's colour qwords (204..216, from 0049E228: the material's rows scaled
+                             //   by a global table) are per-frame lighting constants: one object alternates
+                             //   between two colour sets within a frame and others drift, so in the key they made
+                             //   28 new materials a frame (B6, race_boot). B7 reads them per frame from the batch,
+                             //   as gsn_models.comp does. Reserved for an unscaled per-object colour, if a record
+                             //   ever carries 0049E228's source rows
 };
 using MeshId = uint32_t;      // 0 = none
 using MaterialId = uint32_t;  // 0 = none
