@@ -1476,10 +1476,16 @@ int run(const Options& options) {
                 // compensation for the timer's overshoot keeps the present on time (a read then waits 2 ms at most).
                 // A pass woken by a read presents once more in that interval (without a window nothing is shown: one
                 // draw of GPU time); the next wait then reaches nextFrame + interval, so the rate stays 60 a second.
+                // The pads are sampled in these sleeps too (PLAN.md D11, as while waiting for the game's frame): with
+                // a cap, the pass would otherwise sample them once an interval, up to a whole interval old.
                 if (gs && gs->live()) {
                     Uint64 now = current;
                     while (nextFrame > now && nextFrame - now > 2000000ull && !gs->readRequested()) {
                         SDL_DelayPrecise(1000000ull);
+                        if (padsWhileWaiting) {
+                            SDL_PumpEvents();   // (the keyboard's and the gamepads' state; their events stay queued)
+                            sendPads(true);
+                        }
                         now = SDL_GetTicksNS();
                     }
                     if (nextFrame > now && !gs->readRequested()) SDL_DelayPrecise(nextFrame - now);
