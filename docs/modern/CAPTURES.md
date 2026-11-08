@@ -69,9 +69,15 @@ at their scene points in `build/refs/`; neither is ever committed or served outs
 1. A release game from current main (`tools/release_game.py`) and a host built from an empty folder, from 330c41b
    or later (replays repeat with interpolation and the HD pack on).
 2. A fresh copy of the approved save (above) unpacked into `build/saves/<name>/`.
-3. The route's commands queued into `<session>/commands/` before the host starts (one file per command, named so
-   they sort in order; `tools/host_session.py step` writes them the same way). Routes are in `docs/modern/routes/`:
-   `race_gt_pe2.txt` (lane A's race route: GT mode Home to the Pan Euro race 2 and a lap's start) for `race_boot.cap`.
+3. The route's commands queued into `<session>/commands/` (one file per command, named so they sort in order;
+   `tools/host_session.py step` writes them the same way). Either remove the session folder, then write the
+   commands, then start the host; or start the host first and queue only once the NEW session has written its own
+   `events.jsonl` (newer than your start). A queuer that sees an old folder's `events.jsonl` writes into a folder
+   the host then empties, and the game waits in the menus with no input and no `quit`. Routes are in
+   `docs/modern/routes/`: `race_gt_pe2.txt` (lane A's race route: GT mode Home to the Pan Euro race 2 and a lap's
+   start) for `race_boot.cap`. A route only works from the save it was written for (this one: the approved save
+   `odin-saves-pe-race2`, its GT mode, car and next race); from another save the same presses land elsewhere. The
+   save itself stays out of the repository.
 4. One live session, in one heavy slot:
 
 ```
