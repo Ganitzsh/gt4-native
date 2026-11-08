@@ -964,7 +964,7 @@ static_assert(sizeof(Marker) == 8);
 // --- Vehicle state: one per entrant per simulation tick ---------------------------------------------------------------
 enum VehicleFields : uint16_t {
     kVehTransform = 1, kVehVelocity = 2, kVehEngine = 4, kVehInputs = 8, kVehWheelContact = 16,
-    kVehWheelForces = 32, kVehWheelSlip = 64, kVehSteeringTorque = 128,
+    kVehWheelForces = 32, kVehWheelSlip = 64, kVehSteeringTorque = 128, kVehWheelStroke = 256,
 };
 struct Wheel {
     float contact[3];            // world space
@@ -972,9 +972,9 @@ struct Wheel {
     float slipRatio, slipAngle;  // -, radians
     float forceLateral, forceLongitudinal;   // N
     float spin;                  // rad/s
-    float compression;           // 0..1
+    float compression;           // 0..1; 0 and unflagged until a car's suspension travel is known
     uint8_t surface, onGround, pad0, pad1;
-    float reserved;
+    float strokeSpeed;           // m/s, + compressing (R14: W + 0x98); kVehWheelStroke (was reserved, 0)
 };
 static_assert(sizeof(Wheel) == 48);
 struct Vehicle {

@@ -50,6 +50,7 @@ int main() {
         put(car, at + 0x70, 400.0f);                                 // drive force
         put(car, at + 0x74, 50.0f);                                  // the other longitudinal force
         car[at + 0x89] = static_cast<uint8_t>(w);                    // surface
+        put(car, at + 0x98, 0.1f * (w + 1) - 0.25f);                 // stroke speed (m/s)
         put(car, car::kContacts + static_cast<uint32_t>(w) * 0x34 + 0, 5.0f);   // contact (5, 6, 7)
         put(car, car::kContacts + static_cast<uint32_t>(w) * 0x34 + 4, 6.0f);
         put(car, car::kContacts + static_cast<uint32_t>(w) * 0x34 + 8, 7.0f);
@@ -72,7 +73,9 @@ int main() {
            "wheel slip, forces, surface");
     expect(near(v.wheel[0].contact[0], 5) && near(v.wheel[0].contact[1], 7) && near(v.wheel[0].contact[2], -6),
            "contact in the world frame");
-    expect((v.valid & scene::kVehTransform) && (v.valid & scene::kVehWheelSlip) && !(v.valid & scene::kVehInputs) &&
+    expect(near(v.wheel[0].strokeSpeed, -0.15f) && near(v.wheel[3].strokeSpeed, 0.15f), "stroke speed");
+    expect((v.valid & scene::kVehTransform) && (v.valid & scene::kVehWheelSlip) && (v.valid & scene::kVehWheelStroke) &&
+               !(v.valid & scene::kVehInputs) &&
                !(v.valid & scene::kVehSteeringTorque),
            "valid: the fields R14 checked, not the inputs or the rack torque");
     if (failures) return 1;

@@ -46,7 +46,7 @@ gfx::scene::Vehicle decode_vehicle(const uint8_t *a, uint8_t entrant) {
     v.rpm = f32(a, d + 0x4FC) * 60.0f / 6.2831853f;
     v.gear = a[d + 0x520];
     v.valid = scene::kVehTransform | scene::kVehVelocity | scene::kVehEngine | scene::kVehWheelContact |
-              scene::kVehWheelForces | scene::kVehWheelSlip;
+              scene::kVehWheelForces | scene::kVehWheelSlip | scene::kVehWheelStroke;
     for (int w = 0; w < 4; ++w) {
         const uint32_t at = kWheels + static_cast<uint32_t>(w) * kWheelStride;
         scene::Wheel &out = v.wheel[w];
@@ -56,6 +56,7 @@ gfx::scene::Vehicle decode_vehicle(const uint8_t *a, uint8_t entrant) {
         out.forceLateral = f32(a, at + 0x68);
         out.forceLongitudinal = f32(a, at + 0x70) + f32(a, at + 0x74);
         out.surface = a[at + 0x89];
+        out.strokeSpeed = f32(a, at + 0x98);   // m/s, + compressing (R14; CONTRACTS a.4, 94735ce)
         out.onGround = out.load > 0.0f ? 1 : 0;
         float contact[3];
         for (int k = 0; k < 3; ++k) contact[k] = f32(a, kContacts + static_cast<uint32_t>(w) * 0x34 + k * 4);

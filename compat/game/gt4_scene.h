@@ -131,7 +131,7 @@ struct gt4_scene_wheel {
     float spin;
     float compression;
     unsigned char surface, on_ground, pad0, pad1;
-    float reserved;
+    float stroke_speed;
 };
 
 struct gt4_scene_vehicle {

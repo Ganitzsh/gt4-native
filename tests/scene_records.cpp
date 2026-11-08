@@ -148,7 +148,7 @@ void layouts() {
     SAME_AT(Wheel, gt4_scene_wheel, compression, compression);
     SAME_AT(Wheel, gt4_scene_wheel, surface, surface);
     SAME_AT(Wheel, gt4_scene_wheel, onGround, on_ground);
-    SAME_AT(Wheel, gt4_scene_wheel, reserved, reserved);
+    SAME_AT(Wheel, gt4_scene_wheel, strokeSpeed, stroke_speed);
 
     SAME_SIZE(Vehicle, gt4_scene_vehicle);
     SAME_AT(Vehicle, gt4_scene_vehicle, entrant, entrant);
