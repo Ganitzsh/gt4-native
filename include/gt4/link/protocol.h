@@ -19,9 +19,11 @@
 #include <stdint.h>
 
 #define GT4_LINK_MAGIC 0x4B4E4C34u /* "4LNK" */
-#define GT4_LINK_VERSION 4u /* 2: GT4_REC_GFX_DATA references to set uploads the host keeps (gfx::kDataReference);
+#define GT4_LINK_VERSION 5u /* 2: GT4_REC_GFX_DATA references to set uploads the host keeps (gfx::kDataReference);
                                 3: the graphics stream may carry scene records (gfx::kScene, docs/modern/CONTRACTS.md (a));
-                                4: the settings pages' records (GT4_REC_UI, _SETTINGS_SET, _SETTINGS; host commands 6, 7) */
+                                4: the settings pages' records (GT4_REC_UI, _SETTINGS_SET, _SETTINGS; host commands
+                                   6, 7);
+                                5: the graphics stream carries the origin's parts (gfx::kOriginParts, R6) */
 #define GT4_LINK_SIZE (128u << 20)
 #define GT4_LINK_G2H_SIZE (96u << 20) /* game -> host ring */
 #define GT4_LINK_H2G_SIZE (8u << 20)  /* host -> game ring */

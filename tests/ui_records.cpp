@@ -32,7 +32,7 @@ int main() {
               offsetof(wire::UiItem, textLength) == 48, "UiItem layout");
     check(sizeof(wire::SetHeader) == 16 && offsetof(wire::SetHeader, valueBytes) == 12, "SetHeader layout");
     check(sizeof(wire::SettingsHeader) == 16 && offsetof(wire::SettingsHeader, bytes) == 12, "SettingsHeader layout");
-    check(GT4_REC_UI == 16 && GT4_REC_SETTINGS_SET == 17 && GT4_REC_SETTINGS == 68 && GT4_LINK_VERSION == 4u,
+    check(GT4_REC_UI == 16 && GT4_REC_SETTINGS_SET == 17 && GT4_REC_SETTINGS == 68 && GT4_LINK_VERSION == 5u,
           "record numbers and the link version");
 
     // A draw list round trip, text included.

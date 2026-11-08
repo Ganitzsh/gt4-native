@@ -104,6 +104,9 @@ void gt4_scene_billboards_pause(void *context, int on);
 /* A6: around a car's light-map pass (0038F5D0, from render_cars): each batch run in it gets an Instance flagged
  * kInstLightMap with the car's entrant (out of the view binding, CONTRACTS.md a.5.7). */
 void gt4_scene_light_map(void *context, int on, unsigned entrant);
+/* R6: 004A2BC8's origin parts (include/gt4/gfx.h OriginParts), in sixteenths: sent before the origin it sets. */
+void gt4_gfx_origin_parts(void *context, unsigned contexts, unsigned fieldX, unsigned fieldY, unsigned superX,
+                          unsigned superY, unsigned sumX, unsigned sumY);
 /* A6: around the road reflection pass (render_reflection, 0033EAB8's +0x378 call): its Instances are flagged
  * kInstReflection (out of the view binding, CONTRACTS.md a.5.7). */
 void gt4_scene_reflection(void *context, int on);

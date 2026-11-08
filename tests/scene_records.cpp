@@ -186,6 +186,11 @@ public:
     void vsync(uint32_t, uint32_t) override {}
     void readTransfer(void* out, uint32_t qwc) override { std::memset(out, 0, size_t(qwc) * 16); }
     void effect(const gt4::gfx::EffectRecord&) override { order.push_back("effect"); }
+    gt4::gfx::OriginParts origin{};
+    void originParts(const gt4::gfx::OriginParts& r) override {
+        order.push_back("origin");
+        origin = r;
+    }
     void scene(const uint8_t* payload, size_t bytes) override {
         order.push_back("scene");
         scenes.emplace_back(payload, payload + bytes);
@@ -211,8 +216,16 @@ void stream() {
     instance.serial = 1;
     instance.objectToView[3][2] = -5.0f;
     gt4::gfx::EffectRecord effect{};
+    gt4::gfx::OriginParts origin{};   // R6: both contexts, the field half pixel on y, supersampling 5 and 7 sixteenths
+    origin.contexts = 3;
+    origin.fieldY = 8;
+    origin.superX = 5;
+    origin.superY = 7;
+    origin.sumX = 5;
+    origin.sumY = 15;
     std::vector<uint8_t> block;
     append(block, gt4::gfx::kScene, &begin, sizeof begin);
+    append(block, gt4::gfx::kOriginParts, &origin, sizeof origin);
     append(block, gt4::gfx::kEffect, &effect, sizeof effect);
     append(block, gt4::gfx::kScene, &instance, sizeof instance);
     const uint16_t shortRecord = scene::kMarker;   // two bytes: shorter than a prefix
@@ -221,7 +234,11 @@ void stream() {
     h.type = GT4_REC_GFX;
     h.size = static_cast<uint32_t>(block.size());
     gs.record(h, block.data());
-    check(target.order == std::vector<std::string>({"scene", "effect", "scene"}), "stream: scene records in order with the others");
+    check(target.order == std::vector<std::string>({"scene", "origin", "effect", "scene"}),
+          "stream: scene and origin records in order with the others");
+    const gt4::gfx::OriginParts& got = target.origin;
+    check(got.contexts == 3 && got.fieldY == 8 && got.superX == 5 && got.sumY == 15 && gs.stats().originParts == 1,
+          "stream: an origin record forwarded whole and counted (R6)");
     check(target.scenes.size() == 2 && target.scenes[0].size() == sizeof begin && target.scenes[1].size() == sizeof instance,
           "stream: each scene record whole");
     if (target.scenes.size() == 2) {

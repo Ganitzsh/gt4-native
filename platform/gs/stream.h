@@ -41,6 +41,9 @@ public:
     virtual void texSet(const uint8_t* payload, size_t bytes) { (void)payload; (void)bytes; }
     // A post effect as a pass (docs/NATIVE_V2.md, step 3).
     virtual void effect(const gfx::EffectRecord& r) { (void)r; }
+    // R6: the parts of the named contexts' next origin write (gfx::OriginParts, 004A2BC8), in stream order. Nothing by
+    // default: a target that doesn't pair them draws every origin as before.
+    virtual void originParts(const gfx::OriginParts& r) { (void)r; }
     // A scene record (gfx::kScene: gfx::scene::Prefix, then that kind's struct), in order with the batches.
     // Nothing by default (docs/modern/CONTRACTS.md (a): the scene decoder takes them, ticket A10).
     virtual void scene(const uint8_t* payload, size_t bytes) { (void)payload; (void)bytes; }
@@ -112,6 +115,7 @@ public:
         uint32_t retiredKind = 0;
         uint64_t gfxRecords = 0, badRecords = 0;   // native records in the VIF1 stream (include/gt4/gfx.h)
         uint64_t sceneRecords = 0;   // of them gfx::kScene (0 while the game's kOptionSceneRecords is off)
+        uint64_t originParts = 0;    // of them gfx::kOriginParts (R6: one per 004A2BC8 call)
         uint64_t uploads = 0, uploadsWithoutData = 0, draws = 0;
     };
     const Stats& stats() const { return counters; }

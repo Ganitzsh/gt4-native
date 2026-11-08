@@ -301,6 +301,8 @@ enum RecordType : uint32_t {
     kTexSet = 9,       // TexSetRecord, its uploads, its texture records (docs/NATIVE_V2.md)
     kEffect = 10,      // EffectRecord (docs/NATIVE_V2.md, step 3)
     kScene = 11,       // scene::Prefix, then the record of that kind (docs/modern/CONTRACTS.md (a)); values only
+    kOriginParts = 12, // OriginParts: the parts of the next origin write (R6)
+    kRecordTypeEnd,    // one past the last: the game's list walker (runtime/frame.cpp) sends only blocks below it
 };
 
 struct Header {
@@ -309,6 +311,20 @@ struct Header {
     uint32_t bytes() const { return word >> 8; }
 };
 constexpr Header header(uint32_t type, uint32_t bytes) { return Header{type | bytes << 8}; }
+
+// R6: GT4's library sets the drawing origin (XYOFFSET) in 004A2BC8 as base + (int)((ox + sx * px) * 16) per axis, at
+// most 15 sixteenths: ox / oy the field part (004A2B58, from the display mode: 0 or one half pixel by field), sx * px /
+// sy * py the supersampling part (004A2C58's jitter passes). The register holds only the sum, so 004A2BC8 sends this
+// record before the origin it sets reaches the stream; it pairs with each named context's next origin write (by
+// register or by a state record's kOrigin group). All in sixteenths of a pixel, 0..15.
+struct OriginParts {
+    uint8_t contexts;         // bit 0 context 1, bit 1 context 2
+    uint8_t fieldX, fieldY;   // (int)(ox * 16), (int)(oy * 16)
+    uint8_t superX, superY;   // 004A2BC8's own value with ox = oy = 0: (int)(sx * px * 16), 16 -> 15 as it clamps
+    uint8_t sumX, sumY;       // what 004A2BC8 put in the register's fraction: (int)((ox + sx * px) * 16), 16 -> 15
+    uint8_t reserved;         // 0
+};
+static_assert(sizeof(OriginParts) == 8);   // with its Header: 12 bytes
 
 // The groups that changed (shared groups, then context 1's, then context 2's), from one source context.
 struct StateRecord {

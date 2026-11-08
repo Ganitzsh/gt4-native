@@ -304,7 +304,7 @@ void walk(WalkTimes &times, uint32_t start) {
                 // differ, so the host sees it too.
                 static uint32_t dropped = 0;
                 if (dropped++ == 0) log_warn("frame: a scene record in a called display list (at %08x): dropped", at);
-            } else if (first.type() <= gfx::kScene && sizeof first + first.bytes() <= bytes) {
+            } else if (first.type() < gfx::kRecordTypeEnd && sizeof first + first.bytes() <= bytes) {
                 send_block(times, block, bytes);
             } else {
                 static int warned = 0;

@@ -412,6 +412,7 @@ public:
     void texSet(const uint8_t* payload, size_t bytes) override { put(Op::TexSet, 0, 0, payload, bytes); }
     bool models() const override { return inner.models(); }
     void effect(const gfx::EffectRecord& r) override { put(Op::Effect, 0, 0, &r, sizeof r); }
+    void originParts(const gfx::OriginParts& r) override { put(Op::OriginParts, 0, 0, &r, sizeof r); }
     void scene(const uint8_t* payload, size_t bytes) override { put(Op::Scene, 0, 0, payload, bytes); }
     void sceneFrame(std::unique_ptr<scene::SceneFrame>& frame) override {   // (the pointer travels; the front thread owns it)
         if (!frame) return;
@@ -463,7 +464,7 @@ public:
 
 private:
     enum class Op : uint32_t { Gif, Primitives, Display, State, Upload, Read, Draw, Vsync, TexSet, Model, Effect, ReadLater, Scene,
-                               SceneFrame, SceneView };
+                               SceneFrame, SceneView, OriginParts };
     std::mutex viewsMutex;   // the views' FIFO: Op::SceneView takes the oldest
     std::vector<std::shared_ptr<const scene::SceneView>> views;
     size_t viewsHead = 0;
@@ -576,6 +577,12 @@ private:
                 gfx::EffectRecord r;
                 std::memcpy(&r, first, sizeof r);
                 inner.effect(r);
+                break;
+            }
+            case Op::OriginParts: {
+                gfx::OriginParts r;
+                std::memcpy(&r, first, sizeof r);
+                inner.originParts(r);
                 break;
             }
             case Op::Model: {

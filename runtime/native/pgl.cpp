@@ -1054,6 +1054,22 @@ void gt4_gfx_effect_end(uint32_t context) {
     append(context, gfx::kEffect, &m, sizeof m);
 }
 
+// R6: 004A2BC8's origin parts (game_src/func_004A2BC8.cpp), in stream order before the state flush that carries the
+// origin it set (include/gt4/gfx.h OriginParts). Values above 15 are clamped (004A2BC8 never gives them).
+void gt4_gfx_origin_parts(uint32_t context, uint32_t contexts, uint32_t fieldX, uint32_t fieldY, uint32_t superX,
+                          uint32_t superY, uint32_t sumX, uint32_t sumY) {
+    auto part = [](uint32_t v) { return static_cast<uint8_t>(v > 15 ? 15 : v); };
+    gfx::OriginParts r{};
+    r.contexts = static_cast<uint8_t>(contexts & 3);
+    r.fieldX = part(fieldX);
+    r.fieldY = part(fieldY);
+    r.superX = part(superX);
+    r.superY = part(superY);
+    r.sumX = part(sumX);
+    r.sumY = part(sumY);
+    append(context, gfx::kOriginParts, &r, sizeof r);
+}
+
 // The batch run (itop 0xFFFFFFFF: the lighting chain the last run had).
 void gt4_gfx_batch_run(uint32_t context, uint32_t entry, uint32_t itop) {
     if (g_scene.inFrame && gt4_scene_on()) {

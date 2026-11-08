@@ -171,6 +171,17 @@ void GraphicsStream::records(const uint8_t* data, size_t bytes) {
             gs.effect(r);
             break;
         }
+        case gfx::kOriginParts: {
+            if (h.bytes() < sizeof(gfx::OriginParts)) {
+                ++counters.badRecords;
+                break;
+            }
+            gfx::OriginParts r;
+            std::memcpy(&r, payload, sizeof r);
+            ++counters.originParts;
+            gs.originParts(r);
+            break;
+        }
         case gfx::kScene:
             // validated by the scene decoder (counters `bad`, `versionUnknown`...); only too short for a prefix here
             if (h.bytes() < sizeof(gfx::scene::Prefix)) {
@@ -780,7 +791,7 @@ std::string GraphicsStream::describe() const {
         << r.oversized << " oversized, " << v.outsideBatch << " qwords outside the batch buffers; " << r.setups << " objects, "
         << r.matched << " seen the frame before), " << v.unknownCodes << " unknown codes; "
         << counters.gfxRecords << " native records (" << counters.uploads << " uploads, " << counters.uploadsWithoutData
-         << " without data, " << counters.draws << " draws, " << counters.sceneRecords << " scene, " << counters.badRecords << " bad); " << counters.displays << " displays, " << counters.reads
+         << " without data, " << counters.draws << " draws, " << counters.sceneRecords << " scene, " << counters.originParts << " origin parts, " << counters.badRecords << " bad); " << counters.displays << " displays, " << counters.reads
         << " GS reads; model packets: " << vif1.modelStats.decoded << " decoded, " << vif1.modelStats.replayed << " replayed, "
         << vif1.modelStats.uncacheable << " not kept; 3D batches on the GPU: " << counters.modelBatches;
     if (sceneDecoder_.seen()) {   // the scene records' counters (CONTRACTS.md a.7), totals of the finished frames
