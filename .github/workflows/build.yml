@@ -69,25 +69,65 @@ jobs:
       - name: Test
         run: ctest --test-dir build-sanitized --output-on-failure --timeout 30
 
-  host:
-    name: SDL3 + Vulkan host / ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
+  # The SDL3 + Vulkan host (PLAN.md C4, R4): what CI can build without the game's private sources or a disc. Nothing
+  # proprietary goes in: no game, no captures, no BIOS; the caches hold only zig and Ubuntu's own packages. Tests that
+  # need a capture or a GPU skip (77); Linux runs Mesa's lavapipe, so its host_replay runs for real.
+  host-windows:
+    name: Host / Windows x64 (ctest) + ARM64 (cross)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Python for the tools' selftests
+        run: python -m pip install --quiet numpy
+      - name: x64, build and ctest (tools/build_windows.cmd)
+        shell: cmd
+        run: tools\build_windows.cmd Release
+      - name: The x64 build's glslang, for the ARM64 build's shaders
+        shell: pwsh
+        run: |
+          $g = Get-ChildItem build\host-windows-Release\_deps -Recurse -Filter glslang.exe | Select-Object -First 1
+          if (-not $g) { throw "no glslang.exe in the x64 build" }
+          "GT4_GLSLANG_EXECUTABLE=$($g.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: ARM64, cross build (tools/build_windows.cmd, GT4_ARCH=arm64)
+        shell: cmd
+        env:
+          GT4_ARCH: arm64
+        run: tools\build_windows.cmd Release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gt4-host-windows
+          path: |
+            build/host-windows-Release/gt4_host.exe
+            build/host-windows-arm64-Release/gt4_host.exe
+          if-no-files-found: error
+
+  host-linux:
+    name: Host / Linux ${{ matrix.arch }} (tools/build_linux.sh)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        arch: [x86_64, aarch64]
+    env:
+      GT4_LINUX_TOOLS: ${{ github.workspace }}/.linux-tools
+      GT4_JOBS: 4
     steps:
       - uses: actions/checkout@v4
-      - name: Install SDL's Linux build dependencies
-        if: runner.os == 'Linux'
+      - name: Build tools; lavapipe and numpy for the tests (x86_64 runs ctest)
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
-            libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev wayland-protocols libdecor-0-dev \
-            libpulse-dev libasound2-dev libudev-dev libdbus-1-dev
-      - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DGT4_BUILD_HOST=ON -DBUILD_TESTING=ON
-      - name: Build
-        run: cmake --build build --config Release --parallel 2
-      - name: Test
-        run: ctest --test-dir build -C Release --output-on-failure --timeout 30
+          sudo apt-get install -y ninja-build mesa-vulkan-drivers libvulkan1 python3-numpy
+      - name: zig and the Ubuntu package sysroots (public downloads only)
+        uses: actions/cache@v4
+        with:
+          path: .linux-tools
+          key: linux-tools-${{ matrix.arch }}-${{ hashFiles('tools/build_linux.sh') }}
+      - name: Build (and ctest on x86_64)
+        run: bash tools/build_linux.sh ${{ matrix.arch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gt4-host-linux-${{ matrix.arch }}
+          path: build/host-linux-${{ matrix.arch == 'x86_64' && 'x64' || 'arm64' }}-Release/gt4_host
+          if-no-files-found: error
