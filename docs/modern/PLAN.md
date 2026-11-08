@@ -363,6 +363,126 @@ wheel works in GT4's menus and races with its force feedback.
 **D10: Loading (M).** Measure 004B0E28 and 0x00104E30, then mapped reads. **D11: Latency (S-M).**
 Acceptance for each as the audit's section 4 states, with session tests.
 
+**Input as in current racing games (D12-D16; the owner, 2026-11-08).** The goal is the control quality of GT7, Forza
+and ACC on top of the PS2 mapping, never instead of it. The constraints:
+- Each feature is an `input.*` setting (`settings_input.cpp`). The `original` preset keeps today's behaviour byte for
+  byte (`tests/input_map.cpp`). The other presets take the defaults each ticket gives.
+- Everything happens on the host, before GT4 sees the pad. GT4's own sticks have no dead zone and a linear curve
+  (`spikes/D1-bindings.md`), so the host's response is the whole response.
+- GT4's functions stay assigned in GT4's own controller screen (D1's decision). The host maps devices to the PS2
+  pad; it never moves GT4's functions.
+- Every per-frame filter is counted in D11's latency budget.
+In order of value:
+
+**D12: Steering and pedal response (S-M).** `platform/input/response.{h,cpp}`. Today the sticks cut at 8 % and
+don't rescale (`kStickDeadZone`, `input_map.cpp:62`), so steering jumps from 0 to 8 % of lock.
+- `input.response = original | modern`. `original` (the `original` preset) bypasses all of this: today's map, the
+  8 % cut with no rescale and nothing else, whatever the keys below say. `modern` (every other preset) turns the
+  binding's own 8 % cut off, so the response works on the summed value (keys summed with the stick pass through it
+  too).
+- **A stateful stage after `apply()`**, which stays stateless: `input::Response::step(PadInput&, const Snapshot&,
+  float dt)`, one per pad, held in `main.cpp`. It does smoothing and the keyboard ramp, which need state and the
+  frame's dt. The shaping (dead zones, linearity, sensitivity, saturation) is pure functions it calls, which the
+  CTEST covers.
+- Steering (left stick X), per side. Its dead zones are **per axis, on X only**, which is right for steering: they
+  must not be made radial.
+  - `input.steer.deadzone` (inner, 0-30 %, default 5 %): below it 0; above it rescaled, so the output starts
+    at 0;
+  - `input.steer.outer_deadzone` (0-30 %, default 2 %): full output that far before the end of travel;
+  - `input.steer.linearity` (exponent 1.0-3.0, default 1.0): finer control near the centre above 1;
+  - `input.steer.sensitivity` (0.5-2.0, default 1.0): a gain before the limit, so above 1 full lock comes early;
+  - `input.steer.saturation` (50-100 %, default 100 %): the most lock the stick gives;
+  - `input.steer.smoothing` (0-100 ms, default 0): a one-pole filter.
+- Pedals (each trigger's travel, and the right stick's halves when GT4's analog config uses them): inner and outer
+  dead zone, linearity and smoothing, the same way (`input.pedal.*`). Then GT4's own curve, and
+  `input.trigger_travel` if it is `full`, apply on top as today.
+- Keyboard steering: a digital key ramps the axis at `input.steer.key_rate` (full lock in 0-500 ms, default 150 ms;
+  `original` 0, today's step) and returns at twice that rate.
+- **Speed-sensitive steering**, `input.steer.speed_reduction` (0-80 % less lock at 200 km/h, default 0), comes
+  after D6 (speed, `D + 0x5C4`). It is set only after measuring how GT4 already reduces lock with speed (the
+  steering angle at the wheels, `D + 0x468`, at full stick from 0 to 200 km/h), so the host never doubles it.
+- Depends: D1. Acceptance:
+  - `CTEST` (a new `input_response` test): the output is continuous at the inner dead zone's edge (0 at the edge,
+    one steering byte step just above it), monotonic, and full travel gives full lock at saturation 100 %; the
+    `original` map's bytes are unchanged for every input; smoothing's step response has the configured time
+    constant.
+  - A session test with the virtual pad sweeps the stick over 256 steps. With the defaults, every steering byte from
+    the centre to full lock is reached, with no gap over one byte. With `original`, the jump at 8 % is still there.
+  - Live: the steering angle at the wheels against the stick, standstill and 100 km/h, linearity 1 and 2, plotted
+    (D6's field). It records GT4's own speed reduction for the speed-sensitive part.
+
+**D13: Devices: profiles, hot-plug, keyboard bindings (M-L).** `platform/input/devices.{h,cpp}`.
+- **Profiles.** Each device keyed by its SDL GUID and name: its bindings to the PS2 pad, D12's response, D14's
+  haptics and D16's gyro settings, kept in `input_profiles.ini` beside `settings.ini`. A new device gets the
+  defaults for its type (gamepad, keyboard, wheel).
+- **Hot-plug.** `SDL_EVENT_GAMEPAD_ADDED` / `REMOVED`. A device keeps its port across a reconnect (by GUID, then
+  by order). A port whose device leaves reads unplugged (`scePad2GetState`, D1), as on the PS2.
+- **Keyboard bindings** are rebindable keys for the PS2 pad's inputs.
+- **Remapping** maps a device's inputs to the PS2 pad's. It never moves GT4's functions, so the default stays the
+  PS2 places and GT4's controller screen still assigns accelerate, brake and the rest. Refused, since the menus
+  need them: a remap that leaves any menu input unbound (Cross, Circle, Triangle (back in the Options screens),
+  Start, the D-pad), and an analogue input on Cross or Circle (D1's `input.pedals` trap: a trigger pull confirms).
+  An analogue input on another button GT4 reads in menus gets a warning.
+- Depends: D1. Acceptance:
+  - `CTEST`: profiles round-trip; each refused remap (a menu input unbound, an analogue input on Cross or Circle) is
+    refused; the `original` map is unchanged with no profile file.
+  - A session test plugs and unplugs two virtual pads during a race and a menu: ports stay, unplugged reads as on
+    the PS2, and the game goes on.
+  - Live: one Xbox pad, one DualSense and the keyboard, each with its own profile after a restart.
+
+**D14: Gamepad haptics from the physics (M).** `platform/input/haptics.{h,cpp}`, from D6's per-wheel fields
+(R14: slip ratio `W + 0x38`, slip angle `W + 0x34`, load `W + 0x48`, surface `W + 0x89` (a surface id: 2 seen at
+the track edge; the id table is open), stroke speed `W + 0x98`), read each frame through the vehicle record (A9).
+The kerb signal waits for the id table (or comes from stroke speed alone until then).
+- **Motors:** the low-frequency motor from front slip past the grip peak (understeer), lock-up and wheelspin; the
+  high-frequency motor from kerbs and road texture (surface and stroke speed).
+- **Impulse triggers** (Xbox, `SDL_RumbleGamepadTriggers`): brake lock-up on the left, wheelspin on the right.
+  On Windows they come only through SDL's Windows.Gaming.Input or GameInput backends (not XInput), over USB or
+  the Xbox Wireless Adapter, not Bluetooth. The call returns false otherwise, and the host checks it and shows
+  "not supported on this connection" instead of assuming.
+- **DualSense adaptive triggers** (`SDL_SendGamepadEffect`, through SDL's HIDAPI PS5 driver, USB and Bluetooth):
+  brake resistance rising as the front wheels near lock-up, and a pulse on the throttle when the rear wheels spin.
+  SDL defines no trigger-effect API: the host builds the output report's effects block itself (the layout SDL's
+  `testcontroller` uses). Over Bluetooth it needs SDL's enhanced reports, which SDL3 turns on when effects or
+  sensors are used.
+- **HD haptics** only where SDL3 exposes them. If none, that's reported, not worked around.
+- GT4's own rumble (D2) stays and mixes in (crashes), taking the larger value per motor.
+- Settings: `input.haptics` (`original`: D2 only, the PS2 behaviour; `physics`), `input.haptics.strength` (0-100 %),
+  and `input.trigger_effects` (`off`, `on`; default `on` outside `original`).
+- Depends: D2, D6, A9, D13 (per-device). Acceptance:
+  - `CTEST`: the mapping from recorded wheel fields to motor and trigger values, on a recorded lap's fields
+    (one-frame steps, no output when stopped).
+  - A session test reads the haptic records over a lap with a kerb, a lock-up and a spin, and each shows where
+    D6's fields show it.
+  - Live, manual: an Xbox pad (USB or the wireless adapter) and a DualSense (USB and Bluetooth), with Steam Input
+    and DS4Windows closed: either can hold the device and swallow the effects (checked and said in the result).
+  - D11: the effect is at most one frame behind the physics frame it comes from.
+
+**D15: Wheels beyond the Driving Force Pro (L).** Two paths, a setting per device (D13):
+- `input.wheel.mode`:
+  - `dfp`: GT4 sees a Driving Force Pro through D7's LGDEV emulation and drives its own effects (the PS2
+    behaviour, and the default for a wheel in `original`);
+  - `native`: the wheel's axes go through D12 as a steering axis with its own rotation (`input.wheel.rotation`,
+    degrees for full lock), with separate pedal axes, and the force comes from D8's physics.
+- **Force feedback** through `SDL_Haptic`: constant force from D8's self-aligning torque (R14: built from the front
+  wheels' lateral forces, `func_00353EE8`), plus damper and spring for low speed and a kerb effect from D14's
+  signal.
+- `input.wheel.ffb_strength` (0-100 %) and `input.wheel.ffb_min` (small-force boost, 0-20 %).
+- The supported list is what SDL3 exposes: Logitech G series, Fanatec and Moza through DirectInput on Windows,
+  checked on the devices the owner has.
+- Depends: D7, D8, D12, D13, R15. Acceptance:
+  - `CTEST` (effect translation, on recorded fields);
+  - session test (the effect stream over a lap);
+  - live on each available wheel: centring, the loss of weight at understeer, kerbs; `dfp` behaves as D7.
+
+**D16: Gyro steering (S-M).** `input.gyro = off | steer` (default `off` in every preset). The controller's roll,
+fused from gyro and accelerometer (`SDL_SetGamepadSensorEnabled`), steers. Full lock at `input.gyro.range` (30-180
+degrees, default 90), recentred by a button chosen in D13's profile. It adds to the stick before D12's response.
+Depends: D12, D13. Acceptance:
+- `CTEST` (fusion on synthetic sensor data: half the range gives half lock; drift under 1 degree a minute at rest
+  after the bias calibration);
+- live, manual: a DualSense, a DualShock 4 or a Switch Pro.
+
 ### Lane E: UI, and the previous agents' unfinished work
 
 **E2: Menu movie background as one texture updated in place (S).** Land the uncommitted work in
@@ -408,7 +528,15 @@ preset's values unchanged. **Day one.**
 after upscaling and tone mapping, at paper white in HDR. Depends: A5a, B4. Acceptance: `ORIG`; HUD sharp at 4K with
 render scale 50 %; HDR HUD at paper white (measured).
 
-**E7: SDF text for GT4's font pages (M).** Depends: E6. **E8: Input remap and audio pages (M).** Depends: D1, D5.
+**E7: SDF text for GT4's font pages (M).** Depends: E6.
+
+**E8a: Input pages (M).** `settings_menu.*`: the devices list (D13), each device's bindings, response (D12) with a
+live plot of stick against output, haptics (D14), gyro (D16) and wheel (D15) pages. Each page is shown when its
+ticket has landed. Saved per device in D13's profile. It shows GT4's own controller screen as where accelerate and
+brake are set (D1). Depends: E5, D12, D13. Acceptance: every D12 setting can be set and reset from the pad alone;
+a profile set in the menu matches the file; the menu works with the keyboard only.
+
+**E8b: Audio page (S).** Depends: D5.
 **E9: HUD scale, safe area, HUD off, photo export (M).** Depends: E6.
 
 ### Lane F: night lighting, and the Route 5 night artefacts
@@ -529,7 +657,7 @@ No two day-one tickets edit the same file except `main.cpp` / `renderer.cpp` (B2
 | Phase | Tickets | Gate to leave it |
 |---|---|---|
 | 0. Foundations (weeks 1-3) | A0, A1, A10, A2, A3; B2, B1, B5, B3; C1-C4, C10; E1-E4; F0, F1, N0, N1; spikes R1-R7, R9-R12 | `SCENE` gates on race and event captures; B3 `PRESETS` |
-| 1. Parity (weeks 3-8) | B4, B6, B7, A4, A5a, A6, A11a; D-track | `PARITY` on REF |
+| 1. Parity (weeks 3-8) | B4, B6, B7, A4, A5a, A6, A11a; D-track (D12, D13 first) | `PARITY` on REF |
 | 2. Hybrid ships (weeks 8-10) | B8, B9, F2, N3, N4 (hybrid parts) | `render.scene = hybrid` in presets low-ultra; `R5` gates in hybrid |
 | 3. Modern lighting (weeks 10-18) | B10-B15, F3, F4, A7, A8 (N2b/c and A11b only if N2 reopens) | `R5` gates in modern; owner review |
 | 4. Resolution and effects | B16-B22, F5, E6-E9 | per ticket |
