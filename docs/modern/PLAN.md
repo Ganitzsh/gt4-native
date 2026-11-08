@@ -788,7 +788,10 @@ coordinator's call) gives low to ultra `stereo`. `hrtf` is the player's choice (
     - car effects: in the shared banks, the key-ons of samples that tagged voices also play, tagged. The shared
       banks' other untagged samples are listed with their key-on counts, and the most played are identified (by
       ear, or by the request that starts them) as not car sounds; the worst case, all of them car sounds, is
-      reported beside the rate;
+      reported beside the rate. Left out of this rate, and listed with their count: `RaceCourseSound`'s key-ons
+      (00398B70, the player's own wheels on the course's surfaces, played by the course at the listener with L
+      and R GT4 already panned), found in the trace by their owner being one of its players. They stay in
+      the bed, untagged, as GT4 mixes them (lane D, 2026-11-08);
     - and no BGM, UI or narration key-on tagged. Counted per frame (`voicesTagged`, `voicesUntagged`,
       `voicesNoPosition`); gaps the note names (e.g. a shared tyre-squeal voice) are listed with their share.
   - Direction: a session in which an AI car passes the player; in each 100 ms window where the car's |x| in the
