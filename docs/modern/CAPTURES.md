@@ -125,7 +125,8 @@ background as before; the host's "Texture pack:" line says which mode runs.
 A scripted session runs the host with `--session-dir DIR`: it attaches a virtual pad and runs the commands it
 finds in `DIR/commands/*.cmd`, in name order (`tools/host_session.py send` writes one; the syntax is in
 `platform/sdl/session.cpp`: `button NAME 0|1`, `axis NAME VALUE`, `wait FRAMES`, `vwait VBLANKS`,
-`capture NAME [COUNT]`, `quit`). Two pitfalls:
+`capture NAME [COUNT]`, `quit`; `button2` and `axis2` drive a second virtual pad, the game's pad 2, plugged in at
+their first use and removed by `unplug2`: without them port 2 is empty, as before). Two pitfalls:
 
 1. **Queue a press and its release together.** Each command is run when the host sees it. Sending them one at a
    time through `host_session.py` costs about half a second each (a Python start), so `button cross 1`,

@@ -20,6 +20,9 @@ public:
     bool action() const;
     // The virtual gamepad, which also plays the game's pad 1 in a game session.
     SDL_Gamepad* gamepad() const;
+    // The game's pad 2: a second virtual gamepad, plugged in by the first "button2"/"axis2" command and removed by
+    // "unplug2"; null while there is none (port 2 empty).
+    SDL_Gamepad* gamepad2() const;
     // Future game mixer integration: stereo signed-16 PCM, 48 kHz, main thread.
     void submitAudio(const int16_t* samples, uint32_t frames);
     void frame(uint32_t number, double milliseconds, double gpuMilliseconds, uint32_t width, uint32_t height);

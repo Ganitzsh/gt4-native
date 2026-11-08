@@ -29,7 +29,9 @@ py tools\host_session.py run --exe build\host-windows-Release\gt4_host.exe --hos
   the window size, 1280x720). No window, surface or swapchain is created, so any GPU can be used (default: the discrete one)
   and no desktop is needed. Captures, session commands and reports are the same as in windowed runs.
 - **Sessions** (`tools/host_session.py`, `--session-dir`): a virtual gamepad plus a command queue (`axis`,
-  `button`, `reset`, `capture NAME`, `set KEY VALUE`, `wait FRAMES`, `vwait VBLANKS`, `resize W H`, `tone HZ S`, `quit`); with `--game` its virtual gamepad is the game's pad 1 (`button dpdown 1` ...). `vwait` counts the game's VBlanks: a press
+  `button`, `reset`, `capture NAME`, `set KEY VALUE`, `wait FRAMES`, `vwait VBLANKS`, `resize W H`, `tone HZ S`, `quit`); with `--game` its virtual gamepad is the game's pad 1 (`button dpdown 1` ...). `button2` and `axis2`
+  drive a second virtual gamepad, the game's pad 2, plugged in at their first use and removed by `unplug2`; a session
+  that never uses them has an empty port 2. `vwait` counts the game's VBlanks: a press
   timed in host frames can fall between two of the game's pad reads while it is busy (headless, the host
   draws several frames per VBlank, unevenly), and GT4 then never sees it. The
   report lists the GPU, every setting change with the resulting pipeline, GPU frame times and the captures as

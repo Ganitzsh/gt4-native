@@ -49,6 +49,11 @@ struct Session::Impl {
     SDL_JoystickID id = 0;
     SDL_Joystick* joystick = nullptr;
     SDL_Gamepad* gamepad = nullptr;
+    // Pad 2 (the game's port 2): a second virtual gamepad, plugged in by the first "button2"/"axis2" command and
+    // removed by "unplug2"; a session that never uses them has an empty port 2, as before.
+    SDL_JoystickID id2 = 0;
+    SDL_Joystick* joystick2 = nullptr;
+    SDL_Gamepad* gamepad2 = nullptr;
     SDL_AudioStream* audio = nullptr;
     uint32_t audioBytes = 0;
     Uint64 started = SDL_GetTicks(), generated = 0;
@@ -74,9 +79,52 @@ struct Session::Impl {
     ~Impl() {
         if (audio) SDL_DestroyAudioStream(audio);
         if (wav) { wav.seekp(0); header(); wav.close(); }
+        unplug2(false);
         if (gamepad) SDL_CloseGamepad(gamepad);
         if (joystick) SDL_CloseJoystick(joystick);
         if (id) SDL_DetachVirtualJoystick(id);
+    }
+    static SDL_JoystickID attachPad(const char* name, SDL_Joystick*& joystickOut, SDL_Gamepad*& gamepadOut) {
+        SDL_VirtualJoystickDesc desc;
+        SDL_INIT_INTERFACE(&desc);
+        desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+        desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+        desc.nbuttons = 15;
+        desc.axis_mask = (1u << SDL_GAMEPAD_AXIS_COUNT) - 1;
+        desc.button_mask = (1u << 15) - 1;
+        desc.name = name;
+        const SDL_JoystickID attached = SDL_AttachVirtualJoystick(&desc);
+        require(attached != 0, "SDL_AttachVirtualJoystick");
+        joystickOut = SDL_OpenJoystick(attached);
+        require(joystickOut != nullptr, "SDL_OpenJoystick");
+        gamepadOut = SDL_OpenGamepad(attached);
+        require(gamepadOut != nullptr, "SDL_OpenGamepad");
+        return attached;
+    }
+    static void neutral(SDL_Joystick* j) {
+        for (int i = 0; i < 15; ++i) require(SDL_SetJoystickVirtualButton(j, i, false), "virtual button");
+        for (int i = 0; i < SDL_GAMEPAD_AXIS_COUNT; ++i)
+            require(SDL_SetJoystickVirtualAxis(j, i, i >= SDL_GAMEPAD_AXIS_LEFT_TRIGGER ? -32768 : 0), "virtual axis");
+        SDL_UpdateJoysticks();
+    }
+    // Pad 2's joystick, plugged in (neutral) on first use.
+    SDL_Joystick* pad2() {
+        if (!joystick2) {
+            id2 = attachPad("GT4 automation controller 2", joystick2, gamepad2);
+            neutral(joystick2);
+            event("pad2", "\"plugged\":true,\"controller\":" + std::to_string(id2));
+        }
+        return joystick2;
+    }
+    void unplug2(bool record = true) {   // (false from the destructor, which must not throw)
+        if (!joystick2) return;
+        SDL_CloseGamepad(gamepad2);
+        SDL_CloseJoystick(joystick2);
+        SDL_DetachVirtualJoystick(id2);
+        gamepad2 = nullptr;
+        joystick2 = nullptr;
+        id2 = 0;
+        if (record) event("pad2", "\"plugged\":false");
     }
     void header() {
         wav.write("RIFF", 4); le(wav, 36 + audioBytes, 4); wav.write("WAVEfmt ", 8);
@@ -181,20 +229,21 @@ struct Session::Impl {
         std::string op;
         input >> op;
         bool quit = false;
-        if (op == "axis") {
+        if (op == "axis" || op == "axis2") {
             std::string name; int value;
-            if (!(input >> name >> value)) throw std::runtime_error("axis NAME VALUE required");
+            if (!(input >> name >> value)) throw std::runtime_error(op + " NAME VALUE required");
             auto axis = SDL_GetGamepadAxisFromString(name.c_str());
             if (axis < 0 || axis >= SDL_GAMEPAD_AXIS_COUNT || value < -32768 || value > 32767)
                 throw std::runtime_error("Invalid axis or value");
-            require(SDL_SetJoystickVirtualAxis(joystick, axis, static_cast<Sint16>(value)), "virtual axis");
-        } else if (op == "button") {
+            require(SDL_SetJoystickVirtualAxis(op == "axis" ? joystick : pad2(), axis, static_cast<Sint16>(value)), "virtual axis");
+        } else if (op == "button" || op == "button2") {
             std::string name; int value;
-            if (!(input >> name >> value)) throw std::runtime_error("button NAME 0|1 required");
+            if (!(input >> name >> value)) throw std::runtime_error(op + " NAME 0|1 required");
             auto which = button(name);
             if (which < 0 || which >= 15 || (value != 0 && value != 1)) throw std::runtime_error("Invalid button or state");
-            require(SDL_SetJoystickVirtualButton(joystick, which, value != 0), "virtual button");
-        } else if (op == "reset") reset();
+            require(SDL_SetJoystickVirtualButton(op == "button" ? joystick : pad2(), which, value != 0), "virtual button");
+        } else if (op == "unplug2") unplug2();
+        else if (op == "reset") reset();
         else if (op == "capture") {
             std::string name; input >> name;
             int count = 1; input >> count;
@@ -308,6 +357,7 @@ bool Session::tick(Renderer& renderer, SDL_Window* window, uint32_t frame) {
 }
 float Session::horizontal() const { return SDL_GetGamepadAxis(impl->gamepad, SDL_GAMEPAD_AXIS_LEFTX) / 32768.0f; }
 SDL_Gamepad* Session::gamepad() const { return impl->gamepad; }
+SDL_Gamepad* Session::gamepad2() const { return impl->gamepad2; }
 bool Session::action() const { return SDL_GetGamepadButton(impl->gamepad, SDL_GAMEPAD_BUTTON_SOUTH); }
 void Session::submitAudio(const int16_t* samples, uint32_t frames) { impl->submit(samples, frames); }
 void Session::onSetting(std::function<std::string(const std::string&, const std::string&)> handler) {

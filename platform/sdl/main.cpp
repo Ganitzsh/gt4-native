@@ -970,8 +970,9 @@ int run(const Options& options) {
                 gs->sendPad(0, true, pad);
                 // Pad 2: a second gamepad (no keyboard), held back like pad 1. Without one, port 2 is empty: the game
                 // sees no controller there, as on a PS2 (runtime/iop.cpp scePad2GetState); told once when it goes.
-                if (gamepad2) {
-                    gt4::ps2::PadInput input2 = readPad(gamepad2, false);
+                // (in a session: its second virtual pad, button2 / axis2)
+                if (SDL_Gamepad* second = session ? session->gamepad2() : gamepad2) {
+                    gt4::ps2::PadInput input2 = readPad(second, false);
                     if (menu.isOpen() || padHeldBack) input2 = gt4::ps2::PadInput{};
                     gt4::ps2::encodePad(input2, pad);
                     gs->sendPad(1, true, pad);
