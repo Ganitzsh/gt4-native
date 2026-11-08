@@ -5,6 +5,9 @@
 
 #include "gt4_shaders.h"
 #include "../gs/cpu_profile.h"
+#include "../scene/scene_frame.h"
+#include "lights_cluster.h"
+#include "lights_gather.h"
 
 #include <algorithm>
 #include <cassert>
@@ -174,6 +177,52 @@ struct GsnScene::Impl {
     } lighting;
     vk::Pipeline aoPass, lightPass;
     vk::Image aoImage, litImage;
+    // lighting.night (PLAN.md F2, CONTRACTS.md c.3; GsnScene::setNightLighting): the view's lamps added in
+    // gsn_light.comp, from the clustered light list (F1) and an albedo estimate (gsn_night_lum.comp).
+    float night = 0.0f;                        // 0: off; else the added light's strength
+    vk::Pipeline nightLumPass;
+    render::LightClusters clusters;
+    vk::Image nightLocal;                      // (sum of log luminance, count) per 8 x 8 block
+    vk::Buffer nightCells, nightIndices, nightStats;   // written by the cluster build, read by gsn_light.comp
+    // Per Light command of a list (its ordinal), per (list, slot): the light list's header and lights and the cluster
+    // grid, which the CPU writes (separate buffers: the cluster build binds each at offset 0).
+    std::vector<std::vector<vk::Buffer>> nightHeaders, nightLists, nightGrids;
+    uint32_t nightOrdinal = 0;                 // Light commands of the current list relit so far
+    std::vector<gfx::scene::Light> nightRecords;
+    std::vector<render::GpuLight> nightLights;
+    render::GatherStats nightStatsLast;
+    // gsn_light.comp's push constants from `night` on (offset 40): mirrored field for field.
+    struct NightPush {
+        float night = 0.0f, pad0 = 0.0f;
+        float focal[2] = {1.0f, 1.0f}, centre[2] = {0.0f, 0.0f};
+        float distanceA = 0.0f, distanceB = 0.0f, maxDistance = 0.0f, pad1 = 0.0f;
+        float inset[4] = {1.0f, 1.0f, 0.0f, 0.0f};   // x1 < x0: no mirror
+    };
+    static_assert(sizeof(NightPush) == 56);
+    // gsn_light.comp's push constants, whole.
+    struct LightPush {
+        float size[2], occlusion, zScale, grade, contrast, vibrance, warmth;
+        uint32_t view, aoStep;
+        NightPush night;
+    };
+    static_assert(sizeof(LightPush) == 96 && offsetof(LightPush, night) == 40 && offsetof(LightPush, night.focal) == 48 &&
+                  offsetof(LightPush, night.inset) == 80);
+    struct NightBuffers {
+        vk::Buffer* header = nullptr;
+        vk::Buffer* lights = nullptr;
+        VkDeviceSize lightBytes = sizeof(render::GpuLight);
+    };
+    static void computeBarrier(VkCommandBuffer command, VkAccessFlags2 src, VkAccessFlags2 dst) {
+        VkMemoryBarrier2 m{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        m.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        m.srcAccessMask = src;
+        m.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        m.dstAccessMask = dst;
+        VkDependencyInfo d{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        d.memoryBarrierCount = 1;
+        d.pMemoryBarriers = &m;
+        vkCmdPipelineBarrier2(command, &d);
+    }
     vk::Image gradeImage;                      // the colour grading's result (gsn_grade.comp), copied back
     std::vector<vk::Buffer> curveBuffers;      // its curves, per frame
     // The scene stage's temporal anti-aliasing (docs/NATIVE_RENDERER.md): the 3D draws of a scene are jittered,
@@ -474,6 +523,18 @@ struct GsnScene::Impl {
         vk::destroy(device, lightPass);
         vk::destroy(device, aoImage);
         vk::destroy(device, litImage);
+        vk::destroy(device, nightLumPass);
+        clusters.destroy(device);
+        vk::destroy(device, nightLocal);
+        vk::destroy(device, nightCells);
+        vk::destroy(device, nightIndices);
+        vk::destroy(device, nightStats);
+        for (auto& ring : nightHeaders)
+            for (auto& b : ring) vk::destroy(device, b);
+        for (auto& ring : nightLists)
+            for (auto& b : ring) vk::destroy(device, b);
+        for (auto& ring : nightGrids)
+            for (auto& b : ring) vk::destroy(device, b);
         vk::destroy(device, gradeImage);
         for (auto& b : curveBuffers) vk::destroy(device, b);
         vk::destroy(device, velocityPass);
@@ -845,10 +906,21 @@ struct GsnScene::Impl {
         VkExtent2D area{};
         uint32_t sx = 1, sy = 1;   // the scene target's scale
     };
+    // lighting.night for one scene: its main view (the largest scissor bound to the scene's target), the view's
+    // projection and viewport, the GS origin of its 3D batches; the view's lamps gathered (with GT4_NIGHT_TEST_LIGHTS'
+    // test lamps), clustered over the scene area at the render scale, and the local luminance computed. False (nothing
+    // added) when the frame has no such view or no lights.
+    bool nightPrepare(const gsn::FrameList::Lighting& l, const SceneImages& si, VkImageView colourView, VkImageView depthOnly,
+                      NightPush& k, NightBuffers& out);
+    // Its second half, once the view's parameters are in `k` and its records in nightRecords: the mirror's inset, the
+    // gather, the buffers, the cluster build and the local luminance.
+    bool nightFinish(const gsn::FrameList::Lighting& l, const SceneImages& si, VkImageView colourView, VkImageView depthOnly,
+                     uint16_t viewId, NightPush& k, NightBuffers& out);
     // execute's state between its pieces (executeBegin, executeRange, executeLight, executeFinish): one list's
     // execution, made anew by executeBegin. The functions see the piece's command buffer as `command`.
     struct ExecuteState {
         VkCommandBuffer command = VK_NULL_HANDLE;   // the piece's being recorded
+        uint32_t slot = 0;                          // the frame slot (executeBegin, executeLight)
         vk::Buffer* vertices = nullptr;   // the list's vertices (vertexBuffers)
         uint32_t modelBase = 0;           // where the GPU's vertices start
         vk::Barriers b;
@@ -929,12 +1001,14 @@ struct GsnScene::Impl {
     static constexpr const char* kStepMarks[kSteps] = {"motion vectors", "lighting", "reflections", "fog", "temporal resolve",
                                                        "motion blur", "depth of field"};
     enum Part : int { kPartWhole = -1, kPartFirst = 0, kPartMain = 1, kPartCopy = 2 };
-    // Whether a step runs at Light `l`, from the settings (known when the graph is built). The temporal resolve and the
-    // motion blur also need the motion vectors drawn (ex.moving: the Light has a scene).
-    bool stepRuns(int step, const gsn::FrameList::Lighting& l) const {
+    // Whether a step runs at Light `l` of a list, from the settings (known when the graph is built) and whether that list
+    // has scene records (`records`: the list's own scene frame, the one being planned or run, not `frame`'s). The temporal
+    // resolve and the motion blur also need the motion vectors drawn (ex.moving: the Light has a scene).
+    bool stepRuns(int step, const gsn::FrameList::Lighting& l, bool records) const {
         switch (step) {
             case kStepMotionVectors: return temporal || effects.shutter > 0.0f;
-            case kStepLighting: return lighting.occlusion > 0.0f || lighting.grade > 0.0f;
+            case kStepLighting:   // lighting.night needs the list's lamps and views (or the test lamps)
+                return lighting.occlusion > 0.0f || lighting.grade > 0.0f || (night > 0.0f && (records || render::testLightCount()));
             case kStepReflections: return effects.reflections > 0.0f;
             case kStepFog: return effects.fogDensity > 0.0f && l.fogged;   // (haze does nothing for a Light without fog)
             case kStepTemporalResolve: return temporal;
@@ -1067,6 +1141,8 @@ void GsnScene::Impl::segments(const gsn::FrameList& list, std::vector<Segment>& 
 void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
     ex = ExecuteState{};
     ex.command = command;
+    ex.slot = slot;
+    nightOrdinal = 0;
     snapSprites();
     const VkDeviceSize vertexBytes = std::max<VkDeviceSize>((frame.vertices.size() + frame.modelVertices) * sizeof(gsn::Vertex), 64);
     ex.vertices = &buffer(vertexBuffers, slot, vertexBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
@@ -1333,17 +1409,27 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
                 vk::toStorage(b, lit, true);
             }
             b.flush(command);
+            // lighting.night: the view's lamps, clustered, and the local luminance (none: the light pass adds nothing and
+            // its night bindings get stand-ins it does not read).
+            NightPush nightPush;
+            NightBuffers nightBuffers;
+            const bool lamps = night > 0.0f && nightPrepare(l, si, colour.view, depthOnly, nightPush, nightBuffers);
             vk::bind(command, lightPass);
             vk::Descriptors()
                 .sampled(0, colour.view, samplers[0])
                 .sampled(1, ao.view, samplers[0])
                 .sampled(2, depthOnly, samplers[0])
                 .storage(3, lit.view)
+                .storageBuffer(4, lamps ? nightBuffers.header->buffer : nightCells.buffer, 0, sizeof(render::LightListHeader))
+                .storageBuffer(5, lamps ? nightBuffers.lights->buffer : nightCells.buffer, 0,
+                               lamps ? nightBuffers.lightBytes : sizeof(render::GpuLight))
+                .storageBuffer(6, nightCells.buffer, 0, sizeof(render::ClusterCell) * render::kClusterCount)
+                .storageBuffer(7, nightIndices.buffer, 0,
+                               sizeof(uint32_t) * render::kClusterCount * render::kMaxLightsPerCluster)
+                .sampled(8, lamps ? nightLocal.view : ao.view, samplers[0])
                 .push(command, lightPass);
-            struct {
-                float size[2], occlusion, zScale, grade, contrast, vibrance, warmth;
-                uint32_t view, aoStep;
-            } k{{float(e.width), float(e.height)}, lighting.occlusion, kZScale, lighting.grade, 1.18f, 0.3f, 1.0f, lightView, kAoStep};
+            const LightPush k{{float(e.width), float(e.height)}, lighting.occlusion, kZScale, lighting.grade, 1.18f, 0.3f, 1.0f,
+                              lightView, kAoStep, nightPush};
             vk::pushConstants(command, lightPass, k);
             vk::dispatch2D(command, e.width, e.height);
         }
@@ -2296,7 +2382,7 @@ void GsnScene::Impl::stageOnMembers(VkCommandBuffer command, size_t at) {
     ex.work = WorkImages{&velocityImage, &aoImage, &litImage, &ssrImage, false};
     const gsn::FrameList::Lighting& l = frame.lights[frame.commands[at].index];
     for (int step = 0; step < kSteps; ++step) {
-        if (stepRuns(step, l)) runStep(step, l, at, kPartWhole);
+        if (stepRuns(step, l, frame.scene != nullptr)) runStep(step, l, at, kPartWhole);
         mark(command, kStepMarks[step]);
     }
 }
@@ -2317,7 +2403,7 @@ void GsnScene::Impl::checkOnePass(size_t at) {
     SceneImages si;
     if (!ex.sceneImages(l, si)) return;
     for (int step = 0; step < kSteps; ++step)
-        if (stepRuns(step, l)) {
+        if (stepRuns(step, l, frame.scene != nullptr)) {
             planWrong(at, "was planned without a scene or a step, and has both");
             return;
         }
@@ -2368,7 +2454,7 @@ void GsnScene::Impl::executeLightPart(VkCommandBuffer command, size_t at, int st
             if (same && scene)
                 same = si.area.width == first->area.width && si.area.height == first->area.height &&
                        si.colour->extent.width == first->colour.width && si.colour->extent.height == first->colour.height;
-            for (int s = 0; s < kSteps; ++s) same = same && stepRuns(s, l) == first->runs[s];
+            for (int s = 0; s < kSteps; ++s) same = same && stepRuns(s, l, frame.scene != nullptr) == first->runs[s];
             // GT4_WRONG_PLAN_TEST=1 (testing): every plan taken as wrong, so the fallback runs on every Light; the
             // frames must not change (lane A's suggestion, B4 step 3).
             static const bool wrongTest = [] { const char* e = std::getenv("GT4_WRONG_PLAN_TEST"); return e && *e && *e != '0'; }();
@@ -2391,6 +2477,137 @@ void GsnScene::Impl::executeLightPart(VkCommandBuffer command, size_t at, int st
     ex.work = work;
     runStep(step, frame.lights[frame.commands[at].index], at, part);
     for (const char* m : after) mark(command, m);
+}
+
+bool GsnScene::Impl::nightPrepare(const gsn::FrameList::Lighting& l, const SceneImages& si, VkImageView colourView,
+                                  VkImageView depthOnly, NightPush& k, NightBuffers& out) {
+    // Debugging only (GT4_NIGHT_TEST_LIGHTS without scene records, e.g. an older capture): the test lamps in a stand-in
+    // view, GT4's monitor-preset field of view and its race-measured Z = 1.6e6 / distance (gsn_ao.comp's). The game's own
+    // lights always come with their view's projection (CONTRACTS.md c.3: no fallback for them).
+    if (!frame.scene) {
+        if (!render::testLightCount()) return false;
+        const VkExtent2D e = si.area;
+        k.focal[0] = 0.5f * float(e.width) / lighting.tanX;
+        k.focal[1] = -0.5f * float(e.height) / lighting.tanY;
+        k.centre[0] = 0.5f * float(e.width);
+        k.centre[1] = 0.5f * float(e.height);
+        k.distanceA = 1.6e6f;
+        k.distanceB = 0.0f;
+        k.maxDistance = 1e4f;
+        nightRecords = render::testLights(0, render::testLightCount());
+        return nightFinish(l, si, colourView, depthOnly, 0, k, out);
+    }
+    const scene::SceneFrame& sf = *frame.scene;
+    // The main view drawn into this scene's target: the largest scissor (the mirror's is the smaller one).
+    const scene::ViewData* view = nullptr;
+    uint32_t bestArea = 0;
+    for (const scene::ViewData& v : sf.views) {
+        if (v.target != l.target || !v.projection || v.projection > sf.projections.size()) continue;
+        const uint32_t area = uint32_t(std::max(0, int(v.scissor[2]) - int(v.scissor[0]) + 1)) *
+                              uint32_t(std::max(0, int(v.scissor[3]) - int(v.scissor[1]) + 1));
+        if (!view || area > bestArea) view = &v, bestArea = area;
+    }
+    if (!view) return false;
+    // The GS origin (XYOFFSET) of the view's 3D batches: from its first instance with jobs.
+    float originX = 0.0f, originY = 0.0f;
+    bool origin = false;
+    for (uint32_t i = 0; i < view->instanceCount && !origin; ++i) {
+        const uint32_t at = view->firstInstance + i;
+        if (at >= sf.instances.size()) break;
+        const scene::InstanceData& inst = sf.instances[at];
+        if (inst.jobCount && inst.firstJob < frame.models.size()) {
+            originX = frame.models[inst.firstJob].originX;
+            originY = frame.models[inst.firstJob].originY;
+            origin = true;
+        }
+    }
+    if (!origin) return false;
+    // The view's projection (GT4's row vectors: clip = p * m) and viewport (window = scale * ndc + offset), at the render
+    // scale: render pixel = scale * (window - origin). See CONTRACTS.md c.3 and spike R1 for GT4's Z.
+    const scene::ProjectionData& pd = sf.projections[view->projection - 1];
+    const float (&m)[4][4] = pd.viewToClip.m;
+    const float* vs = pd.viewportScale;
+    const float* vo = pd.viewportOffset;
+    const float sx = float(si.sx), sy = float(si.sy);
+    k.focal[0] = sx * vs[0] * m[0][0];
+    k.focal[1] = sy * vs[1] * m[1][1];
+    k.centre[0] = sx * (vo[0] - originX - vs[0] * m[2][0]);
+    k.centre[1] = sy * (vo[1] - originY - vs[1] * m[2][1]);
+    // Z = vo.z + vs.z * (m22 z + m32) / -z, z = -d: d = vs.z m32 / (Z - vo.z + vs.z m22).
+    k.distanceA = vs[2] * m[3][2];
+    k.distanceB = vs[2] * m[2][2] - vo[2];
+    const float far = std::fabs(m[2][2] + 1.0f) > 1e-6f ? m[3][2] / (m[2][2] + 1.0f) : 0.0f;
+    k.maxDistance = far > 0.0f && std::isfinite(far) ? far * 1.01f : 1e4f;
+    if (!(std::fabs(k.focal[0]) > 0.0f && std::fabs(k.focal[1]) > 0.0f && k.distanceA != 0.0f)) return false;
+    // The lamps: the view's records, and the test lamps.
+    nightRecords.assign(sf.lights.begin(), sf.lights.end());
+    if (const uint32_t n = render::testLightCount()) {
+        const std::vector<gfx::scene::Light> test = render::testLights(view->id, n);
+        nightRecords.insert(nightRecords.end(), test.begin(), test.end());
+    }
+    return nightFinish(l, si, colourView, depthOnly, view->id, k, out);
+}
+
+bool GsnScene::Impl::nightFinish(const gsn::FrameList::Lighting& l, const SceneImages& si, VkImageView colourView,
+                                 VkImageView depthOnly, uint16_t viewId, NightPush& k, NightBuffers& out) {
+    if (l.hasInset) {
+        k.inset[0] = float(l.inset[0]) * sx;
+        k.inset[1] = float(l.inset[1]) * sy;
+        k.inset[2] = float(l.inset[2] + 1) * sx - 1.0f;
+        k.inset[3] = float(l.inset[3] + 1) * sy - 1.0f;
+    }
+    const render::LightListHeader header = render::gatherLights(nightRecords.data(), nightRecords.size(), viewId, 0.5f,
+                                                                std::max(k.maxDistance, 1.0f), night, nightLights, nightStatsLast);
+    if (header.count == 0) return false;
+    // The buffers of this Light command: per ordinal in the list (nightOrdinal, reset by executeBegin), and within an
+    // ordinal's ring per (list, slot) (Impl::buffer keys by listIndex too), so every list of a submission has its own.
+    const uint32_t ordinal = nightOrdinal++;
+    if (nightHeaders.size() <= ordinal) {
+        nightHeaders.resize(ordinal + 1);
+        nightLists.resize(ordinal + 1);
+        nightGrids.resize(ordinal + 1);
+    }
+    const VkBufferUsageFlags storage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    const VkDeviceSize lightBytes = sizeof(render::GpuLight) * nightLights.size();
+    vk::Buffer& hb = buffer(nightHeaders[ordinal], ex.slot, sizeof(header), storage);
+    vk::Buffer& lb = buffer(nightLists[ordinal], ex.slot, lightBytes, storage);
+    vk::Buffer& gb = buffer(nightGrids[ordinal], ex.slot, sizeof(render::ClusterGrid), storage);
+    std::memcpy(hb.mapped, &header, sizeof(header));
+    std::memcpy(lb.mapped, nightLights.data(), lightBytes);
+    const VkExtent2D e = si.area;
+    const render::ClusterGrid grid = render::clusterGrid(
+        header, render::clusterProjection(k.focal[0], k.focal[1], k.centre[0], k.centre[1], float(e.width), float(e.height)));
+    std::memcpy(gb.mapped, &grid, sizeof(grid));
+    // The cluster build (F1), after the earlier light pass read the cells, before this one does.
+    const VkCommandBuffer command = ex.command;
+    computeBarrier(command, VK_ACCESS_2_SHADER_STORAGE_READ_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+    clusters.record(command, hb.buffer, lb.buffer, lightBytes, gb.buffer, nightCells.buffer, nightIndices.buffer, nightStats.buffer);
+    computeBarrier(command, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
+    // The local luminance: (sum of log luminance, count) per 8 x 8 block of the scene area.
+    const VkExtent2D blocks{(e.width + 7) / 8, (e.height + 7) / 8};
+    ex.ensureImage(nightLocal, blocks, VK_FORMAT_R32G32_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                   "gsn night local luminance");
+    vk::toStorage(ex.b, nightLocal, true);
+    ex.b.flush(command);
+    vk::bind(command, nightLumPass);
+    vk::Descriptors()
+        .sampled(0, colourView, samplers[0])
+        .sampled(1, depthOnly, samplers[0])
+        .storage(2, nightLocal.view)
+        .push(command, nightLumPass);
+    struct {
+        float size[2], distanceA, distanceB, maxDistance;
+    } lk{{float(e.width), float(e.height)}, k.distanceA, k.distanceB, k.maxDistance};
+    vk::pushConstants(command, nightLumPass, lk);
+    vkCmdDispatch(command, blocks.width, blocks.height, 1);
+    vk::toSampled(ex.b, nightLocal, vk::kCompute);
+    ex.b.flush(command);
+    k.night = night;
+    out.header = &hb;
+    out.lights = &lb;
+    out.lightBytes = lightBytes;
+    tally("night lights", header.count);
+    return true;
 }
 
 // After the list's commands: the last render pass ended, the displayed buffer's bookkeeping.
@@ -2774,6 +2991,8 @@ void GsnScene::setLighting(float occlusion, uint32_t directions, float grade, fl
     l.tanX = l.tanY * (aspect > 0.0f ? aspect : 4.0f / 3.0f);
 }
 
+void GsnScene::setNightLighting(float strength) { impl->night = std::max(strength, 0.0f); }
+
 void GsnScene::prepare(const SceneFormats& formats) {
     Impl& s = *impl;
     vkDeviceWaitIdle(s.device.device);
@@ -2806,8 +3025,25 @@ void GsnScene::prepare(const SceneFormats& formats) {
     if (!s.lightPass.valid())
         s.lightPass = vk::createCompute(s.device, shaders::gsn_light_comp(),
                                         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                                         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
-                                        40, "gsn light");
+                                         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                                         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+                                        96, "gsn light");
+    // lighting.night (PLAN.md F2): the local luminance pass, the cluster build and its buffers. The light pass reads
+    // these bindings whether or not the night is on (the shader skips them), so they always exist.
+    if (!s.nightLumPass.valid()) {
+        s.nightLumPass = vk::createCompute(s.device, shaders::gsn_night_lum_comp(),
+                                           {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                            VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
+                                           20, "gsn night luminance");
+        s.clusters.create(s.device, shaders::lights_cluster_comp());
+        const VkBufferUsageFlags storage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        s.nightCells = vk::createBuffer(s.device, sizeof(render::ClusterCell) * render::kClusterCount, storage, false);
+        s.nightIndices = vk::createBuffer(s.device, sizeof(uint32_t) * render::kClusterCount * render::kMaxLightsPerCluster,
+                                          storage, false);
+        s.nightStats = vk::createBuffer(s.device, sizeof(render::ClusterStats), storage, false);
+    }
     if (!s.velocityPass.valid()) {
         vk::GraphicsDesc v;
         v.vertex = shaders::gsn_velocity_vert();
@@ -3304,7 +3540,7 @@ bool GsnScene::buildPrepass(rg::Graph& graph, const SceneView& view) {
         plan.scene = Impl::sceneArea(shape(l.target), shape(l.depth), l, plan.area);
         plan.colour = shape(l.target).extent;
         bool any = false;
-        for (int step = 0; step < Impl::kSteps; ++step) any = (plan.runs[step] = s.stepRuns(step, l)) || any;
+        for (int step = 0; step < Impl::kSteps; ++step) any = (plan.runs[step] = s.stepRuns(step, l, list.scene != nullptr)) || any;
         if (drawLimit || !plan.scene || !any) {
             inOnePass(!drawLimit);
             return;

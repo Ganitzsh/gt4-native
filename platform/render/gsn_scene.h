@@ -66,6 +66,9 @@ public:
     // Lighting of the game's 3D scenes (docs/LIGHTING.md): ambient occlusion strength 0..1 (0 = off) and its
     // sample directions, the enhanced grade 0..1 (0 = the game's colours), the display's aspect.
     void setLighting(float occlusion, uint32_t directions, float grade, float aspect);
+    // lighting.night (PLAN.md F2): the course's lamps added to the 3D scenes, with this strength (0: off). Needs the
+    // game's scene records (sceneRecordsWanted), which carry the lamps and each view's projection.
+    void setNightLighting(float strength);
     // Temporal anti-aliasing of the 3D scenes in the scene stage (render.aa = taa, or FSR 2): jittered draws,
     // motion vectors from the 3D renderers, a resolve against each scene's history (docs/NATIVE_RENDERER.md).
     void setTemporal(bool on);

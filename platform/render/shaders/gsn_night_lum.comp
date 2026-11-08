@@ -1,0 +1,48 @@
+#version 460
+// lighting.night (PLAN.md F2, CONTRACTS.md c.3): the local luminance the night relight's albedo estimate divides by,
+// at 1/8 resolution. Per 8 x 8 block of the scene area: the sum of log(luminance) over the pixels with geometry
+// (GT4's Z drawn, the view distance inside the view's range) and their count. gsn_light.comp samples both
+// bilinearly and divides, so a block without geometry (sky, clear colour) weighs 0. The log average keeps small
+// bright spots (lamp heads, headlights) from lifting it; the floor keeps black finite.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D scene;         // colour / 255, display-referred
+layout(set = 0, binding = 1) uniform sampler2D depthBuffer;   // GS Z / 2^32
+layout(set = 0, binding = 2, rg32f) uniform writeonly image2D local;
+layout(push_constant) uniform Lum {
+    vec2 size;          // the scene area, render pixels
+    float distanceA;    // view distance = distanceA / (Z + distanceB) (the view's projection and viewport)
+    float distanceB;
+    float maxDistance;  // metres: farther is not geometry
+} p;
+
+const vec3 kLuma = vec3(0.2126, 0.7152, 0.0722);
+const float kFloor = 1e-3;
+
+shared float sums[64];
+shared float counts[64];
+
+void main() {
+    const ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    const uint i = gl_LocalInvocationIndex;
+    float s = 0.0, c = 0.0;
+    if (all(lessThan(q, ivec2(p.size)))) {
+        const float z = texelFetch(depthBuffer, q, 0).r * 4294967296.0;
+        const float d = z > 0.5 ? p.distanceA / (z + p.distanceB) : -1.0;
+        if (d > 0.0 && d < p.maxDistance) {
+            const vec3 linear = pow(max(texelFetch(scene, q, 0).rgb, vec3(0.0)), vec3(2.2));
+            s = log(max(dot(linear, kLuma), kFloor));
+            c = 1.0;
+        }
+    }
+    sums[i] = s;
+    counts[i] = c;
+    barrier();
+    for (uint stride = 32u; stride > 0u; stride >>= 1u) {
+        if (i < stride) {
+            sums[i] += sums[i + stride];
+            counts[i] += counts[i + stride];
+        }
+        barrier();
+    }
+    if (i == 0u) imageStore(local, ivec2(gl_WorkGroupID.xy), vec4(sums[0], counts[0], 0.0, 0.0));
+}

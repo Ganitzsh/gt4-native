@@ -4,11 +4,25 @@
 // linear light; the enhanced grade then gives it more contrast and colour, as a modern renderer's filmic
 // response would: a contrast curve on luminance around middle grey with a soft shoulder, vibrance (more for
 // muted colours), cool shadows and warm highlights. Targets hold colour / 255 and alpha / 128.
+//
+// lighting.night (PLAN.md F2, CONTRACTS.md c.3): after the occlusion, before the grade, the view's lamps are added.
+// Each pixel's view-space position comes from GT4's Z through the view's own projection and viewport
+// (ProjectionData), its normal from the nearer neighbour on each axis; the lights from the clustered light list
+// (light_list.glsl); the albedo is estimated as colour / local log-average luminance x 0.18, clamped to [0, 0.9]
+// (gsn_night_lum.comp's per-block sums, sampled bilinearly and divided). The sky, pixels whose four blocks have no
+// geometry and the rear-view mirror's inset get no added light.
+#extension GL_GOOGLE_include_directive : require
+#include "light_list.glsl"
 layout(local_size_x = 8, local_size_y = 8) in;
 layout(set = 0, binding = 0) uniform sampler2D scene;
 layout(set = 0, binding = 1) uniform sampler2D occlusion;
 layout(set = 0, binding = 2) uniform sampler2D depthBuffer;   // GS Z / 2^32
 layout(set = 0, binding = 3, rgba16f) uniform writeonly image2D result;
+layout(std430, set = 0, binding = 4) readonly buffer Header { LightListHeader header; };
+layout(std430, set = 0, binding = 5) readonly buffer Lights { GpuLight lights[]; };
+layout(std430, set = 0, binding = 6) readonly buffer Cells { ClusterCell cells[]; };
+layout(std430, set = 0, binding = 7) readonly buffer Indices { uint indices[]; };
+layout(set = 0, binding = 8) uniform sampler2D localLuminance;   // gsn_night_lum.comp: (sum of log luminance, count) per 8 x 8
 layout(push_constant) uniform Light {
     vec2 size;
     float aoStrength;   // 0: no occlusion
@@ -17,6 +31,15 @@ layout(push_constant) uniform Light {
     float contrast, vibrance, warmth;
     uint view;          // debugging (GT4_LIGHT_VIEW): 1 the occlusion, 2 the view distance in 10 m bands
     uint aoStep;        // the occlusion's texels per pixel (gsn_ao.comp's step)
+    float night;        // 0: no night relight; else its strength
+    float pad0;
+    vec2 focal;         // render pixels: x = focal * v / d + centre (v view-space x or y, d the view distance)
+    vec2 centre;
+    float distanceA;    // view distance = distanceA / (Z + distanceB)
+    float distanceB;
+    float maxDistance;  // metres: farther is not geometry
+    float pad1;
+    vec4 inset;         // the mirror, render pixels (x0, y0, x1, y1, inclusive); x1 < x0: none
 } p;
 
 const vec3 kLuma = vec3(0.2126, 0.7152, 0.0722);
@@ -26,12 +49,86 @@ float distanceAt(ivec2 q) {
     return z > 0.5 ? p.zScale / z : 1e30;
 }
 
+// --- lighting.night -----------------------------------------------------------------------------------------------
+// The view distance from GT4's Z through the view's projection: -1 where nothing with depth was drawn.
+float nightDistance(ivec2 q) {
+    const float z = texelFetch(depthBuffer, q, 0).r * 4294967296.0;
+    return z > 0.5 ? p.distanceA / (z + p.distanceB) : -1.0;
+}
+// GT4's view space (right-handed, +y up, the view looks down -z), metres. Render pixel q's centre is q + 0.5 (the
+// projection's window coordinates scaled by the render scale); the GS samples at integer window coordinates, half a GS
+// pixel away at 1x: negligible for positions and normals.
+vec3 nightPosition(ivec2 q, float d) {
+    const vec2 v = (vec2(q) + 0.5 - p.centre) / p.focal * d;
+    return vec3(v, -d);
+}
+// The local log-average luminance (gsn_night_lum.comp), bilinear over the per-block (sum, count) pairs; 0 where the
+// four blocks around the pixel hold no geometry.
+float nightLocal(ivec2 q) {
+    const ivec2 blocks = (ivec2(p.size) + 7) / 8;   // (the image may be larger: it only grows)
+    const vec2 f = (vec2(q) + 0.5) / 8.0 - 0.5;
+    const ivec2 b = ivec2(floor(f));
+    const vec2 t = f - vec2(b);
+    vec2 s = vec2(0.0);
+    for (int y = 0; y < 2; ++y)
+        for (int x = 0; x < 2; ++x) {
+            const ivec2 at = clamp(b + ivec2(x, y), ivec2(0), blocks - 1);
+            const float w = (x == 1 ? t.x : 1.0 - t.x) * (y == 1 ? t.y : 1.0 - t.y);
+            s += texelFetch(localLuminance, at, 0).rg * w;
+        }
+    return s.y > 1e-3 ? exp(s.x / s.y) : 0.0;
+}
+// `linear`: the pixel's colour before the occlusion (the albedo's; lamp light is not dimmed by ambient occlusion).
+vec3 nightLight(ivec2 q, ivec2 last, vec3 linear) {
+    if (p.inset.z >= p.inset.x && all(greaterThanEqual(vec2(q), p.inset.xy)) && all(lessThanEqual(vec2(q), p.inset.zw)))
+        return vec3(0.0);   // the rear-view mirror: another view (step 2: unlit)
+    const float d = nightDistance(q);
+    if (!(d > 0.0 && d < p.maxDistance)) return vec3(0.0);
+    const float local = nightLocal(q);
+    if (!(local > 0.0)) return vec3(0.0);
+    const vec3 albedo = clamp(linear / max(local, 1e-3) * 0.18, vec3(0.0), vec3(0.9));
+    // The normal: from the nearer neighbour on each axis, towards the camera.
+    const vec3 P = nightPosition(q, d);
+    const ivec2 l = max(q - ivec2(1, 0), ivec2(0)), r = min(q + ivec2(1, 0), last);
+    const ivec2 u = max(q - ivec2(0, 1), ivec2(0)), b = min(q + ivec2(0, 1), last);
+    const float dl = nightDistance(l), dr = nightDistance(r), du = nightDistance(u), db = nightDistance(b);
+    const vec3 ex = abs(dr - d) < abs(dl - d) ? nightPosition(r, dr) - P : P - nightPosition(l, dl);
+    const vec3 ey = abs(db - d) < abs(du - d) ? nightPosition(b, db) - P : P - nightPosition(u, du);
+    vec3 n = normalize(cross(ex, ey));
+    if (dot(n, P) > 0.0) n = -n;
+    // The lights: the directional ones, then the pixel's cluster.
+    vec3 sum = vec3(0.0);
+    for (uint i = 0u; i < header.directionalCount; ++i) {
+        vec3 L;
+        const float a = lightAttenuation(lights[i], P, L);
+        sum += lights[i].colour * a * max(dot(n, L), 0.0);
+    }
+    const uvec2 tile = uvec2(clamp(vec2(q) / p.size * vec2(header.clustersX, header.clustersY), vec2(0.0),
+                                   vec2(header.clustersX, header.clustersY) - 1.0));
+    const uint slice = clusterSlice(d, header.sliceScale, header.sliceBias);
+    const ClusterCell cell = cells[clusterIndex(uvec3(tile, slice), header.clustersX, header.clustersY)];
+    for (uint k = 0u; k < cell.count; ++k) {
+        const GpuLight light = lights[indices[cell.offset + k]];
+        vec3 L;
+        const float a = lightAttenuation(light, P, L);
+        sum += light.colour * a * max(dot(n, L), 0.0);
+    }
+    return albedo * sum;
+}
+
 void main() {
     const ivec2 q = ivec2(gl_GlobalInvocationID.xy);
     const ivec2 last = ivec2(p.size) - 1;
     if (any(greaterThan(q, last))) return;
     const vec4 c = texelFetch(scene, q, 0);
+    // Nothing to do (night on with no lamps, say): the colour exactly as it was (both images RGBA16F; the 2.2 round trip
+    // is not bit-exact).
+    if (p.aoStrength == 0.0 && p.grade == 0.0 && p.night == 0.0 && p.view == 0u) {
+        imageStore(result, q, c);
+        return;
+    }
     vec3 linear = pow(max(c.rgb, vec3(0.0)), vec3(2.2));
+    const vec3 unoccluded = linear;
     if (p.aoStrength > 0.0) {
         const float d = distanceAt(q);
         float sum = 0.0, weights = 0.0;
@@ -44,6 +141,8 @@ void main() {
             }
         linear *= mix(1.0, sum / weights, p.aoStrength);
     }
+    // The lamps: after the occlusion (their light is not ambient), before the grades.
+    if (p.night > 0.0) linear += nightLight(q, last, unoccluded) * p.night;
     if (p.grade > 0.0) {
         vec3 x = linear;
         // Vibrance: muted colours gain the most saturation.

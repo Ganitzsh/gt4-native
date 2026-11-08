@@ -56,6 +56,9 @@ gt4_shader(gsn_models_comp ${S}/gsn_models.comp comp)
 gt4_shader(gsn_grade_comp ${S}/gsn_grade.comp comp)
 gt4_shader(gsn_ao_comp ${S}/gsn_ao.comp comp)
 gt4_shader(gsn_light_comp ${S}/gsn_light.comp comp)
+# Night lighting on the GS path (PLAN.md F2): the albedo estimate's local luminance and the cluster build (F1).
+gt4_shader(gsn_night_lum_comp ${S}/gsn_night_lum.comp comp)
+gt4_shader(lights_cluster_comp ${S}/lights_cluster.comp comp)
 gt4_shader(gsn_velocity_vert ${S}/gsn_velocity.vert vert)
 gt4_shader(gsn_velocity_frag ${S}/gsn_velocity.frag frag)
 gt4_shader(gsn_taa_comp ${S}/gsn_taa.comp comp)
@@ -281,15 +284,19 @@ add_executable(gt4_host
     platform/render/display_feature.cpp
     platform/render/test_scene.cpp
     platform/render/gsn_scene.cpp
+    platform/render/modern/lights_cluster.cpp
+    platform/render/modern/lights_gather.cpp
+    platform/render/modern/light_sources.cpp
     platform/render/overlay.cpp
     platform/render/fsr2.cpp
     platform/render/smaa_textures.cpp
     ${GT4_SHADER_OUT}/gt4_shaders.cpp
     ${GT4_SHADER_HEADERS})
-target_include_directories(gt4_host PRIVATE platform/sdl platform/render platform/render/graph ${GT4_SHADER_OUT}
+target_include_directories(gt4_host PRIVATE platform/sdl platform/render platform/render/graph platform/render/modern
+    ${GT4_SHADER_OUT}
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party
     ${GT4_FSR2_DIR})
-target_compile_definitions(gt4_host PRIVATE VK_NO_PROTOTYPES FFX_GCC)
+target_compile_definitions(gt4_host PRIVATE VK_NO_PROTOTYPES FFX_GCC GT4_LIGHTS_CLUSTER_GPU=1)
 target_link_libraries(gt4_host PRIVATE SDL3::SDL3 Vulkan::Headers gt4_guest_abi gt4_fsr2 gt4_gs gt4_saves gt4_input ${GT4_VOLK} ${GT4_VOLK_HEADERS})
 if(MSVC)
   target_compile_options(gt4_host PRIVATE /W4)
