@@ -787,8 +787,9 @@ LINKONCE = re.compile(rb"^[ \t]*\.linkonce\b[^\n]*\n", re.M)
 def localize(asm, rel, addr):
     """The decomp build's symbol policy (tools/build.py: objcopy -G STEM* -G func_ADDR*): an
     object exports only its own function; every other definition (the copies of neighbours and
-    helpers that sources repeat so each one compiles alone) becomes local. Returns the new text
-    and the exported names."""
+    helpers that sources repeat so each one compiles alone) becomes local. Returns the new text,
+    the exported names and how the address was bound ({"function", "by": "name" (named after the
+    source) or "first" (the first function of .text), "static"}; None without an address)."""
     stem = os.path.splitext(os.path.basename(rel))[0].encode()
     own = [b"_" + stem] + ([b"_func_%08X" % addr] if addr is not None else [])
     declared_global = set(GLOBL.findall(asm))
@@ -810,18 +811,33 @@ def localize(asm, rel, addr):
     # helpers, not always alike), calls in the objects whose copy was dropped would land on
     # nothing (a call to the next instruction: 969 of them before this).
     asm = LINKONCE.sub(b"", asm)
+    binding = None
     if addr is not None:
         main, _ = main_function(asm, own)
         if main is not None:
-            if main not in declared_global and not any(main.startswith(o) for o in own):
-                # The address's code is the first function of .text: a file-static helper defined
-                # before it (a debugging aid in a game_src copy) would take over the address.
-                print(f"warning: {rel}: {main.decode()} is static but takes the address "
-                      f"{addr:08X} (define the function itself first)", file=sys.stderr)
+            named = any(main.startswith(o) for o in own)
+            # Not named after the source: the address's code is the first function of .text (the decomp build's
+            # rule). A file-static function defined before the replaced one (a helper in a game_src copy) would take
+            # the address: main() refuses that for curated sources (curated_binding_problems).
+            binding = {"function": main.decode(), "by": "name" if named else "first",
+                       "static": main not in declared_global}
             alias = b"_gt4fn_%08X" % addr
             asm = asm.rstrip(b"\r\n") + b"\n.globl %s\n%s = %s\n" % (alias, alias, main)
             kept.append(alias.decode())
-    return asm, kept
+    return asm, kept, binding
+
+
+def curated_binding_problems(records):
+    """The curated sources (game_src/, staged as native_curated) whose address went to a file-static function
+    defined before the function they replace: the first function of .text takes the address, and a static one is
+    never the decomp's (a source's own function is global). Lane A's 004506F0 copy ran a helper at the address."""
+    out = []
+    for rec in records:
+        b = rec.get("binding")
+        if "native_curated" in rec["file"].replace("\\", "/") and b and b["by"] == "first" and b["static"]:
+            out.append(f"{rec['file']}: the address goes to {b['function']}, a static function defined before the "
+                       f"one this file replaces: define the replaced function first (or name it after the file)")
+    return out
 
 
 LABEL_DEF = re.compile(rb"^(_[A-Za-z0-9_$.]+):", re.M)
@@ -973,6 +989,7 @@ def main():
     # its 245 s in open).
     io = concurrent.futures.ThreadPoolExecutor(16)
     hits = 0
+    all_records = []
 
     def prepare(rel):
         data = recovered[rel][1] if rel in recovered else open(source_path(decomp, args.stage, rel), "rb").read()
@@ -1009,7 +1026,7 @@ def main():
             if os.path.exists(o_path):
                 os.remove(o_path)
             if asm is not None and args.export == "own":
-                asm, rec["exports"] = localize(asm, rel, addresses.get(rel) or stem_address(rel))
+                asm, rec["exports"], rec["binding"] = localize(asm, rel, addresses.get(rel) or stem_address(rel))
                 asm = guest_addresses(asm, rec["exports"])
             if asm is None:
                 rec["stage"] = "timeout" if rc in (124, 137) else "compile"
@@ -1041,6 +1058,7 @@ def main():
         compiled = {rec["file"]: rec for rec in records}
         for rel in chunk:   # (in the order of the sources, kept or compiled)
             rec = kept.get(rel) or compiled[rel]
+            all_records.append(rec)
             census.write(json.dumps(rec) + "\n")
             counts["ok" if rec["ok"] else rec["category"]] += 1
         census.flush()
@@ -1058,6 +1076,9 @@ def main():
             lines.append(f"  {v:6d} {100 * v / total:5.1f}%  {k}")
     open(os.path.join(out, "census_summary.txt"), "w", newline="\n").write("\n".join(lines) + "\n")
     print("\n".join(lines))
+    problems = curated_binding_problems(all_records)
+    if problems:
+        raise SystemExit("the address of a curated source bound to the wrong function:\n  " + "\n  ".join(problems))
 
 
 if __name__ == "__main__":

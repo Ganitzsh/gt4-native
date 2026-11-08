@@ -279,6 +279,68 @@ def nm_objects(objs):
     return result
 
 
+def bound_functions(objs):
+    """{object: (alias, [names of the functions at the alias])}: each object's gt4fn_ alias (tools/game_cc.py) and
+    the functions defined where it points, from objdump -t (a symbol's section and value: nm's values are per section,
+    and a function at offset 0 of a .text$ section would look like the one at 0 of .text)."""
+    result = {}
+
+    def one(chunk):
+        return chunk, run([tool("objdump"), "-t"] + chunk, env=mingw_env())
+
+    sym = re.compile(r"\(sec\s+(-?\d+)\)\(fl [^)]*\)\(ty\s+([0-9a-f]+)\)\(scl\s+(\d+)\)\s+"
+                     r"\(nx \d+\)\s+0x([0-9a-f]+)\s+(\S+)")
+    with ThreadPoolExecutor(8) as ex:
+        for chunk, text in ex.map(one, chunked(list(objs))):
+            current, table = None, {}
+            for line in text.splitlines():
+                if line.endswith("file format pe-i386"):
+                    current = next((o for o in chunk if os.path.normcase(os.path.normpath(o)) ==
+                                    os.path.normcase(os.path.normpath(line.split(":     file format")[0]))), None)
+                    if current:
+                        table[current] = []
+                    continue
+                m = sym.search(line)
+                if current and m:
+                    table[current].append((int(m.group(1)), int(m.group(2), 16), int(m.group(4), 16), m.group(5)))
+            for o, syms in table.items():
+                alias = next(((s, v, n) for s, ty, v, n in syms if n.startswith("_gt4fn_")), None)
+                if alias:
+                    names = [n for s, ty, v, n in syms if ty == 0x20 and s == alias[0] and v == alias[1]]
+                    result[o] = (alias[2], names)
+    return result
+
+
+def check_curated_bindings(curated_objs, others_by_name):
+    """A curated object whose address is not bound by name (its function is a method the file is not named after:
+    tools/game_cc.py binds the first function of .text) must bind the same function as the decomp's object it
+    replaces: a helper defined before the replaced function took lane A's 004506F0 (a crash on a night run)."""
+    bound = bound_functions(curated_objs)
+    pairs = {}
+    for o, (alias, names) in bound.items():
+        stem = "_" + os.path.basename(o).split(".")[0]
+        if any(n == stem or re.fullmatch(r"_func_[0-9A-Fa-f]{8}", n) for n in names):
+            continue   # named after its file or its address: bound by name
+        replaced = others_by_name.get(alias, [])
+        if replaced:
+            pairs[o] = (alias, names, replaced)
+    theirs = bound_functions(sorted({r for _, _, rs in pairs.values() for r in rs}))
+
+    def same(a, b):   # one name, or the same with gcc 2.9's signature after it (a C-linkage copy of a C++ function)
+        return a == b or a.startswith(b + "__") or b.startswith(a + "__")
+    problems = []
+    for o, (alias, names, replaced) in sorted(pairs.items()):
+        for r in replaced:
+            want = theirs.get(r, (None, []))[1]
+            if want and not any(same(n, w) for n in names for w in want):
+                problems.append(f"{os.path.basename(o)}: {alias[1:]} goes to {', '.join(names) or '(nothing)'}, the "
+                                f"decomp's source binds {', '.join(want)}: define that function first in the file")
+    if problems:
+        raise SystemExit("curated sources bind their address to another function than the decomp's:\n  " +
+                         "\n  ".join(problems))
+    return len(pairs)
+
+
 def nm_symbols(objs, every=False):
     """{object: (defined globals, undefined)} with COFF names (leading underscore). every: each defined name maps
     to the list of all the objects defining it (else to the first)."""
@@ -737,6 +799,10 @@ def main():
         others = [o for o in game_objs if o not in curated_objs]
         other_defined, _ = nm_symbols(others, every=True)   # all of them: a source and a leftover draft may both
         replaced_objs = {p for n, paths in other_defined.items() if n in cur_fns for p in paths}
+        replaced_by = {n: [p for p in ps if "native_drafts" not in p.replace("\\", "/")]
+                       for n, ps in other_defined.items() if n in cur_fns}
+        checked = check_curated_bindings(curated_objs, replaced_by)
+        print(f"{checked} curated sources not named after their function: each binds the decomp's function")
         if replaced_objs:
             print(f"{len(replaced_objs)} objects replaced by curated native sources (game_src/)")
             game_objs = [o for o in game_objs if o not in replaced_objs]
