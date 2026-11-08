@@ -362,10 +362,24 @@ void deliver_on_self(Thread *me) {
     --me->kernel_depth;
 }
 
+}  // namespace
+
+void *kernel_make_wait_timer() {
+    HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+    if (timer) return timer;
+    static std::atomic<bool> said{false};
+    if (!said.exchange(true))
+        log_warn("kernel: no high-resolution waitable timer (error %lu): waits take whole scheduler ticks",
+                 static_cast<unsigned long>(GetLastError()));
+    return CreateWaitableTimerExW(nullptr, nullptr, 0, TIMER_ALL_ACCESS);
+}
+
+namespace {
+
 DWORD WINAPI interrupt_thread(void *) {
     set_guest_fpu();
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
-    HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+    HANDLE timer = static_cast<HANDLE>(kernel_make_wait_timer());
     const uint64_t frame_cycles = static_cast<uint64_t>(kBusHz / kFrameHz);
     uint64_t next_frame = frame_cycles;
     for (;;) {

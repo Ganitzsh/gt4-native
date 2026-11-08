@@ -39,6 +39,12 @@ void kernel_set_frame_hook(void (*fn)(uint32_t frame_count));
 // Called after every delivery of the frame's callbacks, completions and alarms, in the same context.
 void kernel_set_interrupt_hook(void (*fn)());
 
+// A waitable timer (a Windows HANDLE) for waits shorter than the 15.6 ms scheduler tick: high resolution
+// (CREATE_WAITABLE_TIMER_HIGH_RESOLUTION) where Windows or Wine has it, else an ordinary one (logged once), else
+// null.
+// The frame clock's, and link_read_image's (one per waiting thread).
+void *kernel_make_wait_timer();
+
 // Ticks of the PS2 bus clock (147.456 MHz) since boot, from the host's monotonic clock.
 uint64_t kernel_bus_cycles();
 void kernel_set_paused(bool paused);  // the host's settings menu: stops the bus clock (frames, alarms)

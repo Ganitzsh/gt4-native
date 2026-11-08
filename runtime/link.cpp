@@ -436,15 +436,35 @@ bool link_read_image(uint32_t qwc, void *dst) {
     const uint32_t req[2] = {g_image_id, qwc};
     const DWORD since = GetTickCount();
     link_send(GT4_REC_GS_READ, req, sizeof req);
+    // Polled for the GS_IMAGE every 0.25 ms on the frame clock's kind of timer (kernel_make_wait_timer), one per
+    // waiting thread: Sleep(1) waited a whole 15.6 ms scheduler tick on Windows while the host answers in about 3 ms,
+    // which made each read take a VBlank (D10 c: 240 ms of the race load's 25 reads). Without a timer, or if setting
+    // it fails, Sleep(1) as before; each wait is bounded at 2 ms, so a timer that never fires costs no more. Up to
+    // 10 s by the wall clock (the 2,000 Sleep(1) polls took about 31 s on Windows, 2 s under Wine): a slow host (a
+    // first read's pipelines on a cold cache, paging) delays the read rather than handing the game wrong pixels, and
+    // a hung one doesn't freeze the game for long. Then the read is given up as before. (The timer is the waiting
+    // thread's, closed when that thread ends: the game's few threads, which live for the run.)
+    struct PollTimer {
+        void *handle = kernel_make_wait_timer();
+        ~PollTimer() { if (handle) CloseHandle(static_cast<HANDLE>(handle)); }
+    };
+    thread_local PollTimer poll_timer;
     bool done = false;
-    for (int waited = 0; waited < 2000 && !done; ++waited) {
+    while (!done) {
         link_poll();
         {
             KernelScope ks;
             std::lock_guard<std::recursive_mutex> poll_lock(g_poll_mutex);
             done = g_image_done;
         }
-        if (!done) Sleep(1);
+        if (done || GetTickCount() - since >= 10000) break;
+        LARGE_INTEGER due;
+        due.QuadPart = -2500;   // 0.25 ms, in 100 ns units (relative)
+        const HANDLE timer = static_cast<HANDLE>(poll_timer.handle);
+        if (timer && SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE))
+            WaitForSingleObject(timer, 2);
+        else
+            Sleep(1);
     }
     KernelScope ks;
     std::lock_guard<std::recursive_mutex> poll_lock(g_poll_mutex);
