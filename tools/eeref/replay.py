@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Replays every call recorded in a directory (GT4_RECORD) on the original code (eeref) and summarises.
 
-    py tools/eeref/replay.py --decomp C:\\path\\to\\gt4-decomp DIR [--all-lines] [--detail ADDR_N]
+    py tools/eeref/replay.py --decomp C:\\path\\to\\gt4-decomp DIR [--game DIR] [--eeref EXE] [--detail ADDR_N]
+                             [--max N] [--timeout S]
 
 Each function's parameters and return are read from the source the native link uses for it (game_src/, the
 matched source, else its draft; tools/abi_lint.py parses them), so floats reach the EE's float registers and
@@ -163,6 +164,12 @@ def main():
             continue
         addr = os.path.basename(pre).split('_')[0].upper()
         d = definition(addr, a.decomp, draft_paths)
+        if not os.path.exists(pre[:-4] + '.post'):   # the call had not returned when the recording ended
+            if ram is not None:
+                shutil.rmtree(os.path.dirname(expand(pre, ram)))
+            rows.append((True, os.path.basename(pre)[:-4], d[2] if d else '?', 'UNFINISHED',
+                         'no .post: the call had not returned when the recording ended'))
+            continue
         if not consistent(pre[:-4] + '.post') or not consistent(pre):
             if ram is not None:
                 shutil.rmtree(os.path.dirname(expand(pre, ram)))
