@@ -200,9 +200,12 @@ store to the lists' counts). The light-glow pass 003B88C8 draws from two per-fra
     reviews; without it each flush would decode and cache a new mesh every frame. B7 then draws them on the GS path,
     counted as mesh 0. A flush never mixes billboard types, by
     construction: `BillboardSet__render` flushes when the type changes and at a tab entry (0x8000).
-  - **A `kSrcBillboard` light per billboard** from its entry (world position `e->f4, f8 + h/2, fC` through set 0, the
-    item's width and height). The flush's billboards are kept in a small fixed buffer during the batch and sent
-    right after the flush's first `Instance`, with `id` = that instance's serial and the main view as their view
+  - **A `kSrcBillboard` light per billboard** from its entry: world position `e->f4, f8 + h/2, fC` through set 0;
+    the half width and half height as `Light` defines them (item `+0` is already the half width, since the quad
+    spans x +- f0; the half height is f4 / 2); colour the mean of the item's vertex colours at `+0xC` / 128 (0x80
+    = 1, so a channel may exceed 1), intensity their alpha's mean, white when the item has none. The flush's
+    billboards are kept in a small fixed buffer during the batch and sent after the flush returns, so after all
+    of its runs' `Instance`s, with `id` = the serial of its first `Instance` and the main view as their view
     (inside the view: a.5 rule 4's plain case). The host keeps one as `kSrcCourseGlow` only when that instance's
     material has the glow class, so tree billboards light nothing (CONTRACTS a.4).
 - **Step 2, headlight spots:** each headlight's direction and cone from the car body (A9's record, D6), so the

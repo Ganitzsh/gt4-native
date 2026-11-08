@@ -233,7 +233,7 @@ enum LightSource : uint8_t {
     kSrcWarning = 7,         // 003B88C8's entries2[], a source with blink > 0 (warning lamps; A7 step 1a)
     kSrcCarLamp = 8,         // a car lamp whose group is not known (entries[], A7 step 1a): point, no direction
     kSrcBillboard = 9,       // a course billboard's centre and size (A7 step 1b), id = the serial of its flush's
-                             //   first kInstBillboard instance, sent right after it. A candidate, not a light: the
+                             //   first kInstBillboard instance, sent after the flush. A candidate, not a light: the
                              //   host keeps it as kSrcCourseGlow when that instance's material has the glow class
                              //   (F2b), else drops it
     kSrcOther = 15,
