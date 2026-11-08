@@ -466,10 +466,23 @@ held; GT4's volume files are inflated on the game thread; no load time is measur
 - Then: memory-map the image, or read ahead per stream on a worker (a stream's size is known at open); drop
   `FILE_FLAG_RANDOM_ACCESS`; give BGM and movies their own readers. If the loading screens turn out to be paced by
   whole frames, run the frame clock faster on loading screens outside `original`.
-- Acceptance: the load times (race and menus) reported before and after, with the targets lane C proposes from its
-  first measurement and the architect agrees; `ORIG` unchanged in its picture and the game's pacing (faster reads
-  shorten `original`'s loads too, which is the point; the faster frame clock stays outside it); saves and replays
-  unaffected (session test).
+- **First measurement** (lane C, `GT4_LOAD_STATS`, desktop, lane A's race route): the race load takes 0.70 s, of
+  which the disc is about 0 (the image is in the OS cache, 1.5-1.9 GB/s), the game's CPU 0.14 s and waiting 0.55 s:
+  the game draws every other VBlank, the "paced by whole frames" case. The other loads are under 0.5 s. The I/O
+  costs would show on a cold cache or the Odin (SD card, Wine's file I/O, FEX), which the desktop can't measure.
+- **Agreed order and targets:**
+  - (a) the I/O part now, safe everywhere: drop `FILE_FLAG_RANDOM_ACCESS`, give music and movies their own file
+    handle (off the loads' mutex), and read each stream ahead on open. Target: no regression on the desktop
+    numbers, and a cold-cache check on the desktop (an uncached copy of the image, before and after) showing it
+    helps where it should; the device numbers come from `GT4_LOAD_STATS` in the owner's device test (R4's list).
+  - (c) the faster frame clock on loading screens, outside `original`: `LoadingMode` (0x00104E30) timed first, and
+    the clock runs fast only while the game is in it, and never during anything with game time the player
+    watches (the countdown, replays, animated menus): if `LoadingMode` ever runs under one of those, the clock
+    follows the state the player sees, not the function. Target: the race load's waiting from 0.55 s to under
+    0.2 s, with a race's lap times and AI behaviour unchanged after a faster load.
+- Acceptance: the load times (race and menus) reported before and after, against those targets; `ORIG` unchanged in
+  its picture and the game's pacing (faster reads shorten `original`'s loads too, which is the point; the faster
+  frame clock stays outside it); saves and replays unaffected (session test).
 
 **D11: Latency (S-M; lane C, moved from lane D).** The input-to-photon budget D12-D16's filters count against. From
 the audit (section 4.6): two frames in flight today, and the pad sampled every host frame. Design: one frame in
