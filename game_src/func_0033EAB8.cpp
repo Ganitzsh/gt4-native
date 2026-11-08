@@ -2,7 +2,9 @@
 /* Native copy of 0033EAB8 (RacePS2Base's scene, from render_world) from gt4-decomp's src/race/RaceBGMPS2_RacePS2Base/func_0033EAB8.cpp, the source the native game compiled until now, with the main
  * view's scene records (docs/modern/CONTRACTS.md a.4, spike R1): its ViewBegin once the camera is loaded (set 1 by
  * its +0x10, set 0 by its +0x18), its ViewEnd before the rear-view mirror, which is drawn after every main-view
- * instance (render_back_mirror 00341E50 has its own view). Nothing is sent while scene records are off. */
+ * instance (render_back_mirror 00341E50 has its own view); and the course's lamps as Lights of the main view (A7), right
+ * after its method 0x3F0 lists them for the glow pass, after the mirror (CONTRACTS.md a.5 rule 4). Nothing is sent while
+ * scene records are off. */
 #include "gt4_gfx.h"
 #include "spr.h"
 typedef int s32;
@@ -89,7 +91,7 @@ extern "C" void func_0033EAB8(char *self, void *buf, void *cur, void *aux, f32 t
     RaceEntryCar__update(0);
     func_004A7454();
     { V *e = entry(cam, 0x18); ((FnF)e->fn)(cam + e->d, t); }
-    gt4_scene_view_begin(spr_base(), 1, 4, 0);   /* kViewMain, kViewCameraKnown: the camera is set 0 now */
+    const unsigned int mainView = gt4_scene_view_begin(spr_base(), 1, 4, 0);   /* kViewMain, kViewCameraKnown: the camera is set 0 now */
     func_00397CE0(scene);
     if (I(self, 0xE340)) {
         func_00396B80(course, P(course, 0x54), -1, one, 1000.0f);
@@ -172,6 +174,7 @@ extern "C" void func_0033EAB8(char *self, void *buf, void *cur, void *aux, f32 t
         func_003B80E8(rb, buf);
         func_003985A0(scene, rb);
         { bool on = hasFlag(scene, 0x8000); V *e = method(self, 0x3F0); ((FnIF)e->fn)(self + e->d, on, t); }
+        gt4_scene_course_lights(spr_base(), mainView, rb);   /* A7: the course's lamps, as method 0x3F0 listed them */
         if (hasFlag(scene, 0x200000)) { V *e = method(self, 0x3F8); ((Fn)e->fn)(self + e->d); }
         func_003B8848(rb);
         if (!Pitmen__isNotRenderOthersPeriod(self + 0x3628, index)) func_003C2838(self + 0x3238);
