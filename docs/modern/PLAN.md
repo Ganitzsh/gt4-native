@@ -429,7 +429,8 @@ don't rescale (`kStickDeadZone`, `input_map.cpp:62`), so steering jumps from 0 t
   defaults left the first third of the stick doing nothing. `modern` compensates it: the shaped output o (0..1)
   becomes the byte `128 + (g + (1 - g) * o) * 127` on the right and `128 - (g + (1 - g) * o) * 128` on the left
   (`padAxis`'s scales, so both ends reach 255 and 0), so the first step past the host's dead zone moves the wheels.
-  The band is measured on both sides, with g per side if GT4's edge is not symmetric. `original` keeps the band, as the PS2 had it.
+  The band is measured on both sides, with g per side if GT4's edge is not symmetric. `original` keeps the band,
+  as the PS2 had it.
   - g comes from the code that writes `D + 0x468`, read before g is chosen: the band's size, and whether it
     depends on speed or a driving aid. If it is constant, g is a setting (`input.steer.game_band`, default the
     band's last byte with the wheels straight, so the host never overshoots into a step). If it depends on speed or
