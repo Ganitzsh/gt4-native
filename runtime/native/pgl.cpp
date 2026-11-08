@@ -562,6 +562,15 @@ void gt4_scene_marker(uint32_t context, int kind) {
 // Read only: the flare read (003B8848) and the glows (003B88C8) see the list unchanged.
 void gt4_scene_course_lights(uint32_t context, uint32_t view, uint32_t glow) {
     namespace scene = gfx::scene;
+    {   // DEBUG (not committed): what the hook sees
+        static uint32_t calls = 0;
+        ++calls;
+        if (calls <= 5 || calls % 300 == 0)
+            log_info("A7 debug: call %u on %u frame %d view %u glow %08x count %d count2 %d enabled %d active %d", calls, gt4_scene_on(),
+                     g_scene.inFrame ? 1 : 0, view, glow, glow ? guest_ref<int32_t>(glow + 0xA34) : -1,
+                     glow ? guest_ref<int32_t>(glow + 0x1848) : -1, glow ? guest_ref<int32_t>(glow + 0xA28) : -1,
+                     glow ? guest_ref<int32_t>(glow + 0xA08) : -1);
+    }
     if (!gt4_scene_on() || !g_scene.inFrame || !view || !glow) return;
     const int32_t count = guest_ref<int32_t>(glow + 0x1848);
     for (int32_t k = 0; k < count && k < 100; ++k) {
