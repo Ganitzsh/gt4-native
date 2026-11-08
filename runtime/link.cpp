@@ -46,7 +46,7 @@ struct AsyncRead {
 constexpr int kAsyncMax = 8;
 constexpr uint32_t kAsyncMaxQwc = 512;   // 64 x 32 PSMCT32: the flare target is 64 x N, N = 8 in every race seen
 AsyncRead g_async[kAsyncMax];
-bool g_async_landed = false;       // one has arrived (the first is waited for)
+bool g_async_landed = false;       // the first has been read (waited for, answered or not); the rest are not waited for
 int async_depth() {
     static const int depth = [] {
         const char *e = std::getenv("GT4_READ_ASYNC_DEPTH");
@@ -455,7 +455,10 @@ bool link_read_image_async(uint32_t qwc, void *dst) {
         return link_read_image(qwc, dst);
     }
     link_poll();   // (what has landed so far frees its slot)
-    // The first one is read as the game asks (nothing landed yet to read the frame after).
+    // The first one is read as the game asks (nothing landed yet to read the frame after). Only the first: answered
+    // or not, the reads after it are asynchronous. A first answer that never came (link_read_image gives up after
+    // its timeout) made every later read wait the whole timeout again, about 31 s each (lane F's and lane A's night
+    // races with scene records on, 2026-11-08).
     bool landed;
     {
         KernelScope ks;
@@ -466,7 +469,8 @@ bool link_read_image_async(uint32_t qwc, void *dst) {
         const bool done = link_read_image(qwc, dst);
         KernelScope ks;
         std::lock_guard<std::recursive_mutex> poll_lock(g_poll_mutex);
-        g_async_landed = done;
+        g_async_landed = true;
+        if (!done) log_warn("link: the first asynchronous read went unanswered; the reads after it are not waited for");
         return done;
     }
     // Never waited for, as on the PS2: a read that finds every slot taken (a host far behind) is sent all the same and
