@@ -73,7 +73,7 @@ void SceneCounters::add(const SceneCounters& o) {
     runsAfterSameMatrix += o.runsAfterSameMatrix; matrixChecked += o.matrixChecked;
     matrixMismatch += o.matrixMismatch; matrixMaxError = std::max(matrixMaxError, o.matrixMaxError);
     viewportMismatch += o.viewportMismatch; guardUnexpected += o.guardUnexpected; cameraChecked += o.cameraChecked;
-    cameraMismatch += o.cameraMismatch; courseObjects += o.courseObjects; billboards += o.billboards; lightMaps += o.lightMaps; lights += o.lights; lightsAfterViewEnd += o.lightsAfterViewEnd;
+    cameraMismatch += o.cameraMismatch; courseObjects += o.courseObjects; billboards += o.billboards; lightMaps += o.lightMaps; reflections += o.reflections; lights += o.lights; lightsAfterViewEnd += o.lightsAfterViewEnd;
     lightViewUnknown += o.lightViewUnknown; emitters += o.emitters; markers += o.markers;
     vehicles += o.vehicles; viewSplitTargets += o.viewSplitTargets; viewsUnbound += o.viewsUnbound;
     fallbackNotBound += o.fallbackNotBound; fallbackMeshPending += o.fallbackMeshPending;
@@ -368,6 +368,7 @@ void SceneDecoder::instance(const rec::Instance& r) {
         if (r.flags & rec::kInstCourseObject) ++c.courseObjects;   // (a placed course object: its own objectToWorld)
         if (r.flags & rec::kInstBillboard) ++c.billboards;         // (a BillboardSet batch run: camera-facing quads)
         if (r.flags & rec::kInstLightMap) ++c.lightMaps;           // (a car light map's batch run, A6)
+        if (r.flags & rec::kInstReflection) ++c.reflections;       // (a road reflection pass's instance, A6)
         if (r.flags & rec::kInstCourse) {   // the course's world-space geometry (R1): objectToView is the camera
             ++c.cameraChecked;
             const float scale = std::max(largest(view->worldToView), 1.0f);
@@ -456,12 +457,14 @@ bool SceneDecoder::expectedMatrix(const InstanceData& d, Mat4& out) const {
 void SceneDecoder::job(gfx::ModelJob& job) {
     // the tag is the instance's position + 1, never the record's serial: a bad serial is counted, not trusted
     job.pad[0] = runInstance_ >= 0 ? static_cast<uint32_t>(runInstance_) + 1 : 0;
-    // and its view, for the front end (Draw::view, the view's target: a.5 7, a.8); 0 untagged. Bit 16: a light-map run
-    // (kInstLightMap, A6), which the binding leaves out (a.5.7): the front end binds nothing for it
+    // and its view, for the front end (Draw::view, the view's target: a.5 7, a.8); 0 untagged. Bits 16 and 17: a
+    // light-map run (kInstLightMap) or a road reflection's (kInstReflection), A6, which the binding leaves out (a.5.7):
+    // the front end binds nothing for them
     job.pad[1] = 0;
     if (runInstance_ >= 0 && frame_) {
         const InstanceData& in = frame_->instances[static_cast<size_t>(runInstance_)];
-        job.pad[1] = in.view | ((in.flags & rec::kInstLightMap) ? gfx::kJobLightMap : 0u);
+        job.pad[1] = in.view | ((in.flags & rec::kInstLightMap) ? gfx::kJobLightMap : 0u) |
+                     ((in.flags & rec::kInstReflection) ? gfx::kJobReflection : 0u);
     }
     if (!frame_) return;
     SceneCounters& c = frame_->counters;

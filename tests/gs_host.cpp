@@ -253,11 +253,13 @@ int main(int argc, char** argv) {
         }
     }
 
-    // 2b2. A car light map's draws (kInstLightMap, A6; CONTRACTS.md a.5.7): the view's principal is the frame, then a
-    // light-map run draws into another target, testing and writing the principal's Z, and a principal draw samples
-    // that target. Tagged as a light map (gfx::kJobLightMap in pad[1]) it is out of the binding: Draw::view 0, no
-    // split, no auxiliary target or read, counted with its target. The same run without the bit splits the view.
-    for (const bool lightMap : {true, false}) {
+    // 2b2. A car light map's draws (kInstLightMap) and the road reflection's (kInstReflection), A6; CONTRACTS.md a.5.7:
+    // the view's principal is the frame, then such a run draws into another target, testing and writing the
+    // principal's Z, and a principal draw samples that target. Tagged with its bit in pad[1] it is out of the binding:
+    // Draw::view 0, no split, no auxiliary target or read, counted with its target (a reflection also with its
+    // readers). The same run without a bit splits the view.
+    for (const uint32_t bit : {gt4::gfx::kJobLightMap, gt4::gfx::kJobReflection, 0u}) {
+        const bool lightMap = bit != 0;
         gt4::gsn::GsFrontend fe;
         fe.setSceneSplit(true);
         Gif g = setup();
@@ -283,7 +285,7 @@ int main(int argc, char** argv) {
         fe.model(job, words.data());
         state(0x100, 4, 0);   // the light map's run: another target, on the principal's Z
         job.pad[0] = 2;
-        job.pad[1] = 1u | (lightMap ? gt4::gfx::kJobLightMap : 0u);
+        job.pad[1] = 1u | bit;
         fe.model(job, words.data());
         state(0, 10, tex0(0x100 * 32, 4, PSMCT32, 8, 8, true, 0));   // the paint samples it
         job.prim = 4 | (1 << 4);
@@ -299,7 +301,8 @@ int main(int argc, char** argv) {
         fe.sceneView(std::move(package));
         gt4::gsn::FrameList partial;
         fe.cut(partial);
-        const std::string mode = lightMap ? "light map: " : "the same run untagged as a light map: ";
+        const std::string mode =
+            bit == gt4::gfx::kJobLightMap ? "light map: " : bit ? "reflection: " : "the same run with no bit: ";
         expect(partial.views.size() == 1, (mode + "the view's package is on the list").c_str());
         if (partial.views.size() != 1) continue;
         const auto& v = partial.views[0];
@@ -308,11 +311,17 @@ int main(int argc, char** argv) {
                    (mode + "its draw has Draw::view 0, the principal's draws view 1").c_str());
             expect(v.target != 0 && v.target == partial.draws[0].target && !v.splitTargets && v.auxCount == 0 && v.auxReads == 0,
                    (mode + "out of the binding: no split, no auxiliary target, no auxiliary read").c_str());
-            expect(fe.stats.viewLightMapDraws == 1 && fe.stats.lightMapTargets.size() == 1 &&
-                       fe.stats.lightMapTargets[0] == partial.draws[1].target,
+            const bool asLightMap = bit == gt4::gfx::kJobLightMap;
+            const auto& targets = asLightMap ? fe.stats.lightMapTargets : fe.stats.reflectionTargets;
+            const uint64_t counted = asLightMap ? fe.stats.viewLightMapDraws : fe.stats.viewReflectionDraws;
+            expect(counted == 1 && targets.size() == 1 && targets[0] == partial.draws[1].target,
                    (mode + "counted, with the target it wrote").c_str());
+            if (!asLightMap)
+                expect(fe.stats.reflectionSamples[1] == 1 && fe.stats.reflectionSamples[0] == 0,
+                       (mode + "its target's reader counted (the tagged principal draw)").c_str());
         } else {
-            expect(v.splitTargets != 0 && fe.stats.viewLightMapDraws == 0, (mode + "the view splits (rule 2), nothing counted").c_str());
+            expect(v.splitTargets != 0 && fe.stats.viewLightMapDraws == 0 && fe.stats.viewReflectionDraws == 0,
+                   (mode + "the view splits (rule 2), nothing counted").c_str());
         }
     }
 

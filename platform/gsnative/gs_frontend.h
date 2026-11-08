@@ -363,6 +363,10 @@ public:
         uint64_t auxDrawsByRole[16] = {}, auxReadsByRole[16] = {};   // a.5.7
         uint64_t viewLightMapDraws = 0;           // A6: draws of kInstLightMap runs, out of the binding (a.5.7)
         std::vector<uint32_t> lightMapTargets;    // the targets they wrote (at most 64 kept)
+        uint64_t viewReflectionDraws = 0;         // A6: draws of kInstReflection instances, out of the binding (a.5.7)
+        std::vector<uint32_t> reflectionTargets;  // the targets they wrote (at most 64 kept)
+        uint64_t reflectionSamples[2] = {};       // draws sampling one the frame's reflection wrote: untagged, tagged
+        uint64_t reflectionTargetsInFrame = 0;    // the most targets the reflection wrote in one scene frame
         uint64_t splitByReason[6] = {};   // views split, by a.5.7's reason (1..5; a view counts once per reason)
         uint64_t splitSummaryFull = 0;    // views split because their binding summary was full (not a.5.7 rule 5)
         uint64_t viewsPastLimit = 0;      // tagged draws naming a view id past kViews (a bad record: never bound)
@@ -660,6 +664,7 @@ private:
     // and the bracket a draw into `colour` gets (`rule`: 0 none or kept, 1 principal target, 2 screen-sized)
     uint8_t sceneBrackets = 0;
     std::vector<uint16_t> sceneMainViews;
+    std::vector<uint32_t> reflectionFrameTargets;   // A6: the targets kInstReflection draws wrote in this scene frame
     // the targets the display records showed lately, and the frame count then (N4: the picture, rule 3 of bracketFor)
     struct ShownTarget {
         uint32_t id = 0;

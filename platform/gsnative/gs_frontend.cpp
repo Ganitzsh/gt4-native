@@ -1929,15 +1929,28 @@ void GsFrontend::model(const gfx::ModelJob& in, const uint32_t* words) {
     // its scene view (CONTRACTS.md a.5 7, a.8: the stream's decoder put its instance in pad[0], that instance's view in
     // pad[1]): the view is bound to the colour target of its first tagged draw, and counted split if another follows
     const uint16_t tagged = static_cast<uint16_t>(in.pad[0] ? in.pad[1] : 0);
-    // A6: a car light map's draw (kInstLightMap, gfx::kJobLightMap in pad[1]) is out of the binding (a.5.7): render-to-
-    // texture into the car's reflection map, treated as untagged and counted with the targets it writes
+    // A6: a car light map's draw (kInstLightMap, gfx::kJobLightMap in pad[1]) and the road reflection's
+    // (kInstReflection, gfx::kJobReflection) are out of the binding (a.5.7): render-to-texture, treated as untagged and
+    // counted with the targets they write
     const bool lightMap = tagged && (in.pad[1] & gfx::kJobLightMap) && sceneOpen;
-    if (lightMap) {
-        ++stats.viewLightMapDraws;
-        std::vector<uint32_t>& seen = stats.lightMapTargets;
+    const bool reflection = tagged && (in.pad[1] & gfx::kJobReflection) && sceneOpen;
+    if (lightMap || reflection) {
+        ++(lightMap ? stats.viewLightMapDraws : stats.viewReflectionDraws);
+        std::vector<uint32_t>& seen = lightMap ? stats.lightMapTargets : stats.reflectionTargets;
         if (std::find(seen.begin(), seen.end(), colour) == seen.end() && seen.size() < 64) seen.push_back(colour);
+        std::vector<uint32_t>& frameSeen = reflectionFrameTargets;
+        if (reflection && std::find(frameSeen.begin(), frameSeen.end(), colour) == frameSeen.end()) {
+            frameSeen.push_back(colour);
+            stats.reflectionTargetsInFrame = std::max<uint64_t>(stats.reflectionTargetsInFrame, frameSeen.size());
+        }
     }
-    const uint16_t view = lightMap ? 0 : tagged;
+    // a draw sampling a target the reflection wrote in this scene frame (its readers, by whether the draw is tagged:
+    // a.7's viewReflectionDraws). By the frame's own targets: target ids are reused for other surfaces later
+    const std::vector<uint32_t>& written = reflectionFrameTargets;
+    if (texture.kind == TextureSource::Kind::Target && !written.empty() &&
+        std::find(written.begin(), written.end(), texture.id) != written.end())
+        ++stats.reflectionSamples[tagged && !lightMap && !reflection ? 1 : 0];
+    const uint16_t view = lightMap || reflection ? 0 : tagged;
     if (view > kViews && sceneOpen) ++stats.viewsPastLimit;   // (not bound: counted apart from viewsUnbound)
     if (view && view <= kViews && sceneOpen) {
         if (viewBindings.size() < view) viewBindings.resize(view);
@@ -2541,6 +2554,7 @@ void GsFrontend::sceneRecord(const uint8_t* payload, size_t bytes) {
         sceneVsyncInFrame = false;
         sceneBrackets = 0;
         sceneMainViews.clear();
+        reflectionFrameTargets.clear();
         glowOrigins.clear();
         // B6: a FrameBegin without the last frame's FrameEnd drops that frame (the decoder does): its jobs and counters go
         clearSceneJobs();
@@ -2875,6 +2889,22 @@ void GsFrontend::sceneFrame(std::unique_ptr<scene::SceneFrame> f) {
     if (sceneBrackets) ++stats.bracketsOpenAtEnd;   // (N4: an End marker missing; the bracket closes with the frame)
     sceneBrackets = 0;
     sceneMainViews.clear();
+    // GT4_SCENE_DEBUG=1: the first frame's reflection targets (A6: the road reflection's 64 x 32, what else it writes)
+    static const bool debugReflection = [] {
+        const char* e = std::getenv("GT4_SCENE_DEBUG");
+        return e && e[0] == '1';
+    }();
+    static bool shownReflection = false;
+    if (debugReflection && !shownReflection && !reflectionFrameTargets.empty()) {
+        shownReflection = true;
+        for (const uint32_t id : reflectionFrameTargets)
+            if (id && id <= targets.size()) {
+                const Target& t = targets[id - 1];
+                std::printf("scene: the road reflection writes target %u (bp %u bw %u psm %u h %u%s)\n", id, t.bp,
+                            t.bw, t.psm, t.height, t.depth ? ", depth" : "");
+            }
+    }
+    reflectionFrameTargets.clear();
 }
 
 void GsFrontend::vsync(uint64_t vblank, FrameList& out) {

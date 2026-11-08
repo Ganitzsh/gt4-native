@@ -1244,6 +1244,11 @@ std::string GsHost::summary() const {
         byRole("auxiliary reads", s.auxReadsByRole);
         if (s.viewLightMapDraws) out << "; " << s.viewLightMapDraws << " light-map draws (out of the binding) into "
                                      << s.lightMapTargets.size() << " targets";
+        if (s.viewReflectionDraws)
+            out << "; " << s.viewReflectionDraws << " reflection draws (out of the binding) into "
+                << s.reflectionTargets.size() << " targets (at most " << s.reflectionTargetsInFrame
+                << " in a frame), sampled in their frame by " << s.reflectionSamples[0] << " untagged and "
+                << s.reflectionSamples[1] << " tagged draws";
         std::string reasons;
         for (int r = 1; r <= 5; ++r)
             if (s.splitByReason[r]) reasons += (reasons.empty() ? "" : " ") + std::to_string(r) + ":" + std::to_string(s.splitByReason[r]);

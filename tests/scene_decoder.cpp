@@ -421,6 +421,9 @@ void checks() {
     const auto lightMap = oneJob(none, rec::kInstLightMap, translate(3.0f, 0.0f, 0.0f) * worldToView());
     check(lightMap.lightMaps == 1 && lightMap.cameraChecked == 0 && lightMap.errorFree(),
           "kInstLightMap: a light map's run is counted, not camera-checked (A6)");
+    const auto reflection = oneJob(none, rec::kInstReflection | rec::kInstLighting, worldToView());
+    check(reflection.reflections == 1 && reflection.lightMaps == 0 && reflection.errorFree(),
+          "kInstReflection: a reflection instance is counted (A6)");
     {   // its job's tag: the view with gfx::kJobLightMap, so the front end leaves it out of the binding (a.5.7)
         auto tagOf = [](uint16_t flags) {
             SceneDecoder d;
@@ -436,6 +439,8 @@ void checks() {
         };
         check(tagOf(rec::kInstLightMap) == (1u | gt4::gfx::kJobLightMap) && tagOf(0) == 1u,
               "kInstLightMap: its jobs carry the view and kJobLightMap; others the view alone");
+        check(tagOf(rec::kInstReflection | rec::kInstLighting) == (1u | gt4::gfx::kJobReflection),
+              "kInstReflection: its jobs carry the view and kJobReflection");
     }
     {   // a NaN in the camera itself (worldToView): the course instance carries the same NaN, and it still counts
         SceneDecoder d;

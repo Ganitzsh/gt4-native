@@ -103,7 +103,9 @@ extern "C" void func_0033EAB8(char *self, void *buf, void *cur, void *aux, f32 t
         func_00342470(buf);
         { V *e = method(self, 0x370); ((FnPI)e->fn)(self + e->d, cam, I(self, 0xE334)); }
         if (I(self, 0xE34C)) func_001079C8(0, 0);
+        gt4_scene_reflection(spr_base(), 1);   /* render_reflection (vtable slot 110): kInstReflection, A6 */
         { V *e = method(self, 0x378); ((FnPPIF)e->fn)(self + e->d, buf, aux, I(self, 0xE334), t); }
+        gt4_scene_reflection(spr_base(), 0);
     }
     func_00397D48(scene);
     func_00342580(buf, F(scene, 0x3C), 1.0f);

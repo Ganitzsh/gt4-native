@@ -386,6 +386,8 @@ struct SceneFrameState {
     int lightMaps = 0;          // a car's light-map pass under way (A6: 0038F5D0, opened by render_cars): each
                                 // batch run an Instance flagged kInstLightMap
     uint32_t lightMapEntrant = 0xFFFFFFFFu;   // that car's entrant
+    int reflections = 0;        // the road reflection pass under way (A6: render_reflection, opened by 0033EAB8): its
+                                // Instances flagged kInstReflection
     uint32_t flushSerial = 0;   // the serial of the current flush's first billboard Instance (0: none yet)
     uint16_t billboardCount = 0;   // the flush's billboards kept (g_billboards)
     uint16_t openView = 0, viewInstances = 0;
@@ -568,6 +570,16 @@ void gt4_scene_course(uint32_t context, int on) {
 
 // Inside the course's draws, draws that are not its world-space geometry pause the flag (1) and resume it (0): the
 // BillboardSet's camera-facing billboards (CourseData::render_course_2), whose objectToView is not the camera.
+// The road reflection pass begins (1) or ends (0) (CONTRACTS.md kInstReflection, a.5.7; A6):
+// game_src/func_0033EAB8.cpp opens it around render_reflection's call (RacePS2Base vtable slot 110, +0x378), whose
+// Cmds draw the reflection into its 64 x 32 target with its own Z in the middle of the main view. Their Instances are
+// flagged kInstReflection, out of the binding. Nested calls count.
+void gt4_scene_reflection(uint32_t context, int on) {
+    (void)context;
+    if (!gt4_scene_on()) return;
+    g_scene.reflections = on ? g_scene.reflections + 1 : (g_scene.reflections > 0 ? g_scene.reflections - 1 : 0);
+}
+
 void gt4_scene_course_pause(uint32_t context, int pause) {
     (void)context;
     if (!gt4_scene_on()) return;
@@ -665,6 +677,9 @@ static uint16_t courseFlag() {
     return gt4_matrix_stack_top == g_scene.courseTop ? gfx::scene::kInstCourse : gfx::scene::kInstCourseObject;
 }
 
+// Inside the road reflection pass (gt4_scene_reflection): kInstReflection on every Instance it sends.
+static uint16_t reflectionFlag() { return g_scene.reflections > 0 ? gfx::scene::kInstReflection : 0; }
+
 // One Cmd 0049D328 draws, after 0049E480 / 0049E548 and before its items (CONTRACTS.md a.4): its object-to-view (set 0
 // as 0049E480 picks it), the scales, its items, and the Projection of set 1 with the viewport the batch holds.
 void gt4_scene_cmd(uint32_t context, uint32_t cmd) {
@@ -677,7 +692,7 @@ void gt4_scene_cmd(uint32_t context, uint32_t cmd) {
     r.prefix = {scene::kInstance, scene::kVersion};
     r.view = g_scene.openView;
     r.flags = static_cast<uint16_t>((flag ? scene::kInstLighting : 0) | ((bits & 0x80) ? scene::kInstSkinned : 0) |
-                                    courseFlag());
+                                    courseFlag() | reflectionFlag());
     r.serial = static_cast<uint32_t>(g_scene.instances) + 1;   // (counted as it is appended)
     r.cmd = cmd;
     r.entrant = 0xFFFFFFFFu;
@@ -801,7 +816,7 @@ static void sceneRunInstance(uint32_t context, uint16_t flags, uint32_t entrant)
     scene::Instance r{};
     r.prefix = {scene::kInstance, scene::kVersion};
     r.view = g_scene.openView;
-    r.flags = flags;
+    r.flags = static_cast<uint16_t>(flags | reflectionFlag());
     r.serial = static_cast<uint32_t>(g_scene.instances) + 1;   // (counted as it is appended)
     r.entrant = entrant;
     std::memcpy(r.objectToView, set0, sizeof r.objectToView);

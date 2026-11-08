@@ -603,6 +603,7 @@ struct ModelJob {
 };
 static_assert(sizeof(ModelJob) == 64 + 14 * 16);
 inline constexpr uint32_t kJobLightMap = 1u << 16;   // in ModelJob::pad[1]: a car light map's run (A6, a.5.7)
+inline constexpr uint32_t kJobReflection = 1u << 17;   // in ModelJob::pad[1]: a road reflection's run (A6, a.5.7)
 inline constexpr uint32_t kModelWords = 1024;   // a batch: 256 qwords
 
 // The texture sets in graphics memory, as the runtime's frame walker and the host both keep them (in the order of
@@ -887,6 +888,9 @@ enum InstanceFlags : uint16_t {
                                //   course lamps near the car, drawn into the car's reflection texture, not the view's
                                //   target; objectToView = set 0 as the pass set it (the car's camera, orthographic);
                                //   entrant = the car. Out of the binding (CONTRACTS.md a.5.7)
+    kInstReflection = 1024,    // drawn by the road reflection pass (render_reflection 003411D0) into its 64 x 32 target
+                               //   with its own Z, inside the main view; set by the pass's context (the 0033EAB8
+                               //   copy), never from the target. Out of the binding (CONTRACTS.md a.5.7)
 };
 struct Instance {
     Prefix prefix;
