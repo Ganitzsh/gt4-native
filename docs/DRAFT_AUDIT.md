@@ -73,3 +73,15 @@ literals; hexadecimal constants were already exact).
   guest RAM (0x02000000); original code (eeref, `GT4_ORIG`) reads them as PS2 pointers and cannot follow them
   (`0235CF0C`, where the three replays above derail). For R17: guest RAM beyond 32 MB would collide with the native
   image there. Not a draft bug.
+- **Can they reach a save?** No path found, not proven. Four of the five values are the first word (the vptr) of
+  RTTI type_info nodes that gcc 2.96's `__tf` functions build at run time (`RefPointer__tf` fills `D_006D5E20`,
+  `HObject__tf` fills `D_0088DA60`), so natively they point at the native C++ runtime's type_info code; the fifth is
+  `adhoc::GetMicroSecond` in the ADHOC engine's native binding table. All are rebuilt at every boot and read only by
+  `__dynamic_cast` and the script engine (the decomp's `GT4MC__FileGT4GameData__loadInstance`, 0x005C0FC8, takes
+  `__dynamic_cast`'s arguments and sits among the C++ runtime's helpers: a name from another game's map). Game
+  objects carry PS2 vptrs natively: all 166 gcc 2.x vtable references (`_vt$...`) are PROVIDEd at their PS2 addresses
+  in the game's link map (lane A, a release game at decomp 6dbbf48f4), none defined by a native object; host vptrs
+  come only with classes of the native C++ runtime. The approved save loads and plays alike across builds whose host
+  layouts differ. Not settled: the save files are compressed or encrypted (8.0 bits a byte), so a scan for pointers
+  proves nothing, and the routine that builds them is not traced: a save would need a `FileGT4GameData` writer that
+  copies whole objects rather than fields.
