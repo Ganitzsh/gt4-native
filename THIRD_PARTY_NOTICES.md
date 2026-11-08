@@ -97,3 +97,14 @@ program. The game uses them through `gt4_ee_mul` and friends (runtime/sdk.cpp).
 The native game links a static FFmpeg (LGPL-2.1+, https://ffmpeg.org) for its movies, built by
 `tools/build_ffmpeg.sh` with only the MPEG-2 video decoder, the MPEG-PS demuxer, PCM/PS2 ADPCM,
 swscale and swresample. Its source is the release tarball that script downloads.
+
+## MIT KEMAR HRTF measurements
+
+Applies to `platform/audio/spatial/hrtf_kemar.h`, a table of head-related impulse responses derived from
+MIT's KEMAR measurements (the compact set, horizontal plane, resampled to 48 kHz) by `tools/hrtf_table.py`; the
+measurements themselves are not included.
+
+Bill Gardner and Keith Martin, "HRTF Measurements of a KEMAR Dummy-Head Microphone", MIT Media Lab Perceptual
+Computing Technical Report #280, 1994. The data is Copyright 1994 by the MIT Media Laboratory: "It is provided free
+with no restrictions on use, provided the authors are cited when the data is used in any research or commercial
+application." (the archive's README).
