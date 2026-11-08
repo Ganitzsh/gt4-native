@@ -2369,11 +2369,15 @@ void GsnScene::Impl::executeLightPart(VkCommandBuffer command, size_t at, int st
                 same = si.area.width == first->area.width && si.area.height == first->area.height &&
                        si.colour->extent.width == first->colour.width && si.colour->extent.height == first->colour.height;
             for (int s = 0; s < kSteps; ++s) same = same && stepRuns(s, l) == first->runs[s];
+            // GT4_WRONG_PLAN_TEST=1 (testing): every plan taken as wrong, so the fallback runs on every Light; the
+            // frames must not change (lane A's suggestion, B4 step 3).
+            static const bool wrongTest = [] { const char* e = std::getenv("GT4_WRONG_PLAN_TEST"); return e && *e && *e != '0'; }();
+            if (wrongTest) same = false;
             if (same) ++stagesOnTransients;
             if (!same) {
                 char what[160];
-                std::snprintf(what, sizeof what, "was planned over %ux%u (colour %ux%u) but has %ux%u (colour %ux%u), or other steps",
-                              first->area.width, first->area.height, first->colour.width, first->colour.height,
+                std::snprintf(what, sizeof what, "%swas planned over %ux%u (colour %ux%u) but has %ux%u (colour %ux%u), or other steps",
+                              wrongTest ? "(GT4_WRONG_PLAN_TEST) " : "", first->area.width, first->area.height, first->colour.width, first->colour.height,
                               scene ? si.area.width : 0u, scene ? si.area.height : 0u, scene ? si.colour->extent.width : 0u,
                               scene ? si.colour->extent.height : 0u);
                 planWrong(at, what);
