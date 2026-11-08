@@ -431,10 +431,19 @@ don't rescale (`kStickDeadZone`, `input_map.cpp:62`), so steering jumps from 0 t
   (`padAxis`'s scales, so both ends reach 255 and 0), so the first step past the host's dead zone moves the wheels.
   The band is measured on both sides, with g per side if GT4's edge is not symmetric. `original` keeps the band,
   as the PS2 had it.
-  - g comes from the code that writes `D + 0x468`, read before g is chosen: the band's size, and whether it
-    depends on speed or a driving aid. If it is constant, g is a setting (`input.steer.game_band`, default the
-    band's last byte with the wheels straight, so the host never overshoots into a step). If it depends on speed or
-    an aid, the host computes g each frame from the same values (D6).
+  - **Where the band is** (lane D, 2026-11-08). It is in the controller layer's analogue path, between the linear
+    steer table (`D_00622F58`) and the steer command, not in the car. The command, copied each tick to
+    `D + 0x454`, is exactly 0 for bytes 90-165 and rises linearly past them, about 45.6 a byte, to +-4096 at the
+    ends. Both edges sit at the same table value, about 29 % of the channel's range, in a GT-mode run and an Arcade
+    run with different cars. The rack (`func_003485D0`: spring, damper, a rate limit that varies with
+    `D + 0x53C`) and the target (`func_00348850`: command x lock / 4096, plus two assists only with an aid flag at
+    speed) have no band. The D-pad writes its command directly and has none.
+  - So g is one constant: `input.steer.game_band`, percent of a side, 0-40, default 29 in `modern`; `original`
+    never applies it. On the right, 128 + 0.29 x 127 = 165, the last zero byte (no overshoot). On the left,
+    128 - 0.29 x 128 = 91, one or two bytes of residual band (90, maybe 89; the allowed undershoot).
+  - Still to confirm before the default is final: the band is the same at speed (expected, since it comes before
+    the car), and whether a Driving Force Pro's input passes through the same analogue path (for D15's `dfp`
+    mode).
   - It applies to everything that goes through the response: the stick, the keyboard ramp, and in D15 a wheel in
     `native` mode.
 - Keyboard steering: a digital key ramps the axis at `input.steer.key_rate` (full lock in 0-500 ms, default 150 ms;
