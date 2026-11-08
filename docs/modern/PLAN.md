@@ -284,8 +284,10 @@ given) when cross-compiling, the built one otherwise. Depends: none. Acceptance:
 identical; a Windows ARM64 cross configure uses the host tool. **Day one.**
 
 **C4: Architecture in scripts (S).** `tools/build_windows.cmd:8, 10` (`-arch`), `tools/package_game.py:28, 264,
-300-301` (arm64 package name and CRT). Depends: C3. Acceptance: x64 package byte layout unchanged; arm64 package
-built from a cross build.
+300-301` (arm64 package name and CRT). Depends: C3. Acceptance (the coordinator, 2026-11-08: no ARM64 toolset on the
+owner's machine): locally, the x64 package layout and the host build unchanged, and the arm64 path checked as far
+as configure (the missing ARM64 component and CRT reported by name); the arm64 package is a CI acceptance, built by
+the CI job once it is set up (Windows ARM64 is CI-build only).
 
 **C5: CI and FP flags (M).** `-ffp-contract=off` (clang), MSVC ARM64 `/fp:precise` codegen check; CI for Windows
 x64 (build, ctest, replay smoke), Linux x64 (build, ctest), Linux aarch64 (cross build; the replay smoke runs on the
