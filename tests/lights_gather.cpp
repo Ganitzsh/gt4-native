@@ -94,7 +94,7 @@ void filtering() {
     Light off = record(1, gfx::scene::kSrcCourseGlow, 0, 0, -5);
     off.intensity = 0.0f;
     r.push_back(off);
-    r.push_back(record(1, 9, 0, 0, -5));                                                // a source the table doesn't know
+    r.push_back(record(1, 14, 0, 0, -5));                                               // a source the table doesn't know (14: unused)
     std::vector<GpuLight> out;
     GatherStats s;
     gatherLights(r.data(), r.size(), 1, 0.5f, 500.0f, 1.0f, out, s);
