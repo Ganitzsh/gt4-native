@@ -611,10 +611,16 @@ bloom; `ORIG` unchanged.
 
 **F2: Night relight on the GS path (M).** At a Light command in `hybrid`: lights gathered from the view's `Light`
 records into the light list, clusters over the scene rectangle, view-space positions and normals from GT4's Z,
-the lights added in the scene stage (CONTRACTS.md c.3). While F2 lights the road, N3 skips the lit-road layer
-(draws 305-308), so the lamps' light reaches the road once. Depends: A7, F1, B4. Acceptance: `ORIG`; `VAL`; `PERF(<=
-1 ms)`; on a night capture lamps light the road and cars near them (review against PCSX2 stills: the scene
-otherwise unchanged).
+the lights added in the scene stage with the albedo estimate of CONTRACTS.md c.3. While F2 lights the road, N3
+skips the lit-road layer (draws 305-308), so the lamps' light reaches the road once. Until N3 lands,
+`lighting.night = enhanced` is set by `--set` only, in no preset, so a release never lights the road twice. Three
+other lanes' files change, each reviewed by its lane: `gsn_light.comp` (lane B's scene-stage shader) takes the
+added light; `sceneRecordsWanted` (`settings_scene.cpp`, lane E) is also true with `lighting.night = enhanced`,
+since the game sends no lights without records; and `cmake/Host.cmake` (lane C) links the light sources and
+compiles `lights_cluster.comp` for the host. Depends: A7, F1, B4.
+Acceptance: `ORIG`; `VAL`; `PERF(<= 1 ms)` at 1440 x 1080; on a night capture lamps light the road and cars near
+them (review against PCSX2 stills: the scene otherwise unchanged); on the lamps capture with the car moving, N1
+shows no new step above 4 % (N2's bar) from the added light.
 
 **F3: Clustered lighting in the deferred and forward passes (M).** Depends: F1, B10, B22. Acceptance: `VAL`;
 `PERF`; the same lights as F2 in `modern`, with G-buffer normals.

@@ -205,7 +205,7 @@ New keys (owned by lane E's table, options in per-module files after E1):
 | `render.scene` | `original`, `hybrid`, `modern` (`parity` by `--set` only) | `original` | `hybrid` (later `modern` from high up) |
 | `render.scale_mode` | `integer` (GS path rule), `free` (modern views) | `integer` | `free` |
 | `lighting.materials` | `original`, `pbr` | `original` | `pbr` |
-| `lighting.night` | `original`, `enhanced` | `original` | low `original`, others `enhanced` |
+| `lighting.night` | `original`, `enhanced` | `original` | low `original`, others `enhanced` once N3 has landed (until then `--set` only, PLAN.md F2) |
 | `effects.shadows`, `effects.reflections`, `effects.ambient_occlusion`, `effects.particles`, `effects.sky_fog`, `effects.bloom`, `effects.dof`, `effects.motion_blur` (exist) | as today | `original` | as today; they now steer the modern nodes too |
 | `effects.decals` | `off`, `on` | `off` | medium up `on` |
 | `effects.wet` | `original`, `enhanced` | `original` | medium up `enhanced` |

@@ -960,3 +960,27 @@ Night lighting can ship first on today's renderer: at a Light command, rebuild v
 the cluster grid built over the GS scene rectangle at the render scale. When the view moves to the modern
 renderer, the same shader functions run in the deferred lighting pass with G-buffer normals. Nothing in c.1
 changes between the two.
+
+**The albedo estimate (F2 step 2, lane F's design, agreed 2026-11-08).** The GS path has no albedo, only GT4's lit
+colour. It assumes GT4's lighting varies slowly over the screen and the textures quickly. So:
+`albedo = colour_linear / L_local * 0.18`, clamped to [0, 0.9]. `L_local` is a 1/8-resolution image of the
+log-average luminance, sampled bilinearly. That keeps texture and hue without GT4's dark night exposure. A fixed
+grey with GT4's chroma would lose the road markings, and colour times a gain would saturate lit areas.
+- `L_local` counts only pixels with geometry (GT4's Z inside the view's depth range): the sky and the clear colour
+  are left out, so they don't pull it, and they get no added light. The log average keeps small bright spots (lamp
+  heads, headlights) from lifting it. A floor of 1e-3 keeps black areas finite; the clamp does the rest.
+- Each 1/8 block stores the sum of its pixels' log luminance and their count. Both are sampled bilinearly and
+  divided after, so a block with no geometry weighs 0 near the skyline. A pixel whose four neighbouring blocks are
+  all empty gets no added light.
+- `L_local` is not smoothed over time in step 2: the N1 acceptance shows whether it has to be, and a history buffer
+  waits for that evidence.
+- The light is added in `gsn_light.comp`, in its linear light (its 2.2 decode): after the occlusion multiply
+  (lamp light is not ambient), before the host's enhanced grade, and before GT4's own grade and post effects.
+  The per-pixel cluster loop (Lambert, `light_list.glsl`'s falloff and cone) runs in that same pass. So the cost is
+  one 1/8 luminance pass plus the existing full pass.
+- Positions and distances come from the view's `ProjectionData` only (its projection and viewport give GT4's
+  exact Z for a distance, R1), not `gsn_ao.comp`'s measured `1.6e6 / d`, which is about 8 % off at 100 m and would
+  shift the falloff. There are no lights without scene records, so no fallback to `lighting.tanX/tanY` is needed.
+  Normals come from depth, from the nearer neighbour on each axis, as `gsn_ao.comp` does.
+- The mirror inset (`Lighting::hasInset`) is another view, with its own projection, and stays unlit in step 2.
+- It is an interim estimate: the modern views use their G-buffer albedo (B10).
