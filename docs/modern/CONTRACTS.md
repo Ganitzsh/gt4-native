@@ -657,6 +657,11 @@ read, then the one that receives `FrameEnd`. (Race route: 38 reads in about 4900
                                                   //   skinned, key-frame blend, pending, or the view cut
       std::vector<MaterialId> materials;          // one per item, in the mesh's item order (both vectors keep
                                                   //   their capacity with the list)
+      struct ItemRef {                            // B7: the item's ModelJob and its Draw, indices in this list
+          uint32_t job, draw;                     //   (valid only on the list that holds the package: a cut
+          uint32_t firstModelVertex, modelVertexCount;   // view has no ids and no items); the job's own vertex
+      };                                          //   range, since one Draw can merge several instances' jobs
+      std::vector<ItemRef> items;                 //   parallel to materials, filled in sceneView() beside the ids
   };
   // FrameList gains: std::vector<ViewOnList> views;   (SceneViews pooled, below)
   //   and std::shared_ptr<const SceneCache> sceneCache;   (B6's caches, read-only on the render thread: F2b, B7)

@@ -317,8 +317,34 @@ equal Z need no class rule and no G-buffer. Two conditions make the ties exact:
   changes no Z.
 The scene target's other draws between the view's passes (R5's clears, Z-only draws and the full-screen draws at
 0.47 of the order) keep their place in that order; whether B7 or the GS path draws them is B8's question (R5).
+- **The design** (lane B): B7 is the GS path with one change. Each tagged model run of a bound, valid, uncut view
+  is drawn from the mesh cache by a parity vertex stage instead of from `gsn_models.comp`'s per-frame output, at its
+  own place in the list's command order, through the same pipelines and `gsn.frag`. So R3 and R5 hold by
+  construction: GT4's order and depth, the Z clears and full-screen draws untouched, alpha as GT4 leaves it.
+  - **Per item**, `ViewOnList::items` (CONTRACTS a.8): its job (the per-frame constants: matrix, scale, offset,
+    clamp, guard, origin, and the lighting rows 200..216) and its draw (state and texture in this list), filled
+    in `sceneView()` beside B6's ids (lane A's file, lane A reviews). The render thread doesn't search by tag.
+  - **Shaders:** the transform, the lighting chain bodies and GS Z move from `gsn_models.comp` into includes
+    (`gt4_transform.glsl`, `gt4_lighting.glsl`). `gsn_models.comp` keeps its decode and calls them, and
+    `modern_parity.vert` calls the same functions on the mesh's object-space vertices and the item's constants (a
+    per-frame buffer, about 300 bytes an item). Same operations on the same values, so Z is equal (R3), and the
+    normals' scaling is made the same operation in both.
+  - **Where:** `GsnScene::executeRange`, at a Draw command holding such runs, only with `render.scene = parity`
+    (`--set` only, never in a preset, named in the settings text as a parity check, not a mode). Without it
+    nothing changes. A Draw can merge several jobs, of several instances (`model()` merges consecutive jobs of
+    the same state, target, texture and view), so the replacement is per job: each item carries its job's own
+    vertex range, and `executeRange` splits a Draw at job boundaries where one instance has a mesh and another
+    falls back. Merging is not changed, since the split now runs in every night race (F2b).
+  - **Fallbacks**, counted as `viewFallbacks` reasons: an instance with mesh 0 (pending, skinned, key-frame blend)
+    draws that run from `gsn_models.comp` as today; a view not valid, or cut, stays wholly on the GS path. The
+    mirror falls back unless it binds and validates as the main view does.
+  - Not in B7: B8's substitution, jitter and TAA (parity is 1x).
+- **Order of work:** B6's `items` (inert without the parity path) and the shader split, as a pure refactor
+  (`PRESETS` identical), in either order; then the parity path; then the acceptance.
 Depends: A2, A3, A10, B4, B5, B6, R3, R5.
-Acceptance: `PARITY` on the race, flyover and event captures; `VAL`; `viewFallbacks` reasons listed.
+Acceptance: `PARITY` on the race, flyover and event captures at 1x; Z equal to the GS path wherever both draw (a
+debug compare pass counts mismatches: 0); `VAL`; `viewFallbacks` reasons listed; `ORIG` and `PRESETS` identical (the
+parity path runs only with `render.scene = parity`).
 
 **B8: Substitution at the Light command, hybrid (M).** `platform/render/modern/compositor.cpp`: colour and GS Z
 into the GS target, the view's tagged draws skipped, untagged ones kept; read policy from R9; `render.scene =
