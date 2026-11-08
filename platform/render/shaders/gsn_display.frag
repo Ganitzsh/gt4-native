@@ -68,6 +68,15 @@ void main() {
     const bool blended = display.blend > 0.0;
     const bool currentLower = blended && display.offset.y > display.otherOffset.y;
     const bool otherLower = blended && display.otherOffset.y > display.offset.y;
+    // display.field_mode = clean: the displayed rectangle's last GS line is the one a TV hides below the picture
+    // (overscan), where GT4's menus park their next text line, drawn in the lower field. Shown black, as PCSX2's
+    // software picture shows it: the motion test below would otherwise show that field alone there, parked text and
+    // all (docs/modern/spikes/E4-fields-vs-pcsx2.md).
+    if (display.clean > 0.5 && blended && inUv.y > 1.0 - display.line / display.size.y) {
+        outColor = vec4(0.0, 0.0, 0.0, 1.0);
+        outVelocity = vec2(0.0);
+        return;
+    }
     vec3 c = clamp(textureLod(frame, fieldPoint(frame, display.offset, display.size, currentLower, inUv), 0.0).rgb, 0.0, 1.0);
     if (blended) {
         const vec2 q = fieldPoint(otherField, display.otherOffset, display.otherSize, otherLower, inUv);
