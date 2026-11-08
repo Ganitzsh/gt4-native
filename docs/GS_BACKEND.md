@@ -187,10 +187,11 @@ XGKICK in `gt4_host` (`docs/NATIVE_ONLY.md`).
   batch buffer: BASE and BASE + OFFSET take turns at each MSCAL/MSCALF (MSCNT goes on where the last renderer
   ended). Each buffer keeps what it was last sent and what the renderers decoded into it (GT4 re-sends only
   what changes, and draws some batches twice: `docs/VU1_PROGRAMS.md`). An MSCAL hands the batch to the
-  renderers (`Vif1::onBatch`). DIRECT/DIRECTHL go to the GS as PATH2; MSKPATH3 (GT4 emits it, `004A1950`: PATH3
-  records that arrive while it is set are held and sent at the unmask, or at the VBlank if it is never lifted);
-  ITOP, OFFSET, BASE, MARK, NOP, FLUSHE/FLUSH/FLUSHA (nothing to wait for). MPG: the uploaded image is kept
-  only to check it is GT4's (another image draws nothing). A command may span records.
+  renderers (`Vif1::onBatch`). ITOP, OFFSET, BASE, MARK, NOP, FLUSHE/FLUSH/FLUSHA (nothing to wait for). These codes
+  now come only inside model packets (the native batch records, `kBatchModel`): the VIF1 stream itself
+  (`GT4_REC_VIF1`, with DIRECT/DIRECTHL to PATH2, MPG and MSKPATH3) and the GIF records went with PLAN.md P1, and a
+  capture holding them is refused. The VU1 program image comes only from a saved state, kept to check it is GT4's
+  (another image draws nothing).
 - **3D renderers** (`platform/gs/renderers3d.*`): the entry table, the setup constants (kept for the entries
   that skip the setup), the lighting chain (decompression and 15 lighting bodies), the six strip renderers with
   back-face culling and the polygon clipper, and the screen grids, in plain float arithmetic; where a VU number
@@ -228,7 +229,7 @@ All in `ctest` (`tools\build_windows.cmd` runs them):
 
 | Test | What | GPU |
 |---|---|---|
-| `ps2gfx` | VIF1 UNPACK formats, row/column/protect masking, offset mode, skipping and filling writes, FLG double buffering into the batch buffers, a command split across records, DIRECT -> PATH2; GT4's strip renderer on a hand-made batch (header packet first, window coordinates, Z, fog, ADC, colours, STQ); record decoding (GIF, PRIV, VSYNC, GS_READ -> GS_IMAGE); MSKPATH3 holding PATH3; capture write/replay; pad encoding. `GT4_VU1_INTERPRETER` builds add the interpreter's instructions and timing quirks, XGKICK, and a toy transform microprogram (MPG + UNPACK + MSCAL) kicking the expected PATH1 packet, and print the interpreter's speed. | no |
+| `ps2gfx` | VIF1 UNPACK formats in model packets, row/column/protect masking, offset mode, skipping and filling writes, FLG double buffering into the batch buffers; a model packet replayed from its recorded effect; GT4's strip renderer on a hand-made batch (header packet first, window coordinates, Z, fog, ADC, colours, STQ); record decoding (DISPLAY, VSYNC, GS_READ -> GS_IMAGE, a retired GIF / VIF1 record refused); capture writing and replay by VBlank; the pad's bytes. | no |
 | `vu1_native_fuzz` | `GT4_VU1_INTERPRETER` builds, with `GT4_VU1_IMAGE`: random batches, the bit-exact port against the interpreter and the native renderers against the interpreter (see above). | no |
 | `gs_host` | the native front end's events (FINISH, SIGNAL, LABEL with their IDs), a GS -> host read from memory and one of drawn pixels asked of the GPU (the frame list cut at it), a capture replayed through `GsHost` (the worker thread, lockstep) into one displayed frame list per VBlank. Writes the capture for the next test. | no |
 | `host_replay` | `gt4_host --headless --replay ... --preset original --capture` at 640 x 448 (the native renderer at 1x), then the PPM checked by pixel (`tests/host_replay.cmake`). | yes (77 = skipped) |

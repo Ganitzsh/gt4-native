@@ -571,6 +571,7 @@ struct GsHost::Impl {
     std::unique_ptr<ps2::ReplaySource> replay;
     std::thread worker;
     std::atomic<bool> stop{false}, done{false};
+    std::atomic<bool> refused{false};   // a replayed capture of the old format (GIF / VIF records, PLAN.md P1)
     bool paused = false;   // the game was asked to pause (setPaused)
     int64_t gameOptions[8] = {-1, -1, -1, -1, -1, -1, -1, -1};   // gameplay option values sent (setGameOption)
 
@@ -846,7 +847,14 @@ struct GsHost::Impl {
     bool replayStep() {
         GT4_CPU_SCOPE("GS: replay frame (reading and dispatch)");
         auto onRecord = [this](const Gt4LinkRecord& h, const uint8_t* p) { dispatch(h, p); };
-        if (replay->nextFrame(onRecord)) { ++replayFrame; return true; }
+        if (replay->nextFrame(onRecord)) {
+            ++replayFrame;
+            if (stream->retired()) {   // an old capture: refused, not drawn wrong (PLAN.md P1)
+                refused = true;
+                return false;
+            }
+            return true;
+        }
         if (options.loop && replay->frames()) {
             replay->rewind();
             replayFrame = 0;
@@ -1104,6 +1112,7 @@ void GsHost::setGameOption(uint32_t id, uint32_t value) {
 
 bool GsHost::live() const { return impl->link && impl->link->running(); }
 bool GsHost::finished() const { return impl->done; }
+bool GsHost::refused() const { return impl->refused; }
 int GsHost::gameExitCode() const { return impl->link && !impl->link->running() ? impl->link->exitCode() : 0; }
 
 std::string GsHost::status() const {

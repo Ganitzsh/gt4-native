@@ -14,6 +14,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -32,20 +33,56 @@ void expect(bool ok, const char* what) {
     }
 }
 
-// The replayed scene: a grey background, a blue sprite (PATH3) and a magenta triangle drawn by the VU1
-// transform microprogram (PATH1), shown for two VBlanks.
-const float kTriangle[3][2] = {{100, 60}, {340, 60}, {100, 300}};
+// The replayed scene: a grey background and a blue sprite, drawn by native records (GT4_REC_GFX: a state record,
+// then a draw record per sprite), shown for two VBlanks. (The GIF and VIF1 records it was written with are retired:
+// PLAN.md P1.)
+void addRecord(std::vector<uint8_t>& block, uint32_t type, const void* a, uint32_t aBytes, const void* b = nullptr, uint32_t bBytes = 0) {
+    const size_t at = block.size();
+    block.resize(at + size_t(gt4::gfx::recordQwords(aBytes + bBytes)) * 16, 0);
+    const gt4::gfx::Header h = gt4::gfx::header(type, aBytes + bBytes);
+    std::memcpy(block.data() + at, &h, sizeof h);
+    std::memcpy(block.data() + at + sizeof h, a, aBytes);
+    if (bBytes) std::memcpy(block.data() + at + sizeof h + aBytes, b, bBytes);
+}
+
+void addSprite(std::vector<uint8_t>& block, uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1, uint32_t rgba) {
+    const gt4::gfx::DrawRecord d{6 /* sprite */, 2, gt4::gfx::kDrawPrim | gt4::gfx::kDrawColor};
+    gt4::gfx::Vertex v[2] = {};
+    v[0].x = static_cast<uint16_t>(x0 * 16);
+    v[0].y = static_cast<uint16_t>(y0 * 16);
+    v[1].x = static_cast<uint16_t>(x1 * 16);
+    v[1].y = static_cast<uint16_t>(y1 * 16);
+    v[0].rgba = v[1].rgba = rgba;
+    v[0].fog = v[1].fog = 255;
+    v[1].kick = 1;
+    addRecord(block, gt4::gfx::kDraw, &d, sizeof d, v, sizeof v);
+}
 
 void writeReplay(const std::string& path) {
     gt4::ps2::CaptureWriter writer(path);
-    const uint32_t three = 3;
-    Gif g = setup();
-    sprite(g, 0, 0, 640, 448, rgbaq(64, 64, 64, 0x80));
-    sprite(g, 400, 300, 600, 420, rgbaq(0, 0, 255, 0x80));
+    // context 1: the 640 x 448 frame at 0, its scissor, the origin at 0, Z always passing and not written
+    gt4::gfx::StateRecord state{};
+    state.contextGroups = 1u << gt4::gfx::kFrame | 1u << gt4::gfx::kOrigin | 1u << gt4::gfx::kDepthBuffer |
+                          1u << gt4::gfx::kScissor | 1u << gt4::gfx::kTests;
+    gt4::gfx::Context& c = state.context;
+    c.colorBase = 0;
+    c.colorWidth = 10;
+    c.colorFormat = gt4::gfx::C32;
+    c.depthBase = 0x70;
+    c.depthFormat = gt4::gfx::Z24;
+    c.depthWrite = 0;
+    c.scissorX0 = 0;
+    c.scissorX1 = 639;
+    c.scissorY0 = 0;
+    c.scissorY1 = 447;
+    c.depthTest = 1;
+    c.depthFunc = gt4::gfx::Always;
+    std::vector<uint8_t> block;
+    addRecord(block, gt4::gfx::kState, &state, sizeof state);
+    addSprite(block, 0, 0, 640, 448, static_cast<uint32_t>(rgbaq(64, 64, 64, 0x80)));
+    addSprite(block, 400, 300, 600, 420, static_cast<uint32_t>(rgbaq(0, 0, 255, 0x80)));
     for (int field = 0; field < 2; ++field) {
-        writer.write(GT4_REC_GIF, &three, 4, g.data(), static_cast<uint32_t>(g.bytes()));
-        const vif::Stream s = transformStream(kTriangle, 255, 0, 255);
-        writer.write(GT4_REC_VIF1, s.bytes(), static_cast<uint32_t>(s.size()));
+        writer.write(GT4_REC_GFX, block.data(), static_cast<uint32_t>(block.size()));
         const gt4::gfx::DisplayRecord shown = displayRecord();
         writer.write(GT4_REC_DISPLAY, &shown, sizeof(shown));
         const uint32_t vs[2] = {static_cast<uint32_t>(field), static_cast<uint32_t>(field)};
@@ -53,18 +90,13 @@ void writeReplay(const std::string& path) {
     }
 }
 
-// Pixels of the replayed scene, in a 640 x 448 image. The test's microprogram is not one of GT4's: only the
-// VU1 interpreter (GT4_VU1_INTERPRETER builds) runs it.
+// Pixels of the replayed scene, in a 640 x 448 image.
 struct Expected { uint32_t x, y, rgb; const char* what; };
 const Expected kReplayPixels[] = {
     {20, 20, rgb(64, 64, 64), "replay background"},
-#if GT4_VU1_INTERPRETER
-    {150, 100, rgb(255, 0, 255), "replay VU1 triangle"},
-#else
-    {150, 100, rgb(64, 64, 64), "no VU1 triangle without the interpreter"},
-#endif
-    {500, 350, rgb(0, 0, 255), "replay PATH3 sprite"},
-    {330, 290, rgb(64, 64, 64), "outside the triangle"},
+    {150, 100, rgb(64, 64, 64), "replay background (centre left)"},
+    {500, 350, rgb(0, 0, 255), "replay sprite"},
+    {330, 290, rgb(64, 64, 64), "replay background (centre)"},
 };
 
 int checkPpm(const std::string& path) {

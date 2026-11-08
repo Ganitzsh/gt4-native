@@ -82,6 +82,8 @@ public:
     void setFrameDrawn(uint64_t vblank);
     void hostWaits(uint32_t& count, uint32_t& ms) const;
     bool finished() const;      // the game exited, or the replay reached its end (without loop)
+    // The replayed capture is of the old format (GIF / VIF records, PLAN.md P1): refused, nothing more of it drawn.
+    bool refused() const;
     int gameExitCode() const;   // the game's exit code once it has exited (0 otherwise)
     double gameCpuSeconds() const;   // the game process's CPU time so far, every thread (0 without a live game)
     std::string status() const;     // one line for the overlay

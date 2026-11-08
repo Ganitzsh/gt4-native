@@ -58,7 +58,7 @@ says how many of its frames show a picture: a capture that replays black proves 
 |---|---|---|---|
 | `race7.cap` | 100 | a race | **A fields-mode race** (recorded at `display.race_frames = fields`): its frames are interlaced and the field blend applies, so `display.field_mode = clean` changes it (98 of 100 frames at ultra). Do not use it as a progressive race. 99 of 100 frames lit at `original`. |
 | `menus_boot.cap` | 18,931 | from boot: the title menu over its attract video, Arcade > Time Trial > Original Circuits and City Courses, browsed | Recorded live from boot (14.5 GB) with a copy of `C:/Users/julie/gt4-native-game/build/r5_saves`, `--preset original`, interpolation and texture pack off. Windows (host frames, within a few VBlanks): title menu 6,450-8,050; Original Circuits row 12,900-15,050 (taps at about 13,600, 13,730, 13,860, 13,985, 14,110); City Courses row 17,200-18,700. A replay of it takes one heavy slot with a host from 70e7fdb on (both with an older one: over 2 GB). |
-| `race_boot.cap` | 4,914 | from boot, GT mode with the approved save: Home, the event screen, the race-start flyover, the grid countdown and the race | Recorded live from boot (2.1 GB) by the procedure below with `docs/modern/routes/race_gt_pe2.txt`, scene records on. Windows (replay frames, the capture's VBlanks): event screen (the entry list) 3,225-3,425; race-start flyover 3,475-3,850; grid and countdown 3,900-4,050; START at 4,075 and the race to the end (bumper view, chase view from about 4,750). Dark only at transitions (3,175-3,200 the race load, 3,450): 117 of 121 frames sampled with `--frames 4914 --capture-frames 1900-4914/25` are lit (over 5 % of their pixels not black). Replaces `race.cap` and `event.cap`, which replayed black (no display records). One heavy slot. |
+| `race_boot.cap` | 4,914 | from boot, GT mode with the approved save: Home, the event screen, the race-start flyover, the grid countdown and the race | Recorded live from boot (2.1 GB) by the procedure below with `docs/modern/routes/race_gt_pe2.txt`, scene records on. Windows (replay frames, the capture's VBlanks): event screen (the entry list) 3,225-3,425; race-start flyover 3,475-3,850; grid and countdown 3,900-4,050; START at 4,075 and the race to the end (bumper view, chase view from about 4,750). Dark only at transitions (3,175-3,200 the race load, 3,450): 117 of 121 frames sampled with `--frames 4914 --capture-frames 1900-4914/25` are lit (over 5 % of their pixels not black). Replaces `race.cap` and `event.cap`, which replayed black (no display records) and hold the GIF / VIF records PLAN.md P1 retired: a host from P1 on refuses them with a message. One heavy slot. |
 
 ### Recording a REF capture
 
@@ -147,6 +147,12 @@ ask the game for `kOptionSceneRecords` 2: every race frame carries a vehicles-on
 ultra recorded before 74ac4bb does not match a run after it; `original` is unchanged (option 0). A gate on a quality
 preset needs a base from 74ac4bb on, or `--set input.haptics=original` on both sides. Since ba5c358 (link version 4)
 a game and a host pair only on the same side of it; captures carry no link version and replay across it.
+
+Since P1 (the GIF and VIF records retired) a capture holding any GT4_REC_GIF, VIF1, VIF0 or old GS_PRIV record is
+refused whole at the first one (the replay stops, gt4_host exits 1 with the reason), even if the rest of it is native
+records. Of the shared captures that is `race.cap` and `event.cap`: point no acceptance at them. The GS summary line
+says `renderer packets N` where it said `GIF packets P1/P2/P3`: a STREAM base from before P1 compares its P1 count
+with `renderer packets` (the game sent nothing on P2 or P3, nor any VIF1 stream).
 
 `tools/perf_report.py --baseline` compares stages by name: a stage found on one side only (renamed, split, new or
 gone) compares against nothing and cannot fail `--max-change`. It is listed as "only in the baseline / only in the

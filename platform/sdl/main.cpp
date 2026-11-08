@@ -1082,6 +1082,8 @@ int run(const Options& options) {
                 }
             }
             renderer->setStatus(gs->status());
+            if (gs->refused())   // (PLAN.md P1: the stream path that drew such captures is gone)
+                throw std::runtime_error("this capture holds GIF / VIF records, a format the host no longer reads: record it again");
             if (!options.game.empty() && gs->finished()) {
                 std::printf("The game has exited; closing the host\n");
                 gameExited = true;

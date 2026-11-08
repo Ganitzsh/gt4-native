@@ -166,23 +166,6 @@ int main() {
         expect(ok, "GS -> EE transfer returns the frame's pixels");
     }
 
-    // 5. A VU1 microprogram: VIF1 uploads it (MPG) and its data (UNPACK), MSCAL runs it; it transforms
-    // three vertices and XGKICKs a triangle (PATH1).
-    if (GT4_VU1_INTERPRETER) {
-        Target target(*gs);
-        gt4::ps2::GraphicsStream stream(target);
-        Gif g = setup();
-        sprite(g, 0, 0, 640, 448, rgbaq(0, 0, 0, 0x80));
-        gs->gif(3, g.data(), g.bytes());
-        const vif::Stream s = transformStream(kTriangle, 255, 0, 255);
-        stream.record({GT4_REC_VIF1, static_cast<uint32_t>(s.size()), 1}, s.bytes());
-        gt4::gs::DisplayFrame f;
-        gs->vsync(0, 5, f);
-        expectPixel(f, 150, 100, rgb(255, 0, 255), "VU1-transformed triangle (inside)");
-        expectPixel(f, 330, 290, rgb(0, 0, 0), "VU1-transformed triangle (outside)");
-        expect(stream.vifStats().microprograms == 1, "one VU1 microprogram ran");
-    }
-
     if (failures) {
         std::fprintf(stderr, "gs_backend: %d check(s) failed\n", failures);
         return 1;

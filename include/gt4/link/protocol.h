@@ -28,9 +28,12 @@
 
 enum Gt4LinkRecordType {
     /* game -> host */
-    GT4_REC_GIF = 1,        /* GIF data for one path: u32 path (1, 2, 3), then qwords (GS packets) */
-    GT4_REC_VIF1 = 2,       /* the VIF1 stream as the DMA would feed it: qwords of VIF codes and data */
-    GT4_REC_VIF0 = 3,       /* the VIF0 stream (VU0 micro mode), rare */
+    /* 1-4 retired (PLAN.md P1): the GS packets and VIF streams of the game before its records went native. The game
+       sends none; the host refuses a capture that holds them. The numbers stay reserved so it can tell. */
+    GT4_REC_GIF = 1,
+    GT4_REC_VIF1 = 2,
+    GT4_REC_VIF0 = 3,
+    GT4_REC_GS_PRIV_RETIRED = 4,
     GT4_REC_VSYNC = 5,      /* VBlank: u32 field (CSR.FIELD), u32 vblank count; present the frame */
     GT4_REC_GS_READ = 6,    /* GS->EE transfer request (BUSDIR): u32 id, u32 qwc; the host answers GT4_REC_GS_IMAGE */
     GT4_REC_AUDIO = 7,      /* audio: u32 stream (0 SPU2 mix, 1 BGM, 2 voice, 3 movie), u32 rate, s16 stereo frames */
@@ -55,14 +58,10 @@ enum Gt4LinkRecordType {
 
 /* Payload details as gt4_host consumes and produces them (docs/GS_BACKEND.md, "Link protocol"):
  *
- *   GT4_REC_GIF       u32 path, then the GIF qwords (they start 4 bytes into the payload, unaligned). A
- *                     GIF packet may continue in the next GIF record of the same path (per-path state).
- *   GT4_REC_VIF1      32-bit words in DMA order; with TTE the upper half of each DMA tag (two VIF codes)
- *                     precedes its data. A VIF command and its data may span records.
  *   GT4_REC_DISPLAY   sent before a VBlank's GT4_REC_VSYNC when the display changed (and at a capture
  *                     window's start).
  *   GT4_REC_VSYNC     ends the frame: the host scans out the display (both read circuits) at this point.
- *   GT4_REC_GS_READ   after the GIF data that set TRXDIR = 1 (local -> host): the host replies GS_IMAGE
+ *   GT4_REC_GS_READ   after the read record (include/gt4/gfx.h kRead) in the records: the host replies GS_IMAGE
  *                     with the same id and qwc qwords of transfer data (zeros past the end of the area).
  *   GT4_REC_STATE     never on the link: the first record of a capture the host recorded from a later VBlank
  *                     (GT4_HOST_RECORD=PATH,FROM,COUNT). Version 4: the uploaded VU1 program image, VIF1's
