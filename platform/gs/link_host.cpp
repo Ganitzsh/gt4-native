@@ -330,8 +330,13 @@ GameLink::~GameLink() {
             if (posix_spawnp(&killer, argv[0], nullptr, nullptr, argv, environ) == 0) {
                 int status = 0;
                 while (waitpid(killer, &status, 0) < 0 && errno == EINTR) {}
+                // (a wineserver of another Wine build than the prefix's fails with a protocol version error)
+                if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+                    std::printf("Link: %s -k ended with status %d; Windows processes may be left (is WINESERVER the "
+                                "launcher's own?)\n", wineserver.c_str(), WIFEXITED(status) ? WEXITSTATUS(status) : -1);
             } else {
-                std::printf("Link: could not run %s -k; Windows processes may be left\n", wineserver.c_str());
+                std::printf("Link: could not run %s -k (set WINESERVER to the launcher's wineserver); Windows processes "
+                            "may be left\n", wineserver.c_str());
             }
             if (!waitFor(1000)) kill(impl->pid, SIGKILL);
         }

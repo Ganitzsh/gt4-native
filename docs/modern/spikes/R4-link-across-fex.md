@@ -72,10 +72,12 @@ Everything else is plain memory plus polling, which crosses as it is, if the mem
   race7 unchanged).
 - **Host build:** the POSIX `GameLink` (`start`, `poll`, `write`, exit code) in `link_host.cpp` builds for x86_64
   and aarch64 Linux with zig 0.17.1 (`build/tools`, SHA-256 checked), glibc 2.35 until Armada's version is known.
-- **On the Odin (the coordinator runs it):** first a two-process probe: a native aarch64 writer and an i686 Windows
-  reader under Wine/FEX on one `/dev/shm` file, counting a million ordered records with TSO emulation on and off,
-  with the ring's indices started just below 2^32 so the low word wraps during the run (the case the 8-byte fix is
-  about; a million records alone never wraps it).
+- **On the Odin (the coordinator runs it):** first a two-process probe (`tools/r4_probe`): a native aarch64 host and
+  an i686 Windows game side under Wine/FEX on one `/dev/shm` file, a million ordered records each way with TSO
+  emulation on and off. Its indices step by 2^32 + 64 a record, so every update changes both 32-bit words and every
+  overlapping read is a chance to tear; a control build with the split 32-bit accesses of the game before the 8-byte
+  fix must fail (locally on Windows: 13-14 impossible indices with only the game side split, 503 and 3,214 with
+  both), and the real build must pass. Results below.
   Then the aarch64 host `--replay` on race7 (ORIG against x64), then the live game.
 
 ## On the Odin (2026-11-08, run by the coordinator)

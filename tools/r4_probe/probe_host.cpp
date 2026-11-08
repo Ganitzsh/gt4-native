@@ -2,7 +2,8 @@
 //   Linux:   probe_host [LAUNCHER WORDS...] -- PROBE_GAME.EXE     the game through e.g. "wine" or
 //            "FEXInterpreter /usr/bin/wine"; the file is /dev/shm/gt4_probe_<pid>, given to the game as Z:\dev\shm\...
 //   Windows: probe_host -- PROBE_GAME.EXE                         (a local check: the game started directly)
-// Exit 0: both sides got every record intact, across the 2^32 wrap of the indices.
+// Exit 0: both sides got every record intact and saw no impossible index (every index update changes both 32-bit
+// words: kStep in probe.h).
 // Build: zig c++ -target aarch64-linux-gnu.2.35 -O2 -std=c++20 probe_host.cpp -o probe_host (or x86_64-linux-gnu.2.35)
 #include "probe.h"
 

@@ -14,7 +14,7 @@ constexpr uint32_t kMagic = 0x34524250;          // "PBR4"
 constexpr uint32_t kRingBytes = 1u << 20;         // each ring's data
 constexpr uint32_t kRecordBytes = 64;             // fixed: a record never straddles the ring's end
 constexpr uint32_t kRecords = 1000000;            // each way: 64 MB, the ring wraps 61 times
-constexpr uint64_t kStart = (1ull << 32) - 32ull * kRingBytes;   // (a multiple of the ring: positions start at 0)
+constexpr uint64_t kStart = (1ull << 32) - 32ull * kRingBytes;   // only a multiple of the ring now: positions start at 0
 constexpr uint64_t kStep = (1ull << 32) + kRecordBytes;           // an index's move per record: both words change
 constexpr uint64_t kSlots = kRingBytes / kRecordBytes;            // records a ring holds
 constexpr uint32_t kFileBytes = 4096 + 2 * kRingBytes;
@@ -38,7 +38,8 @@ inline void store_index(volatile uint64_t* p, uint64_t v) { __atomic_store_n(p, 
 #else
 // The control build (-DPROBE_TORN): the index as the game had it before the 8-byte fix, two 32-bit accesses, low word
 // first. On a run where this build reports bad records or anomalies and the normal build none, the probe has shown it
-// can see the failure it guards against (lane D's suggestion). The indices cross 2^32 once a run: run it several times.
+// can see the failure it guards against (lane D's suggestion). Every index update changes both words (kStep), so a
+// single run is the test.
 inline uint64_t load_index(const volatile uint64_t* p) {
     const volatile uint32_t* w = reinterpret_cast<const volatile uint32_t*>(p);
     const uint32_t lo = w[0];
