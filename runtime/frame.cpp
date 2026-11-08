@@ -32,6 +32,7 @@ using namespace gt4::rt;
 namespace gfx = gt4::gfx;
 
 extern "C" unsigned int gt4_scene_on(void);   // runtime/native/pgl.cpp
+extern "C" int gt4_game_option(int id);         // runtime/sdk.cpp: the host's options (runtime.h kOption*)
 
 namespace {
 
@@ -393,6 +394,11 @@ struct TickLock {   // g_tick_lock, from a guest thread: inside a KernelScope
     ~TickLock() { ReleaseSRWLockExclusive(&g_tick_lock); }
 };
 
+// kOptionSceneRecords 2's cost at the kick (D14's acceptance): send_vehicles_frame() calls, the blocks sent (a race
+// running), and their QPC time (the race check, the decodes, the send), in total and the longest. Kick thread only.
+std::atomic<uint32_t> g_vehicle_calls{0}, g_vehicle_blocks{0};
+std::atomic<int64_t> g_vehicle_ticks{0}, g_vehicle_longest{0};
+
 void raise_to(std::atomic<int64_t> &most, int64_t v) {
     for (int64_t m = most.load(); v > m && !most.compare_exchange_weak(m, v);) {}
 }
@@ -420,6 +426,10 @@ void log_tick_counts() {
              g_ticks_mid_walk.load(), g_ticks_deferred.load(), g_longest_deferral.load() * ms, g_ticks_overflowed.load(),
              g_ticks_merged.load(), g_walks.load(), g_walks_over16.load(), g_walks_over50.load(), longest * ms, longestAt,
              longestSend * ms, longestRead * ms, read * ms, readAt, readQwords, readDestination, g_kicks_nested.load());
+    if (const uint32_t calls = g_vehicle_calls.load())
+        log_info("frame: vehicles only (kOptionSceneRecords 2): %u kicks, %u blocks sent; %.1f us a kick on average, the "
+                 "longest %.1f us", calls, g_vehicle_blocks.load(), g_vehicle_ticks.load() * ms * 1000.0 / calls,
+                 g_vehicle_longest.load() * ms * 1000.0);
 }
 
 }  // namespace
@@ -502,15 +512,31 @@ void drain_ticks() {
     }
 }
 
+// The scene records the kick sends itself, each a header and the record padded to whole qwords (gfx::recordQwords).
+constexpr uint32_t kVehicleBytes = gfx::recordQwords(sizeof(gfx::scene::Vehicle)) * 16;   // 4 + 328: 21 qwords
+constexpr uint32_t kBeginBytes = gfx::recordQwords(sizeof(gfx::scene::FrameBegin)) * 16;  // 4 + 16: two qwords
+constexpr uint32_t kEndBytes = gfx::recordQwords(sizeof(gfx::scene::FrameEnd)) * 16;      // 4 + 20: two qwords
+static_assert(kVehicleBytes == 336 && kBeginBytes == 32 && kEndBytes == 32);
+
+void put_record(uint8_t *block, uint32_t &at, const void *record, uint32_t bytes, uint32_t padded) {
+    const gfx::Header h = gfx::header(gfx::kScene, bytes);
+    std::memcpy(block + at, &h, sizeof h);
+    std::memcpy(block + at + sizeof h, record, bytes);
+    at += padded;
+}
+
+// The running cars' Vehicle records (D6's reader, runtime/vehicle.h; one per running car, in entrant order, CONTRACTS.md
+// a.5 rule 4) into `block` at `at`, for both modes' blocks. Returns how many.
+int put_vehicles(uint8_t *block, uint32_t &at, const gfx::scene::Vehicle *cars, int count) {
+    for (int i = 0; i < count; ++i) put_record(block, at, &cars[i], sizeof cars[i], kVehicleBytes);
+    return count;
+}
+
 // FrameEnd as a record block of its own (CONTRACTS.md a.5.1), right after the walked list, with the frame's Vehicle
-// records before it (one per running car, in entrant order: D6's reader, runtime/vehicle.h; a.5 rule 4, c990148). With
-// scene records off for this kick, a frame left open (they went off after its FrameBegin) is closed unsent, so a later
-// FrameBegin opens anew.
+// records before it (a.5 rule 4, c990148). With scene records off for this kick (or in vehicles-only mode), a frame left
+// open (they changed after its FrameBegin) is closed unsent, so a later FrameBegin opens anew.
 void send_frame_end(bool send) {
     namespace scene = gfx::scene;
-    constexpr uint32_t kVehicleBytes = gfx::recordQwords(sizeof(scene::Vehicle)) * 16;   // 4 + 328: 21 qwords
-    constexpr uint32_t kEndBytes = gfx::recordQwords(sizeof(scene::FrameEnd)) * 16;      // 4 + 20: two qwords
-    static_assert(kVehicleBytes == 336 && kEndBytes == 32);
     scene::FrameEnd end{};
     uint32_t thread = 0;
     if (!scene_frame_end(&end, sizeof end, &thread) || !send) return;
@@ -522,20 +548,33 @@ void send_frame_end(bool send) {
                      static_cast<unsigned long>(GetCurrentThreadId()));
         }
     }
-    // one block, no allocation (the kick, on the game's thread): the Vehicles, then FrameEnd, each padded to qwords
+    // one block, no allocation (the kick, on the game's thread): the Vehicles, then FrameEnd
     alignas(16) uint8_t block[car::kMaxCars * kVehicleBytes + kEndBytes] = {};
     scene::Vehicle cars[car::kMaxCars];
-    const int count = vehicle_records(cars, static_cast<int>(car::kMaxCars));
     uint32_t at = 0;
-    const auto put = [&](const void *record, uint32_t bytes, uint32_t padded) {
-        const gfx::Header h = gfx::header(gfx::kScene, bytes);
-        std::memcpy(block + at, &h, sizeof h);
-        std::memcpy(block + at + sizeof h, record, bytes);
-        at += padded;
-    };
-    for (int i = 0; i < count; ++i) put(&cars[i], sizeof cars[i], kVehicleBytes);
-    put(&end, sizeof end, kEndBytes);
+    put_vehicles(block, at, cars, vehicle_records(cars, static_cast<int>(car::kMaxCars)));
+    put_record(block, at, &end, sizeof end, kEndBytes);
     link_send(GT4_REC_GFX, block, at);
+}
+
+// kOptionSceneRecords 2, vehicles only (D14's haptics; CONTRACTS.md a.1, 01532de): while a race runs, one block of its
+// own at the kick: FrameBegin (kFrameVehiclesOnly), the Vehicles, FrameEnd (no view; begins 1). One block, so nothing
+// comes between it and its FrameEnd without the clock's deferral (a.5.1). Nothing outside a race.
+bool send_vehicles_frame() {
+    namespace scene = gfx::scene;
+    scene::Vehicle cars[car::kMaxCars];
+    const int count = vehicle_records(cars, static_cast<int>(car::kMaxCars));
+    if (count <= 0) return false;
+    scene::FrameBegin begin;
+    scene::FrameEnd end;
+    scene_vehicles_frame(begin, end);
+    alignas(16) uint8_t block[kBeginBytes + car::kMaxCars * kVehicleBytes + kEndBytes] = {};
+    uint32_t at = 0;
+    put_record(block, at, &begin, sizeof begin, kBeginBytes);
+    put_vehicles(block, at, cars, count);
+    put_record(block, at, &end, sizeof end, kEndBytes);
+    link_send(GT4_REC_GFX, block, at);
+    return true;
 }
 }  // namespace
 
@@ -556,8 +595,9 @@ extern "C" void gt4_replace_func_004A11F8(uint32_t pair) {
     // (The PATH3 list, at pair + 4, is left: it holds nothing natively, and recording a display list relinks it
     // into the frame's list, whose blocks would be sent twice.)
     // With scene records on, the clock's ticks wait until the list and its FrameEnd are sent (CONTRACTS.md a.5.1): decided
-    // once here, kept until the drain.
-    const bool scene = gt4_scene_on() != 0;
+    // once here, kept until the drain. The mode is latched once a kick (a.1): 1 full, 2 vehicles only (no deferral).
+    const int mode = gt4_game_option(static_cast<int>(kOptionSceneRecords));
+    const bool scene = mode == 1;
     if (scene) {
         TickLock lock;
         if (g_walking++) ++g_kicks_nested;   // (another kick walking: nested, or another thread's)
@@ -593,7 +633,15 @@ extern "C" void gt4_replace_func_004A11F8(uint32_t pair) {
             g_longest_read_vblank = vblank;
         }
     }
-    send_frame_end(scene);
+    send_frame_end(scene);   // (in mode 2 a full frame left open is closed unsent first)
+    if (mode == 2) {
+        const int64_t v0 = qpc_now();
+        if (send_vehicles_frame()) ++g_vehicle_blocks;
+        const int64_t vt = qpc_now() - v0;
+        ++g_vehicle_calls;
+        g_vehicle_ticks += vt;
+        raise_to(g_vehicle_longest, vt);
+    }
     if (scene) drain_ticks();
     log_tick_counts();
     signal(1);

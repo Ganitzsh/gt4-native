@@ -2,6 +2,11 @@
 // Process-wide settings and the host services that replace the PS2's (kernel, IOP, disc, pad...).
 #include <cstdint>
 
+namespace gt4::gfx::scene {
+struct FrameBegin;
+struct FrameEnd;
+}  // namespace gt4::gfx::scene
+
 namespace gt4::rt {
 
 struct RuntimeConfig {
@@ -35,6 +40,9 @@ void set_game_option(uint32_t id, uint32_t value);   // GT4_REC_HOST_CMD 4 (runt
 // scene_frame_end closes the open frame: false when none is open, else `record` is its FrameEnd (`bytes` long, its
 // counts as runtime/native/pgl.cpp appended them) and `thread` the thread that opened it.
 bool scene_frame_end(void *record, uint32_t bytes, uint32_t *thread);
+// kOptionSceneRecords 2 (vehicles only, CONTRACTS.md a.1): a vehicles-only frame's FrameBegin and FrameEnd, numbered with
+// the full frames; the kick sends them in one block around the Vehicles (runtime/native/pgl.cpp).
+void scene_vehicles_frame(gfx::scene::FrameBegin &begin, gfx::scene::FrameEnd &end);
 // The frame clock's tick (runtime/gs.cpp on_frame): its link records (the display as it stands at the tick, then the
 // VSync), sent by `send`. While a kick walks its list with scene records on, the tick is queued and the kick sends it
 // after FrameEnd (a.5.1), so a list and its FrameEnd are never split across the host's FrameLists. Else sent at once.

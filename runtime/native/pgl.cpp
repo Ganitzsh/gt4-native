@@ -361,7 +361,7 @@ int gt4_gfx_upload_now(uint32_t destination, int x, int y, int w, int h, uint32_
 // sees them in issue order with the batches. Values only, never guest pointers: the frame walker sends them as they
 // are. Nothing is sent unless the host asked for them (kOptionSceneRecords).
 int gt4_game_option(int id);   // runtime/sdk.cpp
-unsigned int gt4_scene_on(void) { return gt4_game_option(static_cast<int>(kOptionSceneRecords)) != 0 ? 1u : 0u; }
+unsigned int gt4_scene_on(void) { return gt4_game_option(static_cast<int>(kOptionSceneRecords)) == 1 ? 1u : 0u; }   // (2: vehicles only, a.1)
 
 }  // extern "C"
 
@@ -665,6 +665,22 @@ bool gt4::rt::scene_frame_end(void *record, uint32_t bytes, uint32_t *thread) {
     g_scene.inFrame = false;
     g_scene.openView = 0;
     return true;
+}
+
+// A vehicles-only frame (kOptionSceneRecords 2, CONTRACTS.md a.1): its FrameBegin (kFrameVehiclesOnly) and FrameEnd
+// (no view, no instance; begins 1), numbered on with the full frames' (frame = ++g_sceneFrames) so the host's frame
+// numbers keep increasing across modes. No frame is opened: the kick sends both in one block around the Vehicles.
+void gt4::rt::scene_vehicles_frame(gfx::scene::FrameBegin &begin, gfx::scene::FrameEnd &end) {
+    namespace scene = gfx::scene;
+    begin = scene::FrameBegin{};
+    begin.prefix = {scene::kFrameBegin, scene::kVersion};
+    begin.frame = ++g_sceneFrames;
+    begin.vblank = kernel_frame_count();
+    begin.flags = scene::kFrameVehiclesOnly;
+    end = scene::FrameEnd{};
+    end.prefix = {scene::kFrameEnd, scene::kVersion};
+    end.frame = begin.frame;
+    end.begins = 1;
 }
 
 extern "C" {
