@@ -2116,6 +2116,13 @@ void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t
             tally("draws");
         }
     }
+    // A range ends with its render pass ended when the scene stage (a valid Light) or the list's end follows: their
+    // first act is end() anyway, so the commands are the same, and no render pass stays open across a graph pass's
+    // boundary (lane A, B4 step 2b: barriers between passes must not land inside one). Before a Light that is skipped
+    // (index out of range) the pass stays open, as the loop left it.
+    const bool lightOrEndNext = to >= frame.commands.size() ||
+        (frame.commands[to].kind == gsn::FrameList::Command::Kind::Light && frame.commands[to].index < frame.lights.size());
+    if (lightOrEndNext) end();
 }
 
 // The scene stage at the list's Light command `at` (`frame.commands[at]`), as the commands' loop ran it.
