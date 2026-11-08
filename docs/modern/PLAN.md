@@ -25,6 +25,12 @@ Sizes: **S** = 1-3 days, **M** = 1-3 weeks, **L** = 1-3 months, for one agent. R
 7. **Settings.** Each modern feature is a setting with presets. `original` is the PS2 path and gets none of them.
 8. **Lane ownership of files** (section 3). A ticket that has to touch another lane's file says so and goes in
    the order section 3 gives.
+9. **Comment- and docs-only commits** (the coordinator, 2026-11-08). A commit that changes only comments or docs,
+   even inside a file that triggers a gate (`game_src`, `gfx.h`, shaders, section 2's `DIFFTEST` files), skips the
+   build and run gates: the release builds of rule 4, `CTEST`, `ORIG`, `DIFFTEST` and the ticket's other runs. CI
+   and the review (rule 3) still apply. The author shows that the diff touches no code: in `git diff -w`, every
+   added or removed line is a comment or blank, and none is code commented out or back in. The commit message
+   says so.
 
 ---
 
