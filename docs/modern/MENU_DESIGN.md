@@ -284,11 +284,13 @@ pause's brightness and contrast, which our pause page writes the way GT4's pause
 | `ui.scale` | 80-150 % | 100 % | 100 % |
 | `ui.reduce_motion`, `ui.high_contrast` | `off`, `on` | `off` | `off` |
 
-Until M9 wires the host's page drawing, every preset and the default set `ui.entry = hotkey` and `ui.pause = gt4`:
-a setting never sends players into a page the host cannot draw (M6 first shipped `integrated` in low to ultra while
-the host still ignored the draw list: GT4's Options got an invisible hub). M9 switches low to ultra to `integrated`
-and `native`, one table line each (`settings.cpp` `presetFollowers`); until then M6's and M7's acceptance runs use
-`--set`, and `host_settings` checks that no preset sets `integrated` or `native`.
+Until M9 wires the host's page drawing, every preset and the default set `ui.entry = hotkey` and `ui.pause = gt4`: a
+setting never sends players into a page the host cannot draw (M6 first shipped `integrated` in low to ultra while the
+host still ignored the draw list: GT4's Options got an invisible hub). M9 switches low to ultra to `integrated` and
+`native`, one table line each (`settings.cpp` `presetFollowers`); until then M6's and M7's acceptance runs use
+`--set`, and `host_settings` checks that no preset sets `integrated` or `native`. The host also ignores them in the
+settings file (`kHostDrawsPages`: a file written between 44f286c and 6ab90b7 holds `integrated`), warns at load, and
+lists them as unused when `--set` gives them; M9 sets `kHostDrawsPages` and the file takes them again.
 
 `applyPreset` sets the `ui.*` keys (as `input.response` already is in every preset), but `detectPreset` ignores
 them, so a player who sets `ui.pause = gt4` on High still reads "Preset: High", not "Custom", for a choice that is

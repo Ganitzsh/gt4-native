@@ -136,8 +136,12 @@ int main() {
         const auto path = gt4::test::uniqueTempPath("gt4_ui_entry", ".ini");
         saveSettings(u, path.string());
         Settings back;
-        check(loadSettings(back, path.string()).empty() && back.uiEntry == UiEntry::Integrated && back.preset == Preset::High,
-              "the file keeps ui.entry = integrated under the high preset");
+        check(getOption(u, "ui.entry") == "integrated" && !unusedReason(u, "ui.entry").empty(),
+              "integrated (from --set) is taken, and listed as unused until M9");
+        const auto loaded = loadSettings(back, path.string());
+        check(loaded.size() == 1 && back.uiEntry == UiEntry::Hotkey && back.preset == Preset::High,
+              "integrated is not taken from the file until M9: hotkey, with one warning");
+        check(unusedReason(back, "ui.entry").empty(), "hotkey is not listed as unused");
         std::filesystem::remove(path);
         // A file from before ui.entry: the loaded preset's value, whether the file names the preset or only matches it.
         auto loadText = [](const std::string& text) {
@@ -160,8 +164,8 @@ int main() {
         check(clean2 && old2.preset == Preset::Original && old2.uiEntry == UiEntry::Hotkey,
               "a file whose values are the original preset's, without ui.entry, opens by hotkey only");
         auto [clean3, old3] = loadText("version = 1\n[graphics]\npreset = original\n[ui]\nentry = integrated\n");
-        check(clean3 && old3.preset == Preset::Original && old3.uiEntry == UiEntry::Integrated,
-              "an original file that sets ui.entry = integrated keeps it");
+        check(!clean3 && old3.preset == Preset::Original && old3.uiEntry == UiEntry::Hotkey,
+              "an original file that sets ui.entry = integrated loads hotkey, with a warning, until M9");
         auto [clean4, old4] = loadText("version = 1\n[graphics]\npreset = high\n");
         check(clean4 && old4.uiEntry == UiEntry::Hotkey, "a high file without ui.entry is hotkey (until M9)");
         auto [clean5, old5] = loadText("version = 1\n[graphics]\npreset = original\n[ui]\nentry = bogus\n");

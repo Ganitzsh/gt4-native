@@ -9,7 +9,8 @@ void uiOptions(std::vector<Option>& o) {
     o.push_back(enumOption("ui.entry", &Settings::uiEntry, {"hotkey", "integrated"},
         "How the settings menu opens. hotkey = only by the host's keys (Guide, Esc, Select + Start): GT4's screens "
         "are as on the PS2 (the original preset). integrated = also from GT4's own Options items, in the top menu and "
-        "in the pre-race menus: they open this menu, and its GT4 options row opens GT4's Options screen."));
+        "in the pre-race menus: they open this menu, and its GT4 options row opens GT4's Options screen. Until the host "
+        "draws the settings pages (MENU_DESIGN M9), integrated is taken only from --set, never from this file."));
 }
 
 }  // namespace gt4::settings_table

@@ -224,6 +224,8 @@ std::string getOption(const Settings& settings, std::string_view key) {
 }
 
 std::string unusedReason(const Settings& settings, std::string_view key) {
+    if (!kHostDrawsPages && key == "ui.entry" && settings.uiEntry == UiEntry::Integrated)
+        return "the host does not draw the settings pages yet (MENU_DESIGN M9): the hub GT4's Options open is invisible";
     // (platform/render/pipeline.cpp: SceneSource::drawsOriginalEffects turns these off for the native GS's frames)
     if (settings.gsRenderer == GsRenderer::Native &&
         (key == "effects.bloom" || key == "post.bloom_intensity" || key == "post.tonemapper" || key == "post.auto_exposure"))
@@ -318,6 +320,13 @@ std::vector<std::string> loadSettings(Settings& settings, const std::string& pat
     // player's file from before ui.entry keeps GT4's screens untouched.
     for (const auto& [key, value] : presetFollowers(settings.preset))
         if (std::find(seen.begin(), seen.end(), key) == seen.end()) find(key)->set(settings, value);
+    // A page the host cannot draw yet is never opened from the file (a file written by a host from 44f286c to
+    // 6ab90b7 holds integrated): --set still applies after the load.
+    if (!kHostDrawsPages && settings.uiEntry == UiEntry::Integrated) {
+        settings.uiEntry = UiEntry::Hotkey;
+        warnings.push_back(path + ": ui.entry = integrated is not taken from the file until the host draws the "
+                           "settings pages (MENU_DESIGN M9); hotkey instead (--set ui.entry=integrated still applies)");
+    }
     return warnings;
 }
 

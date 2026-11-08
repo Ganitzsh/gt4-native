@@ -52,6 +52,9 @@ enum class HapticsMode : uint8_t { Original, Physics };
 // How the settings menu opens (ui.entry, settings_ui.cpp; docs/modern/MENU_DESIGN.md 3.2, 3.8): hotkey = the host's
 // keys only, integrated = GT4's own Options items too (the game's hooks, runtime/menu/menu_host.cpp).
 enum class UiEntry : uint8_t { Hotkey, Integrated };
+// Whether the host draws the settings pages (MENU_DESIGN M9 sets it): until then ui.entry = integrated is taken only
+// from --set (acceptance runs), never from the settings file, and is listed as unused (settings_ui.cpp).
+inline constexpr bool kHostDrawsPages = false;
 
 struct Settings {
     static constexpr int kVersion = 1;
