@@ -14,6 +14,7 @@
 #include "link.h"
 #include "log.h"
 #include "runtime.h"
+#include "vehicle.h"
 #include "gt4/gfx.h"
 #include "gt4/link/protocol.h"
 
@@ -501,17 +502,18 @@ void drain_ticks() {
     }
 }
 
-// FrameEnd as a record block of its own (CONTRACTS.md a.5.1), right after the walked list. With scene records off for
-// this kick, a frame left open (they went off after its FrameBegin) is closed unsent, so a later FrameBegin opens anew.
+// FrameEnd as a record block of its own (CONTRACTS.md a.5.1), right after the walked list, with the frame's Vehicle
+// records before it (one per running car, in entrant order: D6's reader, runtime/vehicle.h; a.5 rule 4, c990148). With
+// scene records off for this kick, a frame left open (they went off after its FrameBegin) is closed unsent, so a later
+// FrameBegin opens anew.
 void send_frame_end(bool send) {
-    struct {
-        gfx::Header header;
-        gfx::scene::FrameEnd end;
-        uint8_t pad[8];
-    } block{};
-    static_assert(sizeof block == 32);   // 4 + 20, padded to two qwords
+    namespace scene = gfx::scene;
+    constexpr uint32_t kVehicleBytes = gfx::recordQwords(sizeof(scene::Vehicle)) * 16;   // 4 + 328: 21 qwords
+    constexpr uint32_t kEndBytes = gfx::recordQwords(sizeof(scene::FrameEnd)) * 16;      // 4 + 20: two qwords
+    static_assert(kVehicleBytes == 336 && kEndBytes == 32);
+    scene::FrameEnd end{};
     uint32_t thread = 0;
-    if (!scene_frame_end(&block.end, sizeof block.end, &thread) || !send) return;
+    if (!scene_frame_end(&end, sizeof end, &thread) || !send) return;
     if (thread != GetCurrentThreadId()) {   // A3's check: the frame opened on another thread than its kick
         static bool warned = false;
         if (!warned) {
@@ -520,8 +522,20 @@ void send_frame_end(bool send) {
                      static_cast<unsigned long>(GetCurrentThreadId()));
         }
     }
-    block.header = gfx::header(gfx::kScene, sizeof block.end);
-    link_send(GT4_REC_GFX, &block, sizeof block);
+    // one block, no allocation (the kick, on the game's thread): the Vehicles, then FrameEnd, each padded to qwords
+    alignas(16) uint8_t block[car::kMaxCars * kVehicleBytes + kEndBytes] = {};
+    scene::Vehicle cars[car::kMaxCars];
+    const int count = vehicle_records(cars, static_cast<int>(car::kMaxCars));
+    uint32_t at = 0;
+    const auto put = [&](const void *record, uint32_t bytes, uint32_t padded) {
+        const gfx::Header h = gfx::header(gfx::kScene, bytes);
+        std::memcpy(block + at, &h, sizeof h);
+        std::memcpy(block + at + sizeof h, record, bytes);
+        at += padded;
+    };
+    for (int i = 0; i < count; ++i) put(&cars[i], sizeof cars[i], kVehicleBytes);
+    put(&end, sizeof end, kEndBytes);
+    link_send(GT4_REC_GFX, block, at);
 }
 }  // namespace
 

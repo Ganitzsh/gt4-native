@@ -615,11 +615,7 @@ extern "C" int gt4_replace_scePad2Read(int id, uint8_t *data) {
     // GT4_VEHICLE_LOG (D6, D12; debugging): the cars' state once a VBlank (pad 1's read), with the steering byte this
     // read gives the game, for the lap and steering plots. On the pad's thread, so a line can mix two physics ticks;
     // the scene records come from the frame's kick (lane A's path).
-    if ((id & 1) == 0 && vehicle_log_on()) {
-        vehicle_log_pad(data);
-        gt4::gfx::scene::Vehicle cars[car::kMaxCars];
-        vehicle_records(cars, static_cast<int>(car::kMaxCars));
-    }
+    if ((id & 1) == 0 && vehicle_log_on()) vehicle_log(data);
     static const std::vector<ScriptedPress> script = pad_script();
     // GT4_TRACE_PAD=all: every read of pad 1, with its VBlank (how often a screen polls the pad)
     static const bool every = std::getenv("GT4_TRACE_PAD") && !std::strcmp(std::getenv("GT4_TRACE_PAD"), "all");

@@ -19,18 +19,20 @@ constexpr uint32_t kMaxCars = 6, kDynamics = 0x104, kWheels = 0x164, kWheelStrid
 // fields R14 checked are filled; `valid` says which.
 gfx::scene::Vehicle decode_vehicle(const uint8_t *a, uint8_t entrant);
 
-// The conductor's guest address, 0 when no race runs (found by the cars' back pointer, kept while it holds).
+// The conductor's guest address, 0 when no race runs (found by the cars' back pointer, kept while it holds). While
+// there is none, each call scans 1 MiB of the guest RAM at most, and a pass that found nothing waits a second. The
+// state is per thread.
 uint32_t vehicle_conductor();
 
-// Each running car's record (at most `max`), by decode_vehicle; 0 outside a race. GT4_VEHICLE_LOG=PATH also writes
-// a CSV line per car per call (VBlank, speed, yaw rate, each wheel's load, slip ratio and slip angle, pad 1's
-// steering byte, the steering angle at the wheels) for the D6 and D12 plots.
+// Each running car's record (at most `max`), by decode_vehicle, in entrant order; 0 outside a race. Read-only on the
+// guest. The scene's Vehicle records (runtime/frame.cpp send_frame_end, at the kick, with scene records on).
 int vehicle_records(gfx::scene::Vehicle *out, int max);
 
-// GT4_VEHICLE_LOG: pad 1's 18 bytes as the game reads them, for the log's next lines (its left stick X).
-void vehicle_log_pad(const uint8_t pad[18]);
+// GT4_VEHICLE_LOG=PATH (debugging, the D6 and D12 plots): a CSV line per running car (VBlank, speed, yaw rate, each
+// wheel's load, slip ratio and slip angle, `pad`'s left stick X, the steering angle at the wheels). Called with pad
+// 1's 18 bytes as the game reads them, once a VBlank.
+void vehicle_log(const uint8_t pad[18]);
 
-// Whether vehicle_records has anything to do without scene records (GT4_VEHICLE_LOG set).
+// Whether GT4_VEHICLE_LOG is set.
 bool vehicle_log_on();
-
 }  // namespace gt4::rt
