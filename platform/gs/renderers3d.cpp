@@ -1,3 +1,4 @@
+#include <map>
 #include <cstdio>
 #include <string>
 // GT4's 3D renderers as native code (see renderers3d.h). Byte addresses in comments are the entry points of
@@ -951,6 +952,22 @@ bool runChain(const Reader& r, Vertices& in, uint32_t n, const ChainPlan& plan, 
     // The bodies light the colours (all but 0x00B0), and some compute texture coordinates.
     if (plan.body != 0x0B0) in.colourSlot = Slot::Words;
     if (plan.body == 0x10A8 || plan.body == 0x12C8 || plan.body == 0x1608) in.stLanes |= 3;
+    {   // SPIKE R8: GT4_B10_BODIES=1 counts the batches per lighting body (and lit ones per power), whatever the scene records
+        static const bool bodies = [] { const char* e = std::getenv("GT4_B10_BODIES"); return e && *e == '1'; }();
+        struct Census {
+            std::map<uint32_t, uint64_t> batches, vertices;
+            ~Census() {
+                for (const auto& [body, count] : batches)
+                    std::printf("R8 batches body %04X: %llu batches, %llu vertices\n", body, (unsigned long long)count,
+                                (unsigned long long)vertices[body]);
+            }
+        };
+        static Census census;
+        if (bodies) {
+            ++census.batches[plan.body];
+            census.vertices[plan.body] += n;
+        }
+    }
     if (plan.dot) dotLighting(r, in, n, plan.model);
     else if (plan.body == 0xCA8) specularLighting(r, in, n, true);
     else if (plan.body == 0xEA0) specularLighting(r, in, n, false);
