@@ -24,6 +24,10 @@ modernises the picture or also corrects it.
 
 (One PCSX2 still counted two text-row runs; enlarged, it is one line, split by a letter's descender.)
 
+The eight slide stills cannot have missed a doubling as short as ours (4 frames, 13603-13606): at 10 % speed one
+still each half second is about 3 game frames apart, the first about 3 frames after the press, so they cover the
+slide's first frames.
+
 ## What it says
 
 - The **doubled line** is not in PCSX2's picture. It comes from our field blend, which mixes the two fields of a line
@@ -33,6 +37,7 @@ modernises the picture or also corrects it.
 - The **faint bottom row** is not in PCSX2's picture either. `blend` shows it at times. `clean` was meant to hide it
   (the lower field's extra line, which GT4 uses to park its next text), but at `low` it shows that parked line
   **more**: the motion test sees a line present in one field only as movement, and shows that field alone there, past
-  the clamp of the lower field's last line. A defect in `clean`, to fix (lane C, E4): the rows a TV hides should stay
-  hidden whatever the motion test says.
+  the clamp of the lower field's last line. A defect in `clean`, **fixed**: in `clean` mode the displayed rectangle's
+  last GS line is drawn black, as a TV's overscan hides it (at low, the hidden rows over 3 luma in 0 of 82 frames,
+  against 73 with blend; original unchanged).
 - The stutter (E4's other half) is not covered by these stills; it is a matter of frame pacing (`--profile-json`).
