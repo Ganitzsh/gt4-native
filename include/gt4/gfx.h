@@ -992,6 +992,8 @@ enum MarkerKind : uint16_t {
     kMarkLampBandsBegin = 11, kMarkLampBandsEnd = 12, // the draws that make the lamp bands on the road (R11)
     kMarkDofBegin = 13, kMarkDofEnd = 14,             // the depth of field 0033E6E0 (Photo Travel's preview, the
                                                       // replay's Dive view: its Z24 passes, R6)
+    kMarkJitterPassBegin = 15, kMarkJitterPassEnd = 16, // one supersampling pass of 00216E78 (garage, showroom):
+                                                      // the pass index is its order in the view (R6)
 };
 struct Marker {
     Prefix prefix;
