@@ -737,6 +737,26 @@ void lightsByView() {
 
 }  // namespace
 
+// a.1 mode 2 (D14): a vehicles-only frame, one block at the kick: FrameBegin (kFrameVehiclesOnly), the Vehicles, FrameEnd
+// with no view. Complete, counted apart, its Vehicles kept.
+void vehiclesOnly() {
+    SceneDecoder d;
+    auto begin = frameBegin(7);
+    begin.flags = rec::kFrameVehiclesOnly;
+    put(d, begin);
+    put(d, make<rec::Vehicle>(rec::kVehicle));
+    put(d, make<rec::Vehicle>(rec::kVehicle));
+    auto end = frameEnd(7, 0, 0, 0);
+    end.begins = 1;
+    put(d, end);
+    const SceneCounters& c = d.totals();
+    check(c.framesVehiclesOnly == 1 && c.frames == 1 && c.countsMismatch == 0 && c.errorFree(),
+          "vehicles only: counted apart, counts matched, no gate");
+    auto f = d.takeFrame();
+    check(f && f->complete && f->views.empty() && f->vehicles.size() == 2 && (f->flags & rec::kFrameVehiclesOnly),
+          "vehicles only: complete with no view, its Vehicles kept, the flag on the frame");
+}
+
 int main() {
     wellFormed();
     decoding();
@@ -751,6 +771,7 @@ int main() {
     splitsAtVsync();
     viewPackages();
     lightsByView();
+    vehiclesOnly();
     if (failures) std::fprintf(stderr, "%d failure(s)\n", failures);
     else std::printf("scene_decoder: all checks passed\n");
     return failures ? 1 : 0;

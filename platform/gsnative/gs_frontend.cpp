@@ -133,10 +133,12 @@ void carryOver(FrameList& dropped, FrameList& into) {
     into.resetTextures = into.resetTextures || dropped.resetTextures;
     dropped.textures.clear();
     dropped.retiredTextures.clear();
-    // Its scene frame and views' packages go with it, never drawn (the next list's draws are not theirs): counted.
+    // Its scene frame and views' packages go with it, never drawn (the next list's draws are not theirs): counted when
+    // it had views (a vehicles-only frame, a.1 mode 2, has none: nothing a substitution would have drawn).
+    const bool withViews = !dropped.views.empty() || (dropped.scene && !dropped.scene->views.empty());
     if (dropped.scene || !dropped.views.empty()) {
-        const uint64_t total = ++skippedWithScene;
-        if (total <= 10 || total % 100 == 0)
+        const uint64_t total = withViews ? ++skippedWithScene : skippedWithScene.load();
+        if (withViews && (total <= 10 || total % 100 == 0))
             std::printf("gsn: a skipped list's scene frame or view packages dropped with it (%llu so far)\n",
                         static_cast<unsigned long long>(total));
         dropped.scene.reset();
@@ -2531,7 +2533,9 @@ void GsFrontend::sceneFrame(std::unique_ptr<scene::SceneFrame> f) {
                 light = k;
                 break;
             }
-        if (sceneCuts || sceneVsyncInFrame) {
+        if (f->flags & gfx::scene::kFrameVehiclesOnly) {
+            // (a.1 mode 2: Vehicles only, no markers sent: not a frame A5a's check is about)
+        } else if (sceneCuts || sceneVsyncInFrame) {
             ++stats.markersNotChecked;   // (its Light and markers may be in an earlier list: a cut or a VSync inside the frame)
         } else if (light != UINT32_MAX) {
             if (f->markerCommands.size() != f->markers.size()) {

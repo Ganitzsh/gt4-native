@@ -794,7 +794,10 @@ struct Prefix {
 static_assert(sizeof(Prefix) == 4);
 
 // --- Frame -----------------------------------------------------------------------------------------------------------
-enum FrameFlags : uint32_t { kFrameField = 1, kFrameOddField = 2 };   // the race's 224-line fields
+enum FrameFlags : uint32_t {
+    kFrameField = 1, kFrameOddField = 2,   // the race's 224-line fields
+    kFrameVehiclesOnly = 4,                // kOptionSceneRecords 2 (CONTRACTS a.1): only Vehicles, no view; not a scene to draw
+};
 struct FrameBegin {
     Prefix prefix;
     uint32_t frame;     // runtime: +1 per FrameBegin since the game started

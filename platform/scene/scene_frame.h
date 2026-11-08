@@ -74,6 +74,7 @@ struct SceneCounters {
     uint64_t frames = 0, framesUnclosed = 0, countsMismatch = 0;
     uint64_t framesTruncated = 0;   // still open when the stream ended (a capture's last list, a.5.1): reported
     uint64_t begins = 0;   // FrameEnd::begins: the FrameBegins the runtime merged (reported)
+    uint64_t framesVehiclesOnly = 0;   // frames flagged kFrameVehiclesOnly (a.1 mode 2: Vehicles only, no view; reported)
     uint64_t views = 0, viewsNested = 0, viewEndWithoutBegin = 0, viewsUnclosed = 0;   // unclosed: open at FrameEnd
     // projections
     uint64_t projections = 0, projectionUnknown = 0;

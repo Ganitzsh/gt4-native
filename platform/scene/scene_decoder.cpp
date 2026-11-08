@@ -63,6 +63,7 @@ float largestDifference(const Mat4& a, const Mat4& b) {
 }
 
 void SceneCounters::add(const SceneCounters& o) {
+    framesVehiclesOnly += o.framesVehiclesOnly;
     records += o.records; bad += o.bad; versionUnknown += o.versionUnknown; unknownKind += o.unknownKind;
     outsideFrame += o.outsideFrame; frames += o.frames; framesUnclosed += o.framesUnclosed;
     countsMismatch += o.countsMismatch; framesTruncated += o.framesTruncated; begins += o.begins; views += o.views; viewsNested += o.viewsNested;
@@ -188,6 +189,7 @@ void SceneDecoder::beginFrame(const rec::FrameBegin& r) {
     frame_->vblank = r.vblank;
     frame_->flags = r.flags;
     frame_->counters.frames = 1;
+    if (r.flags & gfx::scene::kFrameVehiclesOnly) frame_->counters.framesVehiclesOnly = 1;   // (complete with no view: a.7)
     view_ = instance_ = runInstance_ = closed_ = -1;
     occurrences_.clear();
 }

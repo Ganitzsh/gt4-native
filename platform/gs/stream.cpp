@@ -838,7 +838,8 @@ std::string GraphicsStream::describe() const {
     if (sceneDecoder_.seen()) {   // the scene records' counters (CONTRACTS.md a.7), totals of the finished frames
         const scene::SceneCounters& s = sceneDecoder_.totals();
         out << "; scene: " << s.records << " records, " << s.frames << " frames (" << s.framesUnclosed << " unclosed, "
-            << s.countsMismatch << " counts mismatched, " << s.framesTruncated << " truncated, " << s.begins << " FrameBegins), " << s.views << " views (" << s.viewsNested << " nested, "
+            << s.countsMismatch << " counts mismatched, " << s.framesTruncated << " truncated, " << s.begins << " FrameBegins"
+            << (s.framesVehiclesOnly ? ", vehicles-only " + std::to_string(s.framesVehiclesOnly) : std::string()) << "), " << s.views << " views (" << s.viewsNested << " nested, "
             << s.viewEndWithoutBegin << " ends without begin, " << s.viewsUnclosed << " unclosed), " << s.projections
             << " projections (" << s.projectionUnknown << " unknown), " << s.instances << " instances ("
             << s.instancesWithoutView << " without a view, " << s.itemsMismatch << " items mismatched), " << s.jobsTagged
