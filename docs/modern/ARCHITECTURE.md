@@ -237,7 +237,9 @@ the source of each must be found first (RISKS.md R10-R12) and removed where it e
 | Warning-light tint | the flare pass (003B8848 / 003B88C8 samples, read back by 00497EF8 / 00497F48) driving a full-screen flare or veil; glare 003BADF8's bright pass and add-back | The flare's draws (`kMarkFlareBegin/End`) and, in `modern`, GT4's glare are skipped. Lights get the pipeline's energy-conserving bloom and eye adaptation on linear light; a blinking light changes its own light and bloom, not the frame's mean colour. |
 
 Each has a ticket with an acceptance test on a Route 5 night capture (PLAN.md lane F): no step in mean
-luminance at section boundaries, no bands, no full-frame tint when the warning lights blink.
+luminance at section boundaries, no bands, no full-frame tint when the warning lights blink. For the section step,
+R10 found no one-frame step on the Reverse layout (gradual changes, mostly a lit road overlay, which goes to the lamp
+bands' ticket N3), so that row's remedies are parked until a capture shows one (PLAN.md N2).
 
 ---
 

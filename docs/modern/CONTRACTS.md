@@ -178,7 +178,7 @@ enum InstanceFlags : uint16_t {
     kInstObjectKnown = 4,   // set / model / lod come from 00455708's context
     kInstCarBody = 8,       // sphere-map bodies 0x10A8 / 0x12C8 seen in the Cmd (set by the host if not known)
     kInstWheel = 16,
-    kInstCourse = 32,
+    kInstCourse = 32,       // set by the runtime while the course is drawn: 00396D40, 00396E10, 0044E528 (A11a)
     kInstSky = 64,
 };
 struct Instance {
@@ -196,7 +196,8 @@ struct Instance {
     float shapeScale;            // cmd->value (0049E548's scale; 0: rows not scaled)
     uint16_t items;              // the Cmd's items: exactly this many BatchRun records follow for it
     uint16_t matrixSet;          // s->current (+1) when it ran: 0, 1 or 2
-    uint16_t section;            // course section (CourseData::render_model 0x00397188's model index), 0xFFFF none (RISKS R10)
+    uint16_t section;            // course section (CourseData::render_model 0x00397188's model index), 0xFFFF none
+                                 //   (A11b, parked with N2)
     uint16_t projection;         // the Projection current for this Cmd (set 1 and viewport), 0 none
     uint32_t reserved;           // 0 (the members above sum to 116 bytes; A1's compile found it: the record stays 120)
 };

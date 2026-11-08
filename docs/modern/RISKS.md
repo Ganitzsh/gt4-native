@@ -184,7 +184,14 @@ the game does with the values (decomp source). Answer per reader: read the moder
 
 ---
 
-## R10: Where the Route 5 section brightness step comes from (blocks N2, A11)
+## R10: Where the Route 5 section brightness step comes from (blocks N2, A11b)
+
+**Status: closed for the Reverse layout, 2026-11-08: no one-frame step found** (`spikes/R10.md`, coordinator's
+decision for the owner). The brightness changes at fixed track positions build over 8-20 frames. Grading and fog
+colour are ruled out; batch lighting values at 507 and 2514 (1049 and 2859 only partly); the glare was not checked.
+Most of the largest change is the lit-road layer, which goes to N3. N2 and A11b (the section index) are parked. N2
+reopens if a capture from lane F's sessions on the Normal layout or a night city course shows a one-frame step
+(PLAN.md N2); the method below is kept for that.
 
 **What is known.** Owner's playtest: driving from one section of S.S. Route 5 at night into the next, brightness
 or contrast changes in one step; PCSX2 does the same, so it is GT4's. Nothing in the docs or code names course
@@ -203,7 +210,7 @@ whole frame?
    output for those batches, `renderers3d.cpp`);
 3. ablation: replay with each candidate held at its pre-boundary value (grading curve, fog, light constants) and
    measure the step with N1; the candidate whose hold removes the step is the source.
-Check `CourseData::render_course` 0x00396E10 / `render_model` 0x00397188 for a section index (needed by A11).
+Check `CourseData::render_course` 0x00396E10 / `render_model` 0x00397188 for a section index (needed by A11b).
 
 **Time box.** 3 days.
 

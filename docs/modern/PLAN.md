@@ -68,7 +68,7 @@ ARCHITECTURE.md section 1) and the CPU-side tests (B5's mesh check, A10's decode
 | C. Platform, ARM64, tooling | `cmake/`, `tools/build_*`, `tools/package_game.py`, `tools/frame_diff.py`, `tools/perf_report.py`, `platform/core/`, `link_host.cpp`, `docs/modern/CAPTURES.md`, `platform/gsnative/texture_pack.*`, `platform/sdl/session.*` and `tools/host_session.py` (the test harness), `runtime/link.cpp` (lane A reviews every change: its async reads and tick deferral) | `main.cpp`, `renderer.cpp`: C1 **after B2** |
 | D. Systems | `platform/input/`, `platform/audio/`, `runtime/memcard.cpp`, `platform/saves/`, `runtime/iop.cpp`, `runtime/audio.cpp` | `main.cpp`: D1 **after C1**. `protocol.h`: D2 **after A1**. `stream.cpp`: D5 **after A10** |
 | E. UI | `platform/render/overlay.*`, `platform/sdl/settings*.{h,cpp}`, `settings_menu.*`, `platform/render/modern/layer2d.*` | `gs_frontend.cpp` `textureFor` (E2), `gsn_display.frag` (E3): day one, **before A10** |
-| F. Night lighting | `include/gt4/render/light_list.h`, `shaders/light_list.glsl`, `platform/render/modern/lights_*`, `tools/frame_metrics.py`, the Route 5 tickets | `gsn_scene.cpp` scene stage: F2 **after B4**. `gs_frontend.cpp` `effect()`: N2a **after A10** |
+| F. Night lighting | `include/gt4/render/light_list.h`, `shaders/light_list.glsl`, `platform/render/modern/lights_*`, `tools/frame_metrics.py`, the Route 5 tickets | `gsn_scene.cpp` scene stage: F2 **after B4** |
 
 `settings.cpp` / `settings.h`: E1 splits the option table into per-module files on day one; after that each lane
 adds its options in its own file (`settings_scene.cpp`, `settings_input.cpp`, `settings_audio.cpp`,
@@ -108,7 +108,7 @@ split reported; on a race capture, `viewSplitTargets == 0` for main views, with 
 
 **A2: Instance records at 0049D328 (M).** `game_src/func_0049D328.cpp`: after 0049E480 / 0049E548, before the item
 loop, one `Instance` from the scratchpad (`current`, set 0 as used, `scale` when +0xE, `cmd->value`, `count`,
-`flag`, `bits`); `section` 0xFFFF until A11. Depends: A1, A0's answer. Acceptance: `REL`; `ORIG`; a new race
+`flag`, `bits`); `section` 0xFFFF until A11b. Depends: A1, A0's answer. Acceptance: `REL`; `ORIG`; a new race
 capture with records: `SCENE` (`matrixMismatch == 0`, `itemsMismatch == 0`); game CPU per frame up by less than
 0.2 ms (host summary "CPU a frame: game").
 
@@ -118,10 +118,10 @@ the HUD widget's view (003BE3C8, `kViewHud`); the tick deferred during a walk (`
 `game_src/func_00341E50.cpp` (mirror, `kViewInset`); the camera as A0 found it (set 0 at its stack base);
 menus' 3D entry for the showroom and event screen (A0 names it). Depends: A1, A0. Acceptance: `REL`; `ORIG`;
 `SCENE` (`viewsNested == 0`, `countsMismatch == 0`, `instancesWithoutView == 0` in race frames, `cameraMismatch == 0`
-on course instances); with A10: `viewsUnbound == 0` for main views. Tick deferral: a live race run, before and after,
-reports the ticks that landed mid-walk; after it, `framesUnclosed == 0` with that count above 0, and frame pacing
-(the host's frame-time stats) unchanged within noise; with scene records off, the same run's link stream and timing
-unchanged from before (the deferral is off there).
+on course instances, which checks something from A11a on); with A10: `viewsUnbound == 0` for main views. Tick
+deferral: a live race run, before and after, reports the ticks that landed mid-walk; after it, `framesUnclosed ==
+0` with that count above 0, and frame pacing (the host's frame-time stats) unchanged within noise; with scene
+records off, the same run's link stream and timing unchanged from before (the deferral is off there).
 
 **A4: Object identity from 00455708 (S-M).** `game_src/func_00455708.cpp` (draft) sets a runtime-global model
 context (set, model index, level) that A2 reads (`kInstObjectKnown`). Depends: A2, RISKS R2 verdict on 00455708.
@@ -161,9 +161,20 @@ path draws for them.
 **A9: Vehicle record (S).** Where D6 found the per-car state. Depends: D6. Acceptance: `REL`; `ORIG`; the record's
 transform matches the car body instance's `objectToWorld` within 1e-3; speed matches the HUD's speed.
 
-**A11: Course section index (S).** `CourseData::render_model` 0x00397188 sets the runtime's current section that
-A2 writes into `Instance::section`. Depends: A2, R10. Acceptance: `REL`; `ORIG`; on the N0 sections capture every
-course instance has a section, and the section under the camera changes at the boundaries R10 found.
+**A11a: Course instance flag (S).** While the course is drawn, the runtime marks the instances A2 sends with
+`kInstCourse`. The course is drawn in three places (lane A, from the code): 00396D40 (the race's main view, near and
+far passes, called directly from 0033EAB8; it never calls `render_course`); `CourseData::render_course` 0x00396E10
+(the mirror, split screen, 003403B8, 00397048); and the env faces' course list in 0044E528 (its `ModelSet2` calls
+on `scene->f14`, not the sky's `f5C`). That makes A3's camera check real (`cameraChecked` counts course instances;
+until A11a it checks nothing), and B7 relies on a validated `worldToView`. The sky (00396B80) stays unflagged;
+`kInstSky` can be set the same way later. Depends: A2. Acceptance: `REL`; `ORIG`; on a race capture with records,
+`cameraChecked > 0` in every race frame, in the main view and the env faces, and `cameraMismatch == 0`; car, wheel
+and sky instances never flagged.
+
+**A11b: Course section index (S).** `render_model` 0x00397188 sets the runtime's current section, which A2 writes
+into `Instance::section`. **Parked with N2** (only N2's parts b and c need it); it is built if N2 reopens. Depends:
+A11a, N2 reopened. Acceptance: `REL`; `ORIG`; on N2's capture every course instance has a section, and the section
+under the camera changes at the crossing N2 reopened on.
 
 ### Lane B: renderer
 
@@ -223,9 +234,9 @@ role on its captures.
 
 **B10: G-buffer, deferred lighting, sun, material classes (L).** `platform/render/modern/gbuffer.*`,
 `lighting.*`; sun from the batches' light matrices (qwords 201..216) through `objectToWorld`; classes from lighting
-bodies (`lighting.materials = pbr`); prelit course colour as baked lighting **through the section normalisation of
-N2b**. Depends: B8, R8. Acceptance: `VAL`; no NaN or Inf (debug pass counts them); `PERF` budget 4 ms GPU at
-1440 x 1080 on the RX 7900 XTX; the owner's review against PCSX2 stills of the REF scenes.
+bodies (`lighting.materials = pbr`); prelit course colour as baked lighting (through N2b's section normalisation
+only if N2 reopens). Depends: B8, R8. Acceptance: `VAL`; no NaN or Inf (debug pass counts them); `PERF`
+budget 4 ms GPU at 1440 x 1080 on the RX 7900 XTX; the owner's review against PCSX2 stills of the REF scenes.
 
 **B11: Cascaded shadows and contact shadows (M).** Course casts onto cars only. Depends: B10. Acceptance: `VAL`;
 `PERF(<= 1.5 ms)`; no shadow on the course where its baked shadow already is (review images).
@@ -429,23 +440,40 @@ Baseline numbers on the GS path go in `docs/modern/spikes/R5-night.md`. Depends:
 before it, a loop of `--frames N --capture`). Acceptance: `CTEST` (`frame_metrics_selftest` on synthetic frames
 with a known step, band and tint); on N0 the GS path's numbers show all three artefacts. **Day one.**
 
-**N2: Section step removed (M; the half that applies depends on R10).** Parts by source:
-- *a, grading or fog parameters*: in `hybrid`, the host blends `kGrade` curve and weights (and fog colour /
-  density) over about 1.5 s when they change (`FrameList::Effect`, built in `gs_frontend.cpp`'s `effect()`;
-  after A10); `modern` does not run GT4's grade and uses eye adaptation (B15, F4).
-- *b, prelit colour*: a per-section gain from each section's prelit luminance (mean and spread of the course
-  instances' vertex colours per section, from the mesh cache), normalised to the neighbouring sections and blended
-  over distance near the boundary; applied where prelit colour enters as baked lighting (B10). Needs A11.
-- *c, lighting constants*: the per-section light matrices blended over distance by each instance's position.
-Depends: R10, A10 (a), A11 and B10 (b), A2 (c). Acceptance `R5` on the sections capture, in `hybrid` and
-`modern`: no frame-to-frame step above 1 % at any boundary crossing (the GS path's step, measured by N1, for
-comparison), no new step above 4 % anywhere except camera cuts; `ORIG` unchanged (the step stays in `original`).
+**N2: Section step (parked; reopens on evidence).** R10 found no one-frame step on S.S. Route 5 Reverse
+(`spikes/R10.md`; coordinator's decision for the owner, 2026-11-08). The four brightness changes at fixed track
+positions build over 8-20 frames (the largest one-frame change of the scene is 3.0-4.6 %). No grading, fog colour or
+batch lighting value switches there at 507 and 2514. About two thirds of the largest (replay 2514) is the lit-road
+layer the car drives out of (draws 305-308): probably the lamps' light baked into the course, which N3 takes. So
+N2a (blending grading and fog parameters) is dropped and N2 is not designed.
+- **Reopening.** Lane F's live sessions on the Normal layout and one more night city course (for R11 and R12, up to
+  three, recorded by lane F) are checked for a one-frame step. That is: N1 (`frame_metrics.py step`) reports a level
+  shift of at least 5 %, one frame carries at least 70 % of it, it is not a camera cut (structure correlation above
+  0.5), and it comes at the same track position on a second lap. Reverse's four changes fail the 70 % test (3.0-4.6 %
+  of 9.8-31 %). N2's 1 % bar is its acceptance after a fix, not this detection test. If one shows it, N2 reopens
+  with that capture: its source is found by RISKS R10's method, then this ticket is designed from what
+  it finds. Otherwise N2 stays parked.
+- Candidates kept for a reopening: *b, prelit colour* (a per-section gain from the course instances' prelit
+  luminance, normalised to the neighbouring sections and blended near the boundary, applied where prelit colour
+  enters as baked lighting in B10; needs A11b), *c, lighting constants* (the per-section light matrices blended over
+  distance by each instance's position; needs A2).
+- Acceptance when it reopens: `R5` on that capture, in `hybrid` and `modern`: no frame-to-frame step above 1 % at the
+  crossing (the GS path's step, measured by N1, for comparison), no new step above 4 % anywhere except camera cuts;
+  `ORIG` unchanged (the step stays in `original`).
 
 **N3: Lamp bands suppressed (S-M).** The draws R11 identified are skipped in `hybrid` and `modern` between
 `kMarkLampBands*` (A5b), and the lamps light the road through their `Light` records and the clustered lights (F2 in
-`hybrid`, F3 in `modern`). Depends: R11, A5b, A7, B4, F2. Acceptance `R5` on the lamps capture: band ratio at most
-1.3 in every frame (the GS path's value for comparison); suppression counter > 0 on the frames where the GS path
-draws them; `ORIG` unchanged.
+`hybrid`, F3 in `modern`). R10 and R11 found two things on the road (`spikes/R10.md`, `spikes/R11.md`; draw
+numbers are those of replay 2514, and the draws are found by their source, as R11 does):
+- **the lit-road layer** (draws 305-308): world-fixed and without a lighting chain (measured), so probably the lamps'
+  light baked into the course (PCSX2 to confirm). It is skipped exactly when the renderer draws the lamps' own
+  light on the road (F2 in `hybrid`, F3 in `modern`), so the road gets the lamps' light once: never twice, and
+  never dark. With F2 off (a `hybrid` preset without the night relight), the layer stays. `original` keeps it.
+- **the light-image glow** (draws 325-326: a blurred image of the lights in target 71, from target 37, spread as 60
+  sprites weighted by the scene's alpha): R11's first band candidate, skipped with the bands if R11 confirms it.
+Depends: R11, A5b, A7, B4, F2. Acceptance `R5` on the lamps capture: band ratio at most 1.3 in every frame (the
+GS path's value for comparison); suppression counter > 0 on the frames where the GS path draws them; `ORIG`
+unchanged.
 
 **N4: Warning-light tint suppressed (S-M).** The flare (and, in `modern`, glare) draws R12 identified are skipped
 between their markers (A5b); each light keeps its own bloom (pipeline bloom on linear light, F4). Depends: R12,
@@ -455,7 +483,8 @@ bloom; `ORIG` unchanged.
 
 **F2: Night relight on the GS path (M).** At a Light command in `hybrid`: lights gathered from the view's `Light`
 records into the light list, clusters over the scene rectangle, view-space positions and normals from GT4's Z,
-the lights added in the scene stage (CONTRACTS.md c.3). Depends: A7, F1, B4. Acceptance: `ORIG`; `VAL`; `PERF(<=
+the lights added in the scene stage (CONTRACTS.md c.3). While F2 lights the road, N3 skips the lit-road layer
+(draws 305-308), so the lamps' light reaches the road once. Depends: A7, F1, B4. Acceptance: `ORIG`; `VAL`; `PERF(<=
 1 ms)`; on a night capture lamps light the road and cars near them (review against PCSX2 stills: the scene
 otherwise unchanged).
 
@@ -484,8 +513,8 @@ on the sections capture); the warning capture's tint stays below N4's bar.
 
 ### Agent assignments
 
-- **3 agents.** 1: A0, A1, A10, A2, A3 (then A5a, A11). 2: B2, B1, B5, then B3, B4. 3: E2, E3, E4, E1, C1, C2, C3,
-  then N0, N1, R10-R12, F0, F1. D waits for a fourth agent.
+- **3 agents.** 1: A0, A1, A10, A2, A3 (then A5a, A11a; A11b only if N2 reopens). 2: B2, B1, B5, then B3, B4.
+  3: E2, E3, E4, E1, C1, C2, C3, then N0, N1, R10-R12, F0, F1. D waits for a fourth agent.
 - **4 agents.** As 3, plus 4: D3, D4, D1, then D2, D6.
 - **5 agents.** As 4, with lane F (N0, N1, R10-R12, F0, F1, then F2, N2-N4) moved to agent 5, leaving agent 3 on
   E and C.
@@ -500,9 +529,9 @@ No two day-one tickets edit the same file except `main.cpp` / `renderer.cpp` (B2
 | Phase | Tickets | Gate to leave it |
 |---|---|---|
 | 0. Foundations (weeks 1-3) | A0, A1, A10, A2, A3; B2, B1, B5, B3; C1-C4, C10; E1-E4; F0, F1, N0, N1; spikes R1-R7, R9-R12 | `SCENE` gates on race and event captures; B3 `PRESETS` |
-| 1. Parity (weeks 3-8) | B4, B6, B7, A4, A5a, A6; D-track | `PARITY` on REF |
-| 2. Hybrid ships (weeks 8-10) | B8, B9, F2, N2a, N3, N4 (hybrid parts) | `render.scene = hybrid` in presets low-ultra; `R5` gates in hybrid |
-| 3. Modern lighting (weeks 10-18) | B10-B15, F3, F4, N2b/c, A7, A8 | `R5` gates in modern; owner review |
+| 1. Parity (weeks 3-8) | B4, B6, B7, A4, A5a, A6, A11a; D-track | `PARITY` on REF |
+| 2. Hybrid ships (weeks 8-10) | B8, B9, F2, N3, N4 (hybrid parts) | `render.scene = hybrid` in presets low-ultra; `R5` gates in hybrid |
+| 3. Modern lighting (weeks 10-18) | B10-B15, F3, F4, A7, A8 (N2b/c and A11b only if N2 reopens) | `R5` gates in modern; owner review |
 | 4. Resolution and effects | B16-B22, F5, E6-E9 | per ticket |
 | 5. Optional | B23, C6 on devices, research track | per ticket |
 
