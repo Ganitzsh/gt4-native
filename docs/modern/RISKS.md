@@ -73,7 +73,15 @@ their tickets start.
 
 ---
 
-## R3: Coplanar and alpha ordering in the deferred pass (blocks B7, B22)
+## R3: Coplanar and alpha ordering in the deferred pass (blocks B10, B22)
+
+**Status: measured for the day race; B7's part answered** (lane B, [spikes/R3.md](spikes/R3.md), 2026-11-08).
+On `race_boot.cap`, pixels that pass only at equal Z: opaque with Z write 3.0 %, blended with Z write 21 %, blended
+without 2.6 %, opaque without Z write 2.5 %, second passes at equal Z 100 %. No class is free of order. So B7 draws
+forward, in GT4's order, with GT4's own depth (PLAN B7), and needs no class rule. The split between a G-buffer and
+an ordered forward pass is needed only where the view's own reverse-Z depth is used (B10, B22), and the two-order
+prototype below moves there. Open before B10: night and the showroom, the destination-alpha passes, and which
+views t5 and t59 are.
 
 **Question.** Which of GT4's scene-target draws rely on draw order rather than depth: coplanar layers (road
 markings, kerbs, decals, shadows drawn on the road with equal Z under GEQUAL), alpha-blended surfaces (glass,

@@ -306,8 +306,18 @@ in thread CPU time on `race_boot.cap` (after the race's first 300 frames), p95 b
 reported; the same span measured on the Odin in lane C's device run; `ORIG` and `PRESETS` identical.
 
 **B7: Parity view renderer (L).** `platform/render/modern/parity_view.cpp`, `shaders/modern_parity.*`: draws a
-view's instances from the mesh cache with GT4's lighting per vertex (the bodies of `gsn_models.comp`), at 1x, with
-the ordered forward pass RISKS R3 decides for coplanar and blended draws. Depends: A2, A3, A10, B4, B5, B6, R3, R5.
+view's instances from the mesh cache with GT4's lighting per vertex (the bodies of `gsn_models.comp`), at 1x,
+**forward, in GT4's order, with GT4's own depth** (RISKS R3): each instance through its own projection
+(`InstanceData::projection`), GT4's Z tests, its Z clears between depth partitions kept as the view's passes. Its
+depth then equals the GS path's and ties resolve the same, so coplanar layers, blended draws and second passes at
+equal Z need no class rule and no G-buffer. Two conditions make the ties exact:
+- GS Z is computed with the same operations as `gsn_models.comp` (shared shader code), so equal Z stays equal;
+- the items of an instance are drawn in GT4's run order, one draw (or one index range) per item, so layers inside
+  one instance keep their order. The mesh cache's welding across items merges only bitwise-equal vertices, which
+  changes no Z.
+The scene target's other draws between the view's passes (R5's clears, Z-only draws and the full-screen draws at
+0.47 of the order) keep their place in that order; whether B7 or the GS path draws them is B8's question (R5).
+Depends: A2, A3, A10, B4, B5, B6, R3, R5.
 Acceptance: `PARITY` on the race, flyover and event captures; `VAL`; `viewFallbacks` reasons listed.
 
 **B8: Substitution at the Light command, hybrid (M).** `platform/render/modern/compositor.cpp`: colour and GS Z
@@ -321,7 +331,9 @@ role on its captures.
 **B10: G-buffer, deferred lighting, sun, material classes (L).** `platform/render/modern/gbuffer.*`,
 `lighting.*`; sun from the batches' light matrices (qwords 201..216) through `objectToWorld`; classes from lighting
 bodies (`lighting.materials = pbr`); prelit course colour as baked lighting (through N2b's section normalisation
-only if N2 reopens). Depends: B8, R8. Acceptance: `VAL`; no NaN or Inf (debug pass counts them); `PERF`
+only if N2 reopens). R3's split (opaque Z-writing draws into the G-buffer, the rest in an ordered forward pass, B22)
+and its two-order prototype are part of this ticket. Depends: B8, R8, R3 (night, showroom and the destination-alpha
+passes measured). Acceptance: `VAL`; no NaN or Inf (debug pass counts them); `PERF`
 budget 4 ms GPU at 1440 x 1080 on the RX 7900 XTX; the owner's review against PCSX2 stills of the REF scenes.
 
 **B11: Cascaded shadows and contact shadows (M).** Course casts onto cars only. Depends: B10. Acceptance: `VAL`;
