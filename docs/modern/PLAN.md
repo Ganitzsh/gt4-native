@@ -140,7 +140,8 @@ in command order after it; the draws between `HudBegin/End` are the HUD (`GT4_GS
 markers: the lit-road layer is course geometry with no call site of its own, so N3 finds it by a B6 material class
 instead (`kMarkLampBands*` stay reserved and are never sent). Depends: A3, R12. Acceptance: `REL`; `ORIG`;
 `hook_lint` 0; on a night race with records, no frame ends with a bracket open, and with N4's marking the flare
-bracket's draws onto the picture and its kept samples are counted (the samples never land on the picture). The glare
+bracket's draws are counted by target. Draws in the bracket not onto the picture are about 0: the flare's samples are
+a read of the scene (GS to host), not draws. The glare
 bracket is checked on a race whose glare settings have flag bit 0 set (0033F1C8 calls 003BADF8 only then): neither
 the night Route 5 race nor a day Pan Euro race set it, so that live check stays open until a course with glare is
 found, like the warning lamps at the Route 5 pit entry.
@@ -761,12 +762,14 @@ second course, no other draw skipped; `ORIG` unchanged.
 **N4: Warning-light tint suppressed (S-M).** The flare (and, in `modern`, glare) draws R12 identified are skipped
 between their markers (A5b); each light keeps its own bloom (pipeline bloom on linear light, F4). Depends: R12,
 A5b, B4, F4 for `modern`.
-- **Only the draws onto the picture.** The flare pass also draws its samples into the small target the game reads
-  back (00497EF8 / 00497F48) to set each flare's strength. Skipping those would change the game's own result. So a
-  bracketed draw is skipped only when its colour target is the main view's principal target (A10's binding, known
-  when the flare pass runs, after the main `ViewEnd`) or a screen-sized target by `sceneRead`'s rule (bw x 64 >=
-  512 and height >= 384), which also catches a draw into the display buffer after the post effects (that buffer
-  is only named by the display record, later). The sample target is never screen-sized, so the sample draws stay.
+- **Only the draws onto the picture.** The game reads the flare's samples back (00497EF8 / 00497F48) to set each
+  flare's strength; that read must not change. A bracketed draw is skipped only when its colour target is:
+  - the main view's principal target (A10's binding, known when the flare pass runs, after the main `ViewEnd`);
+  - a target the display records showed in the last 8 VSyncs: in a race, the 640 x 224 field buffer the flare's
+    glows are added to, after the scene's copy and before the HUD (lane A's `a5b_r5.cap`). The size rule alone
+    missed it: the field buffers are 448 tall only when the menus have drawn them, so a mid-run replay marked
+    none and a live run about half;
+  - or a screen-sized target by `sceneRead`'s rule (bw x 64 >= 512 and height >= 384).
   Each skip is counted by the rule that caught it. The glare is skipped the same way, in `modern` only.
 - **Where.** The front end marks the draws as it builds the list. It sees each `Marker` in stream order, so a
   list cut before `FrameEnd` is marked too. A `Draw` gets the bracket it is in (flare, glare); lane F writes it in
