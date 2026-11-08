@@ -49,9 +49,27 @@ bool vehicle_log_on() {
     return on;
 }
 
-int vehicle_records(gfx::scene::Vehicle *out, int max) {
+uint32_t vehicle_live() {
     using namespace car;
     const uint32_t cond = vehicle_conductor();
+    if (!cond) return 0;
+    // GT4 keeps a conductor with its cars through the menus too (from the boot on: speed 0, wheel loads under 0.5, tiny
+    // leftovers, not 0). In a race some car always has weight on a wheel (thousands: about 1,500-8,000 a wheel): on the
+    // grid, in the countdown, driving (one airborne car is not all). Above 10 tells them apart.
+    uint32_t count = guest_ref<uint32_t>(cond + kCountOffset);
+    if (count > kMaxCars) count = kMaxCars;
+    for (uint32_t i = 0; i < count; ++i) {
+        const uint32_t a = cond + kCarsOffset + i * kCarStride;
+        if (!in_guest_ram(a, kCarBytes) || guest_ref<uint32_t>(a + 4) != cond) continue;
+        for (uint32_t w = 0; w < 4; ++w)
+            if (guest_ref<float>(a + kWheels + w * kWheelStride + 0x48) > 10.0f) return cond;
+    }
+    return 0;
+}
+
+int vehicle_records(gfx::scene::Vehicle *out, int max) {
+    using namespace car;
+    const uint32_t cond = vehicle_live();
     if (!cond) return 0;
     uint32_t count = guest_ref<uint32_t>(cond + kCountOffset);
     if (count > kMaxCars) count = kMaxCars;

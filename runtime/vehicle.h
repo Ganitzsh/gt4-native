@@ -24,6 +24,10 @@ gfx::scene::Vehicle decode_vehicle(const uint8_t *a, uint8_t entrant);
 // state is per thread.
 uint32_t vehicle_conductor();
 
+// The conductor while a race's physics runs (some car has weight on a wheel), else 0. The conductor alone is not a
+// race: GT4 keeps one with its cars through the menus, from the boot on, every load 0.
+uint32_t vehicle_live();
+
 // Each running car's record (at most `max`), by decode_vehicle, in entrant order; 0 outside a race. Read-only on the
 // guest. The scene's Vehicle records (runtime/frame.cpp send_frame_end, at the kick, with scene records on).
 int vehicle_records(gfx::scene::Vehicle *out, int max);
