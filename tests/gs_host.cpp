@@ -253,6 +253,69 @@ int main(int argc, char** argv) {
         }
     }
 
+    // 2b2. A car light map's draws (kInstLightMap, A6; CONTRACTS.md a.5.7): the view's principal is the frame, then a
+    // light-map run draws into another target, testing and writing the principal's Z, and a principal draw samples
+    // that target. Tagged as a light map (gfx::kJobLightMap in pad[1]) it is out of the binding: Draw::view 0, no
+    // split, no auxiliary target or read, counted with its target. The same run without the bit splits the view.
+    for (const bool lightMap : {true, false}) {
+        gt4::gsn::GsFrontend fe;
+        fe.setSceneSplit(true);
+        Gif g = setup();
+        fe.gif(3, static_cast<const uint8_t*>(g.data()), g.bytes());
+        std::vector<uint32_t> words(gt4::gfx::kModelWords, 0);
+        words[64 * 4 + 3] = 1;
+        words[65 * 4 + 3] = 3 * 3;
+        gt4::gfx::ModelJob job{};
+        job.count = 5;
+        job.prim = 4;
+        gt4::gfx::scene::FrameBegin begin{};
+        begin.prefix = {gt4::gfx::scene::kFrameBegin, gt4::gfx::scene::kVersion};
+        fe.sceneRecord(reinterpret_cast<const uint8_t*>(&begin), sizeof begin);
+        auto state = [&](uint32_t fbp, uint32_t fbw, uint64_t tex) {
+            Gif s2;
+            s2.ad({{FRAME_1, frame(fbp, fbw, PSMCT32)}, {ZBUF_1, zbuf(0x70, PSMZ24, false)}, {TEST_1, test(true, 2)},
+                   {TEX0_1, tex}});
+            fe.gif(3, static_cast<const uint8_t*>(s2.data()), s2.bytes());
+        };
+        state(0, 10, 0);   // the principal: the frame, depth-tested and written
+        job.pad[0] = 1;
+        job.pad[1] = 1;
+        fe.model(job, words.data());
+        state(0x100, 4, 0);   // the light map's run: another target, on the principal's Z
+        job.pad[0] = 2;
+        job.pad[1] = 1u | (lightMap ? gt4::gfx::kJobLightMap : 0u);
+        fe.model(job, words.data());
+        state(0, 10, tex0(0x100 * 32, 4, PSMCT32, 8, 8, true, 0));   // the paint samples it
+        job.prim = 4 | (1 << 4);
+        job.pad[0] = 3;
+        job.pad[1] = 1;
+        fe.model(job, words.data());
+        gt4::gfx::scene::ViewEnd e{};
+        e.prefix = {gt4::gfx::scene::kViewEnd, gt4::gfx::scene::kVersion};
+        e.view = 1;
+        fe.sceneRecord(reinterpret_cast<const uint8_t*>(&e), sizeof e);
+        auto package = std::make_shared<gt4::scene::SceneView>();
+        package->view.id = 1;
+        fe.sceneView(std::move(package));
+        gt4::gsn::FrameList partial;
+        fe.cut(partial);
+        const std::string mode = lightMap ? "light map: " : "the same run untagged as a light map: ";
+        expect(partial.views.size() == 1, (mode + "the view's package is on the list").c_str());
+        if (partial.views.size() != 1) continue;
+        const auto& v = partial.views[0];
+        if (lightMap) {
+            expect(partial.draws.size() == 3 && partial.draws[1].view == 0 && partial.draws[0].view == 1 && partial.draws[2].view == 1,
+                   (mode + "its draw has Draw::view 0, the principal's draws view 1").c_str());
+            expect(v.target != 0 && v.target == partial.draws[0].target && !v.splitTargets && v.auxCount == 0 && v.auxReads == 0,
+                   (mode + "out of the binding: no split, no auxiliary target, no auxiliary read").c_str());
+            expect(fe.stats.viewLightMapDraws == 1 && fe.stats.lightMapTargets.size() == 1 &&
+                       fe.stats.lightMapTargets[0] == partial.draws[1].target,
+                   (mode + "counted, with the target it wrote").c_str());
+        } else {
+            expect(v.splitTargets != 0 && fe.stats.viewLightMapDraws == 0, (mode + "the view splits (rule 2), nothing counted").c_str());
+        }
+    }
+
     // 2c. The binding rule (CONTRACTS.md a.5.7), decided at ViewEnd: a view's first draw goes to a small target without a
     // depth test (the sky's pass), then a depth-tested draw into the frame samples it. The principal moves to the frame,
     // the small target is auxiliary and read, and the view is not split. A second view samples its own principal: split
