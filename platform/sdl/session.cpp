@@ -148,20 +148,7 @@ struct Session::Impl {
         log.open(directory / "events.jsonl");
         if (!log) throw std::runtime_error("Cannot create session log");
         SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
-        SDL_VirtualJoystickDesc desc;
-        SDL_INIT_INTERFACE(&desc);
-        desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
-        desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
-        desc.nbuttons = 15;
-        desc.axis_mask = (1u << SDL_GAMEPAD_AXIS_COUNT) - 1;
-        desc.button_mask = (1u << 15) - 1;
-        desc.name = "GT4 automation controller";
-        id = SDL_AttachVirtualJoystick(&desc);
-        require(id != 0, "SDL_AttachVirtualJoystick");
-        joystick = SDL_OpenJoystick(id);
-        require(joystick != nullptr, "SDL_OpenJoystick");
-        gamepad = SDL_OpenGamepad(id);
-        require(gamepad != nullptr, "SDL_OpenGamepad");
+        id = attachPad("GT4 automation controller", joystick, gamepad);
         reset();
         if (enableAudio) {
             require(SDL_InitSubSystem(SDL_INIT_AUDIO), "SDL_InitSubSystem(audio)");
@@ -176,11 +163,11 @@ struct Session::Impl {
         event("session", "\"audio\":" + std::string(audio ? "true" : "false") +
               ",\"controller\":" + std::to_string(id) + ",\"video_driver\":" + quote(SDL_GetCurrentVideoDriver() ? SDL_GetCurrentVideoDriver() : "none (headless)"));
     }
+    // "reset": every button up and every axis at rest, on pad 1 and, when it is plugged in, pad 2 (a button2 held
+    // without its release would otherwise survive a reset).
     void reset() {
-        for (int i = 0; i < 15; ++i) require(SDL_SetJoystickVirtualButton(joystick, i, false), "virtual button");
-        for (int i = 0; i < SDL_GAMEPAD_AXIS_COUNT; ++i)
-            require(SDL_SetJoystickVirtualAxis(joystick, i, i >= SDL_GAMEPAD_AXIS_LEFT_TRIGGER ? -32768 : 0), "virtual axis");
-        SDL_UpdateJoysticks();
+        neutral(joystick);
+        if (joystick2) neutral(joystick2);
     }
     void submit(const int16_t* samples, uint32_t frames) {
         if (!audio) throw std::runtime_error("Audio is disabled for this session");
