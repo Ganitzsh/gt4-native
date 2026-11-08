@@ -1147,6 +1147,12 @@ std::string GsHost::summary() const {
                 << ", without the post or the HUD " << s.markersAbsent << " (the Light before PostBegin " << s.lightBeforePost
                 << ", inside the post " << s.lightInsidePost << "); scene frames not checked for markers (a cut or VSync inside) "
                 << s.markersNotChecked;
+        // N4: Draws made inside the flare's and glare's brackets, by the rule that marked them; frames ending with one open
+        for (const auto& [name, k] : {std::pair<const char*, uint8_t>{"flare", gsn::kBracketFlare}, {"glare", gsn::kBracketGlare}})
+            if (s.bracketPrincipal[k] || s.bracketScreen[k] || s.bracketKept[k])
+                out << "; " << name << " bracket draws onto the principal " << s.bracketPrincipal[k] << ", screen-sized "
+                    << s.bracketScreen[k] << ", kept (another target) " << s.bracketKept[k];
+        if (s.bracketsOpenAtEnd) out << "; scene frames ending with a bracket open " << s.bracketsOpenAtEnd;
         byRole("unbound", s.unboundByRole);
         byRole("cut", s.cutByRole);
     }
