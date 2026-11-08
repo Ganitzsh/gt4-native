@@ -645,14 +645,14 @@ struct GsnScene::Impl {
         if (parity) {   // B7's fallbacks by reason (PLAN B7's acceptance lists them)
             const render::ParityStats& s = parityView.stats();
             std::printf("Parity path: %llu of %llu items drawn from the mesh cache; on the GS path: mesh 0 %llu, mesh evicted %llu, "
-                        "items differ %llu, outside their draw %llu, over the budget %llu; views not substituted %llu, of a role kept %llu, on the GS "
+                        "items differ %llu, outside their draw %llu, over the budget %llu; views not substituted %llu, of a role kept %llu, light-map and reflection items %llu, on the GS "
                         "path for a game read %llu (cut for one) + %llu (asynchronous); meshes "
                         "uploaded %llu (%.1f MiB), retired %llu; %u blocks of %llu MiB%s\n",
                         static_cast<unsigned long long>(s.drawn), static_cast<unsigned long long>(s.items),
                         static_cast<unsigned long long>(s.meshNone), static_cast<unsigned long long>(s.meshGone),
                         static_cast<unsigned long long>(s.itemsDiffer), static_cast<unsigned long long>(paritySpansOutside),
                         static_cast<unsigned long long>(s.overBudget), static_cast<unsigned long long>(s.viewsNotSubstituted),
-                        static_cast<unsigned long long>(s.viewsOfRoleKept),
+                        static_cast<unsigned long long>(s.viewsOfRoleKept), static_cast<unsigned long long>(s.itemsOutOfBinding),
                         static_cast<unsigned long long>(s.viewsForReadSync), static_cast<unsigned long long>(s.viewsForReadAsync),
                         static_cast<unsigned long long>(s.meshesPlaced), double(s.uploadBytes) / double(1 << 20),
                         static_cast<unsigned long long>(s.meshesRetired), parityView.blocks(),

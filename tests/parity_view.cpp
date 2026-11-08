@@ -151,6 +151,16 @@ int main() {
             check(spans.empty(), "a HUD, menu or env-copy view: never substituted");
         }
         check(small.stats().viewsOfRoleKept == 3, "... and counted");
+        for (const uint16_t flag : {uint16_t(gt4::gfx::scene::kInstLightMap), uint16_t(1024) /* kInstReflection */}) {
+            gsn::FrameList out = makeList(cache);
+            auto view = std::make_shared<scene::SceneView>(*out.views[0].package);
+            view->instances[0].flags = flag;
+            out.views[0].package = view;
+            render::ParityView fresh;
+            fresh.plan(out, spans, st, cp);
+            check(spans.empty() && fresh.stats().itemsOutOfBinding == 2 && fresh.stats().drawn == 0,
+                  "a light-map or road-reflection instance: its items on the GS path, counted");
+        }
         gsn::FrameList differ = makeList(cache);
         differ.views[0].items[1].modelVertexCount = 3;
         small.plan(differ, spans, st, cp);

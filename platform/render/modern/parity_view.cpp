@@ -157,6 +157,15 @@ void ParityView::plan(const gsn::FrameList& list, std::vector<ParitySpan>& spans
         }
         for (uint32_t k = 0; k < view.ids.size(); ++k) {
             const scene::InstanceIds& ids = view.ids[k];
+            // A car's light map and the road reflection (kInstLightMap, kInstReflection) are out of the binding and
+            // never substituted (CONTRACTS a.5.7): render-to-texture the GS path builds in place. Their instances are
+            // the view's (the front end gathers items by instance, not by the view word), so they are left out here.
+            constexpr uint16_t kInstReflection = 1024;   // (gfx::scene::kInstReflection once lane A's gfx.h has it)
+            const uint16_t flags = k < view.package->instances.size() ? view.package->instances[k].flags : 0;
+            if (flags & (gfx::scene::kInstLightMap | kInstReflection)) {
+                counters.itemsOutOfBinding += ids.materialCount;
+                continue;
+            }
             counters.items += ids.materialCount;
             if (!ids.mesh) {
                 counters.meshNone += ids.materialCount;
