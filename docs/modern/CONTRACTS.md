@@ -538,7 +538,8 @@ struct MeshKey {             // a Cmd's geometry: welded once
     uint32_t chainUnpack;    // lighting chain's decompression routine (normals' format)
 };                           // (platform/scene/scene_frame.h; B5 named renderer / chain `mask` / `entry`)
 struct MaterialKey {         // GT4's material: what the batch's pixels depend on besides geometry
-    uint64_t texture;        // texture set content hash ^ texture index; 0 untextured
+    uint64_t texture;        // the texture's identity (the front end's textureIdentity(id): content hash,
+                             //   fields, palette, TEXA), so a re-decode after eviction keeps the id; 0 untextured
     uint32_t palette;        // CLUT source id/version
     uint32_t body;           // ModelJob::chain >> 16 (lighting body)
     uint32_t dot;            // ModelJob::dot
@@ -570,8 +571,14 @@ struct InstanceData {
     uint64_t object;                              // set << 32 ^ model << 8 ^ lod, or the Cmd address
     Mat4 objectToView, objectToWorld, previousObjectToWorld;
     float axisScale[3], shapeScale;
-    uint32_t firstJob = 0, jobCount = 0;          // in FrameList::models
-    MeshId mesh = 0; MaterialId materials[4] = {};   // per item when they differ (rare); more: split
+    uint32_t jobCount = 0;                        // in FrameList::models, found by tag (ModelJob::pad[0] = this
+                                                  //   instance's position + 1), not as a range: an item
+                                                  //   callback's runs can land between them (a.5.3)
+    MeshId mesh = 0;                              // copied at sceneFrame() from the views' ViewOnList::ids (B6)
+    uint32_t firstMaterial = 0, materialCount = 0;   // in SceneFrame::materials: one per item, in the mesh's
+                                                     //   item order (a car has more than four). In a SceneView
+                                                     //   package these three stay 0: it is made before B6 runs
+                                                     //   and const after; its ids are on ViewOnList
     uint32_t entrant = 0xFFFFFFFF;
 };
 struct SceneFrame {                               // one per kicked list (a.5.1)
@@ -585,6 +592,7 @@ struct SceneFrame {                               // one per kicked list (a.5.1)
     std::vector<gfx::scene::Marker> markers;      // with the FrameList command index each arrived at
     std::vector<uint32_t> markerCommands;
     std::vector<gfx::scene::Vehicle> vehicles;
+    std::vector<MaterialId> materials;            // the instances' materials (InstanceData::firstMaterial), B6
     SceneCounters counters;
     bool complete = false;                        // FrameEnd arrived and counts match
 };
@@ -624,6 +632,12 @@ read, then the one that receives `FrameEnd`. (Race route: 38 reads in about 4900
       uint8_t auxCount = 0;                       // a fifth is split (a.5.7 rule 5), so no allocation
       uint8_t auxReads = 0;                       // bit i: a principal draw samples auxTargets[i]
       uint16_t auxDraws = 0;                      // tagged draws into the auxiliary targets
+      struct InstanceIds { MeshId mesh = 0; uint32_t firstMaterial = 0, materialCount = 0; };
+      std::vector<InstanceIds> ids;               // B6: by position in package->instances, filled in
+                                                  //   sceneView() before the view goes on the list; mesh 0:
+                                                  //   skinned, key-frame blend, pending, or the view cut
+      std::vector<MaterialId> materials;          // one per item, in the mesh's item order (both vectors keep
+                                                  //   their capacity with the list)
   };
   // FrameList gains: std::vector<ViewOnList> views;   (SceneViews pooled, below)
   ```

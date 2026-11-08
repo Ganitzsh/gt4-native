@@ -64,7 +64,7 @@ ARCHITECTURE.md section 1) and the CPU-side tests (B5's mesh check, A10's decode
 | Lane | Owns | Shared files it may touch, and in which order |
 |---|---|---|
 | A. Scene extraction | `game_src/` hooks, `runtime/native/pgl.cpp`, `runtime/frame.cpp`, `runtime/runtime.h`, `runtime/kernel.cpp` (from P4), `compat/game/gt4_scene.h`, `include/gt4/gfx.h` scene section, `platform/scene/scene_decoder.*`, `scene_frame.h` | `stream.cpp`, `stream.h`, `gs_host.cpp` (QueuedTarget): A1, A10. `gs_frontend.*`: A10 **after E2**. `protocol.h`: A1 **before D2**. `runtime/gs.cpp` `on_frame` (ticks deferred during a walk, CONTRACTS a.5.1): A3 |
-| B. Renderer | `platform/render/graph/`, `platform/render/modern/`, `platform/scene/mesh_cache.*`, `material_table.*`, `pipeline.cpp`, `gsn_scene.cpp`, `vk.*`, shaders; for P2, the target, page and palette parts of `gs_frontend.*` and `gs_memory.*` (lane A reviews) | `renderer.cpp`, `main.cpp`: B2 **first** (day one) |
+| B. Renderer | `platform/render/graph/`, `platform/render/modern/`, `platform/scene/mesh_cache.*`, `material_table.*`, `scene_cache.*`, `pipeline.cpp`, `gsn_scene.cpp`, `vk.*`, shaders; for P2, the target, page and palette parts of `gs_frontend.*` and `gs_memory.*` (lane A reviews) | `renderer.cpp`, `main.cpp`: B2 **first** (day one) |
 | C. Platform, ARM64, tooling | the settings table (from lane E, 2026-11-08): `platform/sdl/settings.{h,cpp}`, `settings_table.h`, the presets and the shared parts (`settings_display.cpp`, `settings_render.cpp`, `settings_effects.cpp`, `settings_scene.cpp`). The per-module files stay with the lanes that add to them (`settings_input.cpp`, `settings_audio.cpp` lane D; `settings_lighting.cpp` lane F; a future `settings_ui.cpp` lane M), lane C reviewing each change for the table's rules (preset membership, `original` unchanged, `unusedReason`), `cmake/`, `tools/build_*`, `tools/package_game.py`, `tools/frame_diff.py`, `tools/perf_report.py`, `platform/core/`, `link_host.cpp`, `docs/modern/CAPTURES.md`, `platform/gsnative/texture_pack.*`, `platform/sdl/session.*` and `tools/host_session.py` (the test harness), `runtime/link.cpp` (lane A reviews every change: its async reads and tick deferral) | `main.cpp`, `renderer.cpp`: C1 **after B2** |
 | D. Systems | `platform/input/`, `platform/audio/`, `runtime/memcard.cpp`, `platform/saves/`, `runtime/iop.cpp`, `runtime/audio.cpp` | `main.cpp`: D1 **after C1**. `protocol.h`: D2 **after A1**. `stream.cpp`: D5 **after A10** |
 | E. UI | no agent; its files moved on 2026-11-08 (the coordinator): the settings table to lane C, `overlay.*`, `settings_menu.*` and `layer2d.*` to lane M. Its remaining tickets E5 (SDF font), E6 (2D layer), E7 and E9 (HUD) go to lane M with their files (the coordinator), lane C reviewing | `gs_frontend.cpp` `textureFor` (E2), `gsn_display.frag` (E3): day one, **before A10** |
@@ -250,9 +250,34 @@ workers, key list `pipeline_cache.keys`, `prewarm()`, save every 64 new pipeline
 `PRESETS`; with an empty cache, a full run then a second run: zero pipelines created on the render thread in the
 second run after prewarm; hitch log shows no pipeline stage.
 
-**B6: Material table (S).** `platform/scene/material_table.{h,cpp}`: `MaterialKey` from each job and its draw
-state, ids per frame. Depends: B5, A10. Acceptance: `CTEST`; materials per race frame reported (expect a few
-hundred); same key for the same object across frames.
+**B6: Material table and the instances' ids (M).** `platform/scene/material_table.{h,cpp}` (`MaterialKey` to a
+stable `MaterialId`, dropped after N frames unused, like the mesh cache) and `scene_cache.{h,cpp}` (owns a
+`MeshCache` and a `MaterialTable`; one call per view). Each instance with jobs gets its mesh (B5, the jobs hashed in
+place, copied only on a miss) and its materials per item, into `FrameList::ViewOnList::ids` (CONTRACTS a.8).
+- **When:** in the front end's `sceneView()`, when the view's package arrives at its `ViewEnd` (every job of its
+  instances is in the list being built by then, a.5.3), before the view goes on the list. A cut view is skipped.
+  `SceneFrame`'s instances get a copy of the ids at `sceneFrame()`. Only while the scene split is on, like the
+  packages, so `ORIG` and `PRESETS` stay identical by construction.
+- **Jobs by tag:** an instance's jobs are found by `ModelJob::pad[0]`, not as a range (`firstJob` was never filled,
+  and an item callback's runs can land between them). `model()` keeps each open view's job indices per instance
+  (in lane A's file: lane B writes it, lane A reviews).
+- **Mesh 0, counted:** skinned instances (`kInstSkinned`, vertices computed each frame; `meshesSkinned`) and
+  items with a key-frame blend (the mesh cache's per-frame items, whose weight changes every frame;
+  `meshesPerFrame`), since their content changes every frame; B7 draws both per frame. Also pending meshes and cut
+  views.
+- **Materials:** one per item, as many as the mesh has (a car has more than four), in `ViewOnList::materials` and
+  `SceneFrame::materials`, each instance pointing at its range.
+- **Texture identity:** the front end keeps texture id -> identity (`textureIdentity(id)`, setTexture's key) next
+  to its texture map, so a material keeps its id after an eviction (lane A's file, lane A reviews).
+- Depends: B5, A10. Acceptance:
+  - `CTEST`: the table (same key, same id; eviction; counters); `assign` on a synthetic list with two instances
+    sharing a mesh, and an instance whose jobs are interleaved with a callback's;
+  - on `race_boot.cap` with the split on: materials and meshes per race frame reported (expect a few hundred
+    materials); the same object (`InstanceData::object`) keeps its mesh and material ids across race frames,
+    counted; new meshes per frame after the race's first 300 frames near 0 outside the per-frame ones (after
+    the first lap, for a lap-long capture or a live session);
+  - `PERF`: the front-end thread's added time with the split on reported, at most 0.5 ms a race frame;
+  - `ORIG` and `PRESETS` identical.
 
 **B7: Parity view renderer (L).** `platform/render/modern/parity_view.cpp`, `shaders/modern_parity.*`: draws a
 view's instances from the mesh cache with GT4's lighting per vertex (the bodies of `gsn_models.comp`), at 1x, with
