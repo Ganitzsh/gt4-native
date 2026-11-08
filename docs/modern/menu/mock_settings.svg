@@ -1,0 +1,156 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+  <!-- Lane M mockup: the settings hub, Graphics tab. Our own drawing: no game imagery, logos or marks. -->
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8E959E"/><stop offset="0.55" stop-color="#C9CCD0"/><stop offset="1" stop-color="#55585D"/>
+    </linearGradient>
+    <linearGradient id="road" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4A4C50"/><stop offset="1" stop-color="#2B2C2F"/>
+    </linearGradient>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#E3E5E8"/><stop offset="1" stop-color="#A9ADB3"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3B3E44"/><stop offset="1" stop-color="#1C1D20"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="6" stdDeviation="6" flood-color="#000" flood-opacity="0.45"/>
+    </filter>
+    <style>
+      .title { font: italic 800 64px 'Saira Semi Expanded', 'Arial Black', Arial, sans-serif; fill: #F4F4F2; }
+      .sect { font: italic 700 26px 'Saira Semi Expanded', Arial, sans-serif; fill: #F29A1F; letter-spacing: 2px; }
+      .row { font: 500 30px 'Saira Semi Expanded', Arial, sans-serif; fill: #F4F4F2; }
+      .val { font: 500 30px 'Saira Semi Expanded', Arial, sans-serif; fill: #B9BCC2; }
+      .sel { fill: #F29A1F; }
+      .help { font: 400 30px 'Saira', Arial, sans-serif; fill: #F4F4F2; letter-spacing: 1.5px; }
+      .small { font: 600 20px 'Saira Semi Expanded', Arial, sans-serif; letter-spacing: 1px; }
+      .tab { font: italic 700 22px 'Saira Semi Expanded', Arial, sans-serif; fill: #F4F4F2; }
+      .card { font: 400 24px 'Saira', Arial, sans-serif; fill: #D8DADF; }
+    </style>
+  </defs>
+
+  <!-- the game frame behind, dimmed (an abstract road of our own) -->
+  <rect width="1920" height="1080" fill="url(#sky)"/>
+  <polygon points="0,1080 1920,1080 1140,560 780,560" fill="url(#road)"/>
+  <polygon points="952,560 968,560 1010,1080 910,1080" fill="#D9D9D6" opacity="0.5"/>
+  <rect width="1920" height="1080" fill="#000" opacity="0.6"/>
+
+  <!-- top bar -->
+  <rect width="1920" height="112" fill="#000" opacity="0.88"/>
+  <text x="80" y="80" class="title">Settings</text>
+  <g transform="translate(1390,34)">
+    <rect width="150" height="46" fill="#E8C21C"/><text x="75" y="31" text-anchor="middle" class="small" fill="#0B0B0C">PRESET</text>
+    <rect x="150" width="300" height="46" fill="#E9EAEC"/><text x="300" y="31" text-anchor="middle" class="small" fill="#0B0B0C">HIGH</text>
+  </g>
+
+  <!-- tabs: icon tiles on plinths -->
+  <g transform="translate(80,138)">
+    <g filter="url(#shadow)">
+      <rect x="0" width="108" height="96" rx="10" fill="url(#tile)"/>
+      <rect x="128" width="108" height="96" rx="10" fill="url(#tile)"/>
+      <rect x="256" width="108" height="96" rx="10" fill="url(#tile)"/>
+      <rect x="384" width="108" height="96" rx="10" fill="url(#tile)"/>
+      <rect x="512" width="108" height="96" rx="10" fill="url(#tile)"/>
+      <rect x="640" width="108" height="96" rx="10" fill="url(#tile)"/>
+      <rect x="768" width="108" height="96" rx="10" fill="url(#tile)"/>
+      <rect x="896" width="108" height="96" rx="10" fill="url(#tile)"/>
+      <rect x="1024" width="108" height="96" rx="10" fill="url(#tile)"/>
+    </g>
+    <!-- game: flag -->
+    <g transform="translate(30,20)"><rect x="0" width="4" height="58" fill="#2A2C30"/>
+      <rect x="4" width="44" height="30" fill="#0B0B0C"/><rect x="4" width="11" height="10" fill="#E9EAEC"/>
+      <rect x="26" width="11" height="10" fill="#E9EAEC"/><rect x="15" y="10" width="11" height="10" fill="#E9EAEC"/>
+      <rect x="37" y="10" width="11" height="10" fill="#E9EAEC"/><rect x="4" y="20" width="11" height="10" fill="#E9EAEC"/>
+      <rect x="26" y="20" width="11" height="10" fill="#E9EAEC"/></g>
+    <!-- graphics: a lens/aperture, selected -->
+    <rect x="128" y="-6" width="108" height="108" rx="12" fill="none" stroke="#F29A1F" stroke-width="5"/>
+    <g transform="translate(182,48)"><circle r="30" fill="#2A2C30"/><circle r="20" fill="#5D7FA6"/><circle r="9" fill="#0B0B0C"/>
+      <circle cx="-7" cy="-8" r="5" fill="#E9EAEC" opacity="0.8"/></g>
+    <!-- display: monitor -->
+    <g transform="translate(278,22)"><rect width="64" height="42" rx="3" fill="#2A2C30"/><rect x="5" y="5" width="54" height="32" fill="#7E8D9E"/>
+      <rect x="26" y="42" width="12" height="10" fill="#2A2C30"/><rect x="16" y="50" width="32" height="5" fill="#2A2C30"/></g>
+    <!-- image: half-tone sun -->
+    <g transform="translate(438,48)"><circle r="26" fill="#2A2C30"/><path d="M0,-26 A26,26 0 0 1 0,26 Z" fill="#E8C21C"/></g>
+    <!-- controls: generic pad -->
+    <g transform="translate(530,30)"><path d="M14,8 H58 C70,8 76,22 78,40 C80,52 70,56 62,46 L54,36 H18 L10,46 C2,56 -8,52 -6,40 C-4,22 2,8 14,8 Z" fill="#2A2C30"/>
+      <circle cx="20" cy="22" r="6" fill="#9A9DA3"/><circle cx="52" cy="22" r="6" fill="#9A9DA3"/></g>
+    <!-- audio: speaker -->
+    <g transform="translate(668,26)"><path d="M0,16 H14 L32,2 V54 L14,40 H0 Z" fill="#2A2C30"/>
+      <path d="M40,14 Q52,28 40,42" fill="none" stroke="#2A2C30" stroke-width="5"/></g>
+    <!-- hud: gauge -->
+    <g transform="translate(822,54)"><path d="M-30,0 A30,30 0 0 1 30,0" fill="none" stroke="#2A2C30" stroke-width="8"/>
+      <line x1="0" y1="0" x2="18" y2="-20" stroke="#D8452B" stroke-width="5"/><circle r="5" fill="#2A2C30"/></g>
+    <!-- accessibility: open circle figure -->
+    <g transform="translate(950,48)"><circle r="28" fill="none" stroke="#2A2C30" stroke-width="5"/><circle cy="-13" r="5" fill="#2A2C30"/>
+      <path d="M-16,-4 H16 M0,-4 V10 L-9,22 M0,10 L9,22" stroke="#2A2C30" stroke-width="5" fill="none"/></g>
+    <!-- system: gear -->
+    <g transform="translate(1078,48)"><circle r="20" fill="none" stroke="#2A2C30" stroke-width="10" stroke-dasharray="8 5"/><circle r="9" fill="#2A2C30"/></g>
+    <text x="182" y="132" text-anchor="middle" class="tab" fill="#F29A1F" style="fill:#F29A1F">Graphics</text>
+    <text x="-50" y="60" class="small" fill="#B9BCC2">LB</text><text x="1150" y="60" class="small" fill="#B9BCC2">RB</text>
+  </g>
+
+  <!-- list -->
+  <g transform="translate(80,320)">
+    <text x="0" y="0" class="sect">QUALITY</text>
+    <g transform="translate(0,16)">
+      <rect width="1080" height="58" fill="#FFF" opacity="0.06"/>
+      <text x="40" y="40" class="row">Preset</text><text x="1050" y="40" text-anchor="end" class="val">High</text>
+      <rect y="58" width="1080" height="58" fill="#FFF" opacity="0.18"/>
+      <polygon points="8,76 8,98 24,87" fill="#F29A1F"/>
+      <text x="40" y="98" class="row sel">Resolution scale</text>
+      <text x="1050" y="98" text-anchor="end" class="row sel">&#8249;  77 %  &#8250;</text>
+      <rect y="116" width="1080" height="58" fill="#FFF" opacity="0.06"/>
+      <text x="40" y="156" class="row">Upscaler</text><text x="1050" y="156" text-anchor="end" class="val">AMD FSR 1</text>
+      <rect y="174" width="1080" height="58" fill="#FFF" opacity="0.10"/>
+      <text x="40" y="214" class="row">Sharpening</text>
+      <rect x="690" y="198" width="260" height="6" fill="#55585D"/><rect x="690" y="198" width="52" height="6" fill="#F29A1F"/>
+      <rect x="736" y="190" width="12" height="22" fill="#F4F4F2"/><text x="1050" y="214" text-anchor="end" class="val">20 %</text>
+      <rect y="232" width="1080" height="58" fill="#FFF" opacity="0.06"/>
+      <text x="40" y="272" class="row">Anti-aliasing</text><text x="1050" y="272" text-anchor="end" class="val">TAA</text>
+    </g>
+    <text x="0" y="350" class="sect">DETAIL</text>
+    <g transform="translate(0,366)">
+      <rect width="1080" height="58" fill="#FFF" opacity="0.06"/>
+      <text x="40" y="40" class="row">Rear-view mirror</text><text x="1050" y="40" text-anchor="end" class="val">High detail</text>
+      <rect y="58" width="1080" height="58" fill="#FFF" opacity="0.10"/>
+      <text x="40" y="98" class="row">Race frames</text>
+      <rect x="560" y="74" width="150" height="32" fill="#E8C21C"/><text x="635" y="97" text-anchor="middle" class="small" fill="#0B0B0C">NEXT RACE</text>
+      <text x="1050" y="98" text-anchor="end" class="val">Whole frames</text>
+      <rect y="116" width="1080" height="58" fill="#FFF" opacity="0.06"/>
+      <text x="40" y="156" class="row" opacity="0.45">Ambient occlusion</text>
+      <text x="1050" y="156" text-anchor="end" class="val" opacity="0.45">Not used by this renderer</text>
+      <rect y="174" width="1080" height="58" fill="#FFF" opacity="0.10"/>
+      <text x="40" y="214" class="row">Advanced</text><text x="1050" y="214" text-anchor="end" class="val">&#9662;</text>
+    </g>
+  </g>
+
+  <!-- detail panel: the preset card -->
+  <g transform="translate(1220,320)" filter="url(#shadow)">
+    <rect width="620" height="620" fill="url(#card)" opacity="0.92"/>
+    <rect width="620" height="4" fill="#F29A1F"/>
+    <!-- illustration placeholder: our own abstract road and car wedge -->
+    <rect x="30" y="30" width="560" height="280" fill="#6D737B"/>
+    <polygon points="30,310 590,310 380,160 240,160" fill="#3A3C40"/>
+    <polygon points="250,250 370,250 390,280 230,280" fill="#E9EAEC"/>
+    <polygon points="270,232 350,232 370,250 250,250" fill="#9A9DA3"/>
+    <text x="30" y="364" class="sect" style="fill:#F4F4F2">RESOLUTION SCALE</text>
+    <text x="30" y="410" class="card">The game is drawn at 77 % of your screen's</text>
+    <text x="30" y="442" class="card">resolution, then upscaled. Lower is faster.</text>
+    <text x="30" y="498" class="card" style="fill:#B9BCC2">Applies at once.</text>
+    <text x="30" y="560" class="card" style="fill:#B9BCC2">Render 2957 x 1663  ->  Output 3840 x 2160</text>
+  </g>
+
+  <!-- bottom bar -->
+  <rect y="972" width="1920" height="108" fill="#000" opacity="0.88"/>
+  <text x="80" y="1036" class="help">Fewer pixels drawn, then upscaled to your screen.</text>
+  <g transform="translate(1290,1008)" class="small">
+    <circle cx="16" cy="18" r="16" fill="#E9EAEC"/><text x="16" y="25" text-anchor="middle" fill="#0B0B0C">A</text>
+    <text x="42" y="25" fill="#F4F4F2">Change</text>
+    <circle cx="166" cy="18" r="16" fill="#E9EAEC"/><text x="166" y="25" text-anchor="middle" fill="#0B0B0C">B</text>
+    <text x="192" y="25" fill="#F4F4F2">Back</text>
+    <circle cx="296" cy="18" r="16" fill="#E9EAEC"/><text x="296" y="25" text-anchor="middle" fill="#0B0B0C">X</text>
+    <text x="322" y="25" fill="#F4F4F2">Reset</text>
+    <rect x="420" y="2" width="76" height="32" rx="6" fill="#E9EAEC"/><text x="458" y="25" text-anchor="middle" fill="#0B0B0C">LB RB</text>
+    <text x="508" y="25" fill="#F4F4F2">Tabs</text>
+  </g>
+</svg>

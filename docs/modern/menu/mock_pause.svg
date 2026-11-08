@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+  <!-- Lane M mockup: the native race pause page. Our own drawing: no game imagery, logos or marks. -->
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6F7A88"/><stop offset="0.5" stop-color="#B7BCC3"/><stop offset="1" stop-color="#3F4246"/>
+    </linearGradient>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#E3E5E8"/><stop offset="1" stop-color="#A9ADB3"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="8" stdDeviation="7" flood-color="#000" flood-opacity="0.5"/>
+    </filter>
+    <style>
+      .title { font: italic 800 72px 'Saira Semi Expanded', 'Arial Black', Arial, sans-serif; fill: #F4F4F2; }
+      .lab { font: italic 700 28px 'Saira Semi Expanded', Arial, sans-serif; fill: #F4F4F2; }
+      .help { font: 400 30px 'Saira', Arial, sans-serif; fill: #F4F4F2; letter-spacing: 1.5px; }
+      .small { font: 600 20px 'Saira Semi Expanded', Arial, sans-serif; letter-spacing: 1px; }
+      .hud { font: italic 800 40px 'Saira Semi Expanded', Arial, sans-serif; fill: #F4F4F2; opacity: 0.55; }
+    </style>
+  </defs>
+
+  <!-- the paused race behind (abstract), dimmed -->
+  <rect width="1920" height="1080" fill="url(#sky)"/>
+  <polygon points="-200,1080 2120,1080 1100,520 820,520" fill="#3A3B3E"/>
+  <polygon points="930,1080 990,1080 962,520 958,520" fill="#D9D9D6" opacity="0.4"/>
+  <polygon points="860,860 1060,860 1100,930 820,930" fill="#C8CBD0"/>
+  <polygon points="890,820 1030,820 1060,860 860,860" fill="#8E9298"/>
+  <text x="80" y="90" class="hud">2 / 5</text><text x="1840" y="90" text-anchor="end" class="hud">1:42.318</text>
+  <rect width="1920" height="1080" fill="#000" opacity="0.55"/>
+
+  <!-- centre band -->
+  <rect y="330" width="1920" height="400" fill="#0B0B0C" opacity="0.78"/>
+  <rect y="330" width="1920" height="3" fill="#F29A1F"/>
+  <text x="960" y="430" text-anchor="middle" class="title">Pause</text>
+
+  <!-- item tiles -->
+  <g transform="translate(470,480)">
+    <g filter="url(#shadow)">
+      <rect x="0" width="150" height="130" rx="14" fill="url(#tile)"/>
+      <rect x="200" width="150" height="130" rx="14" fill="url(#tile)"/>
+      <rect x="400" width="150" height="130" rx="14" fill="url(#tile)"/>
+      <rect x="600" width="150" height="130" rx="14" fill="url(#tile)"/>
+      <rect x="800" width="150" height="130" rx="14" fill="url(#tile)"/>
+    </g>
+    <!-- continue -->
+    <polygon points="55,35 55,95 105,65" fill="#2E9B4F"/>
+    <!-- retry -->
+    <g transform="translate(275,65)"><path d="M-30,0 A30,30 0 1 0 -18,-24" fill="none" stroke="#2A2C30" stroke-width="10"/>
+      <polygon points="-30,-36 -6,-30 -24,-12" fill="#2A2C30"/></g>
+    <!-- settings: sliders, selected -->
+    <rect x="394" y="-6" width="162" height="142" rx="16" fill="none" stroke="#F29A1F" stroke-width="6"/>
+    <g transform="translate(435,30)"><rect width="80" height="8" y="6" fill="#2A2C30"/><rect x="46" width="14" height="20" fill="#F29A1F"/>
+      <rect width="80" height="8" y="32" fill="#2A2C30"/><rect x="16" y="26" width="14" height="20" fill="#2A2C30"/>
+      <rect width="80" height="8" y="58" fill="#2A2C30"/><rect x="58" y="52" width="14" height="20" fill="#2A2C30"/></g>
+    <!-- screen: half sun -->
+    <g transform="translate(675,65)"><circle r="34" fill="#2A2C30"/><path d="M0,-34 A34,34 0 0 1 0,34 Z" fill="#E8C21C"/></g>
+    <!-- exit: door and arrow -->
+    <g transform="translate(840,28)"><rect width="46" height="74" fill="#2A2C30"/><rect x="6" y="6" width="34" height="62" fill="#9A9DA3"/>
+      <path d="M40,38 H76" stroke="#D8452B" stroke-width="9"/><polygon points="72,24 92,38 72,52" fill="#D8452B"/></g>
+    <polygon points="465,166 485,166 475,152" fill="#F29A1F"/>
+    <text x="75" y="210" text-anchor="middle" class="lab">Continue</text>
+    <text x="275" y="210" text-anchor="middle" class="lab">Retry</text>
+    <text x="475" y="210" text-anchor="middle" class="lab" style="fill:#F29A1F">Settings</text>
+    <text x="675" y="210" text-anchor="middle" class="lab">Screen</text>
+    <text x="875" y="210" text-anchor="middle" class="lab">Exit</text>
+  </g>
+
+  <!-- bottom bar -->
+  <rect y="972" width="1920" height="108" fill="#000" opacity="0.88"/>
+  <text x="80" y="1036" class="help">Graphics, display, controls, audio and more. The race stays paused.</text>
+  <g transform="translate(1500,1008)" class="small">
+    <circle cx="16" cy="18" r="16" fill="#E9EAEC"/><text x="16" y="25" text-anchor="middle" fill="#0B0B0C">A</text>
+    <text x="42" y="25" fill="#F4F4F2">Open</text>
+    <circle cx="156" cy="18" r="16" fill="#E9EAEC"/><text x="156" y="25" text-anchor="middle" fill="#0B0B0C">B</text>
+    <text x="182" y="25" fill="#F4F4F2">Continue</text>
+  </g>
+</svg>

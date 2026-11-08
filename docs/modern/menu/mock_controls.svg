@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+  <!-- Lane M mockup: Controls > Gamepad 1 > Steering response (D12), over a menu background. Our own drawing. -->
+  <defs>
+    <linearGradient id="paper" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#E9EAEC"/><stop offset="1" stop-color="#BFC2C7"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3B3E44"/><stop offset="1" stop-color="#1C1D20"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="6" stdDeviation="6" flood-color="#000" flood-opacity="0.45"/>
+    </filter>
+    <style>
+      .title { font: italic 800 56px 'Saira Semi Expanded', 'Arial Black', Arial, sans-serif; fill: #F4F4F2; }
+      .crumb { font: italic 600 26px 'Saira Semi Expanded', Arial, sans-serif; fill: #B9BCC2; }
+      .sect { font: italic 700 26px 'Saira Semi Expanded', Arial, sans-serif; fill: #F29A1F; letter-spacing: 2px; }
+      .row { font: 500 30px 'Saira Semi Expanded', Arial, sans-serif; fill: #0B0B0C; }
+      .val { font: 500 30px 'Saira Semi Expanded', Arial, sans-serif; fill: #3A3C40; }
+      .sel { fill: #F29A1F; }
+      .help { font: 400 30px 'Saira', Arial, sans-serif; fill: #F4F4F2; letter-spacing: 1.5px; }
+      .small { font: 600 20px 'Saira Semi Expanded', Arial, sans-serif; letter-spacing: 1px; }
+      .axis { font: 400 20px 'Saira', Arial, sans-serif; fill: #B9BCC2; }
+    </style>
+  </defs>
+
+  <!-- pale atlas-like background with thin line work (our own) -->
+  <rect width="1920" height="1080" fill="url(#paper)"/>
+  <g stroke="#9A9DA3" stroke-width="1.5" fill="none" opacity="0.6">
+    <path d="M-50,700 C400,500 900,900 1400,600 S2000,400 2100,450"/>
+    <path d="M-50,760 C400,560 900,960 1400,660 S2000,460 2100,510"/>
+    <line x1="640" y1="0" x2="640" y2="1080"/><line x1="1280" y1="0" x2="1280" y2="1080"/>
+    <line x1="0" y1="360" x2="1920" y2="360"/><line x1="0" y1="720" x2="1920" y2="720"/>
+  </g>
+
+  <rect width="1920" height="112" fill="#000" opacity="0.9"/>
+  <text x="80" y="76" class="title">Controls</text>
+  <text x="420" y="74" class="crumb">Gamepad 1  /  Steering and pedals</text>
+  <g transform="translate(1560,30)"><rect width="280" height="50" fill="#E9EAEC"/>
+    <text x="140" y="33" text-anchor="middle" class="small" fill="#0B0B0C">PORT 1  CONNECTED</text></g>
+
+  <!-- rows on light bands -->
+  <g transform="translate(80,180)">
+    <text x="0" y="0" class="sect">STEERING</text>
+    <g transform="translate(0,16)">
+      <rect width="980" height="58" fill="#FFF" opacity="0.55"/>
+      <text x="40" y="40" class="row">Response</text><text x="950" y="40" text-anchor="end" class="val">Modern</text>
+      <rect y="58" width="980" height="58" fill="#FFF" opacity="0.35"/>
+      <text x="40" y="98" class="row">Inner dead zone</text><text x="950" y="98" text-anchor="end" class="val">5 %</text>
+      <rect y="116" width="980" height="58" fill="#0B0B0C" opacity="0.85"/>
+      <polygon points="8,134 8,156 24,145" fill="#F29A1F"/>
+      <text x="40" y="156" class="row sel">Linearity</text>
+      <text x="950" y="156" text-anchor="end" class="row sel">&#8249;  1.4  &#8250;</text>
+      <rect y="174" width="980" height="58" fill="#FFF" opacity="0.35"/>
+      <text x="40" y="214" class="row">Sensitivity</text><text x="950" y="214" text-anchor="end" class="val">1.0</text>
+      <rect y="232" width="980" height="58" fill="#FFF" opacity="0.55"/>
+      <text x="40" y="272" class="row">Saturation</text><text x="950" y="272" text-anchor="end" class="val">100 %</text>
+      <rect y="290" width="980" height="58" fill="#FFF" opacity="0.35"/>
+      <text x="40" y="330" class="row">Smoothing</text><text x="950" y="330" text-anchor="end" class="val">0 ms</text>
+      <rect y="348" width="980" height="58" fill="#FFF" opacity="0.55"/>
+      <text x="40" y="388" class="row">Keyboard ramp</text><text x="950" y="388" text-anchor="end" class="val">150 ms</text>
+    </g>
+    <text x="0" y="470" class="sect">PEDALS</text>
+    <g transform="translate(0,486)">
+      <rect width="980" height="58" fill="#FFF" opacity="0.55"/>
+      <text x="40" y="40" class="row">Trigger travel</text><text x="950" y="40" text-anchor="end" class="val">Game</text>
+      <rect y="58" width="980" height="58" fill="#FFF" opacity="0.35"/>
+      <text x="40" y="98" class="row">Dead zone</text><text x="950" y="98" text-anchor="end" class="val">5 %</text>
+      <rect y="116" width="980" height="58" fill="#FFF" opacity="0.55"/>
+      <text x="40" y="156" class="row">Button functions</text><text x="950" y="156" text-anchor="end" class="val">In GT4's options  &#8250;</text>
+    </g>
+  </g>
+
+  <!-- live plot -->
+  <g transform="translate(1120,180)" filter="url(#shadow)">
+    <rect width="720" height="720" fill="url(#card)" opacity="0.95"/>
+    <rect width="720" height="4" fill="#F29A1F"/>
+    <text x="30" y="56" class="sect" style="fill:#F4F4F2">STICK  ->  STEERING</text>
+    <g transform="translate(80,110)">
+      <rect width="560" height="500" fill="none" stroke="#55585D" stroke-width="2"/>
+      <line x1="0" y1="500" x2="560" y2="0" stroke="#55585D" stroke-width="2" stroke-dasharray="8 8"/>
+      <path d="M0,500 L28,500 C120,480 260,380 420,180 L532,0 L560,0" fill="none" stroke="#F29A1F" stroke-width="5"/>
+      <circle cx="300" cy="330" r="10" fill="#F4F4F2"/>
+      <line x1="300" y1="500" x2="300" y2="330" stroke="#F4F4F2" stroke-width="1.5" stroke-dasharray="4 4"/>
+      <text x="0" y="536" class="axis">0</text><text x="560" y="536" text-anchor="end" class="axis">Stick 100 %</text>
+      <text x="-12" y="8" text-anchor="end" class="axis">Lock</text>
+    </g>
+    <text x="30" y="690" class="axis">Live: stick 54 %  ->  lock 34 %</text>
+  </g>
+
+  <rect y="972" width="1920" height="108" fill="#000" opacity="0.88"/>
+  <text x="80" y="1036" class="help">Above 1: finer control near the centre, full lock still at the end.</text>
+  <g transform="translate(1420,1008)" class="small">
+    <circle cx="16" cy="18" r="16" fill="#E9EAEC"/><text x="16" y="25" text-anchor="middle" fill="#0B0B0C">B</text>
+    <text x="42" y="25" fill="#F4F4F2">Back</text>
+    <circle cx="146" cy="18" r="16" fill="#E9EAEC"/><text x="146" y="25" text-anchor="middle" fill="#0B0B0C">X</text>
+    <text x="172" y="25" fill="#F4F4F2">Reset</text>
+  </g>
+</svg>
