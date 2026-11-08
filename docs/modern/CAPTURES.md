@@ -25,7 +25,7 @@ build/host-windows-Release/gt4_host.exe --session-dir build/sessions/NAME
 
 The machine is shared by every lane, so heavy jobs go through slots (a slot is a folder made with `mkdir`, which
 fails while someone holds it: wait and retry; `owner.txt` inside with your lane and the time; removed when the job
-exits, on failure too). Do not start one under 6 GB available, free plus standby
+exits, on failure too). Do not start one under 8 GB available, free plus standby
 (`(Get-CimInstance Win32_PerfFormattedData_PerfOS_Memory).AvailableMBytes`).
 
 Take them with `tools/slot.py` (`py -I tools/slot.py --slot heavy --what TEXT --log FILE -- CMD ...`; `--help`), every

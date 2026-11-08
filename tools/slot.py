@@ -10,7 +10,7 @@ docs/modern/CAPTURES.md lists them. A slot is a folder under GT4_LOCKS (default:
 owner.txt in it says who holds it, its first line for people, its second "pid=N start=T" (the holder and its start
 time) for the waiters.
 
-Waits until N GB are available (default 6) and every slot asked for is free, takes them together (a partial hold is
+Waits until N GB are available (default 8) and every slot asked for is free, takes them together (a partial hold is
 given back, never kept while waiting), runs each command in turn (stops at the first failure), and removes the slots
 on exit.
 
@@ -221,7 +221,7 @@ def try_take(kinds, what):
     return held
 
 
-def take(kinds, what, min_gb=6.0, poll=30.0):
+def take(kinds, what, min_gb=8.0, poll=30.0):
     while True:
         if available_gb() >= min_gb:
             held = try_take(kinds, what)
@@ -256,7 +256,7 @@ def kill_with_me():
 
 
 @contextlib.contextmanager
-def held(kinds, what, min_gb=6.0):
+def held(kinds, what, min_gb=8.0):
     paths = take(kinds, what, min_gb)
     try:
         yield [os.path.basename(p) for p in paths]
@@ -361,7 +361,8 @@ def main():
     ap.add_argument("--log", required=True, help="the commands' output, appended")
     ap.add_argument("--cwd")
     ap.add_argument("--env", action="append", default=[], help="K=V for the commands")
-    ap.add_argument("--min-gb", type=float, default=6.0, help="the available memory to wait for (default 6)")
+    ap.add_argument("--min-gb", type=float, default=8.0,
+                    help="the available memory (free plus standby) to wait for (default 8)")
     ap.add_argument("cmd", nargs=argparse.REMAINDER)
     sys.exit(run(ap.parse_args()))
 
