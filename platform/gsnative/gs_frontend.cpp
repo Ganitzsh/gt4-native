@@ -2849,11 +2849,13 @@ void GsFrontend::sceneFrame(std::unique_ptr<scene::SceneFrame> f) {
     c.materialsNew += sceneCacheCounters.materialsNew;
     c.meshesSkinned += sceneCacheCounters.meshesSkinned;
     c.meshesPerFrame += sceneCacheCounters.meshesPerFrame;
+    c.meshesOutOfBinding += sceneCacheCounters.meshesOutOfBinding;
     stats.meshesNew += sceneCacheCounters.meshesNew;   // (the decoder totals its frames before these are filled)
     stats.meshesPending += sceneCacheCounters.meshesPending;
     stats.materialsNew += sceneCacheCounters.materialsNew;
     stats.meshesSkinned += sceneCacheCounters.meshesSkinned;
     stats.meshesPerFrame += sceneCacheCounters.meshesPerFrame;
+    stats.meshesOutOfBinding += sceneCacheCounters.meshesOutOfBinding;
     // GT4_SCENE_CACHE_LOG=1 (B6's acceptance): one line a scene frame: its instances and items given ids, its distinct
     // materials, what the caches found, the front-end time it took.
     static const bool cacheLog = [] { const char* e = std::getenv("GT4_SCENE_CACHE_LOG"); return e && *e == '1'; }();

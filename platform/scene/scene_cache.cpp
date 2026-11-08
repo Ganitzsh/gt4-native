@@ -117,6 +117,12 @@ InstanceIds SceneCache::assign(const InstanceData& instance, const ItemSource* i
         ++counters.meshesPerFrame;
         return ids;
     }
+    // Out of the binding and never substituted (CONTRACTS a.5.7): no mesh to decode for them. Only while they stay out:
+    // the reflection's meshes are static course models, so if B9 makes the reflection a kViewReflection view, its skip goes.
+    if (instance.flags & (gfx::scene::kInstLightMap | gfx::scene::kInstReflection)) {
+        ++counters.meshesOutOfBinding;
+        return ids;
+    }
     refs.resize(count);
     for (size_t i = 0; i < count; ++i) refs[i] = items[i].batch;
     MeshRequest outcome = MeshRequest::Ready;

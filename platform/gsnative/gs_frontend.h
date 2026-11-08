@@ -389,6 +389,7 @@ public:
         // thread's added cost, PERF: at most 0.5 ms a race frame)
         uint64_t sceneInstances = 0, sceneItems = 0;
         uint64_t meshesNew = 0, meshesPending = 0, materialsNew = 0, meshesSkinned = 0, meshesPerFrame = 0;   // totals
+        uint64_t meshesOutOfBinding = 0;   // (light maps, the road reflection: never decoded)
         double sceneCacheMicroseconds = 0.0;
         double sceneCacheCpuMicroseconds = 0.0;   // the same span in the thread's CPU time (scene::threadCpuMicroseconds)
         // F2b: texture summaries made at decode (textureSummary), and their time on the front end

@@ -88,6 +88,16 @@ int main() {
                "a billboard run: mesh 0, per-frame, no mesh asked for");
         expect(ids.materialCount == 1 && materials.size() == 1 && materials[0] != 0 && counters.materialsNew == 1,
                "a billboard run: its material made");
+        for (const uint16_t flag : {uint16_t(gt4::gfx::scene::kInstLightMap), uint16_t(gt4::gfx::scene::kInstReflection)}) {
+            gt4::scene::InstanceData out;
+            out.flags = flag;
+            counters = {};
+            materials.clear();
+            const gt4::scene::InstanceIds o = cache.assign(out, &item, 1, materials, counters);
+            expect(o.mesh == 0 && counters.meshesOutOfBinding == 1 && counters.meshesNew == 0 && o.materialCount == 1 &&
+                       cache.meshes().stats().requests == 0,
+                   "a light map or the road reflection: mesh 0, no mesh asked for, its material made");
+        }
         gt4::scene::InstanceData course;   // (the same item without the flag: a mesh asked for)
         counters = {};
         cache.assign(course, &item, 1, materials, counters);

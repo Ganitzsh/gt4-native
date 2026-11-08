@@ -108,6 +108,9 @@ struct SceneCounters {
     // billboard run (kInstBillboard) or an item with a key-frame blend (MeshCache's per-frame items). B7 leaves them on the
     // GS path
     uint64_t meshesSkinned = 0, meshesPerFrame = 0;
+    // ... and those never substituted, so never decoded: a car's light map (kInstLightMap) and the road reflection
+    // (kInstReflection), out of the binding (CONTRACTS.md a.5.7); their materials are still made (F2b's classifier)
+    uint64_t meshesOutOfBinding = 0;
     void add(const SceneCounters& o);   // running totals
     // the gates of CONTRACTS.md a.7 that hold on any stream (not the ones that need the front end)
     bool errorFree() const {

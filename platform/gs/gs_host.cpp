@@ -1281,7 +1281,8 @@ std::string GsHost::summary() const {
                 << " us a scene frame; thread CPU " << static_cast<uint64_t>(s.sceneCacheCpuMicroseconds) << " us, "
                 << (s.sceneFrames ? s.sceneCacheCpuMicroseconds / double(s.sceneFrames) : 0.0)
                 << " us a scene frame, cycles calibrated once against the steady clock); instances' meshes new " << s.meshesNew << ", pending " << s.meshesPending << ", skinned "
-                << s.meshesSkinned << ", per-frame " << s.meshesPerFrame << ", materials new " << s.materialsNew
+                << s.meshesSkinned << ", per-frame " << s.meshesPerFrame << ", out of the binding " << s.meshesOutOfBinding
+                << ", materials new " << s.materialsNew
                 << "; meshes " << m.decoded << " decoded, " << m.hits << " hits, " << m.perFrame << " per-frame, "
                 << m.evicted << " evicted, " << (m.bytes >> 20) << " MiB held; materials " << t.created << " made, " << t.held
                 << " held; objects " << o.objects << ", sightings with the same ids " << o.objectsSame << ", another mesh "

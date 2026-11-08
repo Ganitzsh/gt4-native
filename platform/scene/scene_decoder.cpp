@@ -80,6 +80,7 @@ void SceneCounters::add(const SceneCounters& o) {
     fallbackPipelinePending += o.fallbackPipelinePending; fallbackValidation += o.fallbackValidation;
     fallbackReadPending += o.fallbackReadPending; meshesNew += o.meshesNew; meshesPending += o.meshesPending;
     materialsNew += o.materialsNew; meshesSkinned += o.meshesSkinned; meshesPerFrame += o.meshesPerFrame;
+    meshesOutOfBinding += o.meshesOutOfBinding;
 }
 
 namespace {
