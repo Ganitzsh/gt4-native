@@ -167,8 +167,11 @@ enum ViewRole : uint8_t {
     kViewMirror = 2,       // render_back_mirror (00341E50)
     kViewEnvFace = 3,      // the car's environment map passes (0044E660 / 0044EB10); `pass` = face
     kViewReflection = 4,   // reserved: the road reflection, if B9 ever draws it as a view (today kInstReflection)
-    kViewShowroom = 5,     // showroom and event-screen car; `pass` = jitter pass 0..3
-    kViewPhoto = 6,        // Photo Travel / photo mode
+    kViewShowroom = 5,     // reserved, never sent: every jittered car view (garage, showroom, dealers) goes through
+                           //   00217058 and is kViewMenu; its passes are kMarkJitterPass pairs (R6, lane A)
+    kViewPhoto = 6,        // Photo Travel's preview (mPhotoViewFace virtual 70, game_src/func_001BD438.cpp), pass 0;
+                           //   the shot's tile passes are B9's to decide (views inside their frames, never a
+                           //   FrameBegin per pass)
     kViewHud = 7,          // 3D drawn by the HUD outside render_world (RaceRoundMeterBase 003BE3C8); never substituted
     kViewMenu = 8,         // menus' 3D (mRenderContextPS2::virtual_64 00217058: the Home garage car, small car views)
     kViewEnvCopy = 9,      // an env face's copy into the shared env map (0044E660, after the face's ViewEnd);
@@ -327,6 +330,11 @@ enum MarkerKind : uint16_t {
     kMarkFlareBegin = 7, kMarkFlareEnd = 8,           // the flare pass: 003B8848 / 003B88C8 samples and what it draws from them
     kMarkGlareBegin = 9, kMarkGlareEnd = 10,          // glare 003BADF8 (inside the post-effect pair)
     kMarkLampBandsBegin = 11, kMarkLampBandsEnd = 12, // reserved, never sent: no call site (A5b); N3 uses a B6 class
+    kMarkDofBegin = 13, kMarkDofEnd = 14,             // depth of field 0033E6E0 (its game_src copy): Photo Travel's
+                                                      //   preview and the race's Dive view
+    kMarkJitterPassBegin = 15, kMarkJitterPassEnd = 16, // one supersampling pass of 00216E78 (garage, showroom),
+                                                      //   from its game_src copy; the pass index is its order in
+                                                      //   the view, the count the number of pairs (R6)
 };
 struct Marker {
     Prefix prefix;
@@ -384,7 +392,7 @@ Where each record is sent (tickets in PLAN.md):
 | object identity | 00455708 (draft) sets a runtime-global "model context" that A2 reads | A4 |
 | `Light` | step 1a: 003B88C8's `entries2[]` (course lamps and warning lamps) and `entries[]` (car lamps), read right before 003B88C8 draws them (in 0033F2E8, inside the flare bracket; the course sources are added after 0033EAB8's method 0x3F0), tagged with the main view's id (a.5 rule 4); step 1b: each billboard of `BillboardSet__render` as a `kSrcBillboard` candidate (its entry's world position and item size through set 0); step 2: headlight spots from the car body (A9). A lamp named both by `entries2[]` and as a billboard gets one light (PLAN F2b) | A7 |
 | `Emitter` | 0x003E7A58, 0x003C1430, 0x003C2780 | A8 |
-| `Marker` | `kMarkPost*` at the start and end of render_post_effect (`game_src/func_0033F890.cpp`, virtual 105); `kMarkHud*` at the start and end of RaceBasic::render_panel (`game_src/func_0038B5A0.cpp`, which RaceSolitaire's calls and RaceSplitBattleBase's reaches per player). Both are reached through the race's vtable after `render_world`, so they are inside the kick's frame (a.5.1) | A5 |
+| `Marker` | `kMarkPost*` at the start and end of render_post_effect (`game_src/func_0033F890.cpp`, virtual 105); `kMarkHud*` at the start and end of RaceBasic::render_panel (`game_src/func_0038B5A0.cpp`, which RaceSolitaire's calls and RaceSplitBattleBase's reaches per player). Both are reached through the race's vtable after `render_world`, so they are inside the kick's frame (a.5.1). `kMarkDof*` around 0033E6E0's draws (`game_src/func_0033E6E0.cpp`); `kMarkJitterPass*` around each pass of 00216E78 (a new `game_src` copy) (R6). Every marker is sent between instances, outside any instance's runs (a Marker ends a.5.3's batch runs) | A5, A6 (R6) |
 | `Vehicle` | the kick (`send_frame_end`, `runtime/frame.cpp`), in `FrameEnd`'s own `GT4_REC_GFX` block, before `FrameEnd`: one per running car, in entrant order, each padded to whole qwords; fields from the car state D6 found (R14) | A9 (D6 emits, lane A reviews) |
 
 ### a.5 Ordering within a frame, and against the existing records
