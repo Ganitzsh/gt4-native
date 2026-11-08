@@ -345,9 +345,27 @@ The scene target's other draws between the view's passes (R5's clears, Z-only dr
     operation in both.
   - **Quirks kept** (lane B): the dot model with the next-normal bit (0x0290) adds the next vertex's N.L terms in
     batch order, so the mesh cache keeps a next normal per vertex for such items and welds on it too. Flat shading
-    takes the last vertex's colour: the provoking vertex set to last (`VK_EXT_provoking_vertex`; without it, the
-    colour duplicated per triangle; checked on the Odin's driver too). The clipping renderers' per-triangle hiding
-    and renderers 4 and 5's facing cull are the rasterizer's clip and cull mode.
+    takes the last vertex's colour: the provoking vertex set to last (`VK_EXT_provoking_vertex`; without it the
+    triangles are rotated, below). The clipping renderers' per-triangle hiding is part of the per-triangle decision
+    below.
+  - **The GS path's vertex order and per-triangle decisions** (lane B): the rasterizer interpolates Z from the
+    vertices in their order, so a strip's odd triangles turned to one winding gave a different Z at coplanar
+    layers. Parity draws each triangle in the GS path's order (the mesh's turned triangles turned back, from
+    `Mesh::turned`). The renderers' per-triangle decision is made per vertex for the triangle ending at it, as
+    `gsn_models.comp` does: facing (a precise, shared `homogeneousFacing`), the hidden test, the fog word with its
+    raise, and ADC. The raw vertex carries the two previous strip vertices and its strip position; `gt4FogWord`
+    (`gt4_transform.glsl`) is shared with `gsn_models.comp`. The ADC bit and the flat colour reach `gsn.frag`'s
+    parity variant from the provoking vertex, the strip's last.
+  - **One device feature:** `VK_EXT_provoking_vertex`, logged at device creation and in the parity line. Without
+    it the triangles are rotated (v, a, b): ADC stays exact, Z may differ.
+  - **Measured** (`race_boot.cap`, all 4,914 frames, precise shaders, against `render.scene = original` in the same
+    build, 17 frames sampled): at the `original` preset 16 identical and one 2 pixels apart by 1 level; at medium
+    8 identical and the rest at most 0.11 % apart (mostly 1 or 2 levels, at most 10), from medium's depth- and
+    history-based scene stage (occlusion, motion vectors, the temporal resolve), not the draws, which are equal at
+    `original` (being traced). 2,916,756 of 2,978,633 items from the mesh cache; 1,264 views not substituted (cut
+    or invalid); VAL clean. Raw vertices are 76 bytes (52 before the previous-vertex words): 8 MiB held at the
+    capture's end against the 512 MiB budget; the arena (76 + 16 MiB host-visible) exists only with
+    `render.scene = parity`.
   - **Where:** `GsnScene::executeRange`, at a Draw command holding such runs, only with `render.scene = parity`
     (`--set` only, never in a preset, named in the settings text as a parity check, not a mode). Without it
     nothing changes. A Draw can merge several jobs, of several instances (`model()` merges consecutive jobs of
@@ -453,7 +471,10 @@ on a80cfca + these tickets; CPU renderers' output identical x64 vs aarch64 on th
 **C6: aarch64 Linux runs on the AYN Odin 3 (M).** The aarch64 host on Armada Linux (Adreno 830, Mesa Turnip),
 under gamescope, with the x86-32 game under FEX. Windows ARM64 is not run (no device). Depends: C5, R4, C9 (live
 link with the game under Wine). Acceptance: race capture replay `ORIG` identical to x64; a live race session runs 5
-minutes at the Odin settings (1280 x 800); timings reported.
+minutes at the Odin settings (1280 x 800); timings reported; `VK_EXT_provoking_vertex` reported from the line the
+renderer logs at device creation (for B7's parity path), that line named in the owner's device list. Without it
+parity's triangles are rotated and its Z may differ: a B7 finding, not a C6 failure (parity is `--set` only). That
+line waits for B7, which adds the log.
 
 **C7: Host job system (M).** `platform/core/jobs.{h,cpp}`: work-stealing pool, fibre-free. Depends: none.
 Acceptance: `CTEST` (stress test, TSan build on Linux); used by B5 and B2b with `PRESETS` unchanged.
