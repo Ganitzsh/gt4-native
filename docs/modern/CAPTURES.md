@@ -60,6 +60,19 @@ says how many of its frames show a picture: a capture that replays black proves 
 | `menus_boot.cap` | 18,931 | from boot: the title menu over its attract video, Arcade > Time Trial > Original Circuits and City Courses, browsed | Recorded live from boot (14.5 GB) with a copy of `C:/Users/julie/gt4-native-game/build/r5_saves`, `--preset original`, interpolation and texture pack off. Windows (host frames, within a few VBlanks): title menu 6,450-8,050; Original Circuits row 12,900-15,050 (taps at about 13,600, 13,730, 13,860, 13,985, 14,110); City Courses row 17,200-18,700. A replay of it takes one heavy slot with a host from 70e7fdb on (both with an older one: over 2 GB). |
 | `race.cap`, `event.cap` (gt4-native-game/build/refcap) | 200, 85 | race-start flyover, event screen | **Replay black** (no display records): not usable until re-recorded (C10). |
 
+## Comparisons and timings
+
+A replay or session runs with `--fixed-step` (the default headless and with `--session-dir`): frame interpolation
+then counts presents instead of the wall clock, and the HD texture pack decodes each replacement at its first use
+instead of on its worker threads, so the same capture gives the same frames every run with both on
+(`tests/replay_determinism.py`; set `GT4_DETERMINISM_CAPTURE` to a capture with 3D, such as race7.cap, to run it).
+`tools/frame_diff.py` still turns both off by default.
+
+For timings (`--profile-json`, `tools/perf_report.py`), the synchronous decode stalls the GS front end on the frame
+where a pack texture is first used: keep `texture.hd_pack=off` for a perf comparison, or skip the start of the run
+(`--skip`) and compare runs that both have the pack on. A live game without `--fixed-step` loads the pack in the
+background as before; the host's "Texture pack:" line says which mode runs.
+
 ## Scripting a live session
 
 A scripted session runs the host with `--session-dir DIR`: it attaches a virtual pad and runs the commands it
