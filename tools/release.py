@@ -19,6 +19,10 @@ It makes files only and publishes nothing. In order:
    tools that built them) and RELEASE-NOTES-VERSION.md, a draft from CHANGELOG.md's newest section with the
    archives' names and SHA-256s and the device line. The steps' logs go to OUT/logs/.
 
+By hand before tagging (live checks this script can't make: they need the disc image and a save):
+- tools/photo_check.py with the archive's host and game: Photo Travel's photo is a picture, not black (0.1.0 shipped
+  it black: its tiles were read from GS memory, not the GPU).
+
 On this machine every build step takes its slot through tools/slot.py (the game slot, a heavy slot) and waits for
 --min-gb of available memory; --no-slots runs them at once (a machine without the slots' folder skips them too).
 """
