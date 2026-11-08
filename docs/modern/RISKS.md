@@ -178,7 +178,12 @@ in a debug colour; check by eye on cars, glass, chrome, course.
 
 ---
 
-## R9: The game's reads of its scene target (blocks B8)
+## R9: The game's reads of its scene target (B8's read switch: a table per reader)
+
+**Status:** no longer a blocker (the coordinator, 2026-11-08). With B8's in-place drawing, a list holding a read
+whose reader is marked GS-only draws that view on the GS path, so the read sees the PS2's picture. R9 fills that
+table reader by reader, GS-only by default; readers of Z alone are exact already (GT4's Z is kept). Readers that
+read every frame come first, before hybrid goes into presets.
 
 **Question.** The game reads pixels it drew (luminance probe 00330AE8, photo tiles 00333A00 / 00333E50, car
 thumbnails, the flare samples 00497EF8; GRAPHICS_API_PLAN.md section H, GS_BACKEND.md:144). In `hybrid` and

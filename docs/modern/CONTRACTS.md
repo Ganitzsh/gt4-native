@@ -449,20 +449,20 @@ Where each record is sent (tickets in PLAN.md):
    the runtime and never reach the host. At the host, `outsideFrame` counts any that do (a stream fault) and drops
    them.
 7. **Relation to the Light command.** The front end still decides where the Light command goes (`sceneRead`,
-   `gs_frontend.cpp:821`). A Light command on a target with a bound view substitutes that view. Several views can
-   bind the same target: in a race the rear-view mirror (view 5) is drawn into the scene target with a smaller
-   scissor (R5). The Light then substitutes the bound views in their order on the list, each within its own
-   rectangle; where rectangles overlap, the later view wins, as GT4 draws them (the mirror over the main view's
-   corner: the main view's rectangle is the whole target). The rectangle is the scissor its tagged draws used:
-   `ViewBegin::scissor` stays 0 (pgl sets the scissor with the view's first draws, after `ViewBegin`), so the front
-   end keeps the union of the SCISSORs of each bound view's tagged draws and publishes it as `ViewOnList::scissor`.
-   Not the projection's viewport: the mirror's scissor is tighter than its viewport.
+   `gs_frontend.cpp:821`). A bound view's items are substituted in place, at their own runs in GT4's order (B7, B8);
+   the Light command is where the scene stage lights them. Several views can bind the same target: in a race the
+   rear-view mirror (view 5) is drawn into the scene target with a smaller scissor (R5). In-place drawing keeps
+   their order by construction (the mirror over the main view's corner); the scene stage lights each view within its
+   own rectangle (the main view's rectangle is the whole target). The rectangle is the scissor its tagged draws
+   used: `ViewBegin::scissor` stays 0 (pgl sets the scissor with the view's first draws, after `ViewBegin`), so the
+   front end keeps the union of the SCISSORs of each bound view's tagged draws and publishes it as
+   `ViewOnList::scissor`. Not the projection's viewport: the mirror's scissor is tighter than its viewport.
    - **Destination alpha is part of the picture.** Later draws read the target's alpha: Z set from it (R5 (c)), a
      low-resolution render added by it (R5 (d)), the car paint's reflection pass with the destination alpha test,
      and at night the light-image glow weighted by it (R11). So a substituted view writes alpha as GT4's draws
      would have left it at the Light, not only colour and Z: that is the alpha after the mid-frame draws (R5 (d)
-     resets it at 0.47 of the order and later draws mark it), not the alpha the view alone would write. B8 defines
-     how.
+     resets it at 0.47 of the order and later draws mark it). In-place drawing (B8) writes it by construction, each
+     item with its own GT4 draw state.
    - **Principal target.** The host binds a view to its principal target: the colour target (FBP, FBW, PSM) and
      depth buffer (ZBP) of the view's first tagged model draw with a depth test (ZTE on, ZTST not ALWAYS). A view
      with no such draw binds to its first tagged draw's colour target, as before (the HUD view never binds to a
@@ -908,7 +908,7 @@ are keyed by `vk::Image*`.
   passes touch the GS colour and Z targets themselves.
 - No GS pass runs on `Queue::Compute` while the GS targets are not declared.
 - `Use::Opaque` imports of GS targets come with the first consumer outside the GS back end that uses them
-  inside the graph: B8's compositor (`ColorWrite` / `DepthWrite` on a bound view's target), and the display
+  inside the graph: B8's side channels beside the scene target (read by the scene stage), and the display
   target that `scene: main` samples. Then a target that changes image between lists needs one import per
   image, with the retired image kept alive until the frame's work has finished. That is B8's design, reviewed
   by the architect before it is built.
@@ -972,7 +972,7 @@ public:
 | `FramePipeline::record` (`pipeline.cpp:972`): exposure, MSAA resolve, FSR 2 / TAA, DOF, motion blur, bloom, tone map, RCAS, FXAA / SMAA, EASU / resample, output pass, 2D overlay | `DisplayFeature` (`platform/render/display_feature.cpp`): one pass per stage, same shaders, same order. `sceneColor/Velocity/Depth` imported from the scene source (later: the modern view's outputs). TAA history, SMAA T2x's frames: `history()`. (As built in B3: the MSAA resolve stays with the scene pass in `FramePipeline`; `exposure` is an import, rewritten every frame from its state buffer, so it carries no image contents between frames.) `hdrA/B`, `ldrA/B`, `outA/B`, `dof*`, `tiles`, `neighbourMax`, `bloomDown/Up`, `smaa*`: transients. `areaTexture`, `searchTexture`: imports. FSR 2's own resources stay inside its dispatch (one pass, imports). Swapchain: import, `Present`. |
 | `GsnScene::Impl::execute` (`gsn_scene.cpp:794`) | `GsFeature`: per list, the uploads (with `ensureTarget`), the 3D batch dispatch (`gsn_models.comp`) and GS segments split at each Light command, as kept passes that do their own barriers (b.6). `Use::Opaque` on GS targets from B8. |
 | The scene stage at a Light command (`gsn_scene.cpp:1494-1518`: motion vectors, relight, reflect, haze, temporal resolve, motion blur, focus) | `SceneStageFeature`: one pass each, between two GS segments; their work images become transients (`ao`, `lit`, `velocity`, `ssr`: each pass samples the target's colour and Z and writes its transient; where the result goes back into the colour target, a pass right after it, `<name> (copy back)`, copies it, since a pass uses each image in one layout). The per-scene TAA history is **not** a `history()`. It stays as `GsnScene`'s own two images per target, imported, with today's rules: valid only if used the frame before, and a new copy at each resolve. A target can resolve twice in a frame (two lists, or a Light resolving the same scene again), and targets are made and retired between lists. `history()` gives one new copy a frame, swapped once, so it fits neither. |
-| (new) a modern view at a Light command | `ModernViewFeature` passes (cull, depth, G-buffer, lighting, transparents...), then the `Compositor` pass: `ColorWrite` on the GS colour target's scene rectangle and `DepthWrite` on its Z target (GS Z = what GT4's own projection and viewport give at each pixel, from the projection of the instance that drew it (`Instance::projection`: the course's two depth ranges and the depth-biased objects give different GS Z, R1), stored as `z / 2^32`, `gsn_common.glsl:50-53`), then the next GS segment with the view's tagged draws skipped. |
+| (new) the substituted items of a bound view | Drawn in place inside the GS segment, at their runs in GT4's order: B7's vertex stage (GT4's Z, `Instance::projection`), the mode's fragment stage, and side channels (normal, material id, view-space depth, motion) beside the scene target. The scene stage at the Light reads the side channels (B8, B10). No compositor. |
 | GPU profile in `gsn_scene.cpp:270-316` and `renderer.cpp:216, 774` | graph timestamps (b.7) |
 | no pipeline cache | `PipelineCache` (b.8) |
 

@@ -409,10 +409,37 @@ Acceptance: `PARITY` on the race, flyover and event captures at 1x; Z equal to t
 debug compare pass counts mismatches: 0); `VAL`; `viewFallbacks` reasons listed; `ORIG` and `PRESETS` identical (the
 parity path runs only with `render.scene = parity`).
 
-**B8: Substitution at the Light command, hybrid (M).** `platform/render/modern/compositor.cpp`: colour and GS Z
-into the GS target, the view's tagged draws skipped, untagged ones kept; read policy from R9; `render.scene =
-hybrid`. Depends: B7, R9, E1. Acceptance: `ORIG`; hybrid on REF at 1x within `PARITY`; differences confined to the
-scene rectangle (post effects and HUD unchanged where the scene is equal); `VAL`.
+**B8: The ordered substitution, hybrid (M, lane B).** `render.scene = hybrid` draws each substituted view's tagged
+items in place, in GT4's command order, by modern stages: B7's vertex stage (GT4's transform and Z, exact, so every
+depth test and blend that follows still holds) and a hybrid fragment stage. The scene stage at the Light command is
+where modern lighting combines, reading side channels the items wrote. Untagged draws (GT4's clears, Z partitions,
+the full-screen draws at 0.47, particles, the sky) stay on the GS path, in place. There is no compositor at the
+Light (the coordinator's decision, 2026-11-08): R5 showed that draws between the view's passes depend on its depth,
+colour and alpha as they stand (particles Z-tested against the cars, t76 added by alpha mid-frame).
+1. **Shippable mesh resources:** device-local vertex and index buffers per mesh, uploaded through staging when first
+   drawn, retired after the frames in flight when the mesh cache evicts the mesh, under a budget. Each item stays
+   one indexed draw; its CPU cost per item is reported into B6c's span. B7's host-visible arena stays for
+   `render.scene = parity` only.
+2. **The hybrid pipelines:** the parity vertex stage and a hybrid fragment stage (`gsn.frag`'s parity variant in
+   B8's first form, so hybrid at 1x equals parity), with side-channel attachments in the hybrid render passes:
+   view-space normal, material id (B6's `MaterialId`, so B10's classes reach the scene stage), view-space depth
+   (from the instance's own projection, independent of GT4's partitioned Z) and motion. They are cleared where the
+   view begins and made only in hybrid. Untagged draws leave normal, depth and motion alone. An untagged draw that
+   writes colour without blending (the sky, opaque billboards) writes material id 0 ("GT4's colour as it is"), so
+   the scene stage never relights it with the normal of the car under it. A blended one leaves the id (an integer
+   can't blend: writing 0 would cut a hard-edged hole in the relighting under faint smoke) and marks the pixel
+   veiled (a bit, or its coverage in a small unorm channel); how a veiled pixel is lit is B10's.
+3. **The scene stage reads the side channels:** in B8 only a debug view of them; B10 lights with them.
+4. **The read switch** (R9 as a per-reader table): a list holding a game read of the scene target whose reader is
+   marked GS-only draws that view on the GS path (its items left out), so the read sees the PS2's picture; counted
+   per reader. R9 fills the table (luminance probe, photo tiles, car icons, flare samples), GS-only by default until
+   a reader is checked. A reader of Z alone is exact already (GT4's Z is kept). A reader that reads every frame must
+   be checked before hybrid goes into presets, or hybrid would never show on those frames.
+5. **`render.scene = hybrid` accepted:** never saved while it is in check form (as parity); in presets when B10 makes
+   it worth it (the coordinator's call).
+Depends: B7, E1; R9's table for step 4's entries (the switch itself doesn't wait). Acceptance: `ORIG`; hybrid on REF
+at 1x within `PARITY`; differences confined to the scene rectangle; `VAL`; `PERF` against `original` (GPU and the
+front end); the Odin's device run (the provoking vertex, logged).
 
 **B9: Mirror, env-map, reflection, showroom and photo views (M).** Depends: A6, B8. Acceptance: `PARITY` per view
 role on its captures.
@@ -420,9 +447,12 @@ role on its captures.
 **B10: G-buffer, deferred lighting, sun, material classes (L).** `platform/render/modern/gbuffer.*`,
 `lighting.*`; sun from the batches' light matrices (qwords 201..216) through `objectToWorld`; classes from lighting
 bodies (`lighting.materials = pbr`); prelit course colour as baked lighting (through N2b's section normalisation
-only if N2 reopens). R3's split (opaque Z-writing draws into the G-buffer, the rest in an ordered forward pass, B22)
-and its two-order prototype are part of this ticket. Depends: B8, R8, R3 (night, showroom and the destination-alpha
-passes measured). Acceptance: `VAL`; no NaN or Inf (debug pass counts them); `PERF`
+only if N2 reopens). Its G-buffer is B8's side channels: B10 adds the lighting at the scene stage and the hybrid
+fragment stage's material classes, not a separate geometry pass. R3's measurements decide which items write the
+side channels (opaque Z-writing ones) and how blended and equal-Z items are lit (B22). Open: how a pixel veiled by
+an untagged blended draw (B8 step 2) is lit: relight the surface under it, accepting that the veil's colour is
+already mixed in, or skip it above a coverage. Depends: B8, R8, R3 (night,
+showroom and the destination-alpha passes measured). Acceptance: `VAL`; no NaN or Inf (debug pass counts them); `PERF`
 budget 4 ms GPU at 1440 x 1080 on the RX 7900 XTX; the owner's review against PCSX2 stills of the REF scenes.
 
 **B11: Cascaded shadows and contact shadows (M).** Course casts onto cars only. Depends: B10. Acceptance: `VAL`;
@@ -437,13 +467,17 @@ showroom car reflects the probe (review).
 **B14: Sky, aerial perspective, froxel fog (M-L).** Shares the froxel grid with F1. Depends: B10, F1. Acceptance:
 `VAL`; `PERF`; GT4's painted skies kept where they have clouds (review).
 
-**B15: Modern mode (M).** GT4's post effects skipped between the markers; pipeline bloom, exposure and tone map on
-linear light; HDR10 metadata. Depends: A5a, B8. Acceptance: `ORIG`; `VAL`; HUD drawn after the tone map (until
-E6, at render scale); HDR output measured on the HDR test pattern.
+**B15: Modern mode (M).** On B8's ordered path (ARCHITECTURE section 4.1): GT4's post effects skipped between the
+markers; pipeline bloom, exposure and tone map on linear light; HDR10 metadata. Depends: A5a, B8. Acceptance:
+`ORIG`; `VAL`; HUD drawn after the tone map (until E6, at render scale); HDR output measured on the HDR test
+pattern.
 
-**B16: Free render scale and jitter for modern views; upscaler interface (M).** Depends: B8. Acceptance: `ORIG`
-(integer scales kept on the GS path); `VAL`; render scale 67 % at 4K upscaled by FSR 2 without TAA ghosting on the
-flyover (review), motion vectors exact (velocity debug view).
+
+**B16: Free render scale and jitter for modern views; upscaler interface (M).** With B8's in-place drawing, the
+render scale is the scene target's: B16 decides a free scale for the scene target as a whole. Depends: B8.
+Acceptance: `ORIG` (integer scales kept on the GS path); `VAL`; render scale 67 % at 4K upscaled by FSR 2 without
+TAA ghosting on the flyover (review), motion vectors exact (velocity debug view).
+
 
 **B17: FSR 3.1, DLSS, XeSS (M).** Depends: B16, R13. Acceptance: each where available; `VAL`; `PERF`.
 

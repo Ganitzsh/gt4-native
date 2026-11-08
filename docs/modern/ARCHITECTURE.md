@@ -68,8 +68,8 @@ Four more facts from the code that shape the design:
   vehicle state (S6)                                                                  |   render thread
                                                                  scene-cache jobs <---+    RenderGraph (New)
                                                                  (mesh decode/weld,         GS segments (Changed gsn_scene)
-                                                                  materials) (New)          ModernView (New, per view)
-                                                                                            Compositor at the Light command (New)
+                                                                  materials) (New)          items in place (New, B8)
+                                                                                            lighting at the Light
                                                                                             display pipeline nodes (Changed pipeline.cpp)
                                                                                             present
 ```
@@ -92,7 +92,7 @@ Four more facts from the code that shape the design:
 | Display pipeline | `platform/render/pipeline.cpp` | B | **Changed** (ported to graph nodes, same shaders) | Same output bit for bit. |
 | GS back end | `platform/render/gsn_scene.cpp` | B | **Changed** (frame list split into graph segments at Light commands; scene stage passes as nodes) | Same output bit for bit. |
 | Modern view renderer | `platform/render/modern/` (parity, G-buffer, lighting, shadows, probes, sky, transparents, particles, decals) | B, F | **New** | Graph features (CONTRACTS.md (b) `Feature`). Read `SceneFrame`, scene cache, light list. |
-| Compositor | `platform/render/modern/compositor.cpp` | B | **New** | At a Light command for a modern view: writes the view's colour and GS depth into the GS target; tells the GS segment which draws to skip. |
+| In-place substitution | `gsn_scene.cpp` (`executeRange`), `platform/render/modern/` (the parity and hybrid stages) | B | **New** | At a modeled run of a bound, valid view: draws its items from the mesh cache with B7's vertex stage and the mode's fragment stage, in GT4's order, writing side channels (normal, material id, view-space depth, motion) beside the scene target. No compositor (B8). |
 | Light list | `include/gt4/render/light_list.h`, `platform/render/shaders/light_list.glsl` | F | **New** | CONTRACTS.md (c). Shared by night lighting and clustered lights. |
 | Job system | `platform/core/jobs.{h,cpp}` | C | **New** | Work-stealing pool; used by scene cache, front end (later), command recording (later). |
 | Test harness | `platform/sdl/main.cpp` (capture options), `tools/frame_diff.py`, `tools/perf_report.py` | C | **Changed** / **New** | Capture N frames, diff, timings JSON. |
@@ -135,10 +135,12 @@ Four more facts from the code that shape the design:
    vehicles, counters) moves with the `FrameList`. The Light command is recorded where it is today.
 5. **Render thread.** For each frame list:
    - build the graph: GS segments split at each Light command (and at each marker the 2D layer needs);
-   - at a Light command whose target belongs to a view the settings give to the modern renderer, and whose view
-     passed validation and has every mesh ready: the view's modern sub-graph renders it; the compositor writes
-     colour and depth into the GS target; the GS segment before it skips that view's model draws;
-   - otherwise the scene stage runs as today;
+   - inside each GS segment, at a modeled run of a view the settings give to the modern renderer that passed
+     validation, the run's items are drawn in place from the mesh cache by B7's vertex stage (GT4's transform
+     and Z, exact) and the mode's fragment stage, writing side channels beside the scene target (B8). Everything
+     else in the segment, untagged draws included, is drawn as today, in GT4's order;
+   - at a Light command, the scene stage combines: today's relight, then modern lighting from the side channels
+     (B10 on);
    - then the remaining GS segments (GT4's post effects, HUD) and the display pipeline nodes.
 6. **Display pipeline.** As today, as graph nodes. In modern mode (later), GT4's post effects are skipped and the
    pipeline's bloom, exposure and tone map run on the modern scene's linear light; the 2D layer composes the HUD
@@ -150,8 +152,22 @@ Four more facts from the code that shape the design:
 |---|---|---|---|---|
 | `original` | GS path | GS path | GT4's | GS path, render scale |
 | `parity` (debug, `--set`) | modern renderer with GT4's own lighting per vertex, 1x | GS path or parity | GT4's | GS path |
-| `hybrid` | modern renderer, written back as GT4-graded input | modern when 1.3 lands, else GS | GT4's, on the modern image | GS path |
-| `modern` | modern renderer, linear | modern | skipped; pipeline bloom, exposure, tone map | 2D layer at output resolution |
+| `hybrid` | its items drawn in place by the modern stages, in GT4's order with GT4's Z; modern lighting at the scene stage from the side channels | the same per view role (B9), else GS | GT4's | GS path |
+| `modern` | the same ordered path, with a modern scene target (HDR) and the modern lighting and effects at the scene stage | the same | skipped by their markers; pipeline bloom, exposure, tone map on linear light | 2D layer at output resolution |
+
+**How `modern` (B15, the end state) sits on the ordered path without a rewrite** (lane B):
+- The same ordered path draws the views; `modern` changes what each stage does, not where draws happen. The
+  substituted views' passes draw into a modern scene target (HDR, more precision) in place of the GS one. The
+  vertex stage keeps GT4's Z for the order; lighting and depth effects use the side channels' view-space depth, so
+  GT4's depth partitions never constrain them.
+- At the Light command, the modern lighting and post run (tone map, bloom, grading), and GT4's post chain after the
+  Light is skipped by its markers (A5a's post and HUD markers; N4 already skips the flare and glare brackets). The
+  HUD stays GT4's, in the 2D layer.
+- The untagged draws move to the modern side one class at a time as lane A tags them (sky, particles, billboards:
+  `kInstBillboard` is the first), each still drawn at its place in the order. When all are tagged, every draw is
+  modern and still ordered; re-sorting transparents, if ever wanted, is then a local change in the plan.
+- Nothing in B8 assumes the GS target's format, its resolution or GT4's post: those are the GS path's defaults,
+  and `modern` replaces them per view.
 
 The `original` preset sets `render.scene = original`. Presets low to ultra set `hybrid` (then `modern` once phase
 B-4 passes its gates). `parity` is never in a preset.
@@ -175,8 +191,9 @@ Frames in flight stay at 2 (`gsn_scene.cpp:29`). Scene-cache GPU uploads go thro
 Determinism: nothing on the host feeds back into the game except what does today (pads, GS events, image reads).
 One exception needs a rule: the game reads pixels of its scene target (luminance probe 00330AE8, photo tiles,
 car thumbnails; GRAPHICS_API_PLAN.md section H). In `hybrid` and `modern`, those reads would see the modern image.
-They are answered from the modern image only after RISKS.md R9 decides it is harmless; until then the compositor
-keeps the GS-drawn copy for reads (cost: the GS draws still run for frames with such a read).
+B8's read switch handles them: a list holding a read whose reader RISKS.md R9 hasn't cleared draws that view on the
+GS path, so the read sees the PS2's picture (cost: those frames lose the modern look). Readers of Z alone are exact
+anyway, since GT4's Z is kept.
 
 ---
 
