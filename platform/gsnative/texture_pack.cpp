@@ -201,24 +201,82 @@ void TexturePack::close() {
     root.clear();
 }
 
+// A replacement's PNG decoded to RGBA8 with the GS's alpha; false when it cannot be read or decoded.
+static bool decode(const std::string& path, ReplacementImage& image) {
+    std::vector<uint8_t> bytes;
+    if (!readFile(path, bytes)) return false;
+    int w = 0, h = 0, channels = 0;
+    stbi_uc* rgba = stbi_load_from_memory(bytes.data(), static_cast<int>(bytes.size()), &w, &h, &channels, 4);
+    if (!rgba) return false;
+    image.width = static_cast<uint32_t>(w);
+    image.height = static_cast<uint32_t>(h);
+    image.pixels.resize(size_t(w) * h);
+    for (size_t i = 0; i < image.pixels.size(); ++i) {
+        const uint8_t* p = rgba + i * 4;
+        // Alpha as the GS's (PCSX2 dumps and loads it unscaled); an image without alpha is opaque (0x80)
+        const uint32_t a = channels == 4 || channels == 2 ? p[3] : 0x80;
+        image.pixels[i] = uint32_t(p[0]) | (uint32_t(p[1]) << 8) | (uint32_t(p[2]) << 16) | (a << 24);
+    }
+    stbi_image_free(rgba);
+    return w > 0 && h > 0;
+}
+
 std::shared_ptr<const ReplacementImage> TexturePack::get(const TextureName& name) {
     if (!index.count(name)) return nullptr;
-    std::lock_guard<std::mutex> g(lock);
-    Entry& e = cache[name];
-    if (e.image) {
-        if (e.aged) ages.erase(e.age);
-        ages.push_front(name);
-        e.age = ages.begin();
-        e.aged = true;
-        return e.image;
-    }
-    if (!e.queued && !e.failed) {
-        e.queued = true;
+    std::string path;
+    {
+        std::lock_guard<std::mutex> g(lock);
+        Entry& e = cache[name];
+        if (e.image) {
+            if (e.aged) ages.erase(e.age);
+            ages.push_front(name);
+            e.age = ages.begin();
+            e.aged = true;
+            return e.image;
+        }
+        if (e.failed) return nullptr;
+        if (!synchronous) {
+            if (!e.queued) {
+                e.queued = true;
+                ++counters.requested;
+                queue.push_back(name);
+                wake.notify_one();
+            }
+            return nullptr;
+        }
         ++counters.requested;
-        queue.push_back(name);
-        wake.notify_one();
+        path = index.at(name);
     }
-    return nullptr;
+    // Synchronous (setSynchronous): decoded here, outside the lock, and drawn from its first use.
+    auto image = std::make_shared<ReplacementImage>();
+    const bool ok = decode(path, *image);
+    std::lock_guard<std::mutex> g(lock);
+    return keep(name, std::move(image), ok, path);
+}
+
+void TexturePack::setSynchronous(bool on) { synchronous = on; }
+
+std::shared_ptr<const ReplacementImage> TexturePack::keep(const TextureName& name, std::shared_ptr<ReplacementImage> image,
+                                                          bool ok, const std::string& path) {
+    Entry& e = cache[name];
+    e.queued = false;
+    if (!ok) {
+        e.failed = true;
+        ++counters.failed;
+        std::fprintf(stderr, "texture pack: cannot load %s\n", path.c_str());
+        return nullptr;
+    }
+    if (e.image) return e.image;   // (decoded twice at once: the first one kept)
+    cachedBytes += image->pixels.size() * 4;
+    e.image = std::move(image);
+    ages.push_front(name);
+    e.age = ages.begin();
+    e.aged = true;
+    ++counters.loaded;
+    std::shared_ptr<const ReplacementImage> kept = e.image;
+    evict();
+    ++loaded;
+    return kept;
 }
 
 TexturePack::Stats TexturePack::stats() const {
@@ -241,42 +299,10 @@ void TexturePack::work() {
             path = index.at(name);
         }
         auto image = std::make_shared<ReplacementImage>();
-        std::vector<uint8_t> bytes;
-        bool ok = false;
-        if (readFile(path, bytes)) {
-            int w = 0, h = 0, channels = 0;
-            if (stbi_uc* rgba = stbi_load_from_memory(bytes.data(), static_cast<int>(bytes.size()), &w, &h, &channels, 4)) {
-                image->width = static_cast<uint32_t>(w);
-                image->height = static_cast<uint32_t>(h);
-                image->pixels.resize(size_t(w) * h);
-                for (size_t i = 0; i < image->pixels.size(); ++i) {
-                    const uint8_t* p = rgba + i * 4;
-                    // Alpha as the GS's (PCSX2 dumps and loads it unscaled); an image without alpha is opaque (0x80)
-                    const uint32_t a = channels == 4 || channels == 2 ? p[3] : 0x80;
-                    image->pixels[i] = uint32_t(p[0]) | (uint32_t(p[1]) << 8) | (uint32_t(p[2]) << 16) | (a << 24);
-                }
-                stbi_image_free(rgba);
-                ok = w > 0 && h > 0;
-            }
-        }
+        const bool ok = decode(path, *image);
         std::lock_guard<std::mutex> g(lock);
         if (stopping) return;
-        Entry& e = cache[name];
-        e.queued = false;
-        if (!ok) {
-            e.failed = true;
-            ++counters.failed;
-            std::fprintf(stderr, "texture pack: cannot load %s\n", path.c_str());
-            continue;
-        }
-        cachedBytes += image->pixels.size() * 4;
-        e.image = std::move(image);
-        ages.push_front(name);
-        e.age = ages.begin();
-        e.aged = true;
-        ++counters.loaded;
-        evict();
-        ++loaded;
+        keep(name, std::move(image), ok, path);
     }
 }
 

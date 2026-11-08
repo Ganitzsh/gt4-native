@@ -680,6 +680,7 @@ int run(const Options& options) {
             settings.texturePackFound = gt4::gsn::TexturePack::locate(settings.texturePack, exeDir, prefDir);
             gsOptions.texturePack = settings.texturePackFound;
             gsOptions.hdTextures = settings.hdTextures;
+            gsOptions.texturePackSynchronous = options.fixedStep;   // (replays and sessions: the same frames every run)
             if (settings.texturePackFound.empty() && settings.texturePack != "auto")
                 std::fprintf(stderr, "Texture pack: none in %s\n", settings.texturePack.c_str());
         }

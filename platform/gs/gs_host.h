@@ -22,6 +22,9 @@ public:
         bool loop = false;                   // replay: start again at the end
         std::string texturePack;             // a texture pack's folder (texture_pack.h); empty: none
         bool hdTextures = true;              // its replacements on at start (setHdTextures)
+        bool texturePackSynchronous = false; // replacements decoded at first use, not on the pack's workers
+                                             // (TexturePack::setSynchronous: gt4_host --fixed-step, replays and
+                                             // sessions, the same frames every run; a live game keeps it off)
         // The game's sound (stereo s16 frames at `rate` Hz), called on the worker thread as it arrives.
         std::function<void(uint32_t rate, const int16_t* frames, size_t count)> audio;
     };

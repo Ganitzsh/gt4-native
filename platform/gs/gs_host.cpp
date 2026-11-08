@@ -835,7 +835,9 @@ std::unique_ptr<GsHost> GsHost::create(const Options& options, std::string& erro
     if (!options.texturePack.empty()) {
         auto pack = std::make_shared<gsn::TexturePack>();
         if (pack->open(options.texturePack)) {
-            std::printf("Texture pack: %zu replacements in %s\n", pack->count(), options.texturePack.c_str());
+            pack->setSynchronous(options.texturePackSynchronous);
+            std::printf("Texture pack: %zu replacements in %s (%s)\n", pack->count(), options.texturePack.c_str(),
+                        options.texturePackSynchronous ? "decoded at first use: fixed step" : "loaded in the background");
             h.target->frontend().setTexturePack(std::move(pack));
         } else {
             std::fprintf(stderr, "Texture pack: no replacements in %s\n", options.texturePack.c_str());

@@ -69,6 +69,10 @@ public:
     // The replacement's image when it is loaded; null while it loads (the first call queues it) or when it
     // failed to load.
     std::shared_ptr<const ReplacementImage> get(const TextureName& name);
+    // Synchronous: get() decodes a replacement on its caller's thread and returns it from its first use, so a run
+    // shows the same textures at the same frames every time (gt4_host --fixed-step: replays and sessions). Off (the
+    // default, a live game): loaded on the worker threads, the original drawn until then.
+    void setSynchronous(bool on);
     // Images that finished loading since the last call (their textures can be decoded again).
     uint64_t loadedSerial() const { return loaded.load(); }
 
@@ -98,6 +102,10 @@ private:
     std::atomic<uint64_t> loaded{0};
     uint64_t cachedBytes = 0, budgetBytes = 0;
     Stats counters;
+    std::atomic<bool> synchronous{false};
+    // A decoded image (or a failure) into the cache, the lock held: the image kept, null on a failure.
+    std::shared_ptr<const ReplacementImage> keep(const TextureName& name, std::shared_ptr<ReplacementImage> image,
+                                                 bool ok, const std::string& path);
     void work();
     void evict();
 };
