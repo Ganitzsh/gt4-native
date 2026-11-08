@@ -376,6 +376,7 @@ struct SceneFrameState {
     uint16_t views = 0, instances = 0, lights = 0, emitters = 0, projections = 0, begins = 0;
     DWORD thread = 0;   // the thread that opened the frame (the kick must be the same: A3's check)
     uint32_t flags = 0;  // the opening FrameBegin's (they stand for the frame)
+    int course = 0;      // the course's draws under way (gt4_scene_course: nested), its Cmds' Instances kInstCourse (A11a)
     uint16_t openView = 0, viewInstances = 0;
     bool haveProjection = false;
     float clip[16] = {}, viewport[12] = {};   // the last Projection sent
@@ -536,6 +537,14 @@ void gt4_scene_view_end(uint32_t context) {
     g_scene.openView = 0;
 }
 
+// The course's draws begin (1) or end (0) (CONTRACTS.md kInstCourse, A11a: 00396D40, CourseData::render_course,
+// RacePS2Base::render_course, the env faces' course list): Instances in between are course instances. Nested calls count.
+void gt4_scene_course(uint32_t context, int on) {
+    (void)context;
+    if (!gt4_scene_on()) return;
+    g_scene.course = on ? g_scene.course + 1 : (g_scene.course > 0 ? g_scene.course - 1 : 0);
+}
+
 // A marker (CONTRACTS.md a.4, a.5 5): around render_post_effect and the panels' render_panel, in the open frame; `view` the
 // view open at it (0 none).
 void gt4_scene_marker(uint32_t context, int kind) {
@@ -559,7 +568,8 @@ void gt4_scene_cmd(uint32_t context, uint32_t cmd) {
     scene::Instance r{};
     r.prefix = {scene::kInstance, scene::kVersion};
     r.view = g_scene.openView;
-    r.flags = static_cast<uint16_t>((flag ? scene::kInstLighting : 0) | ((bits & 0x80) ? scene::kInstSkinned : 0));
+    r.flags = static_cast<uint16_t>((flag ? scene::kInstLighting : 0) | ((bits & 0x80) ? scene::kInstSkinned : 0) |
+                                    (g_scene.course > 0 ? scene::kInstCourse : 0));
     r.serial = static_cast<uint32_t>(g_scene.instances) + 1;   // (counted as it is appended)
     r.cmd = cmd;
     r.entrant = 0xFFFFFFFFu;

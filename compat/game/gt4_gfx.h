@@ -88,6 +88,8 @@ void gt4_scene_view_end(void *context);
 void gt4_scene_cmd(void *context, const void *cmd);
 /* A marker (include/gt4/gfx.h MarkerKind: 1/2 around render_post_effect, 3/4 around the panels' render_panel). */
 void gt4_scene_marker(void *context, int kind);
+/* The course's draws begin (on 1) or end (on 0): the Instances in between are flagged kInstCourse (nested calls count). */
+void gt4_scene_course(void *context, int on);
 #ifdef __cplusplus
 }
 #endif
