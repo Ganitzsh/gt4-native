@@ -4,6 +4,7 @@
 #include "kernel.h"
 #include "link.h"
 #include "log.h"
+#include "runtime.h"
 
 #include "menu_layout.h"
 #include "menu_model.h"
@@ -19,6 +20,8 @@
 using namespace gt4::rt;
 namespace ui = gt4::ui;
 using namespace gt4::rt::menu;
+
+extern "C" int gt4_game_option(int id);   // runtime/sdk.cpp: the host's options (runtime.h kOption*)
 
 namespace {
 
@@ -67,9 +70,15 @@ uint32_t pressed_bits(const uint8_t data[18]) {
 // GT4_REC_HOST_CMD's settings commands (protocol.h): open them at the next safe point, close them.
 constexpr uint32_t kCommandOpen = 6, kCommandClose = 7;
 
+// The row the hub adds when GT4's Options opened it (MENU_DESIGN 3.2): GT4's own screen, already running under the
+// hub. Handled here, never sent to the host.
+const char *const kGt4OptionsKey = "menu.gt4_options";
+
 struct Page {
     ui::Menu menu;
+    ui::Schema host;             // the host's schema, as it sent it
     uint32_t project = 0;        // the GT4 project the page opened over
+    uint32_t entry = 0;          // that project when it is GT4's Options (the page opened in its place), else 0
     uint32_t last_frame = 0;     // kernel_frame_count() at the previous tick
     uint32_t held = 0;           // inputs down at the previous tick (pressed_bits)
     uint32_t request = 0;        // the last request id sent
@@ -84,6 +93,38 @@ Page &page() {
 }
 
 std::atomic<bool> g_open_requested{false};
+std::atomic<uint32_t> g_entry_project{0};   // GT4's Options project just started under ui.entry = integrated
+
+// What the page shows: the host's schema, and with GT4's Options under the hub, the Game tab first with the GT4
+// options row on top (the tab is made when the host's schema has none yet).
+ui::Schema shown_schema(const Page &p) {
+    ui::Schema schema = p.host;
+    if (!p.entry) return schema;
+    ui::Row row;
+    row.kind = ui::RowKind::Action;
+    row.key = kGt4OptionsKey;
+    row.label = "GT4 options";
+    row.help = "GT4's own Options screen: sound, the controller's button functions, the race display and more.";
+    ui::Page *game = nullptr;
+    for (auto &page : schema.pages)
+        if (page.id == "game") game = &page;
+    if (!game) {
+        ui::Page page;
+        page.id = "game";
+        page.title = "Game";
+        page.icon = "tab.game";
+        schema.pages.insert(schema.pages.begin(), std::move(page));
+        game = &schema.pages.front();
+    }
+    game->rows.insert(game->rows.begin(), std::move(row));
+    for (auto it = schema.tabs.begin(); it != schema.tabs.end(); ++it)
+        if (*it == "game") {
+            schema.tabs.erase(it);
+            break;
+        }
+    schema.tabs.insert(schema.tabs.begin(), "game");
+    return schema;
+}
 
 bool trace() {
     static const bool on = [] {
@@ -155,7 +196,8 @@ int take_settings(Page &p) {
                 log_warn("menu: the host's schema could not be read (%u bytes)", static_cast<unsigned>(body.size()));
                 continue;
             }
-            p.menu.setSchema(std::move(schema));
+            p.host = std::move(schema);
+            p.menu.setSchema(shown_schema(p));
             p.schema = true;
         } else if (header.kind == ui::wire::kValues) {
             std::vector<ui::ValueUpdate> values;
@@ -172,8 +214,10 @@ int take_settings(Page &p) {
     return sound;
 }
 
-void open_page(Page &p, uint32_t project, const char *why) {
+void open_page(Page &p, uint32_t project, uint32_t entry, const char *why) {
     p.project = project;
+    p.entry = entry;
+    p.menu.setSchema(shown_schema(p));
     p.held = ~0u;   // what is down when the page opens (the press that opened it) acts only after its release
     p.last_frame = kernel_frame_count();
     {
@@ -189,8 +233,12 @@ void open_page(Page &p, uint32_t project, const char *why) {
     log_info("menu: settings opened (%s) over project %08x at VBlank %u", why, project, kernel_frame_count());
 }
 
-void close_page(Page &p, const char *why) {
-    p.menu.close();
+// Returns kLeaveProject when the page stood in for GT4's Options: the hook then ends that project as GT4's own exit
+// from it does.
+int close_page(Page &p, const char *why) {
+    const bool leave = p.entry != 0;
+    p.entry = 0;
+    if (p.menu.isOpen()) p.menu.close();
     g_open.store(false);
     {
         KernelScope ks;
@@ -200,7 +248,9 @@ void close_page(Page &p, const char *why) {
         g_focus.store(g_draining[0] || g_draining[1] ? kDraining : kGame);
     }
     send_list(p, true);
-    log_info("menu: settings closed (%s) at VBlank %u", why, kernel_frame_count());
+    log_info("menu: settings closed (%s) at VBlank %u%s", why, kernel_frame_count(),
+             leave ? ", GT4's Options ends with them" : "");
+    return leave ? kLeaveProject : 0;
 }
 
 }  // namespace
@@ -236,6 +286,16 @@ bool is_open() { return g_open.load(); }
 
 }  // namespace gt4::rt::menu
 
+extern "C" void gt4_menu_entry(uint32_t project) {
+    if (gt4_game_option(static_cast<int>(kOptionUiEntry)) != 1) {
+        log_info("menu: GT4's Options started (project %08x), ui.entry = hotkey: GT4's screen as it is", project);
+        return;
+    }
+    log_info("menu: GT4's Options started (project %08x), ui.entry = integrated: the settings hub opens over it",
+             project);
+    g_entry_project.store(project);
+}
+
 extern "C" int gt4_menu_tick(uint32_t project) {
     Page &p = page();
     int sound = take_settings(p);
@@ -249,6 +309,19 @@ extern "C" int gt4_menu_tick(uint32_t project) {
     }
     const bool asked = g_open_requested.exchange(false);
     if (!p.menu.isOpen()) {
+        // GT4's Options, started under ui.entry = integrated, opens the hub at its first update. Another project
+        // running instead means it has already ended: nothing to open.
+        uint32_t entry = g_entry_project.load();
+        if (entry && project && project != entry) {
+            log_warn("menu: GT4's Options (%08x) ended before the hub opened", entry);
+            g_entry_project.compare_exchange_strong(entry, 0u);
+            entry = 0;
+        }
+        if (entry && project == entry) {
+            g_entry_project.store(0u);
+            open_page(p, project, entry, "GT4's Options");
+            return sound;
+        }
         // An open asked for while no menu project runs (a race, a load: GT4's menu object idles) waits for one; the
         // pages never open over a running race (M7 opens them over GT4's own pause).
         static const char *waiting = nullptr;
@@ -263,13 +336,13 @@ extern "C" int gt4_menu_tick(uint32_t project) {
             return sound;
         }
         waiting = nullptr;
-        open_page(p, project, why);
+        open_page(p, project, 0, why);
     } else if (command == kCommandClose) {
-        close_page(p, "host command");
-        return sound;
+        return close_page(p, "host command") | sound;
     } else if (project != p.project) {
         // GT4 changed project under the page (a timer, the end of a race): the page closes with it.
         log_warn("menu: GT4 changed project (%08x -> %08x) with the settings open", p.project, project);
+        p.entry = 0;   // nothing to leave
         close_page(p, "project change");
         return sound;
     }
@@ -320,7 +393,12 @@ extern "C" int gt4_menu_tick(uint32_t project) {
         if (edges & (1u << b.bit)) merge(p.menu.press(b.input));
     merge(p.menu.tick(seconds));
 
+    bool to_gt4 = false;   // the GT4 options row: GT4's screen, under the hub, gets the pad
     for (const auto &r : out.requests) {
+        if (p.entry && r.kind == ui::Request::Kind::Action && r.key == kGt4OptionsKey) {
+            to_gt4 = true;
+            continue;
+        }
         const uint32_t kind = r.kind == ui::Request::Kind::Set      ? ui::wire::kSet
                               : r.kind == ui::Request::Kind::Revert ? ui::wire::kRevert
                                                                     : ui::wire::kAction;
@@ -330,7 +408,13 @@ extern "C" int gt4_menu_tick(uint32_t project) {
     if (trace() && (edges || sound != kSoundNone))
         log_info("menu: VBlank %u, inputs down %04x (new %04x), sound %s, %u request(s)", now, down, edges,
                  sound_name(sound), static_cast<unsigned>(out.requests.size()));
-    if (out.closed || !p.menu.isOpen()) close_page(p, "closed by the player");
-    else send_list(p, false);
+    if (to_gt4) {
+        p.entry = 0;   // GT4's Options stays
+        close_page(p, "to GT4's Options");
+    } else if (out.closed || !p.menu.isOpen()) {
+        return close_page(p, "closed by the player") | sound;
+    } else {
+        send_list(p, false);
+    }
     return sound;
 }

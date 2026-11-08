@@ -16,6 +16,9 @@ namespace gt4::rt::menu {
 // GT4's menu sounds, as gt4_menu_tick returns them for its caller to play by name through func_0023F8C8 ("cursor",
 // "ok", "cancel", "disable": the names GT4's own widgets and scripts play, M0).
 enum MenuSound : int { kSoundNone = 0, kSoundCursor = 1, kSoundOk = 2, kSoundCancel = 3, kSoundDisable = 4 };
+// Or'ed into gt4_menu_tick's result when a hub that stood in for GT4's Options closed (any way but its GT4 options
+// row): the hook ends GT4's Options as GT4's own exit from it does (next project = last, the result left empty; M0).
+constexpr int kLeaveProject = 0x100;
 
 // On the pad thread (gt4_replace_scePad2Read, after the host's mapping and the scripted presses): while a page is
 // open, keeps the port's bytes for the page and gives GT4 a neutral pad; after the page closes, a port that the page
@@ -23,12 +26,18 @@ enum MenuSound : int { kSoundNone = 0, kSoundCursor = 1, kSoundOk = 2, kSoundCan
 // acts in GT4. Returns whether `data` was replaced.
 bool pad_focus(int port, uint8_t data[18]);
 
-// An entry asks for the settings (M6-M8); they open at the next menu update that runs a menu project.
+// An entry asks for the settings (M7, M8); they open at the next menu update that runs a menu project.
 void request_open();
 bool is_open();   // any thread
 
 }  // namespace gt4::rt::menu
 
 // One page frame, from the hook in GT4's menu update. `project` is the project that update ran (0: none), so a page
-// left open when GT4 changes project is closed. Returns a MenuSound for the hook to play.
+// left open when GT4 changes project is closed. Returns a MenuSound for the hook to play, with kLeaveProject.
 extern "C" int gt4_menu_tick(uint32_t project);
+
+// From the hook in startProject (game_src/func_00109D00.cpp, M6), on GT4's sequence thread: GT4's "option" project
+// has started (from the top menu or a quick menu's Options). With ui.entry = integrated the settings hub opens over
+// it at its first update, with a GT4 options row first that hands the pad to GT4's screen; closing the hub
+// otherwise ends GT4's Options (kLeaveProject). With ui.entry = hotkey, nothing changes.
+extern "C" void gt4_menu_entry(uint32_t project);

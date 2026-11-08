@@ -14,7 +14,7 @@ Mockups (our own drawings, no game imagery): `docs/modern/menu/mock_*.svg`.
 
 1. **Native pages in GT4's menu flow, not an overlay.** The page logic, navigation, input focus, GT4's menu sounds
    and frame pacing run **in the game process**, as native C++ hooked into matched code: the project flow
-   (`startProject` 00109D00), the quick menus' option path (`func_0010FE40("option")`) and the race pause
+   (`startProject` 00109D00, which both ways into GT4's Options reach, M6) and the race pause
    (`RaceBasic::pauseStart` 0038B428 / `updatePause` 0038B2B0). GT4's scripted menus on the disc are not edited.
 2. **The host owns the pixels.** The game sends a draw list each frame (rectangles, asset IDs, text, at a virtual
    1920 x 1080 canvas with anchors); the host draws it at output resolution with its own images and SDF fonts.
@@ -108,8 +108,8 @@ points placed where GT4's **native** code already branches on a menu choice or a
  game process (x86-32)                                     host (x64 / ARM64)
  ---------------------------------------------------      --------------------------------------------------
  game_src hooks (matched code)                            settings (owner of every value; settings_table.h)
-   startProject 00109D00  ->  menu::open(Options)            ^ SettingsSet           | SettingsSchema/Values
-   0010FE40("option")     ->  menu::open(Options)            |                       v
+   startProject 00109D00  ->  menu: hub over "option"        ^ SettingsSet           | SettingsSchema/Values
+   menu update 00109B38   ->  menu tick, sounds, leave       |                       v
    pauseStart/updatePause ->  menu::pause page            runtime/menu (the game side)
  runtime/menu/  (page host in the game)                      page engine (platform/ui, shared)
    page engine (platform/ui, shared)  --GT4_REC_UI-->     platform/ui/ui_renderer: assets, SDF text,
@@ -138,7 +138,7 @@ The game decides what is on screen and when; the host decides how it looks at th
 | Page engine | `platform/ui/menu_model.{h,cpp}`, `menu_layout.{h,cpp}`, `draw_list.h` | M | New | Pages, tabs, rows, focus, repeat, transitions; lays out at 1920 x 1080 with anchors; emits a `DrawList`. No I/O. Built into the runtime and the host. |
 | UI records | `include/gt4/link/protocol.h`, `include/gt4/ui.h` | M (A, D review) | Changed / New | Section 3.6. |
 | Game-side page host | `runtime/menu/menu_host.{h,cpp}` | M | New | Ticks the engine once a game frame, owns input focus, plays sounds, holds the race pause, talks to the host. |
-| Flow hooks | `game_src/func_00109D00.cpp`, `func_0010FE40.cpp`, `func_0038B428.cpp`, `func_0038B2B0.cpp` (copies of matched code) | M (A reviews) | New | One call each into `runtime/menu` (section 3.2). `tools/hook_lint.py` clean. |
+| Flow hooks | `game_src/func_00109B38.cpp` (M5), `func_00109D00.cpp` (M6), `func_0038B428.cpp`, `func_0038B2B0.cpp` (copies of matched code) | M (A reviews) | New | One call each into `runtime/menu` (section 3.2). `tools/hook_lint.py` clean. No copy of `func_0010FE40`: its `"option"` reaches `startProject` too (M6). |
 | Pad focus | `runtime/iop.cpp` `gt4_replace_scePad2Read` | D's file, M's change | Changed (one test) | Neutral pad to GT4 while a page owns the pad. |
 | Settings bridge | `platform/ui/settings_schema.{h,cpp}` (host) | M (C reviews) | New | Builds the schema from `describe()` plus the page layout table (section 4); applies `SettingsSet`. |
 | UI renderer | `platform/ui/ui_renderer.{h,cpp}` on `platform/render/modern/layer2d.*` | M (C reviews) | New | Draws a `DrawList`: textured quads, nine-slices, gradients, SDF text (E5), at output resolution, HDR at paper white. |
@@ -151,13 +151,17 @@ The game decides what is on screen and when; the host decides how it looks at th
 Each hook is a `game_src` copy of a matched function with one added call, guarded by `ui.entry` (section 3.8).
 
 1. **GT4's Options, everywhere it is offered.** The quick menus' `COMMAND_OPTION` calls `func_0010FE40("option")`,
-   and the top menu's Options goes through sequence 1 with next project `"option"` [I: M0 confirms the top menu's
-   path]. Both reach `startProject("option")`. With `ui.entry = integrated` our **Settings hub** opens instead.
-   Its first tab, *Game*, has the row **GT4 options** (sound, controller functions, display), which runs GT4's own
-   `"option"` project afterwards, so nothing GT4 offered is lost and D1's rule holds (GT4's functions are assigned
-   in GT4's screen). On close the hook leaves the state GT4 expects: `menu_result` not `"loop"` for the quick menu
-   loop, and next project = last menu project (`G + 0x34`) for sequence 1 [I: M0 checks what `"option"` itself
-   leaves].
+   and the top menu's Options goes through sequence 1 with next project `"option"` (M0). Both reach
+   `startProject("option")`, so one hook there serves both (M6): with `ui.entry = integrated`, once GT4's Options
+   project runs, our **Settings hub** opens over it (GT4's screen dimmed behind, its pad neutral). Its first tab,
+   *Game*, has the row **GT4 options** (sound, controller functions, display) first: it closes the hub and GT4's
+   own Options screen, already running, gets the pad, so nothing GT4 offered is lost and D1's rule holds (GT4's
+   functions are assigned in GT4's screen). Closing the hub any other way ends GT4's Options as GT4's own exit
+   from it does (M0: the result left empty, so `func_0010FE40`'s loop ends; next project = last, `G + 0x34`, for
+   sequence 1): the menu update's hook calls MGame's set-next (0042FC50) with the last project and leaves the
+   project's event loop (`MUpdateContext::leaveEventLoop`'s body, 00251E80), and `startProject` returns as after
+   GT4's own exit. The hub opens over the project rather than in its place because a menu project is what runs the
+   menu update the pages tick in and keeps GT4 drawing frames; the cost is GT4's Options loading first.
 2. **Start on the GT mode map.** While project `"gtmode"` is on its map page, Start opens the hub. The pad hook
    (section 3.3) sees Start's edge before GT4's `MenuControl` does and swallows it. What Start does there today is
    [U]. Decision (coordinator for the owner, 2026-11-08): if Start already opens something there, Settings becomes
@@ -475,10 +479,12 @@ page open GT4 receives a neutral pad on both ports, the closing button never rea
 through GT4's call by GT4's names (logged; that they are heard is M9's, below), and GT4's page, cursor and project are
 unchanged after close; `ORIG` and `STREAM` with no page opened (the hook runs every VBlank in every preset).
 
-**M6: Options entry (S).** Hooks in copies of 00109D00 and 0010FE40. Depends: M5. Acceptance: session test from the
-approved save: the pre-race quick menu's Options opens the hub (screenshot), *GT4 options* opens GT4's screen, and
-closing returns to the quick menu with the race still startable; the top menu the same; `ui.entry = hotkey`
-opens GT4's `"option"` as before (project log).
+**M6: Options entry (S).** A hook in a copy of 00109D00 (both paths reach it), the leave in 00109B38's (M5), the
+`ui.entry` setting (`settings_ui.cpp`) sent to the game (`kOptionUiEntry`). Depends: M5. Acceptance: session test
+from the approved save: the pre-race quick menu's Options opens the hub (screenshot), *GT4 options* opens GT4's
+screen, and closing returns to the quick menu with the race still startable; the top menu the same;
+`ui.entry = hotkey` opens GT4's `"option"` as before (project log); `STREAM` with a page open (lane A: the UI
+list's rate, up to about 3.8 MB/s).
 
 **M7: Native pause page (M).** Hooks in copies of 0038B428 and 0038B2B0. Depends: M5, M0. Acceptance: session test
 in a race: pause, Settings, change a live option, close, Continue: race time, lap and car state identical to a run
