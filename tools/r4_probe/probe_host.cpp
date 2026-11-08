@@ -98,8 +98,9 @@ int main(int argc, char** argv) {
         return 4;
     }
 #endif
-    std::printf("probe_host: %s, the game given %s; %u records of %u bytes each way, indices from %llu\n", path.c_str(),
-                gamePath.c_str(), probe::kRecords, probe::kRecordBytes, static_cast<unsigned long long>(probe::kStart));
+    std::printf("probe_host: %s, the game given %s; %u records of %u bytes each way, indices from %llu by 2^32 + %u\n",
+                path.c_str(), gamePath.c_str(), probe::kRecords, probe::kRecordBytes,
+                static_cast<unsigned long long>(probe::kStart), probe::kRecordBytes);
     std::fflush(stdout);
     const auto t0 = std::chrono::steady_clock::now();
     uint32_t bad = 0, anomalies = 0;

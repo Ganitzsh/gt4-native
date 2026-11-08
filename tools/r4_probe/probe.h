@@ -1,8 +1,10 @@
 // R4's device probe (docs/modern/spikes/R4-link-across-fex.md): the game link's ring discipline across the boundary
 // between a native host and the i686 game under Wine (on the Odin, Wine on FEX). probe_host makes a file both map;
 // probe_game (i686 Windows) opens it by path. Each sends kRecords numbered records to the other through its own ring,
-// with the link's 8-byte index accesses and barriers, and checks every record it receives. The indices start just
-// below 2^32, so their low words wrap during the run (the case the link's 8-byte fix is about).
+// with the link's 8-byte index accesses and barriers, and checks every record it receives. An index moves by kStep =
+// 2^32 + 64 a record (lane D's design): the ring position (the index modulo the ring, a divisor of 2^32) still moves
+// 64 bytes, but every update changes both 32-bit words, so every read that overlaps a write is a chance to tear,
+// millions a run (the case the link's 8-byte fix is about: there the high word changes every 4 GiB).
 #pragma once
 #include <cstdint>
 
@@ -12,7 +14,9 @@ constexpr uint32_t kMagic = 0x34524250;          // "PBR4"
 constexpr uint32_t kRingBytes = 1u << 20;         // each ring's data
 constexpr uint32_t kRecordBytes = 64;             // fixed: a record never straddles the ring's end
 constexpr uint32_t kRecords = 1000000;            // each way: 64 MB, the ring wraps 61 times
-constexpr uint64_t kStart = (1ull << 32) - 32ull * kRingBytes;   // below 2^32 by 32 MiB: the low word wraps early on
+constexpr uint64_t kStart = (1ull << 32) - 32ull * kRingBytes;   // (a multiple of the ring: positions start at 0)
+constexpr uint64_t kStep = (1ull << 32) + kRecordBytes;           // an index's move per record: both words change
+constexpr uint64_t kSlots = kRingBytes / kRecordBytes;            // records a ring holds
 constexpr uint32_t kFileBytes = 4096 + 2 * kRingBytes;
 
 struct Ring {
@@ -64,8 +68,8 @@ inline bool check(const uint8_t* r, uint64_t n) {
 
 // Both directions at once from one thread: send while there is room, take what has come. `fence` is the side's full
 // barrier (MemoryBarrier on Windows, __atomic_thread_fence on POSIX). Returns the records received intact. `anomalies`
-// counts indices that cannot be right (a head behind the last one seen, or more than a ring from its tail): a torn
-// read, ignored for that pass.
+// counts indices that cannot be right (a head behind the last one seen or behind its tail, a head and tail not a whole
+// number of records apart, or more than a ring apart): a torn read, ignored for that pass.
 template <typename Fence>
 uint32_t exchange(Ring& out, uint8_t* outData, Ring& in, const uint8_t* inData, Fence fence, uint32_t* bad,
                   uint32_t* anomalies) {
@@ -77,29 +81,29 @@ uint32_t exchange(Ring& out, uint8_t* outData, Ring& in, const uint8_t* inData, 
     for (uint64_t spins = 0; (sent < kRecords || got < kRecords) && spins < 2000000000ull; ++spins) {
         if (sent < kRecords) {
             const uint64_t head = load_index(&out.head), tail = load_index(&out.tail);
-            if (tail > head || head - tail > kRingBytes) {
+            if (tail > head || (head - tail) % kStep != 0 || (head - tail) / kStep > kSlots) {
                 ++*anomalies;
-            } else if (head + kRecordBytes - tail <= kRingBytes) {
+            } else if ((head - tail) / kStep < kSlots) {
                 fill(rec, sent);
                 uint8_t* at = outData + (head % kRingBytes);
                 for (uint32_t k = 0; k < kRecordBytes; ++k) at[k] = rec[k];
                 fence();
-                store_index(&out.head, head + kRecordBytes);
+                store_index(&out.head, head + kStep);
                 ++sent;
             }
         }
         const uint64_t head = load_index(&in.head);
         fence();
         uint64_t tail = load_index(&in.tail);
-        if (head < lastHead || head < tail || head - tail > kRingBytes) {
+        if (head < lastHead || head < tail || (head - tail) % kStep != 0 || (head - tail) / kStep > kSlots) {
             ++*anomalies;
             continue;
         }
         lastHead = head;
-        while (tail + kRecordBytes <= head && got < kRecords) {
+        while (tail < head && got < kRecords) {
             if (!check(inData + (tail % kRingBytes), got)) ++*bad;
             ++got;
-            tail += kRecordBytes;
+            tail += kStep;
         }
         fence();
         store_index(&in.tail, tail);
