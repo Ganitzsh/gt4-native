@@ -58,7 +58,7 @@ says how many of its frames show a picture: a capture that replays black proves 
 |---|---|---|---|
 | `race7.cap` | 100 | a race | **A fields-mode race** (recorded at `display.race_frames = fields`): its frames are interlaced and the field blend applies, so `display.field_mode = clean` changes it (98 of 100 frames at ultra). Do not use it as a progressive race. 99 of 100 frames lit at `original`. |
 | `menus_boot.cap` | 18,931 | from boot: the title menu over its attract video, Arcade > Time Trial > Original Circuits and City Courses, browsed | Recorded live from boot (14.5 GB) with a copy of `C:/Users/julie/gt4-native-game/build/r5_saves`, `--preset original`, interpolation and texture pack off. Windows (host frames, within a few VBlanks): title menu 6,450-8,050; Original Circuits row 12,900-15,050 (taps at about 13,600, 13,730, 13,860, 13,985, 14,110); City Courses row 17,200-18,700. A replay of it takes one heavy slot with a host from 70e7fdb on (both with an older one: over 2 GB). |
-| `race_boot.cap` | 4,914 | from boot, GT mode with the approved save: Home, the event screen, the race-start flyover, the grid countdown and the race | Recorded live from boot (2.1 GB) by the procedure below with `docs/modern/routes/race_gt_pe2.txt`, scene records on. Windows (replay frames, the capture's VBlanks): event screen (the entry list) 3,225-3,425; race-start flyover 3,475-3,850; grid and countdown 3,900-4,050; START at 4,075 and the race to the end (bumper view, chase view from about 4,750). Dark only at transitions (3,175-3,200 the race load, 3,450): 121 of 125 frames sampled every 25 from 1,900 are lit. Replaces `race.cap` and `event.cap`, which replayed black (no display records). One heavy slot. |
+| `race_boot.cap` | 4,914 | from boot, GT mode with the approved save: Home, the event screen, the race-start flyover, the grid countdown and the race | Recorded live from boot (2.1 GB) by the procedure below with `docs/modern/routes/race_gt_pe2.txt`, scene records on. Windows (replay frames, the capture's VBlanks): event screen (the entry list) 3,225-3,425; race-start flyover 3,475-3,850; grid and countdown 3,900-4,050; START at 4,075 and the race to the end (bumper view, chase view from about 4,750). Dark only at transitions (3,175-3,200 the race load, 3,450): 121 of 125 frames sampled with `--capture-frames 1900-5000/25` are lit (over 5 % of their pixels not black). Replaces `race.cap` and `event.cap`, which replayed black (no display records). One heavy slot. |
 
 ### Recording a REF capture
 
@@ -66,8 +66,8 @@ A REF capture is recorded from boot (`FROM` 0), so every model and texture its s
 starts mid-run begins with a state save instead. The captures live in each clone's `build/caps/`, the stills taken
 at their scene points in `build/refs/`; neither is ever committed or served outside this machine.
 
-1. A release game from current main (`tools/release_game.py`) and a host built from an empty folder, from 330c41b
-   or later (replays repeat with interpolation and the HD pack on).
+1. A release game from current main (`tools/release_game.py`) and a host built from an empty folder (any recent
+   one: the command below turns interpolation and the HD pack off).
 2. A fresh copy of the approved save (above) unpacked into `build/saves/<name>/`.
 3. The route's commands queued into `<session>/commands/` (one file per command, named so they sort in order;
    `tools/host_session.py step` writes them the same way). Either remove the session folder, then write the
@@ -77,7 +77,8 @@ at their scene points in `build/refs/`; neither is ever committed or served outs
    `docs/modern/routes/`: `race_gt_pe2.txt` (lane A's race route: GT mode Home to the Pan Euro race 2 and a lap's
    start) for `race_boot.cap`. A route only works from the save it was written for (this one: the approved save
    `odin-saves-pe-race2`, its GT mode, car and next race); from another save the same presses land elsewhere. The
-   save itself stays out of the repository.
+   save itself stays out of the repository. The routes use SDL's button names (`a`, `b`, `back`, `start`,
+   `dpup`...), which the session takes besides the PS2 names (`cross`, `circle`, `select`).
 4. One live session, in one heavy slot:
 
 ```
@@ -91,10 +92,13 @@ gt4_host --headless --size 1280x720 --session-dir build/sessions/<name> --no-aud
          --preset original --set display.frame_interpolation=off --set texture.hd_pack=off
 ```
 
-   The host exits 1 when the route's `quit` comes before `--frames` runs out; the capture is complete all the same.
-5. Replay the capture once (one heavy slot) with `--capture-frames <first>-<last>/25` and read the scenes' windows
-   from those frames: the live session's frame numbers lag the capture's VBlanks by an amount that changes from run to
-   run (23 to 90 frames on the race route), so windows are given in replay frames. Count the lit frames.
+   `<COUNT>`: the route's `vwait` total plus a margin (`race_gt_pe2.txt`: 4,906, so 5000). The host exits 1 when
+   the route's `quit` comes before `--frames` runs out; the capture is complete all the same.
+5. Replay the capture once (one heavy slot) with `--frames <COUNT> --capture-frames <first>-<COUNT>/25` (the
+   race: `1900-5000/25`, 125 frames from Home on) and read the scenes' windows from those frames: the live session's
+   frame numbers lag the capture's VBlanks by an amount that changes from run to run (23 to 90 frames on the race
+   route), so windows are given in replay frames, and a second recording's transitions fall a few frames apart.
+   Count the lit frames (over 5 % of the pixels not black, as tools/frame_diff.py's lit check).
 6. Add the row to the table above and the file name to `build/caps/REF.txt`.
 
 PCSX2 software-renderer stills at the same scene points (menus, showroom, paused race, Photo Travel) wait for the
