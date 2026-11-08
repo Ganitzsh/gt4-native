@@ -199,6 +199,10 @@ enum InstanceFlags : uint16_t {
                                //   (its display program pushed a transform of its own), so its own objectToWorld
     kInstBillboard = 256,      // one batch run of BillboardSet__render 004506F0 (items 1): camera-facing quads
                                //   built every frame, objectToView = the camera (set 0); never course geometry
+    kInstLightMap = 512,       // one batch run of a car's light map (0038F5D0, from render_cars): the fans of the
+                               //   course lamps near the car, drawn into the car's reflection texture, not the
+                               //   view's target; objectToView = set 0 as the pass set it (the car's camera,
+                               //   orthographic); entrant = the car. Out of the binding (a.5.7)
 };
 struct Instance {
     Prefix prefix;
@@ -338,7 +342,7 @@ Where each record is sent (tickets in PLAN.md):
 | `FrameEnd` | the runtime, at the frame's kick (004A11F8, `runtime/frame.cpp`), after `walk(list)`, when a frame is open | A3 |
 | `ViewBegin` / `ViewEnd` | main: after 0033EAB8's camera load (a `game_src` copy of 0033EAB8, or a hook at the camera's +0x18 call), `ViewEnd` before `render_back_mirror`; mirror: `game_src/func_00341E50.cpp` (after every main-view instance, so views never nest); env-map passes 0044E660 (before the main view); menus 00217058 (`kViewMenu`); the HUD's 3D widget 003BE3C8 (`kViewHud`); showroom and Photo Travel per R6 | A3, A6 |
 | `Projection` | `game_src/func_0049D328.cpp`, before the `Instance`, when set 1 (as 0049E480 picks it) or the viewport / clamp the batch holds (the runtime's copy of the last qwords 197..199 written by 0049E548) differ from the last `Projection` sent this frame (a 64 + 48-byte compare); also for each view's camera load, before its `ViewBegin` | A2, A3 |
-| `Instance` | `game_src/func_0049D328.cpp`, after 0049E480 / 0049E548, before the item loop; A and B read as 0049E480 picks them (by `s->current`) even when it does not run (R1: it recomposed for 16 % of the Cmds); and one per batch run inside `BillboardSet__render` 004506F0's billboard context, flagged `kInstBillboard`, just before the run (A7 step 1b) | A2, A7 |
+| `Instance` | `game_src/func_0049D328.cpp`, after 0049E480 / 0049E548, before the item loop; A and B read as 0049E480 picks them (by `s->current`) even when it does not run (R1: it recomposed for 16 % of the Cmds); and one per batch run inside `BillboardSet__render` 004506F0's billboard context, flagged `kInstBillboard`, just before the run (A7 step 1b); one per batch run inside the car light map pass 0038F5D0, flagged `kInstLightMap`, the context opened around each 0038F5D0 call by the `render_cars` copy (`game_src/func_00340950.cpp`, entrant = car `+0x544`) (A6) | A2, A6, A7 |
 | object identity | 00455708 (draft) sets a runtime-global "model context" that A2 reads | A4 |
 | `Light` | step 1a: 003B88C8's `entries2[]` (course lamps and warning lamps) and `entries[]` (car lamps), read right before 003B88C8 draws them (in 0033F2E8, inside the flare bracket; the course sources are added after 0033EAB8's method 0x3F0), tagged with the main view's id (a.5 rule 4); step 1b: each billboard of `BillboardSet__render` as a `kSrcBillboard` candidate (its entry's world position and item size through set 0); step 2: headlight spots from the car body (A9). A lamp named both by `entries2[]` and as a billboard gets one light (PLAN F2b) | A7 |
 | `Emitter` | 0x003E7A58, 0x003C1430, 0x003C2780 | A8 |
@@ -478,6 +482,12 @@ Where each record is sent (tickets in PLAN.md):
      target written earlier in the view (the main view sampling the sky's pass) reads it. That is counted
      (`viewAuxiliaryReads`) and named in the binding (a.8 `ViewOnList::auxReads`), so a consumer (B7) treats that
      auxiliary target as an input to the substituted view and never drops its producer.
+   - **Light-map draws.** The draws of `kInstLightMap` instances take no part in the binding: they never set or
+     replace the principal, are not auxiliary, count towards no split reason and no auxiliary target, and a read
+     of their target is not an auxiliary read. The binding treats them as untagged draws, and counts them
+     (`viewLightMapDraws`). They are render-to-texture built every frame on the GS path, which the substitution
+     never replaces (B8 draws in place, so nothing drops their producer), and the car's paint samples the result
+     as an ordinary texture. The tag is there for accounting (a.5.3) and for B9.
    - **Split.** A view is split (`viewSplitTargets`, by reason) and never substituted when any tagged draw of it:
      (1) builds a second scene: the view's tagged draws into a second target both test and write its depth
      buffer (one of its own; some draw tests it and some writes it, not necessarily the same one). A pass that
@@ -541,6 +551,7 @@ Where each record is sent (tickets in PLAN.md):
 | `jobsUntaggedInView` | untagged model jobs into a bound view's target between its `ViewBegin` and the Light command | reported; the substitution keeps drawing them on the GS path |
 | `viewSplitTargets` (by reason, a.5.7), `viewsUnbound` | binding | 0 for main views |
 | `viewAuxiliaryDraws`, `viewAuxiliaryReads` | tagged draws into a view's auxiliary targets; principal draws sampling one (a.5.7), by view role | reported |
+| `viewLightMapDraws` | draws of `kInstLightMap` instances, out of the binding (a.5.7), by view, with the targets they write | reported |
 | `cuts`, `viewsCut` | partial `FrameList`s drawn at a read (synchronous or asynchronous) inside the frame's list, by kind; views still open at a cut, not substituted in that frame (a.8) | reported (main views: 0 in race frames, unless R9 names a reader inside the main view) |
 | `viewsSubstitutedFrameInvalid` | views substituted in a partial list (validated at their `ViewEnd`) whose frame then failed a frame-level check (a.8) | 0 |
 | `viewFallbacks` (by reason: not bound, mesh pending, pipeline pending, validation, read pending) | modern views drawn by the GS path | reported; 0 after warm-up for `mesh pending` and `pipeline pending` |

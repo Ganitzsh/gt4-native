@@ -148,12 +148,28 @@ found, like the warning lamps at the Route 5 pit entry.
 
 **A6: Further views (M).** Env-map passes 0044E660 / 0044EB10 (`kViewEnvFace`), the road reflection
 (`render_reflection` 003411D0, `kViewReflection`), showroom jitter passes, Photo Travel. `Instance` records for the
-untagged draw paths: the car light effects (`render_cars` 00340950 -> 0049B330 -> 0038F5D0 -> 0038F408's radial fan
-or 0049C0D8 -> 0049BBF0, found with A7 step 1b), and those that run after a Cmd (CONTRACTS a.5.3): 00497838's
+untagged draw paths: the car light maps, and those that run after a Cmd (CONTRACTS a.5.3): 00497838's
 pre-built shapes, placed by position (what their `objectToView` is), and 0049FAC8's Cmd-like models, checking that
-their 0049E480 / 0049E548 composition follows R1's rule. Depends: A3, R6. Acceptance: `REL`; `ORIG`; `SCENE` on the
-showroom and photo captures; each env face's views bound to the 128 x 256 env target; `runsAfterInstance == 0` in
-race frames once both paths send `Instance`s.
+their 0049E480 / 0049E548 composition follows R1's rule.
+- **The car light maps** (lane A, from the code, 2026-11-08; the architect's call (A)). `render_cars` (00340950)
+  calls, per car with its light context enabled, 0038E7F8 (fills the context from the course's light table near
+  the car: up to six lamps) and 0038F5D0, which binds the car's light-map target (a 256 x 256 `GSBuffer` on large
+  courses) under an orthographic projection and draws per lamp a 10-segment radial fan at the lamp direction's
+  sphere-map point (0038F408, 0049C0D8 prim 0x15), flushed by 0049BBF0. The car then samples it: the fans are its
+  reflection map of the course lamps. They are most of the untagged runs left (about 5.8 a frame on Route 5 night).
+  An `Instance` per batch run inside that pass, items 1, flag `kInstLightMap`, `objectToView` = set 0 as the pass
+  set it, inside the main view. 0038F5D0 doesn't know the car, so it needs no copy: the `render_cars` copy
+  (`game_src/func_00340950.cpp`) opens the light-map context around each 0038F5D0 call, `entrant` = the car's
+  entrant byte (`+0x544`, the byte its loop compares with the car index). Its draws
+  are out of the binding (CONTRACTS a.5.7, light-map draws), so they can't split the main view or fill its four
+  auxiliary targets. B6 gives them mesh 0 per frame as it does `kInstBillboard` (lane B's code, lane A reviews);
+  F2b's and N3's classifiers skip their materials, since they light a texture, not the scene. Not done: a view
+  per call (nesting inside the main view, which a.5 rule 2 forbids; B9's question if the maps are ever redrawn
+  natively), and lights from the context's lamps (a third source of course lamps beside `entries2[]` and the
+  billboards, only if F2 finds lamps missing; lane F says).
+Depends: A3, R6. Acceptance: `REL`; `ORIG`; `SCENE` on the showroom and photo captures; each env face's views bound
+to the 128 x 256 env target; `runsAfterInstance == 0` in race frames once both paths send `Instance`s; on Route 5
+night, `viewSplitTargets` and `viewAuxiliaryDraws` unchanged by the light maps and `viewLightMapDraws` reported.
 
 **A7: Light records (M).** Sources, corrected by lane A from the code (2026-11-08, a scan of the ELF for every
 store to the lists' counts). The light-glow pass 003B88C8 draws from two per-frame lists in its object:
@@ -309,7 +325,8 @@ place, copied only on a miss) and its materials per item, into `FrameList::ViewO
   (in lane A's file: lane B writes it, lane A reviews).
 - **Mesh 0, counted:** skinned instances (`kInstSkinned`, vertices computed each frame; `meshesSkinned`) and
   items with a key-frame blend (the mesh cache's per-frame items, whose weight changes every frame;
-  `meshesPerFrame`), since their content changes every frame; B7 draws both per frame. Also pending meshes and cut
+  `meshesPerFrame`), since their content changes every frame; B7 leaves them on the GS path. The same for
+  `kInstBillboard` and `kInstLightMap` instances (rebuilt every frame; no key hashed). Also pending meshes and cut
   views.
 - **Materials:** one per item, as many as the mesh has (a car has more than four), in `ViewOnList::materials` and
   `SceneFrame::materials`, each instance pointing at its range.
