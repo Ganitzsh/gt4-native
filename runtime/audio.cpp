@@ -206,6 +206,14 @@ struct Core {
 };
 Core g_core[2];
 uint32_t g_kon_count = 0, g_koff_count = 0;  // for GT4_TRACE_SPU
+// RISKS R16 (GT4_SPU_REPLY_DELAY, debugging): the key-ons since the start, those onto a voice still keyed (attack,
+// decay, sustain: a sound cut short, by a late status or the driver's own priority) and onto one releasing (its tail cut)
+uint64_t g_kon_total = 0, g_kon_keyed = 0, g_kon_releasing = 0;
+// and those coming 1, 2, 3 or 4 frames after the same voice's previous key-on (a stale status read as the voice ended
+// would key it again at once). The gaps count audio_frame calls (g_r16_frame), the frame clock's, one a VBlank however
+// often the driver asks for the status; GT4_SPU_REPLY_DELAY's N counts status calls (SPUP fno 3 and 4).
+uint64_t g_kon_again[5] = {};
+uint32_t g_r16_frame = 0, g_kon_frame[2][24] = {};
 
 void load_block(Voice &v) {
     v.block &= (2 << 20) - 16;
@@ -526,6 +534,13 @@ void spu_apply(const uint8_t *image) {
             for (int n = 0; n < 24; ++n)
                 if (on >> n & 1) {
                     ++g_kon_count;
+                    ++g_kon_total;
+                    if (core.v[n].phase == kRelease) ++g_kon_releasing;
+                    else if (core.v[n].phase != kOff) ++g_kon_keyed;
+                    const int ci = c;
+                    const uint32_t gap = g_r16_frame - g_kon_frame[ci][n];
+                    if (g_kon_frame[ci][n] && gap >= 1 && gap <= 4) ++g_kon_again[gap];
+                    g_kon_frame[ci][n] = g_r16_frame;
                     key_on(core.v[n]);
                     core.endx &= ~(1u << n);
                 }
@@ -533,10 +548,26 @@ void spu_apply(const uint8_t *image) {
     }
 }
 
+// RISKS R16: GT4_SPU_REPLY_DELAY=N (0-8, debugging) answers each status with the one N calls before (one a VBlank): how
+// late the ENDX / ENVX replies can come, as they would from a mixer on the host, before GT4 runs short of voices or
+// cuts sounds. Unset: the status now, as always.
+int reply_delay() {
+    static const int delay = [] {
+        const char *e = std::getenv("GT4_SPU_REPLY_DELAY");
+        if (!e || !*e) return -1;
+        const int d = std::atoi(e);
+        return d < 0 ? 0 : d > 8 ? 8 : d;
+    }();
+    return delay;
+}
+
 void spu_status(uint8_t *reply) {
     std::lock_guard<std::mutex> lock(g_mutex);
+    const int delay = reply_delay();
+    uint8_t now[0x68];
+    uint8_t *out = delay > 0 ? now : reply;
     for (int c = 0; c < 2; ++c) {
-        uint8_t *r = reply + c * 0x34;
+        uint8_t *r = out + c * 0x34;
         uint32_t endx = g_core[c].endx;
         for (int n = 0; n < 24; ++n)
             if (g_core[c].v[n].phase == kOff) endx |= 1u << n;
@@ -545,6 +576,15 @@ void spu_status(uint8_t *reply) {
             const uint16_t env = static_cast<uint16_t>(g_core[c].v[n].phase == kOff ? 0 : g_core[c].v[n].env);
             std::memcpy(r + 4 + 2 * n, &env, 2);
         }
+    }
+    if (delay > 0) {   // a ring of the last statuses: the one `delay` calls back (the oldest kept until it fills)
+        static uint8_t ring[9][0x68];
+        static int head = 0, filled = 0;
+        std::memcpy(ring[head], now, sizeof now);
+        const int back = filled < delay ? filled : delay;
+        std::memcpy(reply, ring[(head - back + 9) % 9], sizeof now);
+        head = (head + 1) % 9;
+        if (filled < 8) ++filled;
     }
 }
 
@@ -662,6 +702,15 @@ void audio_frame() {
     {
         std::lock_guard<std::mutex> lock(g_mutex);
         spu_trace();
+        // R16's counts, every 600 frames, while GT4_SPU_REPLY_DELAY is set (0 included, for the baseline)
+        ++g_r16_frame;
+        if (reply_delay() >= 0 && g_r16_frame % 600 == 0)
+            log_info("spu: R16, reply delay %d: %llu key-ons, %llu onto a voice still keyed, %llu onto one releasing; "
+                     "again after 1/2/3/4 frames %llu %llu %llu %llu", reply_delay(),
+                     static_cast<unsigned long long>(g_kon_total), static_cast<unsigned long long>(g_kon_keyed),
+                     static_cast<unsigned long long>(g_kon_releasing), static_cast<unsigned long long>(g_kon_again[1]),
+                     static_cast<unsigned long long>(g_kon_again[2]), static_cast<unsigned long long>(g_kon_again[3]),
+                     static_cast<unsigned long long>(g_kon_again[4]));
     }
     // 48000 / 60 = 800 sample frames a frame (the kernel's frame clock)
     g_frames_due += static_cast<uint64_t>(kRate) * 1000;
