@@ -43,6 +43,7 @@ private:
     void closeInstance();
     void closeView(bool ended);   // ended: its ViewEnd arrived (else nested or left open at FrameEnd)
     void endFrame(bool closed);
+    void groupLights();           // at FrameEnd: each view's lights together, by id (a.5 rule 4)
     void beginFrame(const gfx::scene::FrameBegin& r);
     void viewBegin(const gfx::scene::ViewBegin& r);
     void viewEnd(const gfx::scene::ViewEnd& r);
