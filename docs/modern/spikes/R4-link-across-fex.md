@@ -103,3 +103,62 @@ Everything else is plain memory plus polling, which crosses as it is, if the mem
 - **Shutdown:** a `SIGTERM` to the launcher ends it (it becomes `start.exe`), but the Windows processes it started keep
   running. The host now runs `wineserver -k` (the same `WINESERVER` and `WINEPREFIX`) after the `SIGTERM`, then
   `SIGKILL`s the launcher if needed.
+
+## The aarch64 host and its package (2026-11-08)
+
+**Built.** `bash tools/build_linux.sh aarch64` on Ubuntu 24.04 (a WSL is enough, no root):
+- zig 0.17.1 is fetched once and checked against ziglang.org's SHA-256. It compiles for `aarch64-linux-gnu.2.35` with
+  its own glibc stubs and libc++.
+- SDL3's backends take headers, `.pc` files and the libraries' sonames from a sysroot of Ubuntu noble's arm64
+  packages, fetched by a private apt. SDL loads them all at run time, nothing links them.
+- The shaders are compiled by the x86_64 build's glslang.
+
+`gt4_host` needs only `libc.so.6` and `libm.so.6`, no glibc symbol newer than 2.34 (the device has 2.43). Its SDL
+has Wayland (with libdecor) and X11, PipeWire, PulseAudio and ALSA, udev, D-Bus and HIDAPI; Vulkan comes through
+volk (`libvulkan.so.1` at run time).
+
+**Package.** `tools/package_game.py --release VERSION --arch linux-arm64` (`--host` names a host built elsewhere)
+writes `GT4-Native-VERSION-linux-arm64.tar.gz`. It holds:
+- `gt4_host` and the same `gt4_game.exe`, settings, documents, `game/`, `textures/` and `saves/` as the Windows
+  package;
+- `gt4-native.sh`, which starts the host with Proton's Wine as the game's launcher. It takes `GT4_PROTON`, or the
+  newest Proton under Steam's `steamapps/common`, then `compatibilitytools.d`. It puts that Proton's `files/bin-arm64`
+  first on `PATH` (folder names have spaces, so the launcher is plain `wine`), and sets `WINESERVER` to its
+  wineserver and `WINEPREFIX` to `~/.local/share/gt4-native/prefix` unless set.
+
+The package refuses a host that is not an aarch64 ELF or that needs glibc above 2.35. On Linux the host passes the
+game its paths (`--elf`, `--iso`, `--log`, `--saves`) as `Z:\...`, so Wine opens them wherever the game's working
+directory is. Paths a caller writes into `--game-args` itself (scripts passing `--elf` and `--log` that way) go as
+given: on Linux, give them as Wine paths (`Z:\home\...`) or relative to the working directory.
+
+**Tested here, x86_64 Linux in WSL, the same code** (built with gcc 13, and by `build_linux.sh x86_64` with zig):
+- ctest: every test passes; `replay_determinism` runs when given a capture, `frame_metrics_selftest` skips.
+- race7.cap headless on lavapipe (Mesa's CPU Vulkan; headless needs no display): `replay_determinism`
+  bit-identical twice at ultra with interpolation and the HD pack on.
+- At `original` against the Windows host on a Radeon RX 7900 XTX, frame by frame: 86-100 % of pixels identical,
+  at least 99.95 % within 4, PSNR 57-60 dB, the largest error 47 (the two GPUs' rasterisation), 99 of 100 frames lit.
+
+Not run here: the POSIX link against the real game. WSL has no Wine; the probe on the device covers the link itself.
+
+**Unverified on the device: what the owner's test covers.** In order, each with what to look at:
+1. `gt4-native.sh` finds the Odin's Proton (it prints which; `GT4_PROTON=<folder>` otherwise). host.log beside the
+   host says `Link: started ... with wine`.
+2. The first start makes the prefix with Proton's Wine run directly (not Proton's own `proton` script): how long it
+   takes, and that it does not stop (game.log appears beside the host). An empty or broken prefix:
+   `rm -rf ~/.local/share/gt4-native/prefix` and start again.
+3. The game finds its files through the `Z:\` paths (`made game/CORE.GT4.elf` on a first start from the .iso, then
+   the title screen). A failure here names the path in game.log.
+4. The window under gamescope (game mode) and on the desktop: SDL's Wayland or X11 driver (host.log), full screen,
+   the refresh rate. `SDL_VIDEO_DRIVER=x11` or `wayland` forces one.
+5. Vulkan on the Odin's Adreno: the device host.log names, every pipeline compiled (no Vulkan errors), and
+   `./gt4_host --replay race7.cap --headless --frames 100 --preset original --set display.frame_interpolation=off
+   --set texture.hd_pack=off --capture-frames 1-100 --capture-dir DIR` against the x64 frames (`tools/frame_diff.py`).
+6. Sound through PipeWire or PulseAudio.
+7. The built-in controls as an SDL gamepad (udev/HIDAPI): port 1 in host.log, every button, the sticks, rumble.
+8. Quitting from the game and from Steam: no Windows process left (`ps aux | grep -i wine` empty), host.log shows no
+   `wineserver -k ended with status`.
+9. Speed: 60 game frames a second in a race (host.log's `perf:` lines), the host's and the game's CPU, FEX's TSO
+   setting.
+10. Steam: a non-Steam shortcut to `gt4-native.sh` with no compatibility tool starts it in game mode.
+11. The files beside the host: host.log, game.log, settings.ini written; `--import-save` into `saves/`; an HD pack
+    from `textures/SCUS-97328`.
