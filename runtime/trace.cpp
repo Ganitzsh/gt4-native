@@ -1,6 +1,7 @@
 // Call tracing for game sources compiled with GT4_CC_EXTRA=-finstrument-functions (a debugging aid):
 // with GT4_TRACE_FUNCS set, every entry and exit of an instrumented function is logged with its PS2
 // address, indented by call depth per thread (at most GT4_TRACE_FUNCS lines, default 20000).
+#include "guest.h"
 #include "image.h"
 #include "log.h"
 
@@ -45,9 +46,13 @@ __attribute__((no_instrument_function)) void record_hit(uint32_t fn) {
         uint32_t seen = g_hits[slot].load(std::memory_order_relaxed);
         if (seen == fn) return;
         if (seen == 0 && g_hits[slot].compare_exchange_strong(seen, fn)) {
-            uint32_t guest = 0;
-            const char *name = gt4::rt::native_name_for(fn, &guest);
-            fprintf(g_hit_file, "%08x %s\n", guest, name ? name : "?");
+            // game_link PROVIDEs every func_ADDR at its PS2 address (the trampoline), so the address
+            // -finstrument-functions passes for most game functions is already the guest's, which
+            // native_name_for (host code only) does not know: below the guest RAM's end it is the address itself
+            const bool in_guest = fn < gt4::rt::kRamSize;
+            uint32_t guest = in_guest ? fn : 0;
+            const char *name = in_guest ? "" : gt4::rt::native_name_for(fn, &guest);
+            fprintf(g_hit_file, "%08x %s\n", guest, name && *name ? name : "?");
             fflush(g_hit_file);
             return;
         }
