@@ -226,10 +226,21 @@ struct FrameList {
         using InstanceIds = scene::InstanceIds;
         std::vector<InstanceIds> ids;
         std::vector<scene::MaterialId> materials;
+        // B7: each item's job and draw in this list, parallel to `materials` (the mesh's item order, which is the runs'
+        // order), and the job's own vertices in modelVertices (a Draw can merge several jobs, of several instances:
+        // B7 draws part of it from the mesh cache, the rest from gsn_models.comp's output, split at these). The
+        // indices are the list's that holds this view, valid only there: `items` is empty exactly when `ids` is (a cut
+        // or invalid view gets neither).
+        struct ItemRef {
+            uint32_t job = 0, draw = 0;                          // into models, draws
+            uint32_t firstModelVertex = 0, modelVertexCount = 0;   // the job's triangles x 3, from its start
+        };
+        std::vector<ItemRef> items;
     };
     // (B6: the views' ids and materials vectors, emptied by clear() with their capacity, for the next views on this list)
     std::vector<std::vector<scene::InstanceIds>> spareIds;
     std::vector<std::vector<scene::MaterialId>> spareMaterials;
+    std::vector<std::vector<ViewOnList::ItemRef>> spareItems;
     std::vector<ViewOnList> views;
     void clear();
 };
@@ -600,6 +611,7 @@ private:
     // An instance's jobs need not be contiguous (a.5.3). Emptied when the list goes (cut, VSync) and at a frame's end.
     struct SceneJob {
         uint32_t job = 0, draw = 0, next = UINT32_MAX;
+        uint32_t firstVertex = 0, vertexCount = 0;   // its vertices in modelVertices (B7: ViewOnList::items)
     };
     std::vector<SceneJob> sceneJobs;
     std::vector<uint32_t> sceneJobFirst, sceneJobLast;

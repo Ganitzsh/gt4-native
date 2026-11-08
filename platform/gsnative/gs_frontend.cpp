@@ -85,6 +85,10 @@ void FrameList::clear() {
             v.materials.clear();
             spareMaterials.push_back(std::move(v.materials));
         }
+        if (v.items.capacity()) {
+            v.items.clear();
+            spareItems.push_back(std::move(v.items));
+        }
     }
     views.clear();
 }
@@ -1983,7 +1987,8 @@ void GsFrontend::model(const gfx::ModelJob& in, const uint32_t* words) {
             sceneJobLast.resize(instance + 1, UINT32_MAX);
         }
         const uint32_t at = static_cast<uint32_t>(sceneJobs.size());
-        sceneJobs.push_back({static_cast<uint32_t>(frame.models.size() - 1), static_cast<uint32_t>(batch - frame.draws.data()), UINT32_MAX});
+        sceneJobs.push_back({static_cast<uint32_t>(frame.models.size() - 1), static_cast<uint32_t>(batch - frame.draws.data()), UINT32_MAX,
+                             frame.models.back().first, triangles * 3});
         if (sceneJobLast[instance] == UINT32_MAX) sceneJobFirst[instance] = at;
         else sceneJobs[sceneJobLast[instance]].next = at;
         sceneJobLast[instance] = at;
@@ -2555,6 +2560,10 @@ void GsFrontend::sceneView(std::shared_ptr<const scene::SceneView> view) {
             v.materials = std::move(frame.spareMaterials.back());
             frame.spareMaterials.pop_back();
         }
+        if (!frame.spareItems.empty()) {
+            v.items = std::move(frame.spareItems.back());
+            frame.spareItems.pop_back();
+        }
         v.ids.resize(view->instances.size());
         for (size_t k = 0; k < view->instances.size(); ++k) {
             const scene::InstanceData& instance = view->instances[k];
@@ -2584,6 +2593,7 @@ void GsFrontend::sceneView(std::shared_ptr<const scene::SceneView> view) {
                                        uint64_t(tx.base) | uint64_t(tx.clutBase) << 16 | uint64_t(tx.width) << 32);
                 }
                 sceneItems.push_back(item);
+                v.items.push_back({sj.job, sj.draw, sj.firstVertex, sj.vertexCount});   // (parallel to the materials assign makes)
             }
             v.ids[k] = sceneCache_->assign(instance, sceneItems.data(), sceneItems.size(), v.materials, sceneCacheCounters);
             ++stats.sceneInstances;

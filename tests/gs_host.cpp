@@ -756,6 +756,17 @@ int main(int argc, char** argv) {
             expect(ids[0].mesh != 0 && ids[0].mesh == ids[1].mesh && ids[2].mesh != 0 && ids[2].mesh != ids[0].mesh && ids[3].mesh == 0,
                    "B6: after the decodes, two instances share a mesh, the third has its own, the skinned none");
             expect(m == first.views[0].materials, "B6: the same material ids in the next frame");
+            // B7's carrier: one ItemRef per material, its job and its vertices (instance 3's two jobs on either side of
+            // the callback's run: jobs 2 and 4 of the list, each 3 triangles)
+            const auto& items = second.views[0].items;
+            expect(items.size() == m.size(), "B7: one ItemRef per material");
+            if (items.size() == 5 && ids[2].firstMaterial + 1 < items.size()) {
+                const auto& a3 = items[ids[2].firstMaterial];
+                const auto& b3 = items[ids[2].firstMaterial + 1];
+                expect(a3.job == 2 && b3.job == 4, "B7: an instance's items name its jobs, not the callback's between them");
+                expect(a3.modelVertexCount == 9 && b3.modelVertexCount == 9 && b3.firstModelVertex == a3.firstModelVertex + 18,
+                       "B7: each job's own vertices (three triangles; the callback's nine between)");
+            }
             expect(second.scene->counters.meshesNew == 0 && second.scene->counters.materialsNew == 0, "B6: nothing new the second time");
             const auto& in = second.scene->instances;
             expect(in.size() == 4 && in[2].mesh == ids[2].mesh && in[2].materialCount == 2 &&
