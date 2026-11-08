@@ -23,6 +23,7 @@
 #include <deque>
 #include <functional>
 #include <map>
+#include <optional>
 #include <tuple>
 #include <string>
 #include <thread>
@@ -504,6 +505,7 @@ struct GsnScene::Impl {
         if (readSkips) std::printf("... of them ahead of GS reads: %llu (of %llu reads)\n", static_cast<unsigned long long>(readSkips),
                                    static_cast<unsigned long long>(reads));
         if (profile.pool) vkDestroyQueryPool(device.device, profile.pool, nullptr);
+        if (readGraph) readGraph->destroy();
         for (auto& [id, t] : targets) vk::destroy(device, t.image);
         for (auto& [id, t] : textures) vk::destroy(device, t.image);
         for (auto& [when, image] : graveyard) vk::destroy(device, image);
@@ -1056,6 +1058,26 @@ struct GsnScene::Impl {
     void endPending(VkCommandBuffer command);
     size_t pendingShown = 0;   // the list shown now (pending.size(): none)
     size_t pendingBuilt = 0;   // the lists buildPrepass made passes for (checked when they run: the lists cannot change)
+    // The pending lists as render graph passes (GsnScene::buildPrepass: a frame's, into the pipeline's graph, `slot` its
+    // frame slot; GsnScene::read: a read's, "read: ..." passes into readGraph, slot 0, its readbacks left for the read).
+    void buildPending(rg::Graph& graph, uint32_t slot, VkExtent2D extent, bool read);
+    // GsnScene::read's own render graph (ticket B4 step 5): one slot, so one transient heap (the read waits for the
+    // device first). Destroyed with the scene.
+    std::unique_ptr<rg::Graph> readGraph;
+    uint32_t readFrames = 0;
+    bool reading = false;   // GsnScene::read's graph is being built or run: its passes' CPU time is the read's
+    // The CPU scopes of a frame's GS pass (none in a read's: the read times itself, as before the graph). `commands`:
+    // the native renderer's commands scope too.
+    struct FrameScopes {
+        std::optional<cpuprofile::Scope> stage, commands;
+        FrameScopes(const Impl& s, bool withCommands = true) {
+            static cpuprofile::Slot& stageSlot = cpuprofile::slot("render: the scene (game lists)");
+            static cpuprofile::Slot& commandsSlot = cpuprofile::slot("render: native renderer's commands");
+            if (s.reading) return;
+            stage.emplace(cpuprofile::stagesMeasured() ? &stageSlot : nullptr);
+            if (withCommands) commands.emplace(cpuprofile::enabled() ? &commandsSlot : nullptr);
+        }
+    };
 
     // The pixels the display shows: the circuit's size in video clocks over its clocks per pixel; interlaced in
     // field mode each field shows every line of a half-height buffer.
@@ -3456,11 +3478,39 @@ bool GsnScene::read(const gsn::ReadRequest& request, std::vector<uint8_t>& out) 
     // the pixels as the game drew them: no frame interpolation (its moving 3D a step behind, by the display's clock)
     const bool interpolating = s.interpolate;
     s.interpolate = false;
-    s.executePending(command, 0, s.lastExtent);
+    // The lists and the copy as passes of the read's own render graph (ticket B4 step 5; the frames' are in the
+    // pipeline's graph, GsnScene::buildPrepass): the scene stage's work images are its transients. Its order rule: this
+    // runs from the main loop's read branch only, never inside Renderer::draw, after vkDeviceWaitIdle above (CONTRACTS
+    // b.6), so slot 0's buffers and the one transient heap are free, and no frame's graph is between build and execute.
+    Impl::Copied copied;
+    bool copiedOk = false;
+    if (!s.readGraph) s.readGraph = std::make_unique<rg::Graph>(s.device);
+    rg::FrameInfo info;
+    info.slot = 0;
+    info.frameIndex = ++s.readFrames;
+    info.render = info.output = s.lastExtent;
+    s.reading = true;
+    s.readGraph->begin(info);
+    s.buildPending(*s.readGraph, 0, s.lastExtent, true);
+    s.readGraph->pass("read: copy", [](rg::PassBuilder& b) { b.keep(); }, [&](rg::PassContext& c) {
+        copiedOk = s.copyRect(c.command, request, copied);
+    });
+    s.readGraph->compile();
+    if (s.readGraph->plan().ok()) {
+        s.readGraph->execute(command, VK_NULL_HANDLE);
+    } else {
+        // (as before the graph: the lists, then the copy; told once)
+        static bool told = false;
+        if (!told)
+            for (const std::string& error : s.readGraph->plan().errors)
+                std::fprintf(stderr, "gsn: a read's render graph did not compile (recorded without it): %s\n", error.c_str());
+        told = true;
+        s.executePending(command, 0, s.lastExtent);
+        copiedOk = s.copyRect(command, request, copied);
+    }
+    s.reading = false;
     s.interpolate = interpolating;
     const Clock::time_point recorded = Clock::now();
-    Impl::Copied copied;
-    const bool copiedOk = s.copyRect(command, request, copied);
     up.submit();
     const Clock::time_point drawn = Clock::now();
     s.finishReadbacks(s.readbacksRecorded);   // (asynchronous reads in the lists drawn: done too)
@@ -3493,29 +3543,35 @@ bool GsnScene::read(const gsn::ReadRequest& request, std::vector<uint8_t>& out) 
 }
 
 // The prepass as passes of the pipeline's render graph (ticket B4, docs/modern/CONTRACTS.md b.6): the pending lists'
-// work, each list its own passes, in the order executePending runs them. The GS targets are not graph resources: each
-// pass records its barriers from their vk::Image state, as before. The scene stage's work images are transients the
-// graph makes and synchronises (the TAA histories stay the scene's). The lists are known now and do not change before
-// the graph executes (frames are added between draws, and GsnScene::read never runs inside one).
+// work, each list its own passes, in the order executePending runs them (Impl::buildPending). The GS targets are not
+// graph resources: each pass records its barriers from their vk::Image state, as before. The scene stage's work images
+// are transients the graph makes and synchronises (the TAA histories stay the scene's). The lists are known now and do
+// not change before the graph executes: frames are added between draws, and GsnScene::read runs only from the main
+// loop's read branch, never inside Renderer::draw (CONTRACTS b.6's read order), and waits for the device first.
 bool GsnScene::buildPrepass(rg::Graph& graph, const SceneView& view) {
     Impl& s = *impl;
-    auto keep = [](rg::PassBuilder& b) { b.keep(); };
     if (s.pending.empty()) {   // the last list drawn again, or nothing
-        graph.pass("gs: frame again", keep, [this, view](rg::PassContext& c) { recordPrepass(c.command, view); });
+        graph.pass("gs: frame again", [](rg::PassBuilder& b) { b.keep(); }, [this, view](rg::PassContext& c) { recordPrepass(c.command, view); });
         return true;
     }
+    s.buildPending(graph, view.slot, view.renderExtent, false);
+    return true;
+}
+
+void GsnScene::Impl::buildPending(rg::Graph& graph, uint32_t slot, VkExtent2D extent, bool read) {
+    Impl& s = *this;
+    auto keep = [](rg::PassBuilder& b) { b.keep(); };
     {
         // The render scale first, before any pass (it drops the targets when it changes): the scene stage's work images
         // are sized from the targets at that scale (beginPending, in the frame's first pass, does the rest).
-        GT4_STAGE_SCOPE("render: the scene (game lists)");
-        s.decideScale(view.renderExtent);
+        FrameScopes scopes(s, false);
+        s.decideScale(extent);
     }
-    s.lastExtent = view.renderExtent;
+    s.lastExtent = extent;
     s.pendingBuilt = s.pending.size();
-    graph.pass("gs: frame", keep, [&s, view](rg::PassContext& c) {
-        GT4_STAGE_SCOPE("render: the scene (game lists)");
-        GT4_CPU_SCOPE("render: native renderer's commands");
-        s.beginPending(c.command, view.slot, view.renderExtent, true, true);
+    graph.pass(read ? "read: frame" : "gs: frame", keep, [&s, slot, extent, read](rg::PassContext& c) {
+        FrameScopes scopes(s);
+        s.beginPending(c.command, slot, extent, !read, true);
     });
     // The targets as each list's uploads will leave them (Impl::reshapeTarget: ensureTarget's decisions, on copies), list
     // by list: the scene stage's area at each Light, so the sizes its work images grow to, known before the passes run.
@@ -3540,12 +3596,11 @@ bool GsnScene::buildPrepass(rg::Graph& graph, const SceneView& view) {
     auto sceneStage = [&](const gsn::FrameList& list, size_t at) {
         // (`check`: the plan saw no scene or no step; a scene with a step at run time is counted as a wrong plan)
         auto inOnePass = [&](bool check) {
-            graph.pass("gs: scene stage", keep, [&s, view, at, check](rg::PassContext& c) {
-                GT4_STAGE_SCOPE("render: the scene (game lists)");
-                GT4_CPU_SCOPE("render: native renderer's commands");
+            graph.pass(read ? "read: scene stage" : "gs: scene stage", keep, [&s, slot, at, check](rg::PassContext& c) {
+                FrameScopes scopes(s);
                 GT4_STAGE_SCOPE("render: the lists' draws");
                 if (check) s.checkOnePass(at);
-                s.executeLight(c.command, view.slot, at);
+                s.executeLight(c.command, slot, at);
             });
         };
         const gsn::FrameList::Lighting& l = list.lights[list.commands[at].index];
@@ -3605,29 +3660,29 @@ bool GsnScene::buildPrepass(rg::Graph& graph, const SceneView& view) {
                 continue;
             }
             switch (step) {
-                case Impl::kStepMotionVectors: passes.push_back({"scene: motion vectors", step, Impl::kPartWhole}); break;
+                case Impl::kStepMotionVectors: passes.push_back({read ? "read: motion vectors" : "scene: motion vectors", step, Impl::kPartWhole}); break;
                 case Impl::kStepLighting:
-                    passes.push_back({"scene: lighting (occlusion)", step, Impl::kPartFirst});
-                    passes.push_back({"scene: lighting", step, Impl::kPartMain});
-                    passes.push_back({"scene: lighting (copy back)", step, Impl::kPartCopy});
+                    passes.push_back({read ? "read: lighting (occlusion)" : "scene: lighting (occlusion)", step, Impl::kPartFirst});
+                    passes.push_back({read ? "read: lighting" : "scene: lighting", step, Impl::kPartMain});
+                    passes.push_back({read ? "read: lighting (copy back)" : "scene: lighting (copy back)", step, Impl::kPartCopy});
                     break;
                 case Impl::kStepReflections:
-                    passes.push_back({"scene: reflections (trace)", step, Impl::kPartFirst});
-                    passes.push_back({"scene: reflections", step, Impl::kPartMain});
-                    passes.push_back({"scene: reflections (copy back)", step, Impl::kPartCopy});
+                    passes.push_back({read ? "read: reflections (trace)" : "scene: reflections (trace)", step, Impl::kPartFirst});
+                    passes.push_back({read ? "read: reflections" : "scene: reflections", step, Impl::kPartMain});
+                    passes.push_back({read ? "read: reflections (copy back)" : "scene: reflections (copy back)", step, Impl::kPartCopy});
                     break;
                 case Impl::kStepFog:
-                    passes.push_back({"scene: fog", step, Impl::kPartMain});
-                    passes.push_back({"scene: fog (copy back)", step, Impl::kPartCopy});
+                    passes.push_back({read ? "read: fog" : "scene: fog", step, Impl::kPartMain});
+                    passes.push_back({read ? "read: fog (copy back)" : "scene: fog (copy back)", step, Impl::kPartCopy});
                     break;
-                case Impl::kStepTemporalResolve: passes.push_back({"scene: temporal resolve", step, Impl::kPartWhole}); break;
+                case Impl::kStepTemporalResolve: passes.push_back({read ? "read: temporal resolve" : "scene: temporal resolve", step, Impl::kPartWhole}); break;
                 case Impl::kStepMotionBlur:
-                    passes.push_back({"scene: motion blur", step, Impl::kPartMain});
-                    passes.push_back({"scene: motion blur (copy back)", step, Impl::kPartCopy});
+                    passes.push_back({read ? "read: motion blur" : "scene: motion blur", step, Impl::kPartMain});
+                    passes.push_back({read ? "read: motion blur (copy back)" : "scene: motion blur (copy back)", step, Impl::kPartCopy});
                     break;
                 case Impl::kStepFocus:
-                    passes.push_back({"scene: focus", step, Impl::kPartMain});
-                    passes.push_back({"scene: focus (copy back)", step, Impl::kPartCopy});
+                    passes.push_back({read ? "read: focus" : "scene: focus", step, Impl::kPartMain});
+                    passes.push_back({read ? "read: focus (copy back)" : "scene: focus (copy back)", step, Impl::kPartCopy});
                     break;
                 default: break;
             }
@@ -3675,8 +3730,7 @@ bool GsnScene::buildPrepass(rg::Graph& graph, const SceneView& view) {
                     used->lit = lit = b.use(b.create(litDesc), rg::Use::StorageWrite, vk::kCompute);
                 },
                 [&s, at, step = sp.step, part = sp.part, before = sp.before, after = sp.after, used, plan, first = p == 0](rg::PassContext& c) {
-                    GT4_STAGE_SCOPE("render: the scene (game lists)");
-                    GT4_CPU_SCOPE("render: native renderer's commands");
+                    FrameScopes scopes(s);
                     GT4_STAGE_SCOPE("render: the lists' draws");
                     Impl::WorkImages w;
                     w.graph = true;
@@ -3689,12 +3743,11 @@ bool GsnScene::buildPrepass(rg::Graph& graph, const SceneView& view) {
         }
     };
     for (size_t i = 0; i < s.pending.size(); ++i) {
-        graph.pass("gs: uploads", keep, [&s, view, i](rg::PassContext& c) {
-            GT4_STAGE_SCOPE("render: the scene (game lists)");
-            GT4_CPU_SCOPE("render: native renderer's commands");
+        graph.pass(read ? "read: uploads" : "gs: uploads", keep, [&s, slot, i](rg::PassContext& c) {
+            FrameScopes scopes(s);
             assert(s.pending.size() == s.pendingBuilt && i < s.pending.size());   // (lane A: nothing changes the lists in between)
             s.listIndex = i;
-            s.pendingTargets(c.command, view.slot);
+            s.pendingTargets(c.command, slot);
         });
         for (const gsn::Target& t : s.pending[i].targets) {   // (as pendingTargets will)
             bool dropped = false;
@@ -3705,46 +3758,41 @@ bool GsnScene::buildPrepass(rg::Graph& graph, const SceneView& view) {
         // (Impl::segments: its commands' kinds), made now; the list is made current by its uploads pass.
         std::vector<Impl::Segment> split;
         Impl::segments(s.pending[i], split);
-        graph.pass("gs: 3D batches", keep, [&s, view](rg::PassContext& c) {
-            GT4_STAGE_SCOPE("render: the scene (game lists)");
-            GT4_CPU_SCOPE("render: native renderer's commands");
+        graph.pass(read ? "read: 3D batches" : "gs: 3D batches", keep, [&s, slot](rg::PassContext& c) {
+            FrameScopes scopes(s);
             GT4_STAGE_SCOPE("render: the lists' draws");
-            s.executeBegin(c.command, view.slot);
+            s.executeBegin(c.command, slot);
         });
         for (const Impl::Segment& g : split) {
             if (g.kind == Impl::Segment::Kind::Light) {
                 sceneStage(s.pending[i], g.from);
             } else {
-                graph.pass("gs: draws", keep, [&s, view, from = g.from, to = g.to](rg::PassContext& c) {
-                    GT4_STAGE_SCOPE("render: the scene (game lists)");
-                    GT4_CPU_SCOPE("render: native renderer's commands");
+                graph.pass(read ? "read: draws" : "gs: draws", keep, [&s, slot, from = g.from, to = g.to](rg::PassContext& c) {
+                    FrameScopes scopes(s);
                     GT4_STAGE_SCOPE("render: the lists' draws");
-                    s.executeRange(c.command, view.slot, from, to);
+                    s.executeRange(c.command, slot, from, to);
                 });
             }
         }
-        graph.pass("gs: draws end", keep, [&s, view](rg::PassContext& c) {
-            GT4_STAGE_SCOPE("render: the scene (game lists)");
-            GT4_CPU_SCOPE("render: native renderer's commands");
+        graph.pass(read ? "read: draws end" : "gs: draws end", keep, [&s, slot](rg::PassContext& c) {
+            FrameScopes scopes(s);
             GT4_STAGE_SCOPE("render: the lists' draws");
-            s.executeFinish(c.command, view.slot);
+            s.executeFinish(c.command, slot);
         });
-        graph.pass("gs: list end", keep, [&s](rg::PassContext& c) {
-            GT4_STAGE_SCOPE("render: the scene (game lists)");
-            GT4_CPU_SCOPE("render: native renderer's commands");
+        graph.pass(read ? "read: list end" : "gs: list end", keep, [&s](rg::PassContext& c) {
+            FrameScopes scopes(s);
             s.pendingListEnd(c.command);
         });
     }
-    graph.pass("gs: frame end", keep, [&s, view](rg::PassContext& c) {
-        GT4_STAGE_SCOPE("render: the scene (game lists)");
-        GT4_CPU_SCOPE("render: native renderer's commands");
+    graph.pass(read ? "read: frame end" : "gs: frame end", keep, [&s, slot, read](rg::PassContext& c) {
+        FrameScopes scopes(s);
         s.listIndex = s.pending.size();
         s.endPending(c.command);
-        auto& inFlight = s.readbacksInFlight[view.slot % kSlots];   // (as recordPrepass)
+        if (read) return;   // (a read's asynchronous readbacks: finished after its submission, GsnScene::read)
+        auto& inFlight = s.readbacksInFlight[slot % kSlots];   // (as recordPrepass)
         for (auto& r : s.readbacksRecorded) inFlight.push_back(std::move(r));
         s.readbacksRecorded.clear();
     });
-    return true;
 }
 
 void GsnScene::recordMain(VkCommandBuffer command, const SceneView& view) {

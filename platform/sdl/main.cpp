@@ -949,7 +949,9 @@ int run(const Options& options) {
                 renderer->addNativeFrames(nativeFrames);
             }
             // A read of drawn pixels the game waits for (the car thumbnails it renders and keeps): the lists up
-            // to it are drawn now and the pixels read back.
+            // to it are drawn now and the pixels read back. Only here, between frames, never inside Renderer::draw
+            // (CONTRACTS b.6's read order): GsnScene::read waits for the device, then records through its own render
+            // graph, while a frame's graph is never between its build and its execution.
             gt4::gsn::ReadRequest read;
             if (gs->takeReadRequest(read)) {
                 GT4_STAGE_SCOPE("main: a read the game waits for");
