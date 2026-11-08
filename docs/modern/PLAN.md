@@ -539,6 +539,9 @@ Depends: D12, D13. Acceptance:
 
 ### Lane E: UI, and the previous agents' unfinished work
 
+Lane E has no agent (2026-11-08). E5, E6, E7 and E9 are lane M's, with lane C reviewing; E8a and E8b became M11's
+pages (docs/modern/MENU_DESIGN.md); E1-E4 are done.
+
 **E2: Menu movie background as one texture updated in place (S).** Land the uncommitted work in
 `C:/Users/julie/gt4-native-sprite`: `GsFrontend::textureFor` (`gs_frontend.cpp`) decodes a stream (new content at
 the same address and size on three or more consecutive frames) into the previous content's texture id instead of
@@ -584,13 +587,13 @@ render scale 50 %; HDR HUD at paper white (measured).
 
 **E7: SDF text for GT4's font pages (M).** Depends: E6.
 
-**E8a: Input pages (M).** `settings_menu.*`: the devices list (D13), each device's bindings, response (D12) with a
-live plot of stick against output, haptics (D14), gyro (D16) and wheel (D15) pages. Each page is shown when its
-ticket has landed. Saved per device in D13's profile. It shows GT4's own controller screen as where accelerate and
-brake are set (D1). Depends: E5, D12, D13. Acceptance: every D12 setting can be set and reset from the pad alone;
-a profile set in the menu matches the file; the menu works with the keyboard only.
+**E8a: Input pages (M; now M11's Controls page, lane M, drawn natively).** The devices list (D13), each device's
+bindings, response (D12) with a live plot of stick against output, haptics (D14), gyro (D16) and wheel (D15) pages.
+Each page is shown when its ticket has landed. Saved per device in D13's profile. It shows GT4's own controller
+screen as where accelerate and brake are set (D1). Depends: E5, D12, D13. Acceptance: every D12 setting can be set
+and reset from the pad alone; a profile set in the menu matches the file; the menu works with the keyboard only.
 
-**E8b: Audio page (S).** Depends: D5.
+**E8b: Audio page (S; now M11's Audio page, lane M).** Depends: D5.
 **E9: HUD scale, safe area, HUD off, photo export (M).** Depends: E6.
 
 ### Lane F: night lighting, and the Route 5 night artefacts
@@ -687,6 +690,30 @@ on the sections capture); the warning capture's tint stays below N4's bar.
 `VAL`; wet variants only; review against the wet capture.
 
 ---
+
+### Lane M: in-game settings menu (MENU_DESIGN.md)
+
+Native settings pages in GT4's menu flow, not an overlay: the logic, navigation, input focus, GT4's menu sounds and
+frame pacing in the game process; the pixels and the settings in the host. The tickets, their files and their
+acceptance in full are [MENU_DESIGN.md](MENU_DESIGN.md) section 7.1. Every ticket: `CTEST`, `REL` where the game
+changes, `ORIG` and `STREAM` with records off and no page opened. In order:
+
+| Ticket | Size | Depends |
+|---|---|---|
+| **M0** Menu flow spike (`docs/modern/spikes/M0-menu-flow.md`) | S, 3 days | none |
+| **M1** UI and settings records (`ui.h`, `protocol.h` 16, 17, 68, host commands 6, 7 new and 5 documented; the version serialised with P1 and P3a) | S | none left |
+| **M2** Page engine (`platform/ui/`) | M | none |
+| **M3** UI renderer and asset pipeline | M | E5, E6 |
+| **M4** Settings bridge | S-M | M1, M2, E1 |
+| **M5** Game-side page host (`runtime/menu/`; the pad focus in `iop.cpp`, lane D reviews) | M | M0, M1, M2 |
+| **M6** Options entry (hooks in copies of 00109D00, 0010FE40) | S | M5 |
+| **M7** Native pause page (hooks in copies of 0038B428, 0038B2B0) | M | M5, M0 |
+| **M8** Start on the GT mode map | S | M5, M0 |
+| **M9** Host wiring; the old menu deleted (the pad chord kept; host commands 2, 3 retired) | S-M | M3, M4, M5 |
+| **M10** Style guide and the first asset set (the owner's sign-off) | M | M3 |
+| **M11** Controls, Audio and HUD pages (E8a, E8b, E9's rows) | M | M4, M5, D12, D13, D5, E6 |
+| **M12** Pointer input and accessibility options | S-M | M9 |
+| **Q1-Q8** QoL options (MENU_DESIGN 7.1), each with its own spike and a setting off in `original` | per ticket | M1-M9 |
 
 ### Cross-lane: PS2 mechanisms removed (P1-P6, PS2_REMOVAL.md)
 
@@ -816,6 +843,8 @@ No two day-one tickets edit the same file except `main.cpp` / `renderer.cpp` (B2
 | 3. Modern lighting (weeks 10-18) | B10-B15, F3, F4, A7 step 2, A8 (N2b/c and A11b only if N2 reopens) | `R5` gates in modern; owner review |
 | 4. Resolution and effects | B16-B22, F5, E6-E9, P2b, P2c, P3b | per ticket |
 | 5. Optional | B23, C6 on devices, research track | per ticket |
+
+Lane M runs beside the phases: M0-M9 first, then M10-M12 and Q1-Q8 (MENU_DESIGN.md 7.3: 10-14 weeks for one agent).
 
 Critical path: A0 -> A1 -> A10 -> A2/A3 -> B7 (also needs B1 -> B3 -> B4 and B5 -> B6) -> B8 -> B10 -> B15.
 Calendar estimates are guesses from the sizes: hybrid in about 10 weeks with lanes A, B and C in parallel.
