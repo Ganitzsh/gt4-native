@@ -56,6 +56,8 @@ const PresetTable& presetValues(Preset preset) {
     // PS2-faithful preset; the quality presets leave them as the player set them.
     // render.scene: original in the original preset; low to ultra take hybrid when it lands (PLAN.md B8,
     // ARCHITECTURE.md section 7) and leave it as it is until then.
+    // input.response: original (the PS2's sticks, as before) in the original preset, modern in the others (PLAN.md
+    // D12); its input.steer.* and input.pedal.* values are the player's, in no preset.
     static const PresetTable original{
         {"render.scene", "original"}, {"render.gs", "original"}, {"display.field_mode", "blend"}, {"render.quality", "native"}, {"render.upscaler", "bilinear"}, {"render.sharpness", "0"},
         {"render.aa", "off"}, {"render.msaa", "1"}, {"texture.filter", "bilinear"}, {"texture.anisotropy", "1"},
@@ -65,31 +67,31 @@ const PresetTable& presetValues(Preset preset) {
         {"effects.ambient_occlusion", "original"}, {"effects.model_detail", "original"}, {"display.race_frames", "fields"},
         {"post.tonemapper", "original"}, {"post.auto_exposure", "off"},
         {"post.exposure", "0"}, {"post.film_grain", "0"}, {"post.vignette", "0"},
-        {"post.chromatic_aberration", "0"}, {"post.dither", "off"}};
+        {"post.chromatic_aberration", "0"}, {"post.dither", "off"}, {"input.response", "original"}};
     static const PresetTable low{
         {"render.gs", "native"}, {"display.field_mode", "clean"}, {"render.quality", "performance"}, {"render.upscaler", "fsr1"}, {"render.sharpness", "0.3"},
         {"render.aa", "fxaa"}, {"render.msaa", "1"}, {"texture.filter", "trilinear"}, {"texture.anisotropy", "4"},
         {"effects.shadows", "low"}, {"effects.reflections", "low"}, {"effects.bloom", "low"},
         {"effects.heat_haze", "low"}, {"effects.particles", "low"}, {"effects.sky_fog", "low"},
-        {"effects.ambient_occlusion", "off"}, {"effects.model_detail", "original"}, {"display.race_frames", "progressive"}, {"post.tonemapper", "agx_punchy"}, {"post.auto_exposure", "on"}};
+        {"effects.ambient_occlusion", "off"}, {"effects.model_detail", "original"}, {"display.race_frames", "progressive"}, {"post.tonemapper", "agx_punchy"}, {"post.auto_exposure", "on"}, {"input.response", "modern"}};
     static const PresetTable medium{
         {"render.gs", "native"}, {"display.field_mode", "clean"}, {"render.quality", "quality"}, {"render.upscaler", "fsr2"}, {"render.sharpness", "0.25"},
         {"render.aa", "taa"}, {"render.msaa", "1"}, {"texture.filter", "trilinear"}, {"texture.anisotropy", "8"},
         {"effects.shadows", "medium"}, {"effects.reflections", "medium"}, {"effects.bloom", "medium"},
         {"effects.heat_haze", "medium"}, {"effects.particles", "medium"}, {"effects.sky_fog", "medium"},
-        {"effects.ambient_occlusion", "low"}, {"effects.model_detail", "high"}, {"display.race_frames", "progressive"}, {"post.tonemapper", "agx_punchy"}, {"post.auto_exposure", "on"}};
+        {"effects.ambient_occlusion", "low"}, {"effects.model_detail", "high"}, {"display.race_frames", "progressive"}, {"post.tonemapper", "agx_punchy"}, {"post.auto_exposure", "on"}, {"input.response", "modern"}};
     static const PresetTable high{
         {"render.gs", "native"}, {"display.field_mode", "clean"}, {"render.quality", "native"}, {"render.upscaler", "fsr1"}, {"render.sharpness", "0.2"},
         {"render.aa", "taa"}, {"render.msaa", "1"}, {"texture.filter", "trilinear"}, {"texture.anisotropy", "16"},
         {"effects.shadows", "high"}, {"effects.reflections", "high"}, {"effects.bloom", "high"},
         {"effects.heat_haze", "high"}, {"effects.particles", "high"}, {"effects.sky_fog", "high"},
-        {"effects.ambient_occlusion", "medium"}, {"effects.model_detail", "high"}, {"display.race_frames", "progressive"}, {"post.tonemapper", "agx_punchy"}, {"post.auto_exposure", "on"}};
+        {"effects.ambient_occlusion", "medium"}, {"effects.model_detail", "high"}, {"display.race_frames", "progressive"}, {"post.tonemapper", "agx_punchy"}, {"post.auto_exposure", "on"}, {"input.response", "modern"}};
     static const PresetTable ultra{
         {"render.gs", "native"}, {"display.field_mode", "clean"}, {"render.quality", "native"}, {"render.upscaler", "fsr2"}, {"render.sharpness", "0.15"},
         {"render.aa", "taa"}, {"render.msaa", "1"}, {"texture.filter", "trilinear"}, {"texture.anisotropy", "16"},
         {"effects.shadows", "ultra"}, {"effects.reflections", "ultra"}, {"effects.bloom", "ultra"},
         {"effects.heat_haze", "ultra"}, {"effects.particles", "ultra"}, {"effects.sky_fog", "ultra"},
-        {"effects.ambient_occlusion", "high"}, {"effects.model_detail", "ultra"}, {"display.race_frames", "progressive"}, {"post.tonemapper", "agx_punchy"}, {"post.auto_exposure", "on"}};
+        {"effects.ambient_occlusion", "high"}, {"effects.model_detail", "ultra"}, {"display.race_frames", "progressive"}, {"post.tonemapper", "agx_punchy"}, {"post.auto_exposure", "on"}, {"input.response", "modern"}};
     static const PresetTable none;
     switch (preset) {
     case Preset::Original: return original;

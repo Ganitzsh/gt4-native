@@ -13,6 +13,7 @@
 #include "cpu_profile.h"
 #include "ps2_pad.h"
 #include "input_map.h"
+#include "response.h"
 #include "chord_guard.h"
 #include "renderer.h"
 #include "save_import.h"
@@ -474,13 +475,31 @@ gt4::input::Snapshot readInput(SDL_Gamepad* gamepad) {
     return s;
 }
 
-// The game's pad 1 from the keyboard and the gamepad (docs/GS_BACKEND.md, "Input"): the PS2 mapping, through the
-// action map (tests/input_map.cpp checks it gives the same bytes as the readPad before it, for every input).
-gt4::ps2::PadInput readPad(SDL_Gamepad* gamepad, bool keyboard = true) {
+// The response's settings (input.response, input.steer.*, input.pedal.*; the settings give percent).
+gt4::input::ResponseConfig responseConfig(const gt4::Settings& s) {
+    gt4::input::ResponseConfig c;
+    c.modern = s.inputResponse == gt4::InputResponse::Modern;
+    c.steer = {s.steerDeadzone / 100.0f, s.steerOuterDeadzone / 100.0f, s.steerLinearity, s.steerSensitivity,
+               s.steerSaturation / 100.0f};
+    c.pedal = {s.pedalDeadzone / 100.0f, s.pedalOuterDeadzone / 100.0f, s.pedalLinearity, 1.0f, 1.0f};
+    c.steerSmoothingMs = s.steerSmoothing;
+    c.pedalSmoothingMs = s.pedalSmoothing;
+    c.keyRateMs = s.steerKeyRate;
+    return c;
+}
+
+// The game's pad `port` from the keyboard (pad 1 only) and the gamepad (docs/GS_BACKEND.md, "Input"): the PS2
+// mapping, through the action map (tests/input_map.cpp checks it gives the same bytes as the readPad before it, for
+// every input), then the pad's response (platform/input/response.h; input.response = original leaves it as it is).
+// Called once a frame per pad, dt the time since the last frame in seconds.
+gt4::ps2::PadInput readPad(SDL_Gamepad* gamepad, int port, const gt4::Settings& settings, float dt) {
     static const gt4::input::Map map = gt4::input::originalMap();
+    static gt4::input::Response response[2] = {gt4::input::Response(map), gt4::input::Response(map)};
     gt4::input::Snapshot s = readInput(gamepad);
-    if (!keyboard) std::fill(std::begin(s.keys), std::end(s.keys), false);   // (pad 2: its gamepad only)
-    return gt4::input::apply(map, s);
+    if (port) std::fill(std::begin(s.keys), std::end(s.keys), false);   // (pad 2: its gamepad only)
+    gt4::ps2::PadInput in = gt4::input::apply(map, s);
+    response[port & 1].step(in, s, responseConfig(settings), dt);
+    return in;
 }
 
 // GT4_HOST_KEYS=FRAME:KEY,... (unattended checks of the settings menu): presses KEY (escape up down left right
@@ -709,6 +728,8 @@ int run(const Options& options) {
     bool pad2Sent = false;             // pad 2 sent as connected, so its removal is told to the game
     uint32_t rumbleApplied[2] = {};    // g_rumble as last given to the gamepads (and a session's events)
     Uint64 rumbleSentAt[2] = {};
+    Uint64 padLast = 0;                // when the pads were last read (their response's dt)
+    uint8_t padRecorded[18] = {};      // pad 1's bytes as a session last recorded them
     auto save = [&] {
         if (interactive && !settingsPath.empty()) {
             try { gt4::saveSettings(settings, settingsPath); }
@@ -967,7 +988,11 @@ int run(const Options& options) {
                 gs->setGameOption(6, static_cast<uint32_t>(settings.triggerTravel)); // kOptionTriggerTravel
                 // Nothing reaches the game while the menu is open, nor afterwards until every button is up
                 // (the button that closed the menu would act in the game).
-                gt4::ps2::PadInput input = readPad(session ? session->gamepad() : gamepad);
+                // the frame's time for the pads' response (its filters and the keys' ramp), a tenth of a second at most
+                const Uint64 padNow = SDL_GetTicksNS();
+                const float padDt = padLast ? std::min(static_cast<float>(padNow - padLast) * 1e-9f, 0.1f) : 0.0f;
+                padLast = padNow;
+                gt4::ps2::PadInput input = readPad(session ? session->gamepad() : gamepad, 0, settings, padDt);
                 if (menuEnabled) chordGuard.filter(input, SDL_GetTicks());
                 if (padHeldBack) {
                     bool held = std::fabs(input.leftX) > 0.3f || std::fabs(input.leftY) > 0.3f;
@@ -978,11 +1003,18 @@ int run(const Options& options) {
                 uint8_t pad[18];
                 gt4::ps2::encodePad(input, pad);
                 gs->sendPad(0, true, pad);
+                // a session records pad 1's bytes when they change (its tests read what the game was sent)
+                if (session && std::memcmp(pad, padRecorded, sizeof pad) != 0) {
+                    std::memcpy(padRecorded, pad, sizeof pad);
+                    char hex[37];
+                    for (int i = 0; i < 18; ++i) std::snprintf(hex + 2 * i, 3, "%02x", pad[i]);
+                    session->record("pad", std::string("\"port\":0,\"bytes\":\"") + hex + "\"");
+                }
                 // Pad 2: a second gamepad (no keyboard), held back like pad 1. Without one, port 2 is empty: the game
                 // sees no controller there, as on a PS2 (runtime/iop.cpp scePad2GetState); told once when it goes.
                 // (in a session: its second virtual pad, button2 / axis2)
                 if (SDL_Gamepad* second = session ? session->gamepad2() : gamepad2) {
-                    gt4::ps2::PadInput input2 = readPad(second, false);
+                    gt4::ps2::PadInput input2 = readPad(second, 1, settings, padDt);
                     if (menu.isOpen() || padHeldBack) input2 = gt4::ps2::PadInput{};
                     gt4::ps2::encodePad(input2, pad);
                     gs->sendPad(1, true, pad);

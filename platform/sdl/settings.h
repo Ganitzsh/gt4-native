@@ -41,6 +41,8 @@ enum class Preset : uint8_t { Original, Low, Medium, High, Ultra, Custom };
 enum class AiCatchUp : uint8_t { Original, Reduced, Off };
 // The pedals' pressure scale (input.trigger_travel, settings_input.cpp; docs/modern/spikes/D1-bindings.md).
 enum class TriggerTravel : uint8_t { Game, Full };
+// The sticks' and pedals' response (input.response, platform/input/response.h; PLAN.md D12).
+enum class InputResponse : uint8_t { Original, Modern };
 
 struct Settings {
     static constexpr int kVersion = 1;
@@ -122,8 +124,21 @@ struct Settings {
     // [gameplay] (sent to the game; not part of the graphics presets)
     AiCatchUp aiCatchUp = AiCatchUp::Original;
 
-    // [input] (settings_input.cpp; not part of the graphics presets)
+    // [input] (settings_input.cpp; not part of the graphics presets but for input.response)
     TriggerTravel triggerTravel = TriggerTravel::Game;   // sent to the game (kOptionTriggerTravel)
+    // (input.response is a graphics-preset member: original in the original preset, modern in the others)
+    InputResponse inputResponse = InputResponse::Modern;
+    float steerDeadzone = 5.0f;         // percent of travel
+    float steerOuterDeadzone = 2.0f;    // percent
+    float steerLinearity = 1.0f;        // exponent
+    float steerSensitivity = 1.0f;      // gain
+    float steerSaturation = 100.0f;     // percent of lock
+    float steerSmoothing = 0.0f;        // ms
+    float steerKeyRate = 150.0f;        // ms to full lock from a key
+    float pedalDeadzone = 5.0f;         // percent
+    float pedalOuterDeadzone = 2.0f;    // percent
+    float pedalLinearity = 1.0f;        // exponent
+    float pedalSmoothing = 0.0f;        // ms
 
     // [scene] (test scene only; not saved)
     bool animate = true;

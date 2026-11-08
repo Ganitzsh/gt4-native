@@ -243,8 +243,9 @@ add_library(gt4_saves STATIC platform/saves/save_import.cpp)
 target_include_directories(gt4_saves PUBLIC platform/saves)
 target_compile_features(gt4_saves PUBLIC cxx_std_20)
 
-# The game's pads from the keyboard and gamepads through an action map (platform/input; no SDL calls, its headers).
-add_library(gt4_input STATIC platform/input/input_map.cpp)
+# The game's pads from the keyboard and gamepads through an action map and the sticks' response (platform/input; no SDL
+# calls, its headers).
+add_library(gt4_input STATIC platform/input/input_map.cpp platform/input/response.cpp)
 target_include_directories(gt4_input PUBLIC platform/input platform/gs)
 target_link_libraries(gt4_input PUBLIC SDL3::Headers)
 target_compile_features(gt4_input PUBLIC cxx_std_20)
@@ -382,6 +383,12 @@ if(BUILD_TESTING)
   add_executable(gt4_input_map_test tests/input_map.cpp)
   target_link_libraries(gt4_input_map_test PRIVATE gt4_input)
   add_test(NAME input_map COMMAND gt4_input_map_test)
+
+  # The sticks' and pedals' response (PLAN.md D12): the shaping's edges, monotonic, full lock, smoothing's time
+  # constant, the keys' ramp, and original untouched.
+  add_executable(gt4_input_response_test tests/input_response.cpp)
+  target_link_libraries(gt4_input_response_test PRIVATE gt4_input)
+  add_test(NAME input_response COMMAND gt4_input_response_test)
 
   # The cards behind the game's libmc calls (runtime/save_folder.cpp, built here on its own): cut writes,
   # hidden copies and backups, backup rotation, the second slot. Works in the build folder.
