@@ -172,23 +172,31 @@ bool link_open(const char *name) {
     void *view = MapViewOfFile(h, FILE_MAP_ALL_ACCESS, 0, 0, GT4_LINK_SIZE);
     if (!view) {
         log_error("link: cannot map %s", name);
+        CloseHandle(h);
         return false;
     }
+    // (every refusal from here releases the view and the mapping: the game then runs without a link)
+    auto refuse = [&] {
+        g_hdr = nullptr;
+        UnmapViewOfFile(view);
+        CloseHandle(h);
+        return false;
+    };
     g_hdr = static_cast<Gt4LinkHeader *>(view);
     if (g_hdr->magic != GT4_LINK_MAGIC || g_hdr->version != GT4_LINK_VERSION) {
         log_error("link: %s is not a version %u link", name, GT4_LINK_VERSION);
-        g_hdr = nullptr;
-        return false;
+        return refuse();
     }
-    // The rings within the mapped size (a host and a game built from different protocol sizes would otherwise
-    // read and write past the section; a file the host made is grown silently by a larger mapping).
-    const uint64_t g2h_end = uint64_t(g_hdr->g2h_offset) + g_hdr->g2h_size, h2g_end = uint64_t(g_hdr->h2g_offset) + g_hdr->h2g_size;
-    if (g2h_end > GT4_LINK_SIZE || h2g_end > GT4_LINK_SIZE || g_hdr->g2h_offset < sizeof(Gt4LinkHeader) ||
-        g_hdr->h2g_offset < sizeof(Gt4LinkHeader)) {
-        log_error("link: %s has rings outside its %u bytes (g2h %u+%u, h2g %u+%u)", name, GT4_LINK_SIZE,
+    // The rings within the mapped size and apart (a host and a game built from different protocol sizes would
+    // otherwise read and write past the section or into each other's ring; a file the host made is grown silently by
+    // a larger mapping).
+    const uint64_t g2h_start = g_hdr->g2h_offset, h2g_start = g_hdr->h2g_offset;
+    const uint64_t g2h_end = g2h_start + g_hdr->g2h_size, h2g_end = h2g_start + g_hdr->h2g_size;
+    if (g2h_end > GT4_LINK_SIZE || h2g_end > GT4_LINK_SIZE || g2h_start < sizeof(Gt4LinkHeader) ||
+        h2g_start < sizeof(Gt4LinkHeader) || (g2h_start < h2g_end && h2g_start < g2h_end)) {
+        log_error("link: %s has rings outside its %u bytes or overlapping (g2h %u+%u, h2g %u+%u)", name, GT4_LINK_SIZE,
                   g_hdr->g2h_offset, g_hdr->g2h_size, g_hdr->h2g_offset, g_hdr->h2g_size);
-        g_hdr = nullptr;
-        return false;
+        return refuse();
     }
     g_g2h = static_cast<uint8_t *>(view) + g_hdr->g2h_offset;
     g_h2g = static_cast<uint8_t *>(view) + g_hdr->h2g_offset;
