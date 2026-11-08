@@ -246,6 +246,11 @@ add_library(gt4_saves STATIC platform/saves/save_import.cpp)
 target_include_directories(gt4_saves PUBLIC platform/saves)
 target_compile_features(gt4_saves PUBLIC cxx_std_20)
 
+# The SPU2 (platform/audio/spu; PLAN.md D5): one source with the game's runtime, which answers GT4's status from it.
+add_library(gt4_spu STATIC platform/audio/spu/spu2.cpp)
+target_include_directories(gt4_spu PUBLIC platform/audio)
+target_compile_features(gt4_spu PUBLIC cxx_std_20)
+
 # The game's pads from the keyboard and gamepads through an action map and the sticks' response (platform/input; no SDL
 # calls, its headers).
 add_library(gt4_input STATIC platform/input/input_map.cpp platform/input/response.cpp platform/input/devices.cpp
@@ -418,6 +423,17 @@ add_test(NAME material_table COMMAND gt4_material_table_test)
   add_executable(gt4_save_import_test tests/save_import.cpp)
   target_link_libraries(gt4_save_import_test PRIVATE gt4_saves)
   add_test(NAME save_import COMMAND gt4_save_import_test)
+
+  # The SPU2 (platform/audio/spu): a voice's timing the same mixed or only advanced (the game's status and the host's
+  # voices agree, PLAN.md D5), ADPCM, the envelope, loops and ends, key-off, the status (built here; no game data).
+  add_executable(gt4_spu2_test tests/spu2.cpp)
+  target_link_libraries(gt4_spu2_test PRIVATE gt4_spu)
+  if(MSVC)
+    target_compile_options(gt4_spu2_test PRIVATE /W4)
+  else()
+    target_compile_options(gt4_spu2_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  add_test(NAME spu2 COMMAND gt4_spu2_test)
 
   # The input action map: the original map against the host's mapping before it, for every input.
   add_executable(gt4_input_map_test tests/input_map.cpp)

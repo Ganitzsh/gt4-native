@@ -255,8 +255,8 @@ def checked_game_build(build, decomp, root):
     for repo, commit, paths, what in ((decomp, stamp["decomp_commit"], ["src", "include", "config", "project.toml"],
                                        "gt4-decomp"),
                                       (root, stamp["native_commit"], ["game_src", "compat", "runtime", "platform/ui",
-                                       "include", "tools/game_cc.py", "tools/game_link.py", "tools/draft_natives.py",
-                                       "tools/game_toolchain"], "gt4-native")):
+                                       "platform/audio/spu", "include", "tools/game_cc.py", "tools/game_link.py",
+                                       "tools/draft_natives.py", "tools/game_toolchain"], "gt4-native")):
         changed = subprocess.run(["git", "-C", repo, "diff", "--name-only", commit, "--"] + paths,
                                  capture_output=True, text=True, check=True).stdout.split()
         untracked = subprocess.run(["git", "-C", repo, "ls-files", "-o", "--exclude-standard", "--"] + paths,

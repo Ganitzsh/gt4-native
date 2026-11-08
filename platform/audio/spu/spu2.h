@@ -1,0 +1,113 @@
+#pragma once
+// The PS2's sound processor (SPU2) as GT4 drives it: the register image its sound driver sends every VBlank (SPUP
+// fno 4), the voices it keys from SPU RAM (SPU ADPCM, pitch, ADSR, volumes), the reverb unit, and the status the driver
+// reads back (ENDX, ENVX). Written for this project from the public SPU documentation (psx-spx: "SPU ADPCM",
+// "SPU ADSR", "SPU Reverb Formula", "Reverb Examples").
+//
+// One source for the game and the host (PLAN.md D5, spikes/R16-audio-reply-timing.md): the game answers GT4's status
+// from it in the same SPUP call, the host mixes the same voices. Both step the voices with run(): advance() keeps the
+// voices' timing only (key state, envelope, address, ENDX), mix() also decodes and mixes them, and the timing is
+// the same either way, so a voice ends at the same sample on both sides. Pure C++: no SDL, no runtime calls.
+#include <cstdint>
+#include <vector>
+
+namespace gt4::spu {
+
+constexpr int kRate = 48000;            // output samples a second (0x1000 pitch = one SPU RAM sample each)
+constexpr uint32_t kRamBytes = 2u << 20;
+constexpr uint32_t kImageBytes = 2 * 0x1D0;   // SPUP fno 4: one 0x1D0-byte image per core
+constexpr uint32_t kStatusBytes = 2 * 0x34;   // per core: u32 ENDX, u16 ENVX[24]
+
+// SPU ADPCM: one 16-byte block (shift/filter, flags, 14 bytes of nibbles) to 28 samples, with the two history samples.
+void decodeBlock(const uint8_t* block, int32_t& s1, int32_t& s2, int16_t out[28]);
+
+enum Phase { kOff, kAttack, kDecay, kSustain, kRelease };
+
+struct Voice {
+    uint16_t pitch = 0, voll = 0, volr = 0, adsr1 = 0, adsr2 = 0;   // registers
+    uint32_t ssa = 0;
+    // timing: what the status depends on
+    Phase phase = kOff;
+    int32_t env = 0, env_wait = 0;
+    uint32_t block = 0, loop = 0;   // byte addresses in SPU RAM
+    uint8_t flags = 0;              // the current block's loop flags
+    int index = 0;                  // sample in the block
+    uint32_t counter = 0;           // 12-bit fraction
+    // the samples: mixing only
+    int16_t samples[28] = {};
+    int32_t s1 = 0, s2 = 0;
+    int16_t last = 0, cur = 0;
+};
+
+// The reverb unit (psx-spx "SPU Reverb Formula"): the PS1's, at half the output rate, on a work area of its own. GT4
+// picks one of libsd's presets (sceSdSetEffectAttr: mode, depth, delay, feedback).
+struct Reverb {
+    bool on = false;
+    int mode = -1;
+    int32_t depth[2] = {0, 0};
+    int32_t r[32] = {};
+    std::vector<int16_t> buf = std::vector<int16_t>(16);
+    uint32_t pos = 0;
+    int32_t in[2] = {0, 0};   // the wet input of the first half of the current 24 kHz step
+    int32_t out[2] = {0, 0}, prev[2] = {0, 0};
+    bool odd = false;
+
+    void set(int mode, int delay, int feedback);
+    // One 48 kHz output sample: the wet input in, the reverberated pair added to outl / outr.
+    void sample(int32_t inl, int32_t inr, int32_t& outl, int32_t& outr);
+
+private:
+    void step(int32_t inl, int32_t inr);
+    int16_t& at(int32_t reg, int32_t back = 0);
+};
+
+struct Core {
+    Voice v[24];
+    uint32_t endx = 0;
+    uint32_t vmixl = 0xFFFFFF, vmixr = 0xFFFFFF, vmixel = 0, vmixer = 0;
+    int16_t evol[2] = {0, 0};
+    Reverb fx;
+    uint8_t effect[0x10] = {};   // the effect attributes last applied
+};
+
+class Spu2 {
+public:
+    // `ram`: the 2 MiB of SPU RAM, owned by the caller (the game fills it through STRP).
+    explicit Spu2(const uint8_t* ram) : ram_(ram) {}
+
+    // SPUP fno 4's register image (kImageBytes): registers, effect attributes, volumes, key-offs then key-ons.
+    void apply(const uint8_t* image);
+    // The status GT4's driver reads (kStatusBytes): per core ENDX (a voice that is off counts as ended), ENVX.
+    void status(uint8_t* reply) const;
+    // `n` output samples: the voices' timing only (key state, envelope, address, ENDX).
+    void advance(int n);
+    // `n` output samples mixed and added to `stereo` (2n values); the same timing as advance. `dryOnly`: the effect
+    // sends come back dry at the effect return volume instead of through the reverb.
+    void mix(int32_t* stereo, int n, bool dryOnly);
+    // The next frame (the frame clock's): the key-on gaps below count frames.
+    void tick() { ++counters.frame; }
+
+    Core core[2];
+
+    // Counters (GT4_TRACE_SPU, R16's GT4_SPU_REPLY_DELAY): key-ons and key-offs, since the reader last cleared
+    // kon / koff; key-ons onto a voice still keyed or releasing; key-ons 1-4 frames after the same voice's previous one.
+    struct Counters {
+        uint32_t kon = 0, koff = 0;
+        uint64_t konTotal = 0, konKeyed = 0, konReleasing = 0, konAgain[5] = {};
+        uint32_t frame = 0, konFrame[2][24] = {};
+    } counters;
+
+    // Called when an effect attribute set arrives with its "set" byte (core, the 0x10 bytes), for a log line.
+    void (*onEffect)(int core, const Reverb& fx, const uint8_t* attributes) = nullptr;
+
+private:
+    const uint8_t* ram_;
+    void keyOn(Voice& v);
+    template <bool kMix> void loadBlock(Voice& v);
+    template <bool kMix> int32_t voiceSample(Core& core, int n, Voice& v);
+    template <bool kMix> void run(int32_t* stereo, int n, bool dryOnly);
+};
+
+void envelope(Voice& v);   // one step of the ADSR envelope generator
+
+}  // namespace gt4::spu
