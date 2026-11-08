@@ -178,6 +178,87 @@ public:
                 }
             }
         }
+        // SPIKE R5 (local, never pushed): GT4_R5=1, per Light command, the draws into its target before it (since the list's
+        // start or the previous Light on that target), one token each, the targets they sample, and the draws after it that
+        // read the target. tools: scratchpad r5_report.py.
+        if (static const bool r5 = std::getenv("GT4_R5") != nullptr; r5 && native) {
+            auto targetOf = [&](uint32_t id) -> const gsn::Target* {
+                for (const auto& x : list.targets) if (x.id == id) return &x;
+                return nullptr;
+            };
+            std::string line;
+            for (const auto& x : list.targets)
+                line += " " + std::to_string(x.id) + ":" + std::to_string(x.bp) + "/" + std::to_string(x.bw) + "/" + std::to_string(x.psm) + "/" +
+                        std::to_string(x.height) + (x.depth ? "z" : "");
+            std::printf("[r5t] vb %u targets%s\n", count, line.c_str());
+            std::vector<size_t> lastLight;   // per target: the command index after its last Light
+            auto since = [&](uint32_t target) -> size_t {
+                size_t from = 0;   // (the latest Light on it)
+                for (size_t k = 0; k + 1 < lastLight.size(); k += 2) if (lastLight[k] == target) from = lastLight[k + 1];
+                return from;
+            };
+            for (size_t at = 0; at < list.commands.size(); ++at) {
+                const auto& cmd = list.commands[at];
+                if (cmd.kind != gsn::FrameList::Command::Kind::Light || cmd.index >= list.lights.size()) continue;
+                const auto& l = list.lights[cmd.index];
+                std::string before, sampled;
+                for (size_t k = since(l.target); k < at; ++k) {
+                    const auto& c = list.commands[k];
+                    if (c.kind == gsn::FrameList::Command::Kind::Clear) {
+                        before += " clear";
+                        continue;
+                    }
+                    if (c.kind != gsn::FrameList::Command::Kind::Draw) continue;
+                    const auto& d = list.draws[c.index];
+                    if (d.target != l.target) {
+                        if (d.depth == l.depth && d.depth) before += " zother";   // (its Z buffer from another colour target)
+                        continue;
+                    }
+                    const gfx::Context& s = d.state.c;
+                    const uint32_t type = d.state.prim & 7;
+                    const char* cls = d.modeled ? (d.view ? "M" : "m") : type == 6 ? "S" : type >= 3 ? "T" : type >= 1 ? "L" : "P";
+                    const bool zonly = s.colorKeep == 0xFFFFFFFFu;
+                    const bool blend = (d.state.prim >> 6) & 1;
+                    const char* tex = d.texture.kind == gsn::TextureSource::Kind::None ? "n" : d.texture.kind == gsn::TextureSource::Kind::Memory ? "t" :
+                                      d.texture.kind == gsn::TextureSource::Kind::Target ? "g" : "r";
+                    char tok[96];
+                    std::snprintf(tok, sizeof tok, " %s.z%u%u%u.b%u%u%u%u%u.a%u%u%u.d%u.%s%s.c%u.v%u", cls, s.depthTest ? 1u : 0u, s.depthFunc,
+                                  d.depth && s.depthWrite ? 1u : 0u, blend ? 1u : 0u, s.blendA, s.blendB, s.blendC, s.blendD, s.alphaTest,
+                                  s.alphaFunc, s.alphaFail, s.destTest, tex, zonly ? ".zo" : "", d.modeled ? 0u : d.count, d.view);
+                    before += tok;
+                    if (d.texture.kind == gsn::TextureSource::Kind::Target) {
+                        const gsn::Target* src = targetOf(d.texture.id);
+                        sampled += " " + std::to_string(d.texture.id) + (src ? "@" + std::to_string(src->bp) : std::string()) + "<" + cls;
+                    }
+                }
+                // after: until the target's next Light, the draws that read it (as a texture), by the target they draw into
+                std::string after;
+                size_t next = list.commands.size();
+                for (size_t k = at + 1; k < list.commands.size(); ++k)
+                    if (list.commands[k].kind == gsn::FrameList::Command::Kind::Light && list.commands[k].index < list.lights.size() &&
+                        list.lights[list.commands[k].index].target == l.target) {
+                        next = k;
+                        break;
+                    }
+                uint32_t drawsAfterInto = 0;
+                for (size_t k = at + 1; k < next; ++k) {
+                    const auto& c = list.commands[k];
+                    if (c.kind != gsn::FrameList::Command::Kind::Draw) continue;
+                    const auto& d = list.draws[c.index];
+                    if (d.target == l.target) ++drawsAfterInto;
+                    if (d.texture.kind == gsn::TextureSource::Kind::Target && d.texture.id == l.target)
+                        after += " " + std::to_string(d.target) + (d.target == l.target ? "(self)" : "");
+                    if (d.texture.kind == gsn::TextureSource::Kind::Reinterpreted && d.texture.id < list.reinterpretations.size() &&
+                        list.reinterpretations[d.texture.id].target == l.target)
+                        after += " " + std::to_string(d.target) + "(reint)";
+                }
+                std::printf("[r5] vb %u light %zu t %u z %u %ux%u inset %u scene %s | before%s | sampled%s | after-into %u | reads%s\n", count, at,
+                            l.target, l.depth, l.width, l.height, l.hasInset ? 1u : 0u, list.scene ? "yes" : "no", before.c_str(), sampled.c_str(),
+                            drawsAfterInto, after.c_str());
+                lastLight.push_back(l.target);
+                lastLight.push_back(at + 1);
+            }
+        }
         const bool statsNow = triggered || statsAt.second < 0 ||
                               (static_cast<long>(count) >= statsAt.first && static_cast<long>(count) <= statsAt.second);
         if (native && stats && statsNow) {
