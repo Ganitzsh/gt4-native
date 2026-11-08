@@ -86,6 +86,13 @@ ARCHITECTURE.md section 1) and the CPU-side tests (B5's mesh check, A10's decode
 adds its options in its own file (`settings_scene.cpp`, `settings_input.cpp`, `settings_audio.cpp`,
 `settings_lighting.cpp`) and the shared table only lists them.
 
+**The link version** (`protocol.h`) moves when a change to what the game sends would make an older host misread it,
+or count it as bad: a new record type is one (R6's origin record takes 5). A new kind inside an existing record
+that an older host provably skips, with no error, nothing counted as unknown or bad, and no change to its output,
+keeps the version (D9's `GT4_SPU2_TAGS` in `GT4_REC_SPU2_REGS`: lanes C and A checked `HostMixer::record`). The
+commit names the check. A newer host must handle the kind's absence (an older game) as its own case, never as a
+zero value.
+
 ---
 
 ## 4. Tickets
