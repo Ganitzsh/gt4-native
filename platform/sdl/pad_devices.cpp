@@ -134,7 +134,8 @@ void PadDevices::take(SDL_Gamepad* pad, int port) {
     port_[port].gamepad = pad;
     port_[port].profile = profileFor(SDL_GetGamepadID(pad));
     rebuild(port);
-    std::printf("Input: port %d: %s\n", port + 1, SDL_GetGamepadName(pad));
+    std::printf("Input: port %d: %s (id %u, %s)\n", port + 1, SDL_GetGamepadName(pad),
+                static_cast<unsigned>(SDL_GetGamepadID(pad)), profiles_[port_[port].profile].key.c_str());
 }
 
 int PadDevices::profileFor(SDL_JoystickID id) {
