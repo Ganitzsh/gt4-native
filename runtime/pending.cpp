@@ -3,6 +3,7 @@
 // is temporary: when gt4-decomp matches the function, delete it here and the matched source is
 // used instead. The list is also in docs/PENDING_FUNCTIONS.md for the decomp's swarm.
 #include "guest.h"
+#include "log.h"
 
 #include <cstdint>
 #include <cstring>
@@ -41,6 +42,14 @@ int gt4_replace_func_0039A480(uint8_t *self) {
 // at +0x50 of its object (set by setjmp in 004B0120) with 1.
 void gt4_replace_longjmp(void *buf, int value);
 void gt4_replace_func_004B01F8(uint8_t *self) { gt4_replace_longjmp(self + 0x50, 1); }
+
+// runtime/setjmp.s: the native longjmp found no marker in the buffer, so the original code's setjmp filled it
+// (GT4_ORIG runs a function and its callees translated, which save EE registers there). Restoring those into x86
+// registers would jump to whatever they hold (a call to 0 when 002C48A8 runs original); stop with the reason.
+extern "C" [[noreturn]] void gt4_longjmp_refused(const void *buf) {   // called from runtime/setjmp.s by name
+    fatal("longjmp: the jmp_buf at %p was not filled by the native setjmp (no marker: the original code's setjmp "
+          "saved EE registers there, under GT4_ORIG); a native longjmp would jump to them", buf);
+}
 
 // 004B0210 (not in the decomp's inventory: glued to 004B01F8): flags +0x3290 and calls 004B0610.
 void gt4_replace_func_004B0210(uint8_t *self) {
