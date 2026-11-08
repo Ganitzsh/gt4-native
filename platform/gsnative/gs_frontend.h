@@ -339,8 +339,9 @@ public:
     // A texture set record (docs/NATIVE_V2.md): gfx::TexSetRecord, its uploads, then (when `sent`) their bytes in order.
     void texSet(const uint8_t* payload, size_t bytes);
     // The sets in graphics memory, as set records (a content's bytes with its first), for a recording that starts
-    // mid-run.
-    void exportSets(const std::function<void(const gfx::TexSetRecord&, const std::vector<gfx::TexSetUpload>&, const std::vector<uint8_t>&)>& out) const;
+    // mid-run. Returns the sets in graphics memory left out because their content is no longer held (a replay then
+    // draws those slots without them).
+    size_t exportSets(const std::function<void(const gfx::TexSetRecord&, const std::vector<gfx::TexSetUpload>&, const std::vector<uint8_t>&)>& out) const;
 
 private:
     GsMemory mem;
