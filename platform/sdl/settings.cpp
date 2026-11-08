@@ -110,10 +110,11 @@ const PresetTable& presetValues(Preset preset) {
 
 // What a preset sets besides its members (MENU_DESIGN 3.8): applyPreset sets these too, but detectPreset ignores them
 // and changing one leaves graphics.preset as it is, since they are not graphics choices. ui.entry: hotkey in the
-// original preset (GT4's screens untouched), integrated in the others.
+// original preset (GT4's screens untouched); hotkey in the others too until the host draws the pages (MENU_DESIGN M9
+// sets integrated there): before, a hub opened from GT4's Options would be invisible.
 const PresetTable& presetFollowers(Preset preset) {
     static const PresetTable original{{"ui.entry", "hotkey"}};
-    static const PresetTable others{{"ui.entry", "integrated"}};
+    static const PresetTable others{{"ui.entry", "hotkey"}};
     static const PresetTable none;
     return preset == Preset::Original ? original : preset == Preset::Custom ? none : others;
 }

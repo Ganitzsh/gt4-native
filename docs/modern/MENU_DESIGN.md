@@ -284,6 +284,12 @@ pause's brightness and contrast, which our pause page writes the way GT4's pause
 | `ui.scale` | 80-150 % | 100 % | 100 % |
 | `ui.reduce_motion`, `ui.high_contrast` | `off`, `on` | `off` | `off` |
 
+Until M9 wires the host's page drawing, every preset and the default set `ui.entry = hotkey` and `ui.pause = gt4`:
+a setting never sends players into a page the host cannot draw (M6 first shipped `integrated` in low to ultra while
+the host still ignored the draw list: GT4's Options got an invisible hub). M9 switches low to ultra to `integrated`
+and `native`, one table line each (`settings.cpp` `presetFollowers`); until then M6's and M7's acceptance runs use
+`--set`, and `host_settings` checks that no preset sets `integrated` or `native`.
+
 `applyPreset` sets the `ui.*` keys (as `input.response` already is in every preset), but `detectPreset` ignores
 them, so a player who sets `ui.pause = gt4` on High still reads "Preset: High", not "Custom", for a choice that is
 not a graphics one.
@@ -480,16 +486,17 @@ through GT4's call by GT4's names (logged; that they are heard is M9's, below), 
 unchanged after close; `ORIG` and `STREAM` with no page opened (the hook runs every VBlank in every preset).
 
 **M6: Options entry (S).** A hook in a copy of 00109D00 (both paths reach it), the leave in 00109B38's (M5), the
-`ui.entry` setting (`settings_ui.cpp`) sent to the game (`kOptionUiEntry`). Depends: M5. Acceptance: session test
-from the approved save: the pre-race quick menu's Options opens the hub (screenshot), *GT4 options* opens GT4's
-screen, and closing returns to the quick menu with the race still startable; the top menu the same;
-`ui.entry = hotkey` opens GT4's `"option"` as before (project log); `STREAM` with a page open (lane A: the UI
-list's rate, up to about 3.8 MB/s).
+`ui.entry` setting (`settings_ui.cpp`) sent to the game (`kOptionUiEntry`; `hotkey` in every preset until M9, 3.8).
+Depends: M5. Acceptance: session test from the approved save with `--set ui.entry=integrated`: the pre-race quick
+menu's Options opens the hub (screenshot), *GT4 options* opens GT4's screen, and closing returns to the quick menu
+with the race still startable; the top menu the same; `ui.entry = hotkey` opens GT4's `"option"` as before (project
+log); `STREAM` with a page open (lane A: the UI list's rate, up to about 3.8 MB/s).
 
-**M7: Native pause page (M).** Hooks in copies of 0038B428 and 0038B2B0. Depends: M5, M0. Acceptance: session test
-in a race: pause, Settings, change a live option, close, Continue: race time, lap and car state identical to a run
-that paused without opening Settings (D6's fields or A9); Retry and Exit give GT4's results; brightness and
-contrast stored as GT4's pause stores them; `ui.pause = gt4` loads `pause.strb` as before.
+**M7: Native pause page (M).** Hooks in copies of 0038B428 and 0038B2B0; `ui.pause = gt4` in every preset until M9
+(3.8). Depends: M5, M0. Acceptance: session test with `--set ui.pause=native` in a race: pause, Settings, change a
+live option, close, Continue: race time, lap and car state identical to a run that paused without opening Settings
+(D6's fields or A9); Retry and Exit give GT4's results; brightness and contrast stored as GT4's pause stores them;
+`ui.pause = gt4` loads `pause.strb` as before.
 
 **M8: Start on the GT mode map (S).** The map detection and the button from M0. Depends: M5, M0. Acceptance:
 session test: Start on the map opens the hub, other pages of `"gtmode"` are unaffected, the map's state after close
@@ -503,7 +510,9 @@ the host for replay and the test scene. The tests that go with the old menu move
 `settings_menu.cpp` and drives the chord (`cmake/Host.cmake:313`): its chord cases (`tests/host_settings.cpp:29-45`)
 stay, its menu cases are replaced by M2's golden draw lists; `GT4_HOST_KEYS` (docs/RENDERING.md:70, `scriptedKeys`),
 how menu checks run unattended today, sends command 6 and the page's keys, and a session command `open_settings`
-does the same. Depends: M3, M4, M5. Acceptance: `CTEST`; `ORIG`; Guide and the chord in a race pause through GT4
+does the same. M9 also switches presets low to ultra to `ui.entry = integrated` and `ui.pause = native` (3.8; the
+default too), and `host_settings`' check that no preset sets them turns into the table's values. Depends: M3, M4,
+M5. Acceptance: `CTEST`; `ORIG`; Guide and the chord in a race pause through GT4
 and open Settings, a short Start alone still pauses GT4; the replay and test scene open the host-run hub; the pages'
 sounds heard (moved from M5: in the game's own mix, `GT4_AUDIO_WAV`, the map's sequenced music hides a menu sound,
 GT4's own included), by an A/B of two runs with the same inputs, one moving a page's cursor and one not.

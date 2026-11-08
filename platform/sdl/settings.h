@@ -136,7 +136,7 @@ struct Settings {
     AudioMixer audioMixer = AudioMixer::Game;   // sent to the game (kOptionHostMixer)
 
     // [ui] (settings_ui.cpp, lane M; set by every preset, but not part of what makes one: MENU_DESIGN 3.8)
-    UiEntry uiEntry = UiEntry::Integrated;   // sent to the game (kOptionUiEntry); hotkey in the original preset
+    UiEntry uiEntry = UiEntry::Hotkey;   // sent to the game (kOptionUiEntry); integrated in low to ultra from M9
 
     // [input] (settings_input.cpp; not part of the graphics presets but for input.response)
     TriggerTravel triggerTravel = TriggerTravel::Game;   // sent to the game (kOptionTriggerTravel)

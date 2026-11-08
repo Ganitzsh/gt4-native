@@ -103,25 +103,33 @@ int main() {
         check(!setOption(f, "display.field_mode", "bob").empty(), "an unknown field mode is refused");
     }
 
-    // ui.entry (settings_ui.cpp, MENU_DESIGN 3.8): every preset sets it, hotkey in original and integrated in the
-    // others, but it decides no preset: changing it keeps graphics.preset, and the file round trip keeps the player's.
+    // ui.entry (settings_ui.cpp, MENU_DESIGN 3.8): every preset sets it (hotkey in all of them until M9 draws the
+    // pages), but it decides no preset: changing it keeps graphics.preset, and the file round trip keeps the player's.
     {
         Settings u;
-        check(u.uiEntry == UiEntry::Integrated && getOption(u, "ui.entry") == "integrated", "ui.entry is integrated by default");
+        check(u.uiEntry == UiEntry::Hotkey && getOption(u, "ui.entry") == "hotkey", "ui.entry is hotkey by default (until M9)");
         applyPreset(u, Preset::Original);
         check(u.uiEntry == UiEntry::Hotkey && detectPreset(u) == Preset::Original, "the original preset opens by hotkey only");
         check(setOption(u, "ui.entry", "integrated").empty() && u.preset == Preset::Original && detectPreset(u) == Preset::Original,
               "ui.entry = integrated keeps the original preset");
         applyPreset(u, Preset::High);
-        check(u.uiEntry == UiEntry::Integrated, "a quality preset sets integrated");
-        check(setOption(u, "ui.entry", "hotkey").empty() && u.preset == Preset::High && detectPreset(u) == Preset::High,
-              "ui.entry = hotkey keeps the high preset");
+        check(u.uiEntry == UiEntry::Hotkey, "a quality preset sets hotkey (until M9)");
+        // Until M9 wires the host's page drawing, no preset may open a page the host cannot draw (MENU_DESIGN 3.8):
+        // M9 changes this check to the table's values (ui.pause joins it with M7).
+        for (Preset preset : {Preset::Original, Preset::Low, Preset::Medium, Preset::High, Preset::Ultra}) {
+            Settings t;
+            t.uiEntry = UiEntry::Integrated;
+            applyPreset(t, preset);
+            check(t.uiEntry == UiEntry::Hotkey, "no preset sets ui.entry = integrated before M9");
+        }
+        check(setOption(u, "ui.entry", "integrated").empty() && u.preset == Preset::High && detectPreset(u) == Preset::High,
+              "ui.entry = integrated keeps the high preset");
         check(!setOption(u, "ui.entry", "start").empty(), "an unknown ui.entry is refused");
         const auto path = gt4::test::uniqueTempPath("gt4_ui_entry", ".ini");
         saveSettings(u, path.string());
         Settings back;
-        check(loadSettings(back, path.string()).empty() && back.uiEntry == UiEntry::Hotkey && back.preset == Preset::High,
-              "the file keeps ui.entry = hotkey under the high preset");
+        check(loadSettings(back, path.string()).empty() && back.uiEntry == UiEntry::Integrated && back.preset == Preset::High,
+              "the file keeps ui.entry = integrated under the high preset");
         std::filesystem::remove(path);
         // A file from before ui.entry: the loaded preset's value, whether the file names the preset or only matches it.
         auto loadText = [](const std::string& text) {
@@ -147,7 +155,7 @@ int main() {
         check(clean3 && old3.preset == Preset::Original && old3.uiEntry == UiEntry::Integrated,
               "an original file that sets ui.entry = integrated keeps it");
         auto [clean4, old4] = loadText("version = 1\n[graphics]\npreset = high\n");
-        check(clean4 && old4.uiEntry == UiEntry::Integrated, "a high file without ui.entry is integrated");
+        check(clean4 && old4.uiEntry == UiEntry::Hotkey, "a high file without ui.entry is hotkey (until M9)");
         auto [clean5, old5] = loadText("version = 1\n[graphics]\npreset = original\n[ui]\nentry = bogus\n");
         check(!clean5 && old5.uiEntry == UiEntry::Hotkey, "a refused ui.entry is as if missing: the original preset's hotkey");
     }
