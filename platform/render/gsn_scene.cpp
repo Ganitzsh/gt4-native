@@ -2548,19 +2548,18 @@ bool GsnScene::Impl::nightPrepare(const gsn::FrameList::Lighting& l, const Scene
         if (!view || area > bestArea) view = &v, bestArea = area;
     }
     if (!view) return false;
-    // The GS origin (XYOFFSET) of the view's 3D batches: from its first instance with jobs.
+    // The GS origin (XYOFFSET) of the view's 3D batches: from its first tagged job (ModelJob::pad[0] its instance,
+    // pad[1] its view: CONTRACTS.md a.8, jobs by tag; InstanceData had no first job, B6). frame.models holds this list's
+    // jobs only, so view ids from other frames can't match here.
     float originX = 0.0f, originY = 0.0f;
     bool origin = false;
-    for (uint32_t i = 0; i < view->instanceCount && !origin; ++i) {
-        const uint32_t at = view->firstInstance + i;
-        if (at >= sf.instances.size()) break;
-        const scene::InstanceData& inst = sf.instances[at];
-        if (inst.jobCount && inst.firstJob < frame.models.size()) {
-            originX = frame.models[inst.firstJob].originX;
-            originY = frame.models[inst.firstJob].originY;
+    for (const gfx::ModelJob& job : frame.models)
+        if (job.pad[0] && job.pad[1] == view->id) {
+            originX = job.originX;
+            originY = job.originY;
             origin = true;
+            break;
         }
-    }
     if (!origin) return false;
     // The view's projection (GT4's row vectors: clip = p * m) and viewport (window = scale * ndc + offset), at the render
     // scale: render pixel = scale * (window - origin). See CONTRACTS.md c.3 and spike R1 for GT4's Z.

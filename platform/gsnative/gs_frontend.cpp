@@ -1,5 +1,7 @@
 // The native renderer's front end (see gs_frontend.h). Register layouts from the public GS documentation.
 #include "gs_frontend.h"
+
+#include <chrono>
 #include "../gs/cpu_profile.h"
 #include "texture_name.h"
 
@@ -73,7 +75,17 @@ void FrameList::clear() {
     dump = false;
     readbacks.clear();
     scene.reset();
-    for (ViewOnList& v : views) scene::sceneViewToPool(v.package);
+    for (ViewOnList& v : views) {
+        scene::sceneViewToPool(v.package);
+        if (v.ids.capacity()) {   // (B6: kept for this list's next views)
+            v.ids.clear();
+            spareIds.push_back(std::move(v.ids));
+        }
+        if (v.materials.capacity()) {
+            v.materials.clear();
+            spareMaterials.push_back(std::move(v.materials));
+        }
+    }
     views.clear();
 }
 
@@ -500,8 +512,16 @@ void GsFrontend::setReadData(std::vector<uint8_t> data) {
     readPos = 0;
 }
 
+void GsFrontend::clearSceneJobs() {
+    sceneJobs.clear();
+    std::fill(sceneJobFirst.begin(), sceneJobFirst.end(), UINT32_MAX);
+    std::fill(sceneJobLast.begin(), sceneJobLast.end(), UINT32_MAX);
+}
+
 void GsFrontend::cut(FrameList& out, bool async) {
     lastModelView = 0;   // (the split's draws: a new list starts its runs)
+    clearSceneJobs();    // (B6: their indices are the list's that goes; a view with jobs in both is cut)
+    sceneViewsFrom = 0;
     if (sceneOpen) {   // a partial list inside a scene frame (a.8): its views with tagged draws are cut
         ++sceneCuts;
         if (async) ++sceneCutsAsync;
@@ -1354,6 +1374,7 @@ bool GsFrontend::setTexture(const DrawState& s, TextureSource& src) {
         loadSetContent(hash, sc);
         if (indexed) loadPalette();
         d.id = nextTexture++;
+        textureIdentities[d.id] = key;   // (B6: a material keys on it)
         d.texels = 0;
         TextureImage image;
         image.id = d.id;
@@ -1707,6 +1728,7 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
         c.streak = consecutive ? c.streak + 1 : 1;
         c.decodedFrame = frameCount;
         d.id = c.id = id ? id : nextTexture++;
+        if (!id) textureIdentities[d.id] = contentKey;   // (B6; a stream's reused id keeps its first content's: one material)
         d.texels = 0;
         for (uint32_t i = 0; i < levelCount; ++i) d.texels += uint64_t(levels[i].w) * levels[i].h;
         cachedTexels += d.texels;
@@ -1953,6 +1975,19 @@ void GsFrontend::model(const gfx::ModelJob& in, const uint32_t* words) {
     batch->count += triangles * 3;
     frame.modelData.insert(frame.modelData.end(), words, words + gfx::kModelWords);
     frame.models.push_back(job);
+    // B6: a tagged job (pad[0] its instance), chained to its instance's earlier ones in this list, with its draw
+    if (sceneSplit && sceneOpen && in.pad[0]) {
+        const uint32_t instance = in.pad[0];
+        if (sceneJobFirst.size() <= instance) {
+            sceneJobFirst.resize(instance + 1, UINT32_MAX);
+            sceneJobLast.resize(instance + 1, UINT32_MAX);
+        }
+        const uint32_t at = static_cast<uint32_t>(sceneJobs.size());
+        sceneJobs.push_back({static_cast<uint32_t>(frame.models.size() - 1), static_cast<uint32_t>(batch - frame.draws.data()), UINT32_MAX});
+        if (sceneJobLast[instance] == UINT32_MAX) sceneJobFirst[instance] = at;
+        else sceneJobs[sceneJobLast[instance]].next = at;
+        sceneJobLast[instance] = at;
+    }
     stats.primitives += triangles;
     if (depth) {
         Scene& scene = scenes[colour];
@@ -2209,6 +2244,7 @@ uint32_t GsFrontend::replacementTexture(const TextureName& name, const Replaceme
     }
     TextureImage upload;
     upload.id = nextTexture++;
+    textureIdentities[upload.id] = TextureNameHash{}(name) ^ 0x7E3A9C0000000000ull;   // (B6: a pack image, by its name)
     upload.version = 1;
     upload.width = image.width;
     upload.height = image.height;
@@ -2222,6 +2258,11 @@ uint32_t GsFrontend::replacementTexture(const TextureName& name, const Replaceme
     return upload.id;
 }
 
+uint64_t GsFrontend::textureIdentity(uint32_t id) const {
+    auto it = textureIdentities.find(id);
+    return it == textureIdentities.end() ? 0 : it->second;
+}
+
 void GsFrontend::resetTextures() {
     lastTexture.valid = false;
     assetLoaded = 0;
@@ -2229,6 +2270,7 @@ void GsFrontend::resetTextures() {
     replacementTextures.clear();
     textureCache.clear();
     decoded.clear();
+    textureIdentities.clear();
     cachedTexels = 0;
     frame.textures.clear();
     frame.resetTextures = true;
@@ -2435,6 +2477,10 @@ void GsFrontend::sceneRecord(const uint8_t* payload, size_t bytes) {
         sceneVsyncInFrame = false;
         sceneBrackets = 0;
         sceneMainViews.clear();
+        // B6: a FrameBegin without the last frame's FrameEnd drops that frame (the decoder does): its jobs and counters go
+        clearSceneJobs();
+        sceneCacheCounters = {};
+        sceneViewsFrom = frame.views.size();
     } else if (prefix.kind == gfx::scene::kMarker && sceneOpen) {   // (SceneFrame::markerCommands, a.8)
         sceneMarkerCommands.push_back(static_cast<uint32_t>(frame.commands.size()));
         if (bytes >= sizeof(gfx::scene::Marker)) {   // N4: the flare's and glare's brackets, in stream order (a cut list too)
@@ -2478,6 +2524,57 @@ void GsFrontend::sceneView(std::shared_ptr<const scene::SceneView> view) {
         for (uint8_t i = 0; i < b.auxCount; ++i) v.auxTargets[i] = b.aux[i];
         v.auxReads = b.auxReads;
         v.auxDraws = static_cast<uint16_t>(std::min<uint32_t>(b.auxDraws, 0xFFFF));
+    }
+    // B6 (design a92c4a2): each instance's mesh and materials, from its tagged jobs in this list (all of them are here
+    // by its ViewEnd, a.5.3, unless the view was cut: then it is never substituted, and gets none).
+    // A view whose own checks failed at its ViewEnd (view.valid) is never substituted either: none.
+    const bool cut = id && id <= viewBindings.size() && viewBindings[id - 1u].cut;
+    if (sceneSplit && !cut && view->view.valid) {
+        const auto started = std::chrono::steady_clock::now();
+        if (!sceneCache_) sceneCache_ = std::make_unique<scene::SceneCache>();
+        if (!frame.spareIds.empty()) {
+            v.ids = std::move(frame.spareIds.back());
+            frame.spareIds.pop_back();
+        }
+        if (!frame.spareMaterials.empty()) {
+            v.materials = std::move(frame.spareMaterials.back());
+            frame.spareMaterials.pop_back();
+        }
+        v.ids.resize(view->instances.size());
+        for (size_t k = 0; k < view->instances.size(); ++k) {
+            const scene::InstanceData& instance = view->instances[k];
+            const uint32_t tag = instance.index + 1;   // (the jobs' pad[0]: its position, not its serial)
+            sceneItems.clear();
+            for (uint32_t at = tag < sceneJobFirst.size() ? sceneJobFirst[tag] : UINT32_MAX; at != UINT32_MAX; at = sceneJobs[at].next) {
+                const SceneJob& sj = sceneJobs[at];
+                const gfx::ModelJob& job = frame.models[sj.job];
+                const Draw& draw = frame.draws[sj.draw];
+                scene::ItemSource item;
+                item.batch = {&job, frame.modelData.data() + job.data};
+                item.prim = draw.state.prim;
+                item.context = &draw.state.c;
+                item.texAlpha0 = draw.state.texAlpha0;
+                item.texAlpha1 = draw.state.texAlpha1;
+                item.texBlackTransparent = draw.state.texBlackTransparent;
+                item.perPixelBlend = draw.state.perPixelBlend;
+                if (draw.texture.kind == TextureSource::Kind::Memory) item.texture = textureIdentity(draw.texture.id);
+                else if (draw.texture.kind == TextureSource::Kind::Target) item.texture = 0x7A26E70000000000ull ^ draw.texture.id;
+                else if (draw.texture.kind == TextureSource::Kind::Reinterpreted && draw.texture.id < frame.reinterpretations.size()) {
+                    // (which target, read through which format and palette: not the per-list index)
+                    const Reinterpretation& ri = frame.reinterpretations[draw.texture.id];
+                    const gfx::Texture& tx = ri.texture;
+                    item.texture = mix(mix(mix(0x5E1D000000000000ull, ri.target), uint64_t(tx.format) | uint64_t(tx.log2Width) << 8 |
+                                                                              uint64_t(tx.log2Height) << 16 | uint64_t(tx.clutFormat) << 24 |
+                                                                              uint64_t(tx.clutOffset) << 32),
+                                       uint64_t(tx.base) | uint64_t(tx.clutBase) << 16 | uint64_t(tx.width) << 32);
+                }
+                sceneItems.push_back(item);
+            }
+            v.ids[k] = sceneCache_->assign(instance, sceneItems.data(), sceneItems.size(), v.materials, sceneCacheCounters);
+            ++stats.sceneInstances;
+            stats.sceneItems += sceneItems.size();
+        }
+        stats.sceneCacheMicroseconds += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - started).count();
     }
     v.package = std::move(view);
     frame.views.push_back(std::move(v));
@@ -2606,6 +2703,58 @@ void GsFrontend::sceneFrame(std::unique_ptr<scene::SceneFrame> f) {
     stats.cuts += c.cuts;
     stats.cutsAsync += c.cutsAsync;
     stats.viewsCut += c.viewsCut;
+    // B6: the ids of this list's views into the frame's instances (by serial), for SceneFrame-wide readers; views on an
+    // earlier partial list keep theirs there. Then the counters, and the caches' frame end.
+    for (size_t at = std::min(sceneViewsFrom, frame.views.size()); at < frame.views.size(); ++at) {   // (this frame's)
+        const FrameList::ViewOnList& v = frame.views[at];
+        if (!v.package || v.ids.size() != v.package->instances.size()) continue;
+        for (size_t k = 0; k < v.ids.size(); ++k) {
+            const uint32_t index = v.package->instances[k].index;
+            if (index >= f->instances.size()) continue;
+            scene::InstanceData& in = f->instances[index];
+            const scene::InstanceIds& ids = v.ids[k];
+            in.mesh = ids.mesh;
+            in.firstMaterial = static_cast<uint32_t>(f->materials.size());
+            in.materialCount = ids.materialCount;
+            f->materials.insert(f->materials.end(), v.materials.begin() + ids.firstMaterial,
+                                v.materials.begin() + ids.firstMaterial + ids.materialCount);
+        }
+    }
+    c.meshesNew += sceneCacheCounters.meshesNew;
+    c.meshesPending += sceneCacheCounters.meshesPending;
+    c.materialsNew += sceneCacheCounters.materialsNew;
+    c.meshesSkinned += sceneCacheCounters.meshesSkinned;
+    c.meshesPerFrame += sceneCacheCounters.meshesPerFrame;
+    stats.meshesNew += sceneCacheCounters.meshesNew;   // (the decoder totals its frames before these are filled)
+    stats.meshesPending += sceneCacheCounters.meshesPending;
+    stats.materialsNew += sceneCacheCounters.materialsNew;
+    stats.meshesSkinned += sceneCacheCounters.meshesSkinned;
+    stats.meshesPerFrame += sceneCacheCounters.meshesPerFrame;
+    // GT4_SCENE_CACHE_LOG=1 (B6's acceptance): one line a scene frame: its instances and items given ids, its distinct
+    // materials, what the caches found, the front-end time it took.
+    static const bool cacheLog = [] { const char* e = std::getenv("GT4_SCENE_CACHE_LOG"); return e && *e == '1'; }();
+    if (cacheLog && sceneCache_) {
+        static uint64_t lastInstances = 0, lastItems = 0;
+        static double lastMicroseconds = 0.0;
+        std::vector<scene::MaterialId> distinct(f->materials);
+        std::sort(distinct.begin(), distinct.end());
+        distinct.erase(std::unique(distinct.begin(), distinct.end()), distinct.end());
+        size_t meshes = 0;
+        for (const scene::InstanceData& in : f->instances) meshes += in.mesh != 0;
+        std::printf("scene cache: vblank %u: %llu instances (%zu with a mesh), %llu items, %zu materials; meshes new %llu, pending %llu, "
+                    "skinned %llu, per-frame %llu; materials new %llu; %.0f us\n",
+                    f->vblank, static_cast<unsigned long long>(stats.sceneInstances - lastInstances), meshes,
+                    static_cast<unsigned long long>(stats.sceneItems - lastItems), distinct.size(),
+                    static_cast<unsigned long long>(sceneCacheCounters.meshesNew), static_cast<unsigned long long>(sceneCacheCounters.meshesPending),
+                    static_cast<unsigned long long>(sceneCacheCounters.meshesSkinned), static_cast<unsigned long long>(sceneCacheCounters.meshesPerFrame),
+                    static_cast<unsigned long long>(sceneCacheCounters.materialsNew), stats.sceneCacheMicroseconds - lastMicroseconds);
+        lastInstances = stats.sceneInstances;
+        lastItems = stats.sceneItems;
+        lastMicroseconds = stats.sceneCacheMicroseconds;
+    }
+    sceneCacheCounters = {};
+    if (sceneCache_) sceneCache_->endFrame();
+    clearSceneJobs();   // (the next frame's instances count from 1 again)
     frame.scene = std::move(f);   // (two in one list: the newer stands; the stream counts that case)
     sceneOpen = false;
     viewBindings.clear();
@@ -2619,7 +2768,10 @@ void GsFrontend::vsync(uint64_t vblank, FrameList& out) {
     packetsThisFrame = 0;
     lastModelView = 0;
     if (sceneOpen) sceneVsyncInFrame = true;   // (its markers' indices span two lists: not checked)
-    for (ViewBinding& v : viewBindings) v.inList = false;
+    for (ViewBinding& v : viewBindings) {   // (as cut(): a view with tagged draws in this list and still open is cut, B6)
+        if (sceneOpen && v.inList && !v.ended) v.cut = true;
+        v.inList = false;
+    }
     scenes.clear();
     // The texture pack switched on or off: every texture decodes again, with or without its replacement.
     const bool wanted = replacementsWanted.load() && texturePack && texturePack->isOpen();
@@ -2638,6 +2790,7 @@ void GsFrontend::vsync(uint64_t vblank, FrameList& out) {
         for (auto it = replacementTextures.begin(); it != replacementTextures.end();) {
             if (it->second.lastUsed + 120 < frameCount) {   // (a texture pack's images: large, and outside the budget)
                 frame.retiredTextures.push_back(it->second.id);
+                textureIdentities.erase(it->second.id);
                 cachedTexels -= it->second.texels;
                 it = replacementTextures.erase(it);
             } else {
@@ -2650,6 +2803,7 @@ void GsFrontend::vsync(uint64_t vblank, FrameList& out) {
         for (auto it = decoded.begin(); it != decoded.end();) {
             if (it->second.lastUsed + kUnused < frameCount) {
                 frame.retiredTextures.push_back(it->second.id);
+                textureIdentities.erase(it->second.id);
                 cachedTexels -= it->second.texels;
                 it = decoded.erase(it);
             } else {
@@ -2664,6 +2818,7 @@ void GsFrontend::vsync(uint64_t vblank, FrameList& out) {
                 if (cachedTexels <= kBudget / 2 || used + 1 >= frameCount) break;
                 auto it = decoded.find(key);
                 frame.retiredTextures.push_back(it->second.id);
+                textureIdentities.erase(it->second.id);
                 cachedTexels -= it->second.texels;
                 decoded.erase(it);
             }
@@ -2699,6 +2854,8 @@ void GsFrontend::vsync(uint64_t vblank, FrameList& out) {
     d.target2 = displayed(shown.circuit[1]);
     for (Target& t : targets)
         if (t.id == d.target1 || t.id == d.target2) t.lastUsed = frameCount;
+    clearSceneJobs();   // (B6: as at a cut)
+    sceneViewsFrom = 0;
     std::swap(out, frame);
     frame.clear();
 }

@@ -15,6 +15,9 @@ namespace gt4::scene {
 namespace {
 
 constexpr uint32_t kPositions = 0, kSt = 64, kColors = 128, kTag = 192, kWeight = 242;
+// PRIM's FGE (bit 5), ABE (6), AA1 (7) and CTXT (9); in the GIF tag's second word they are bits 20, 21, 22 and 24 (PRIM at
+// the tag's bits 47..57)
+constexpr uint32_t kPrimNotGeometry = 0x2E0u, kTagPrimNotGeometry = 0x01700000u;
 constexpr float kNormalScale = 1.0f / 127.0f;
 
 // The VU's reading of a float word: no infinities, NaNs or denormals (renderers3d.cpp vuFloat).
@@ -174,25 +177,44 @@ Mesh buildMesh(const std::vector<BatchCopy>& items) {
     return mesh;
 }
 
-MeshKey meshKey(const std::vector<BatchCopy>& items) {
+MeshKey meshKey(const BatchRef* items, size_t count) {
     MeshKey key;
     XXH3_state_t state;
     XXH3_64bits_reset(&state);
-    for (const BatchCopy& item : items) {
+    for (size_t i = 0; i < count; ++i) {
+        const gfx::ModelJob& job = *items[i].job;
         // The vertex data, the strips and the tag (qwords 0..192); not the setup's constants, the lights or the
         // header, which change with the view, not with the geometry, nor a key-frame blend's weight, which changes
         // per frame (such items are not cached: MeshCache::request).
-        XXH3_64bits_update(&state, item.words, (kTag + 1) * 16);
-        const uint32_t fields[5] = {item.job.count, item.job.nloop, item.job.renderer, item.job.chain, item.job.prim};
+        // The tag and the job's PRIM without the bits that change the pixels but not the geometry (fog, blend, antialiasing,
+        // context): GT4 draws the same object into its views with those set differently (B6: the main view and the mirrors
+        // gave one object three meshes). The item's MeshItem::prim is the first decode's: the per-frame state is the draw's.
+        XXH3_64bits_update(&state, items[i].words, kTag * 16);
+        uint32_t tag[4];
+        std::memcpy(tag, items[i].words + kTag * 4, sizeof tag);
+        tag[1] &= ~kTagPrimNotGeometry;
+        XXH3_64bits_update(&state, tag, sizeof tag);
+        const uint32_t fields[5] = {job.count, job.nloop, job.renderer, job.chain, job.prim & ~kPrimNotGeometry};
         XXH3_64bits_update(&state, fields, sizeof fields);
     }
     key.packets = XXH3_64bits_digest(&state);
-    if (!items.empty()) {
-        key.renderer = items[0].job.renderer;
-        key.chain = items[0].job.chain;
-        key.chainUnpack = unpackOf(items[0].job);
+    if (count) {
+        key.renderer = items[0].job->renderer;
+        key.chain = items[0].job->chain;
+        key.chainUnpack = unpackOf(*items[0].job);
     }
     return key;
+}
+
+static std::vector<BatchRef> refsOf(const std::vector<BatchCopy>& items) {
+    std::vector<BatchRef> refs(items.size());
+    for (size_t i = 0; i < items.size(); ++i) refs[i] = {&items[i].job, items[i].words};
+    return refs;
+}
+
+MeshKey meshKey(const std::vector<BatchCopy>& items) {
+    const std::vector<BatchRef> refs = refsOf(items);
+    return meshKey(refs.data(), refs.size());
 }
 
 std::vector<std::pair<uint32_t, uint32_t>> groupByMatrix(const gfx::ModelJob* jobs, size_t count) {
@@ -221,16 +243,24 @@ MeshCache::~MeshCache() {
 }
 
 MeshId MeshCache::request(const std::vector<BatchCopy>& items) {
-    for (const BatchCopy& item : items) {
-        const uint32_t unpack = unpackOf(item.job);
+    const std::vector<BatchRef> refs = refsOf(items);
+    return request(refs.data(), refs.size());
+}
+
+MeshId MeshCache::request(const BatchRef* items, size_t count, MeshRequest* outcome) {
+    MeshRequest found;
+    if (!outcome) outcome = &found;
+    for (size_t i = 0; i < count; ++i) {
+        const uint32_t unpack = unpackOf(*items[i].job);
         if (unpack == 3 || unpack == 4) {   // a key-frame blend: its geometry is this frame's only
             std::lock_guard<std::mutex> guard(lock);
             ++counters.requests;
             ++counters.perFrame;
+            *outcome = MeshRequest::PerFrame;
             return 0;
         }
     }
-    const MeshKey key = meshKey(items);
+    const MeshKey key = meshKey(items, count);
     std::unique_lock<std::mutex> guard(lock);
     ++counters.requests;
     auto it = ids.find(key);
@@ -238,16 +268,24 @@ MeshId MeshCache::request(const std::vector<BatchCopy>& items) {
         ++counters.hits;
         Entry& e = *entries[it->second - 1];
         e.lastUsed = frame;
-        return e.ready.load(std::memory_order_acquire) ? it->second : 0;
+        const bool ready = e.ready.load(std::memory_order_acquire);
+        *outcome = ready ? MeshRequest::Ready : MeshRequest::Pending;
+        return ready ? it->second : 0;
     }
     entries.push_back(std::make_unique<Entry>());
     const MeshId id = static_cast<MeshId>(entries.size());
     entries.back()->lastUsed = frame;
     ids.emplace(key, id);
-    queue.emplace_back(id, items);
+    std::vector<BatchCopy> copies(count);   // (only on a miss: the worker decodes from them after this list goes)
+    for (size_t i = 0; i < count; ++i) {
+        copies[i].job = *items[i].job;
+        std::memcpy(copies[i].words, items[i].words, sizeof copies[i].words);
+    }
+    queue.emplace_back(id, std::move(copies));
     ++counters.pending;
     guard.unlock();
     wake.notify_one();
+    *outcome = MeshRequest::Queued;
     return 0;
 }
 
@@ -258,11 +296,11 @@ MeshId MeshCache::find(const MeshKey& key) const {
     return entries[it->second - 1]->ready.load(std::memory_order_acquire) ? it->second : 0;
 }
 
-const Mesh* MeshCache::mesh(MeshId id) const {
+std::shared_ptr<const Mesh> MeshCache::mesh(MeshId id) const {
     std::lock_guard<std::mutex> guard(lock);
     if (id == 0 || id > entries.size()) return nullptr;
     const Entry& e = *entries[id - 1];
-    return e.ready.load(std::memory_order_acquire) && !e.evicted ? &e.mesh : nullptr;
+    return e.ready.load(std::memory_order_acquire) && !e.evicted ? e.mesh : nullptr;
 }
 
 void MeshCache::setLimits(uint32_t frames, uint64_t bytes) {
@@ -275,9 +313,9 @@ void MeshCache::endFrame() {
     std::lock_guard<std::mutex> guard(lock);
     ++frame;
     auto evict = [&](Entry& e) {
-        counters.bytes -= e.mesh.bytes();
-        ids.erase(e.mesh.key);   // asked for again: decoded again, under a new id
-        e.mesh = Mesh{};
+        counters.bytes -= e.mesh->bytes();
+        ids.erase(e.mesh->key);   // asked for again: decoded again, under a new id
+        e.mesh.reset();          // (a reader holding it keeps it)
         e.evicted = true;
         ++counters.evicted;
     };
@@ -317,18 +355,19 @@ void MeshCache::work() {
         ++busy;
         guard.unlock();
         const auto started = std::chrono::steady_clock::now();
-        entry->mesh = buildMesh(items);
+        auto built = std::make_shared<const Mesh>(buildMesh(items));
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
         guard.lock();   // (published under the lock, with its bytes counted: endFrame never sees it half done)
+        entry->mesh = std::move(built);
         entry->ready.store(true, std::memory_order_release);
         --busy;
         --counters.pending;
         ++counters.decoded;
-        counters.vertices += entry->mesh.vertices.size();
-        counters.sourceVertices += entry->mesh.sourceVertices;
-        counters.triangles += entry->mesh.indices.size() / 3;
-        counters.bytes += entry->mesh.bytes();
-        counters.decodedBytes += entry->mesh.bytes();
+        counters.vertices += entry->mesh->vertices.size();
+        counters.sourceVertices += entry->mesh->sourceVertices;
+        counters.triangles += entry->mesh->indices.size() / 3;
+        counters.bytes += entry->mesh->bytes();
+        counters.decodedBytes += entry->mesh->bytes();
         counters.decodeMilliseconds += ms;
         if (queue.empty() && busy == 0) idle.notify_all();
     }

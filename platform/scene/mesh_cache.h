@@ -58,6 +58,16 @@ struct BatchCopy {
     uint32_t words[gfx::kModelWords] = {};
 };
 
+// One batch where it lies (a FrameList's job and its words in modelData): no copy (MeshCache::request's fast path).
+struct BatchRef {
+    const gfx::ModelJob* job = nullptr;
+    const uint32_t* words = nullptr;   // gfx::kModelWords of them
+};
+
+// What a request found (B6's counters): the mesh decoded, asked for before and still decoding, asked for the first
+// time (queued now), or not cached (an item with a key-frame blend: its geometry is this frame's only).
+enum class MeshRequest : uint8_t { Ready, Pending, Queued, PerFrame };
+
 // The decode of one batch (its vertices in batch order, and its triangles over them); exposed for the tests.
 struct DecodedBatch {
     std::vector<MeshVertex> vertices;    // the first job.count of the batch (the strips' vertices)
@@ -72,6 +82,7 @@ Mesh buildMesh(const std::vector<BatchCopy>& items);
 
 // A key for the items' contents (what a later frame sends again for the same object).
 MeshKey meshKey(const std::vector<BatchCopy>& items);
+MeshKey meshKey(const BatchRef* items, size_t count);
 
 // Groups a frame's jobs into objects until instances are known: consecutive jobs with the same matrix.
 std::vector<std::pair<uint32_t, uint32_t>> groupByMatrix(const gfx::ModelJob* jobs, size_t count);   // (first, count) runs
@@ -87,9 +98,12 @@ public:
     // Per-frame geometry is not cached: items with a key-frame blend (their weight changes every frame) give 0
     // and count in Stats::perFrame; the caller decodes them itself (decodeBatch) or falls back.
     MeshId request(const std::vector<BatchCopy>& items);
+    // The same from batches where they lie: the key is hashed in place, the items copied only when queued (a miss).
+    MeshId request(const BatchRef* items, size_t count, MeshRequest* outcome = nullptr);
     MeshId find(const MeshKey& key) const;       // 0: not known, not decoded yet, or evicted
-    // Decoded meshes only. A pointer stays valid until the next endFrame() (which may evict).
-    const Mesh* mesh(MeshId id) const;
+    // Decoded meshes only (null: unknown, pending or evicted). Shared: a reader on another thread (the render thread, B7,
+    // F2b) keeps it alive across an eviction by endFrame() on the front-end thread.
+    std::shared_ptr<const Mesh> mesh(MeshId id) const;
     void wait();                                 // until every requested decode is done (tests)
 
     // The end of a frame: meshes not asked for in the last `unusedFrames` frames are dropped, then the least
@@ -109,7 +123,7 @@ public:
 private:
     struct Entry {
         std::atomic<bool> ready{false};
-        Mesh mesh;                               // written by the worker before `ready`
+        std::shared_ptr<const Mesh> mesh;        // written by the worker before `ready`
         uint32_t lastUsed = 0;                   // the frame it was last asked for
         bool evicted = false;
     };

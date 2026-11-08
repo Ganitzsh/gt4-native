@@ -1208,6 +1208,21 @@ std::string GsHost::summary() const {
                 out << "; " << name << " bracket draws onto the principal " << s.bracketPrincipal[k] << ", screen-sized "
                     << s.bracketScreen[k] << ", kept (another target) " << s.bracketKept[k];
         if (s.bracketsOpenAtEnd) out << "; scene frames ending with a bracket open " << s.bracketsOpenAtEnd;
+        // B6: the scene cache's ids (instances and items given them, the front-end time, the caches' totals, and whether
+        // the same object kept its ids)
+        if (gt4::scene::SceneCache* cache = h.target->frontend().sceneCache()) {
+            const auto m = cache->meshes().stats();
+            const auto t = cache->materials().stats();
+            const auto o = cache->stats();
+            out << "; scene cache: " << s.sceneInstances << " instances (" << s.sceneItems << " items) given ids in "
+                << static_cast<uint64_t>(s.sceneCacheMicroseconds) << " us on the front end (" << (s.sceneFrames ? s.sceneCacheMicroseconds / double(s.sceneFrames) : 0.0)
+                << " us a scene frame); instances' meshes new " << s.meshesNew << ", pending " << s.meshesPending << ", skinned "
+                << s.meshesSkinned << ", per-frame " << s.meshesPerFrame << ", materials new " << s.materialsNew
+                << "; meshes " << m.decoded << " decoded, " << m.hits << " hits, " << m.perFrame << " per-frame, "
+                << m.evicted << " evicted, " << (m.bytes >> 20) << " MiB held; materials " << t.created << " made, " << t.held
+                << " held; objects " << o.objects << ", sightings with the same ids " << o.objectsSame << ", another mesh "
+                << o.objectsMeshChanged << ", other materials " << o.objectsMaterialsChanged;
+        }
         byRole("unbound", s.unboundByRole);
         byRole("cut", s.cutByRole);
     }

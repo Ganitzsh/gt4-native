@@ -56,12 +56,14 @@ struct MeshKeyHash {
     }
 };
 struct MaterialKey {         // GT4's material: what the batch's pixels depend on besides geometry
-    uint64_t texture = 0;    // texture set content hash ^ texture index; 0 untextured
+    uint64_t texture = 0;    // the texture's identity (the front end's textureIdentity(id): content hash, fields,
+                             //   palette, TEXA), so a re-decode after eviction keeps the id; 0 untextured
     uint32_t palette = 0;    // CLUT source id/version
     uint32_t body = 0;       // ModelJob::chain >> 16 (lighting body)
     uint32_t dot = 0;        // ModelJob::dot
     uint32_t state = 0;      // hash of the DrawState fields that matter (blend, tests, fog, filter)
-    uint64_t colours = 0;    // hash of the material colour qwords (0049E228)
+    uint64_t colours = 0;    // 0 (a.8, 51a14a9): the batch's colour rows are per-frame lighting, not identity;
+                             //   reserved for an unscaled per-object colour
 };
 using MeshId = uint32_t;      // 0 = none
 using MaterialId = uint32_t;  // 0 = none
@@ -98,6 +100,9 @@ struct SceneCounters {
     uint64_t fallbackNotBound = 0, fallbackMeshPending = 0, fallbackPipelinePending = 0, fallbackValidation = 0,
              fallbackReadPending = 0;
     uint64_t meshesNew = 0, meshesPending = 0, materialsNew = 0;
+    // B6: instances given mesh 0 because their geometry is this frame's only: skinned (kInstSkinned), or an item with
+    // a key-frame blend (MeshCache's per-frame items); B7 draws them per frame
+    uint64_t meshesSkinned = 0, meshesPerFrame = 0;
     void add(const SceneCounters& o);   // running totals
     // the gates of CONTRACTS.md a.7 that hold on any stream (not the ones that need the front end)
     bool errorFree() const {
@@ -134,6 +139,8 @@ struct ViewData {
 struct InstanceData {
     uint16_t view = 0, flags = 0;
     uint32_t serial = 0;
+    uint32_t index = 0;                           // its position in SceneFrame::instances: its jobs' tag is index + 1
+                                                  //   (ModelJob::pad[0]); the serial is the record's, not trusted
     uint16_t projection = 0;                      // GT4's projection for this instance: parity and GS Z (B7, B8)
     uint64_t object = 0;                          // set << 32 ^ model << 8 ^ lod, or the Cmd address
     uint32_t cmd = 0, entrant = 0xFFFFFFFFu, set = 0;
@@ -142,9 +149,19 @@ struct InstanceData {
     Mat4 objectToView, objectToWorld, previousObjectToWorld;
     float axisScale[3] = {1, 1, 1}, shapeScale = 0;
     uint16_t items = 0, runs = 0;                 // runs: the kBatchRun records that followed it
-    uint32_t firstJob = 0, jobCount = 0;          // in FrameList::models (A10's front-end half)
+    uint32_t jobCount = 0;                        // in FrameList::models, found by tag (ModelJob::pad[0] = this
+                                                  //   instance's position + 1), not as a range: an item
+                                                  //   callback's runs can land between them (a.5.3)
+    MeshId mesh = 0;                              // copied at sceneFrame() from the views' ViewOnList::ids (B6)
+    uint32_t firstMaterial = 0, materialCount = 0;   // in SceneFrame::materials: one per item, in the mesh's
+                                                     //   item order (a car has more than four). In a SceneView
+                                                     //   package these three stay 0: it is made before B6 runs
+                                                     //   and const after; its ids are on ViewOnList
+};
+// B6: one instance's ids beside its package (FrameList::ViewOnList::ids, CONTRACTS.md a.8).
+struct InstanceIds {
     MeshId mesh = 0;
-    MaterialId materials[4] = {};
+    uint32_t firstMaterial = 0, materialCount = 0;   // in ViewOnList::materials
 };
 struct SceneFrame {
     uint32_t frame = 0, vblank = 0, flags = 0;
@@ -152,6 +169,7 @@ struct SceneFrame {
     std::vector<ProjectionData> projections;      // by id - 1
     std::vector<ViewData> views;                  // by id - 1
     std::vector<InstanceData> instances;          // by serial - 1
+    std::vector<MaterialId> materials;            // the instances' materials (InstanceData::firstMaterial), B6
     std::vector<gfx::scene::Light> lights;
     std::vector<gfx::scene::Emitter> emitters;
     std::vector<gfx::scene::Marker> markers;

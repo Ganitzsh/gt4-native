@@ -633,6 +633,122 @@ int main(int argc, char** argv) {
         }
     }
 
+    // 2g. B6 (design a92c4a2): each instance of a view gets its mesh and materials at ViewEnd, beside the package. Two
+    // instances with the same batch share a mesh; a third's two jobs have a callback's untagged run between them (jobs by
+    // tag, not a range); a skinned one gets mesh 0. The first frame finds every mesh new or pending; the second, after the
+    // decodes, the same mesh and material ids, and the frame's instances get a copy.
+    {
+        using gt4::scene::InstanceData;
+        gt4::gsn::GsFrontend fe;
+        fe.setSceneSplit(true);
+        Gif g = setup();
+        fe.gif(3, static_cast<const uint8_t*>(g.data()), g.bytes());
+        std::vector<uint32_t> a(gt4::gfx::kModelWords, 0), b(gt4::gfx::kModelWords, 0);
+        for (auto* w : {&a, &b}) {
+            (*w)[64 * 4 + 3] = 1;       // one strip
+            (*w)[65 * 4 + 3] = 3 * 3;   // of 5 vertices: 3 triangles
+        }
+        b[0] = 0x3F800000;              // another position: another batch
+        gt4::gfx::ModelJob job{};
+        job.count = 5;
+        job.prim = 4;
+        auto frameOf = [&](uint32_t vsync, gt4::gsn::FrameList& out) {
+            gt4::gfx::scene::FrameBegin begin{};
+            begin.prefix = {gt4::gfx::scene::kFrameBegin, gt4::gfx::scene::kVersion};
+            fe.sceneRecord(reinterpret_cast<const uint8_t*>(&begin), sizeof begin);
+            auto tagged = [&](uint32_t instance, const std::vector<uint32_t>& words) {
+                job.pad[0] = instance;
+                job.pad[1] = instance ? 1 : 0;
+                fe.model(job, words.data());
+            };
+            tagged(1, a);
+            tagged(2, a);
+            tagged(3, a);
+            tagged(0, b);   // an item callback's untagged run, between instance 3's jobs
+            tagged(3, b);
+            tagged(4, a);
+            gt4::gfx::scene::ViewEnd end{};
+            end.prefix = {gt4::gfx::scene::kViewEnd, gt4::gfx::scene::kVersion};
+            end.view = 1;
+            fe.sceneRecord(reinterpret_cast<const uint8_t*>(&end), sizeof end);
+            auto package = std::make_shared<gt4::scene::SceneView>();
+            package->view.id = 1;
+            package->view.valid = true;   // (its checks passed at ViewEnd: an invalid view gets no ids)
+            auto frame = std::make_unique<gt4::scene::SceneFrame>();
+            for (uint32_t serial = 1; serial <= 4; ++serial) {
+                InstanceData in;
+                in.serial = serial + 10;   // (a record's serial, not trusted: the ids follow the position)
+                in.index = serial - 1;     // (its position: the jobs' tag - 1)
+                in.view = 1;
+                if (serial == 4) in.flags = gt4::gfx::scene::kInstSkinned;
+                package->instances.push_back(in);
+                frame->instances.push_back(in);
+            }
+            gt4::scene::ViewData v;
+            v.id = 1;
+            frame->views.push_back(v);
+            fe.sceneView(std::move(package));
+            fe.sceneFrame(std::move(frame));
+            fe.vsync(vsync, out);
+        };
+        gt4::gsn::FrameList first, second;
+        frameOf(1, first);
+        expect(first.views.size() == 1 && first.views[0].ids.size() == 4, "B6: one InstanceIds per instance of the package");
+        if (first.views.size() == 1 && first.views[0].ids.size() == 4 && first.scene) {
+            const auto& ids = first.views[0].ids;
+            const auto& m = first.views[0].materials;
+            const auto& c = first.scene->counters;
+            expect(ids[0].materialCount == 1 && ids[1].materialCount == 1 && ids[2].materialCount == 2 && ids[3].materialCount == 1,
+                   "B6: a material per item, found by tag (instance 3's two jobs across the callback's)");
+            expect(ids[0].mesh == 0 && ids[1].mesh == 0 && ids[2].mesh == 0 && ids[3].mesh == 0, "B6: no mesh before its decode");
+            expect(c.meshesNew == 2 && c.meshesPending == 1, "B6: new meshes asked for (1 and 3), one asked again while decoding (2)");
+            expect(c.meshesSkinned == 1, "B6: a skinned instance is counted, mesh 0");
+            expect(m[ids[0].firstMaterial] == m[ids[1].firstMaterial] && c.materialsNew == 1,
+                   "B6: the same state and texture, the same material (made once)");
+        }
+        fe.sceneCache()->meshes().wait();
+        frameOf(2, second);
+        if (second.views.size() == 1 && second.views[0].ids.size() == 4 && second.scene && first.views.size() == 1) {
+            const auto& ids = second.views[0].ids;
+            const auto& m = second.views[0].materials;
+            expect(ids[0].mesh != 0 && ids[0].mesh == ids[1].mesh && ids[2].mesh != 0 && ids[2].mesh != ids[0].mesh && ids[3].mesh == 0,
+                   "B6: after the decodes, two instances share a mesh, the third has its own, the skinned none");
+            expect(m == first.views[0].materials, "B6: the same material ids in the next frame");
+            expect(second.scene->counters.meshesNew == 0 && second.scene->counters.materialsNew == 0, "B6: nothing new the second time");
+            const auto& in = second.scene->instances;
+            expect(in.size() == 4 && in[2].mesh == ids[2].mesh && in[2].materialCount == 2 &&
+                       second.scene->materials.size() == 5 && second.scene->materials[in[2].firstMaterial] == m[ids[2].firstMaterial],
+                   "B6: the frame's instances get a copy of the ids");
+        } else {
+            expect(false, "B6: the second frame's view and scene");
+        }
+        expect(fe.stats.sceneInstances == 8 && fe.stats.sceneItems == 10, "B6: instances and items counted");
+        // A VSync inside the view (lane A's review): its jobs before it went with that list, so the view is cut, no ids.
+        gt4::gfx::scene::FrameBegin begin{};
+        begin.prefix = {gt4::gfx::scene::kFrameBegin, gt4::gfx::scene::kVersion};
+        fe.sceneRecord(reinterpret_cast<const uint8_t*>(&begin), sizeof begin);
+        job.pad[0] = 1;
+        job.pad[1] = 1;
+        fe.model(job, a.data());
+        gt4::gsn::FrameList before, after;
+        fe.vsync(3, before);
+        fe.model(job, a.data());
+        gt4::gfx::scene::ViewEnd end{};
+        end.prefix = {gt4::gfx::scene::kViewEnd, gt4::gfx::scene::kVersion};
+        end.view = 1;
+        fe.sceneRecord(reinterpret_cast<const uint8_t*>(&end), sizeof end);
+        auto package = std::make_shared<gt4::scene::SceneView>();
+        package->view.id = 1;
+        package->view.valid = true;
+        InstanceData in;
+        in.serial = 1;
+        in.view = 1;
+        package->instances.push_back(in);
+        fe.sceneView(std::move(package));
+        fe.vsync(4, after);
+        expect(after.views.size() == 1 && after.views[0].ids.empty(), "B6: a view a VSync cut gets no ids");
+    }
+
     // 3. A capture replayed through GsHost (no game: reads stay in memory): one displayed list per VBlank.
     {
         const std::filesystem::path dir = outputDir.empty() ? gt4::test::uniqueTempPath("gt4_gs_host_test") : std::filesystem::path(outputDir);

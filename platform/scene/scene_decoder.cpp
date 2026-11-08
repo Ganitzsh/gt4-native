@@ -79,7 +79,7 @@ void SceneCounters::add(const SceneCounters& o) {
     fallbackNotBound += o.fallbackNotBound; fallbackMeshPending += o.fallbackMeshPending;
     fallbackPipelinePending += o.fallbackPipelinePending; fallbackValidation += o.fallbackValidation;
     fallbackReadPending += o.fallbackReadPending; meshesNew += o.meshesNew; meshesPending += o.meshesPending;
-    materialsNew += o.materialsNew;
+    materialsNew += o.materialsNew; meshesSkinned += o.meshesSkinned; meshesPerFrame += o.meshesPerFrame;
 }
 
 namespace {
@@ -373,6 +373,7 @@ void SceneDecoder::instance(const rec::Instance& r) {
                 ++c.cameraMismatch;
         }
     }
+    d.index = static_cast<uint32_t>(frame_->instances.size());   // (its jobs' tag - 1, below: B6 finds them by it)
     frame_->instances.push_back(d);
     instance_ = static_cast<int>(frame_->instances.size()) - 1;
 }

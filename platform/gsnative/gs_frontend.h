@@ -6,6 +6,7 @@
 // target drawn earlier (the pages it last wrote) or GS memory, decoded once per content. The back end
 // (Vulkan) only executes the list. See docs/NATIVE_RENDERER.md.
 #include "scene_frame.h"
+#include "scene_cache.h"   // (B6: GsFrontend::sceneView gives each instance its ids)
 #include "gs_memory.h"
 #include "texture_pack.h"
 #include "gt4/gfx.h"
@@ -219,7 +220,16 @@ struct FrameList {
         uint8_t auxCount = 0;
         uint8_t auxReads = 0;             // bit i: a principal draw samples auxTargets[i]
         uint16_t auxDraws = 0;            // tagged draws into the auxiliary targets
+        // B6 (CONTRACTS.md a.8): by position in package->instances, filled in GsFrontend::sceneView before the view goes on
+        // the list; mesh 0: skinned, key-frame blend, pending, or the view cut. `materials`: one per item, in the mesh's
+        // item order (InstanceIds::firstMaterial).
+        using InstanceIds = scene::InstanceIds;
+        std::vector<InstanceIds> ids;
+        std::vector<scene::MaterialId> materials;
     };
+    // (B6: the views' ids and materials vectors, emptied by clear() with their capacity, for the next views on this list)
+    std::vector<std::vector<scene::InstanceIds>> spareIds;
+    std::vector<std::vector<scene::MaterialId>> spareMaterials;
     std::vector<ViewOnList> views;
     void clear();
 };
@@ -307,6 +317,9 @@ public:
     // pixels are the same either way (stats.sceneSplitDraws counts the draws it adds).
     void setSceneSplit(bool on) { sceneSplit = on; }
     bool sceneSplitOn() const { return sceneSplit; }
+    // A texture id's identity (setTexture's key: content hash, fields, palette, TEXA; a texture pack image's name): what a
+    // material keys on (B6), the same after the texture is dropped and decoded again under a new id. 0: unknown.
+    uint64_t textureIdentity(uint32_t id) const;
     // Replaces the whole of GS memory (4 MiB in address order: a saved state restored); every page becomes
     // memory-owned and changed.
     void restoreMemory(const void* data);
@@ -345,7 +358,14 @@ public:
         // unmarked (another target: the samples); scene frames that ended with a bracket open (an End missing: 0 expected)
         uint64_t bracketPrincipal[3] = {}, bracketScreen[3] = {}, bracketKept[3] = {};
         uint64_t bracketsOpenAtEnd = 0;
+        // B6 (scene cache): instances given ids, their items, and the time sceneView spent on them (the front-end
+        // thread's added cost, PERF: at most 0.5 ms a race frame)
+        uint64_t sceneInstances = 0, sceneItems = 0;
+        uint64_t meshesNew = 0, meshesPending = 0, materialsNew = 0, meshesSkinned = 0, meshesPerFrame = 0;   // totals
+        double sceneCacheMicroseconds = 0.0;
     } stats;
+    // B6's caches (null until the split is first on): their own counters, for the host's summary.
+    scene::SceneCache* sceneCache() { return sceneCache_.get(); }
 
     // The state groups of include/gt4/gfx.h: a state record from the game (the shared groups, then the
     // context groups of both contexts in bit order, from one source context).
@@ -573,6 +593,20 @@ private:
     std::vector<ViewBinding> viewBindings;
     uint32_t sceneCuts = 0, sceneCutsAsync = 0;
     std::vector<uint32_t> sceneMarkerCommands;   // the command index each marker of the open frame arrived at
+    // B6: the tagged jobs of the list being built, by instance (ModelJob::pad[0], the instance's position + 1 in the
+    // frame): each its job and its draw, chained per instance (sceneJobFirst / sceneJobLast by instance, then `next`).
+    // An instance's jobs need not be contiguous (a.5.3). Emptied when the list goes (cut, VSync) and at a frame's end.
+    struct SceneJob {
+        uint32_t job = 0, draw = 0, next = UINT32_MAX;
+    };
+    std::vector<SceneJob> sceneJobs;
+    std::vector<uint32_t> sceneJobFirst, sceneJobLast;
+    void clearSceneJobs();
+    std::unique_ptr<scene::SceneCache> sceneCache_;
+    scene::SceneCounters sceneCacheCounters;   // the open frame's (into its SceneFrame at sceneFrame())
+    std::vector<scene::ItemSource> sceneItems;   // (sceneView's, kept)
+    size_t sceneViewsFrom = 0;   // the open scene frame's first view on the list (frame.views): its own packages only
+    std::unordered_map<uint32_t, uint64_t> textureIdentities;   // texture id -> identity (textureIdentity)
     // N4: the brackets open in the frame (bit kBracketFlare, bit kBracketGlare), its main views (ViewBegin role kViewMain),
     // and the bracket a draw into `colour` gets (`rule`: 0 none or kept, 1 principal target, 2 screen-sized)
     uint8_t sceneBrackets = 0;
