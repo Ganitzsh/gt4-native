@@ -38,4 +38,10 @@ bool sceneRecordsWanted(const Settings& settings) {
     return record || settings.scene != SceneRenderer::Original || settings.night != LightingMode::Original;
 }
 
+// The scene split beside the records it needs, so the two switches can't drift apart (settings.h).
+bool sceneSplitWanted(const Settings& settings) {
+    const bool modern = settings.scene == SceneRenderer::Hybrid || settings.scene == SceneRenderer::Modern;
+    return sceneRecordsWanted(settings) && (modern || settings.night == LightingMode::Enhanced);
+}
+
 }  // namespace gt4

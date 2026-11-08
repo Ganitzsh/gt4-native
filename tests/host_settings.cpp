@@ -119,7 +119,18 @@ int main() {
             Settings t;
             applyPreset(t, preset);
             check(t.night == LightingMode::Original, "no preset turns the night relight on");
+            check(!sceneSplitWanted(t), "no preset turns the scene split on");
         }
+        // the scene split (sceneSplitWanted, F2b): with the night relight, beside the records it needs
+        Settings split;
+        check(!sceneSplitWanted(split) && !sceneSplitWanted(original), "no scene split by default or in the original preset");
+        split.night = LightingMode::Enhanced;
+        check(sceneRecordsWanted(split) && sceneSplitWanted(split), "the night relight wants the records and the split");
+        split.night = LightingMode::Original;
+        split.scene = SceneRenderer::Parity;
+        check(sceneRecordsWanted(split) && !sceneSplitWanted(split), "parity wants the records, not the split");
+        split.scene = SceneRenderer::Hybrid;
+        check(sceneSplitWanted(split), "hybrid wants the split");
     }
 
     // render.scene (settings_scene.cpp): only the GS path until the modern renderer draws a view.

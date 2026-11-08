@@ -1004,6 +1004,7 @@ int run(const Options& options) {
             }
             sendReadAnswers();
             gs->setHdTextures(settings.hdTextures);
+            gs->setSceneSplit(gt4::sceneSplitWanted(settings));   // (B6's ids for F2b's lamps, B7/B8's views; live and replays)
             gs->sendRequests();
             if (gs->live()) {
                 gs->setPaused(menu.isOpen());

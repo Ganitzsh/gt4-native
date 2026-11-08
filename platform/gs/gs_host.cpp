@@ -63,10 +63,12 @@ public:
         // GT4_GSN=stats prints a line per frame.
         const char* mode = std::getenv("GT4_GSN");
         stats = mode && !std::strcmp(mode, "stats");
-        // GT4_GSN_SCENE_SPLIT=1 (A10, testing until the modern renderer turns it on): Draw::view set, merging stopped at a
-        // view change (the pixels are the same either way)
-        if (const char* split = std::getenv("GT4_GSN_SCENE_SPLIT"); split && split[0] == '1') native->setSceneSplit(true);
+        // GT4_GSN_SCENE_SPLIT=1 (A10, testing): Draw::view set, merging stopped at a view change (the pixels are the same
+        // either way). Also on when the settings want it (GsHost::setSceneSplit: sceneSplitWanted), from the next VSync.
+        if (const char* split = std::getenv("GT4_GSN_SCENE_SPLIT"); split && split[0] == '1') splitFromEnv = true;
+        native->setSceneSplit(splitFromEnv);
     }
+    std::atomic<bool> splitWanted{false};   // GsHost::setSceneSplit (any thread); applied at the next vsync
     void setEventSink(gsn::GsFrontend::EventSink sink) { native->setEventSink(std::move(sink)); }
     // A live game's asynchronous reads (gfx::kReadAsync): the list cut at the read goes to the render thread with the
     // rectangle to copy when it draws it (`later`, not waited for), and GsHost::answerReads sends the pixels; pixels no
@@ -112,7 +114,10 @@ public:
     // puts each closed frame on the FrameList that receives its FrameEnd.
     void scene(const uint8_t* payload, size_t bytes) override { native->sceneRecord(payload, bytes); }
     void sceneFrame(std::unique_ptr<scene::SceneFrame>& frame) override { native->sceneFrame(std::move(frame)); }
-    bool wantsSceneViews() const override { return native->sceneSplitOn(); }   // (packages only for the split's consumer)
+    // (packages only for the split's consumer). Asked on the stream thread (QueuedTarget forwards it), so from the
+    // wanted state's atomic, not the front end's flag that vsync() writes on the GS thread: a package that arrives just
+    // before the switch reaches sceneView with the split still off and gets no ids, which is harmless.
+    bool wantsSceneViews() const override { return splitFromEnv || splitWanted.load(std::memory_order_relaxed); }
     void sceneView(std::shared_ptr<const scene::SceneView> view) override { native->sceneView(std::move(view)); }
     void primitives(const ps2::GsPrimitives& p) override {
         GT4_CPU_SCOPE("front end: the renderers' primitives");
@@ -152,6 +157,7 @@ public:
                     std::fclose(f);
                 }
             native->vsync(count, list);
+            native->setSceneSplit(splitFromEnv || splitWanted.load(std::memory_order_relaxed));   // (between frames)
         }
         // GT4_GSN_AT=FROM[,TO] (debugging): the per-frame lines below only for those VBlanks.
         static const std::pair<long, long> statsAt = [] {
@@ -342,6 +348,7 @@ private:
     std::unique_ptr<gsn::GsFrontend> native;
     gsn::FrameList list;
     bool stats = false;
+    bool splitFromEnv = false;   // GT4_GSN_SCENE_SPLIT=1
 };
 
 }  // namespace
@@ -1108,6 +1115,10 @@ void GsHost::setGameOption(uint32_t id, uint32_t value) {
     impl->gameOptions[id] = value;
     const uint32_t payload[3] = {4u, id, value};
     impl->link->write(GT4_REC_HOST_CMD, payload, sizeof payload);
+}
+
+void GsHost::setSceneSplit(bool on) {
+    if (impl->target) impl->target->splitWanted.store(on, std::memory_order_relaxed);
 }
 
 bool GsHost::live() const { return impl->link && impl->link->running(); }

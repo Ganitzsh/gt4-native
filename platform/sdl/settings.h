@@ -180,6 +180,11 @@ const char* name(FieldMode);
 // Whether the game should send its scene records (runtime kOptionSceneRecords; docs/modern/CONTRACTS.md a.1):
 // GT4_HOST_RECORD_SCENE=1, or a render.scene other than original (settings_scene.cpp, the one place that reads them).
 bool sceneRecordsWanted(const Settings& settings);
+// Whether the front end splits its draws by scene view (A10; B6's mesh and material ids exist only then): with scene
+// records wanted, for a modern renderer (render.scene = hybrid or modern) or the night relight's course lamps
+// (lighting.night = enhanced, PLAN.md F2b). The pixels are the same either way. GT4_GSN_SCENE_SPLIT=1 turns it on too
+// (gs_host.cpp).
+bool sceneSplitWanted(const Settings& settings);
 
 // Content aspect ratio (width / height), or 0 for "match the window".
 float aspectValue(AspectRatio ratio);

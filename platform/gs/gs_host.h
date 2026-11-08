@@ -73,6 +73,9 @@ public:
     void setHdTextures(bool on);
     // A gameplay option of the game (runtime.h GameOption): sent when it differs from the last value sent.
     void setGameOption(uint32_t id, uint32_t value);
+    // The front end's scene split (A10; sceneSplitWanted in the settings, or GT4_GSN_SCENE_SPLIT=1): from the next VSync.
+    // Live and in replays alike.
+    void setSceneSplit(bool on);
 
     bool live() const;          // linked to a running game
     uint64_t vblanks() const;   // VBlanks received from the game or the capture (the game's clock)
