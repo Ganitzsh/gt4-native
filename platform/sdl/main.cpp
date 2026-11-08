@@ -181,6 +181,20 @@ std::vector<std::string> splitArguments(const std::string& text) {
     return out;
 }
 
+// A host path as an argument for the game. On Linux the game is a Windows program under Wine, where / is Z:\ (the
+// link's path is given the same way, link_host.cpp): an absolute path becomes Z:\..., which Wine opens wherever the
+// game's working directory is. Elsewhere, and for a relative path, the path as it is.
+std::string gamePathArgument(const std::string& path) {
+#ifdef _WIN32
+    return path;
+#else
+    if (path.empty() || path[0] != '/') return path;
+    std::string wine = "Z:" + path;
+    std::replace(wine.begin(), wine.end(), '/', '\\');
+    return wine;
+#endif
+}
+
 Options parse(int argc, char** argv) {
     Options o;
     auto value = [&](int& i) -> std::string {
@@ -600,7 +614,7 @@ int run(const Options& options) {
         gsOptions.gameArgs = options.gameArgs;
         if (!options.saves.empty()) {   // the save folder (the game's default otherwise)
             gsOptions.gameArgs.push_back("--saves");
-            gsOptions.gameArgs.push_back(options.saves);
+            gsOptions.gameArgs.push_back(gamePathArgument(options.saves));
         }
         // A wide content shape switches on the game's own 16:9 mode, generalised to that aspect (the
         // game's --aspect: Hor+ 3D in the anamorphic 640 x 448 frame, which the host presents at the
@@ -1407,8 +1421,8 @@ void usePackagedGame(Options& o) {
         std::printf("made %s from %s\n", utf8(elf).c_str(), utf8(iso.filename()).c_str());
     }
     o.game = utf8(game);
-    std::vector<std::string> args{"--elf", utf8(elf), "--log", utf8(base / "game.log")};
-    if (!iso.empty()) args.insert(args.end(), {"--iso", utf8(iso)});
+    std::vector<std::string> args{"--elf", gamePathArgument(utf8(elf)), "--log", gamePathArgument(utf8(base / "game.log"))};
+    if (!iso.empty()) args.insert(args.end(), {"--iso", gamePathArgument(utf8(iso))});
     o.gameArgs.insert(o.gameArgs.begin(), args.begin(), args.end());
     if (o.saves.empty()) {
         fs::create_directories(base / "saves", error);
