@@ -38,9 +38,12 @@ void profile_start();
 // from its own voices and sends the register images and SPU RAM for the host to mix (runtime/audio.cpp, PLAN.md D5).
 // kOptionUiEntry: ui.entry, 0 hotkey (original, and before the host sends it), 1 integrated: GT4's Options items open
 // the settings hub (runtime/menu/menu_host.cpp; lane M, docs/modern/MENU_DESIGN.md 3.2).
+// kOptionUiPause: ui.pause, 0 gt4 (original, and before the host sends it), 1 native: the race pause shows the native
+// pause page instead of GT4's pause.strb (game_src/func_003C3820.cpp, runtime/menu/menu_host.cpp; lane M, M7).
 enum GameOption : uint32_t { kOptionAiCatchUp = 0, kOptionMirrorDetail = 1, kOptionModelDetail = 2, kOptionRaceFrames = 3, kOptionAspect = 4,
                              kOptionSceneRecords = 5, kOptionTriggerTravel = 6, kOptionSteerBand = 7,
-                             kOptionHostMixer = 8, kOptionUiEntry = 9, kGameOptionCount = 10 };
+                             kOptionHostMixer = 8, kOptionUiEntry = 9, kOptionUiPause = 10,
+                             kGameOptionCount = 11 };
 static_assert(kGameOptionCount == GT4_GAME_OPTION_COUNT, "the options the host sends: include/gt4/link/protocol.h");
 void set_game_option(uint32_t id, uint32_t value);   // GT4_REC_HOST_CMD 4 (runtime/link.cpp)
 

@@ -10,6 +10,7 @@
 #include "menu_model.h"
 #include "ui_records.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
@@ -79,6 +80,9 @@ struct Page {
     ui::Schema host;             // the host's schema, as it sent it
     uint32_t project = 0;        // the GT4 project the page opened over
     uint32_t entry = 0;          // that project when it is GT4's Options (the page opened in its place), else 0
+    uint32_t pause = 0;          // the RacePause the page answers for (M7), else 0
+    int items = 0;               // that pause's PauseItem bits
+    int *screen = nullptr;       // its brightness and contrast (menu_host.h gt4_pause_tick)
     uint32_t last_frame = 0;     // kernel_frame_count() at the previous tick
     uint32_t held = 0;           // inputs down at the previous tick (pressed_bits)
     uint32_t request = 0;        // the last request id sent
@@ -95,10 +99,118 @@ Page &page() {
 std::atomic<bool> g_open_requested{false};
 std::atomic<uint32_t> g_entry_project{0};   // GT4's Options project just started under ui.entry = integrated
 
+// The page is ticked by GT4's menu update and by the race pause, on whichever guest threads run them. One guest thread
+// runs at a time, but an interrupt can switch threads mid-tick, so each tick takes the page with try_take(): a tick
+// that finds it taken skips its frame (a blocking lock could wait on a thread that never runs again).
+std::atomic<bool> g_page_taken{false};
+struct PageTake {
+    const bool ok = !g_page_taken.exchange(true);
+    ~PageTake() {
+        if (ok) g_page_taken.store(false);
+    }
+};
+
+// The pause page's state other threads read: the pause it is open for (0: none), the VBlank of its last tick, and a
+// pause GT4 ended while the page was taken (closed by the next tick that takes it).
+std::atomic<uint32_t> g_pause_open{0};
+std::atomic<uint32_t> g_pause_tick_frame{0};
+std::atomic<uint32_t> g_pause_ended{0};
+// A pause page not ticked for this many VBlanks has lost its pause without an end: the pad goes back to GT4. A second,
+// so a hitch (a disc read, a host stall that does not stop the bus clock) never closes an open page (lane A).
+constexpr uint32_t kPauseStaleFrames = 60;
+
+// The pause page's rows (MENU_DESIGN 3.2, point 4), handled here, never sent to the host.
+const char *const kPauseTab = "pause", *const kPauseScreenPage = "pause.screen", *const kPauseExitPage = "pause.exit";
+const char *const kKeyContinue = "pause.continue", *const kKeyRetry = "pause.retry",
+                  *const kKeySettings = "pause.settings", *const kKeyExit = "pause.exit_race",
+                  *const kKeyBrightness = "pause.brightness", *const kKeyContrast = "pause.contrast";
+// The strobe's brightness and contrast steps: GT4's Screen Settings stops at -5 and 5 (measured, M7).
+constexpr int kScreenMin = -5, kScreenMax = 5;
+
+bool is_pause_page(const ui::Page *page) {
+    return page && (page->id == kPauseTab || page->id.compare(0, 6, "pause.") == 0);
+}
+
 // What the page shows: the host's schema, and with GT4's Options under the hub, the Game tab first with the GT4
 // options row on top (the tab is made when the host's schema has none yet).
+ui::Row action_row(const char *key, const char *label, const char *help) {
+    ui::Row row;
+    row.kind = ui::RowKind::Action;
+    row.key = key;
+    row.label = label;
+    row.help = help;
+    return row;
+}
+
+// Over a race pause: the pause tab first, with only the items this pause enables, in GT4's order (Continue, Retry when
+// RETRYENABLE, Exit, confirmed when CONFIRMEXIT with Continue preselected, Screen Settings when SCREENSETTINGENABLE;
+// M0, M7), then Settings, which shows the host's first tab. The host's tabs follow.
+void add_pause_tab(const Page &p, ui::Schema &schema) {
+    ui::Page tab;
+    tab.id = kPauseTab;
+    tab.title = "Paused";
+    tab.icon = "tab.pause";
+    tab.rows.push_back(action_row(kKeyContinue, "Continue", "Back to the race."));
+    if (p.items & kPauseRetry) tab.rows.push_back(action_row(kKeyRetry, "Retry", "Start this race again."));
+    if (p.items & kPauseConfirmExit) {
+        ui::Row exit;
+        exit.kind = ui::RowKind::Link;
+        exit.key = kPauseExitPage;
+        exit.label = "Exit";
+        exit.help = "Leave the race.";
+        tab.rows.push_back(std::move(exit));
+    } else {
+        tab.rows.push_back(action_row(kKeyExit, "Exit", "Leave the race."));
+    }
+    if (p.items & kPauseScreen) {
+        ui::Row screen;
+        screen.kind = ui::RowKind::Link;
+        screen.key = kPauseScreenPage;
+        screen.label = "Screen";
+        screen.help = "GT4's brightness and contrast, as its own pause sets them.";
+        tab.rows.push_back(std::move(screen));
+    }
+    ui::Row settings = action_row(kKeySettings, "Settings", "The game's settings, with the race paused behind.");
+    settings.enabled = !p.host.tabs.empty();
+    tab.rows.push_back(std::move(settings));
+    schema.pages.push_back(std::move(tab));
+
+    ui::Page screen;
+    screen.id = kPauseScreenPage;
+    screen.title = "Screen";
+    screen.livePreview = true;
+    const char *const keys[2] = {kKeyBrightness, kKeyContrast};
+    const char *const labels[2] = {"Brightness", "Contrast"};
+    for (int i = 0; i < 2; ++i) {
+        ui::Row row;
+        row.kind = ui::RowKind::Step;
+        row.key = keys[i];
+        row.label = labels[i];
+        row.minimum = static_cast<float>(kScreenMin);
+        row.maximum = static_cast<float>(kScreenMax);
+        row.step = 1.0f;
+        row.value = std::to_string(p.screen ? p.screen[i] : 0);
+        screen.rows.push_back(std::move(row));
+    }
+    schema.pages.push_back(std::move(screen));
+
+    ui::Page exit;
+    exit.id = kPauseExitPage;
+    exit.title = "Exit";
+    ui::Row question;
+    question.kind = ui::RowKind::Header;
+    question.label = "Are you sure?";
+    exit.rows.push_back(std::move(question));
+    exit.rows.push_back(action_row(kKeyContinue, "Continue", "Back to the race."));
+    exit.rows.push_back(action_row(kKeyExit, "Exit", "Leave the race."));
+    schema.pages.push_back(std::move(exit));
+
+    schema.tabs.insert(schema.tabs.begin(), kPauseTab);
+}
+
 ui::Schema shown_schema(const Page &p) {
     ui::Schema schema = p.host;
+    if (p.pause) add_pause_tab(p, schema);
     if (!p.entry) return schema;
     ui::Row row;
     row.kind = ui::RowKind::Action;
@@ -253,6 +365,92 @@ int close_page(Page &p, const char *why) {
     return leave ? kLeaveProject : 0;
 }
 
+void merge(ui::Output &out, ui::Output o) {
+    for (auto &r : o.requests) out.requests.push_back(std::move(r));
+    if (o.sound != ui::Sound::None) out.sound = o.sound;
+    out.closed = out.closed || o.closed;
+}
+
+// One frame of the page's input: the pad's new presses (`edges`, and `down`, pressed_bits of both ports) pressed on
+// the menu, then the frame's time. `intercept(input, out)` sees each press first; true when it took it.
+template <class Intercept>
+ui::Output drive(Page &p, uint32_t &edges, uint32_t &down, Intercept intercept) {
+    // The frame's time, in VBlanks of the NTSC clock GT4 runs on.
+    const uint32_t now = kernel_frame_count();
+    const float seconds = static_cast<float>(now - p.last_frame) / 59.94f;
+    p.last_frame = now;
+
+    uint8_t pads[2][18];
+    bool seen[2];
+    {
+        KernelScope ks;
+        std::lock_guard<std::mutex> lock(g_pad_mutex);
+        std::memcpy(pads, g_page_pad, sizeof pads);
+        seen[0] = g_page_pad_seen[0];
+        seen[1] = g_page_pad_seen[1];
+    }
+    down = 0;
+    for (int port = 0; port < 2; ++port)
+        if (seen[port]) down |= pressed_bits(pads[port]);
+    edges = down & ~p.held;
+    const uint32_t ups = p.held & ~down;
+    p.held = down;
+
+    ui::Output out;
+    auto press = [&](ui::Input input) {
+        if (!intercept(input, out)) merge(out, p.menu.press(input));
+    };
+    static const struct { int bit; ui::Input input; } kDirections[] = {
+        {kUp, ui::Input::Up}, {kDown, ui::Input::Down}, {kLeft, ui::Input::Left}, {kRight, ui::Input::Right}};
+    for (const auto &d : kDirections) {
+        if (edges & (1u << d.bit)) {
+            p.menu.hold(d.input, true);
+            press(d.input);
+        } else if (ups & (1u << d.bit)) {
+            p.menu.hold(d.input, false);
+        }
+    }
+    // GT4's menus confirm with Cross and Circle and go back with Triangle (M0); the shoulders change tabs, Square
+    // resets a row, Start closes the settings from any depth (MENU_DESIGN 4.2).
+    static const struct { int bit; ui::Input input; } kButtons[] = {
+        {kCross, ui::Input::Confirm}, {kCircle, ui::Input::Confirm}, {kTriangle, ui::Input::Back},
+        {kL1, ui::Input::TabLeft}, {kR1, ui::Input::TabRight}, {kSquare, ui::Input::Reset}, {kStart, ui::Input::Close}};
+    for (const auto &b : kButtons)
+        if (edges & (1u << b.bit)) press(b.input);
+    merge(out, p.menu.tick(seconds));
+    return out;
+}
+
+// Opens the pause page over `pause` (the race pause GT4 has started; its pause.strb is never started).
+void open_pause(Page &p, uint32_t pause, int items, int *screen) {
+    p.pause = pause;
+    p.items = items;
+    p.screen = screen;
+    open_page(p, 0, 0, "race pause");
+    p.menu.selectTab(kPauseTab);   // a pause always opens on its own tab, Continue selected
+    p.menu.setSchema(shown_schema(p));
+    g_pause_open.store(pause);
+    g_pause_tick_frame.store(kernel_frame_count());
+    log_info("menu: pause page over RacePause %08x, items%s%s%s", pause, items & kPauseRetry ? " retry" : "",
+             items & kPauseConfirmExit ? " confirm-exit" : "", items & kPauseScreen ? " screen" : "");
+}
+
+
+void close_pause(Page &p, const char *why) {
+    close_page(p, why);
+    p.pause = 0;
+    p.items = 0;
+    p.screen = nullptr;
+    p.menu.setSchema(shown_schema(p));
+    g_pause_open.store(0u);
+}
+
+// A pause that ended while another tick had the page, or that stopped being ticked (pad_focus): its page closes.
+void close_ended(Page &p) {
+    const uint32_t ended = g_pause_ended.exchange(0u);
+    if (ended && ended == p.pause) close_pause(p, "the pause ended");
+}
+
 }  // namespace
 
 namespace gt4::rt::menu {
@@ -260,6 +458,14 @@ namespace gt4::rt::menu {
 bool pad_focus(int port, uint8_t data[18]) {
     const int focus = g_focus.load();
     if (focus == kGame) return false;
+    // A pause page no longer ticked (its pause gone without gt4_pause_end) never holds the race's pad: GT4 has it
+    // back, and the next tick that takes the page closes it.
+    const uint32_t paused = g_pause_open.load();
+    if (paused && kernel_frame_count() - g_pause_tick_frame.load() > kPauseStaleFrames) {
+        g_pause_ended.store(paused);
+        g_focus.store(kGame);
+        return false;
+    }
     port &= 1;
     {
         KernelScope ks;
@@ -297,7 +503,12 @@ extern "C" void gt4_menu_entry(uint32_t project) {
 }
 
 extern "C" int gt4_menu_tick(uint32_t project) {
+    const uint32_t paused = g_pause_open.load();
+    if (paused && g_pause_ended.load() != paused) return kSoundNone;   // a race pause has the page (gt4_pause_tick)
+    const PageTake take;
+    if (!take.ok) return kSoundNone;   // the pause tick has it this frame
     Page &p = page();
+    close_ended(p);
     int sound = take_settings(p);
 
     const uint32_t command = link_take_menu_command();
@@ -347,51 +558,9 @@ extern "C" int gt4_menu_tick(uint32_t project) {
         return sound;
     }
 
-    // The frame's time, in VBlanks of the NTSC clock GT4 runs on.
+    uint32_t edges = 0, down = 0;
+    ui::Output out = drive(p, edges, down, [](ui::Input, ui::Output &) { return false; });
     const uint32_t now = kernel_frame_count();
-    const float seconds = static_cast<float>(now - p.last_frame) / 59.94f;
-    p.last_frame = now;
-
-    uint8_t pads[2][18];
-    bool seen[2];
-    {
-        KernelScope ks;
-        std::lock_guard<std::mutex> lock(g_pad_mutex);
-        std::memcpy(pads, g_page_pad, sizeof pads);
-        seen[0] = g_page_pad_seen[0];
-        seen[1] = g_page_pad_seen[1];
-    }
-    uint32_t down = 0;
-    for (int port = 0; port < 2; ++port)
-        if (seen[port]) down |= pressed_bits(pads[port]);
-    const uint32_t edges = down & ~p.held;
-    const uint32_t ups = p.held & ~down;
-    p.held = down;
-
-    ui::Output out;
-    auto merge = [&](ui::Output o) {
-        for (auto &r : o.requests) out.requests.push_back(std::move(r));
-        if (o.sound != ui::Sound::None) out.sound = o.sound;
-        out.closed = out.closed || o.closed;
-    };
-    static const struct { int bit; ui::Input input; } kDirections[] = {
-        {kUp, ui::Input::Up}, {kDown, ui::Input::Down}, {kLeft, ui::Input::Left}, {kRight, ui::Input::Right}};
-    for (const auto &d : kDirections) {
-        if (edges & (1u << d.bit)) {
-            p.menu.hold(d.input, true);
-            merge(p.menu.press(d.input));
-        } else if (ups & (1u << d.bit)) {
-            p.menu.hold(d.input, false);
-        }
-    }
-    // GT4's menus confirm with Cross and Circle and go back with Triangle (M0); the shoulders change tabs, Square
-    // resets a row, Start closes the settings from any depth (MENU_DESIGN 4.2).
-    static const struct { int bit; ui::Input input; } kButtons[] = {
-        {kCross, ui::Input::Confirm}, {kCircle, ui::Input::Confirm}, {kTriangle, ui::Input::Back},
-        {kL1, ui::Input::TabLeft}, {kR1, ui::Input::TabRight}, {kSquare, ui::Input::Reset}, {kStart, ui::Input::Close}};
-    for (const auto &b : kButtons)
-        if (edges & (1u << b.bit)) merge(p.menu.press(b.input));
-    merge(p.menu.tick(seconds));
 
     bool to_gt4 = false;   // the GT4 options row: GT4's screen, under the hub, gets the pad
     for (const auto &r : out.requests) {
@@ -417,4 +586,103 @@ extern "C" int gt4_menu_tick(uint32_t project) {
         send_list(p, false);
     }
     return sound;
+}
+
+extern "C" void gt4_pause_end(uint32_t pause) {
+    if (!pause || g_pause_open.load() != pause) return;
+    const PageTake take;
+    if (!take.ok) {
+        g_pause_ended.store(pause);   // closed by the tick that has the page
+        return;
+    }
+    Page &p = page();
+    if (p.pause == pause) close_pause(p, "GT4 ended the pause");
+}
+
+extern "C" int gt4_pause_tick(uint32_t pause, int items, int *screen) {
+    const bool native = gt4_game_option(static_cast<int>(kOptionUiPause)) == 1;
+    if (trace() && screen) {
+        // GT4_TRACE_MENU: the brightness and contrast as either pause leaves them (GT4's SETVAL or the page).
+        static int shown[2] = {0x7FFFFFFF, 0x7FFFFFFF};
+        if (screen[0] != shown[0] || screen[1] != shown[1]) {
+            log_info("menu: pause %08x (%s), items %d, brightness %d, contrast %d", pause, native ? "native" : "gt4",
+                     items, screen[0], screen[1]);
+            shown[0] = screen[0];
+            shown[1] = screen[1];
+        }
+    }
+    if (!native && !g_pause_open.load()) return -1;
+    const PageTake take;
+    if (!take.ok) return native ? 1 : -1;   // the menu update has the page this frame: the pause waits a frame
+    Page &p = page();
+    close_ended(p);
+    if (!native) {
+        if (p.pause) close_pause(p, "ui.pause = gt4");   // set while the page was open: GT4's pause takes over
+        return -1;
+    }
+    g_pause_tick_frame.store(kernel_frame_count());
+    int sound = take_settings(p);
+    if (p.pause && p.pause != pause) close_pause(p, "another pause");
+    if (!p.pause) {
+        if (p.menu.isOpen()) close_page(p, "race pause");
+        open_pause(p, pause, items, screen);
+        return 1 | sound << 8;
+    }
+    if (p.screen) {
+        p.menu.setValue(kKeyBrightness, std::to_string(p.screen[0]));
+        p.menu.setValue(kKeyContrast, std::to_string(p.screen[1]));
+    }
+    // The host's open and close commands: Settings shows the host's first tab, close goes back to the pause tab.
+    const uint32_t command = link_take_menu_command();
+    if (command == kCommandOpen && !p.host.tabs.empty()) p.menu.selectTab(p.host.tabs.front());
+    else if (command == kCommandClose) p.menu.selectTab(kPauseTab);
+
+    // Triangle and Start on the pause's own pages continue the race, as Triangle does anywhere in GT4's pause (M0);
+    // on a Settings tab, Start and Triangle at the tab go back to the pause tab.
+    int answer = 0;
+    uint32_t edges = 0, down = 0;
+    ui::Output out = drive(p, edges, down, [&](ui::Input input, ui::Output &o) {
+        if (answer) return true;
+        if (input != ui::Input::Back && input != ui::Input::Close) return false;
+        if (p.menu.confirming() || p.menu.previewing()) return false;
+        if (is_pause_page(p.menu.page())) {
+            answer = 3;
+        } else if (input == ui::Input::Close || !p.menu.inSubPage()) {
+            p.menu.selectTab(kPauseTab);
+        } else {
+            return false;
+        }
+        o.sound = ui::Sound::Cancel;
+        return true;
+    });
+    for (const auto &r : out.requests) {
+        if (r.kind == ui::Request::Kind::Action && r.key.compare(0, 6, "pause.") == 0) {
+            if (r.key == kKeyContinue) answer = answer ? answer : 3;
+            else if (r.key == kKeyExit) answer = answer ? answer : 4;
+            else if (r.key == kKeyRetry && (p.items & kPauseRetry)) answer = answer ? answer : 5;
+            else if (r.key == kKeySettings && !p.host.tabs.empty()) p.menu.selectTab(p.host.tabs.front());
+            continue;
+        }
+        if (r.kind != ui::Request::Kind::Action && (r.key == kKeyBrightness || r.key == kKeyContrast)) {
+            const int value = std::clamp(std::atoi(r.value.c_str()), kScreenMin, kScreenMax);
+            if (p.screen) p.screen[r.key == kKeyBrightness ? 0 : 1] = value;   // as the strobe's SETVAL writes it
+            continue;
+        }
+        const uint32_t kind = r.kind == ui::Request::Kind::Set      ? ui::wire::kSet
+                              : r.kind == ui::Request::Kind::Revert ? ui::wire::kRevert
+                                                                    : ui::wire::kAction;
+        send_set(p, kind, r.key, r.value);
+    }
+    if (out.sound != ui::Sound::None) sound = sound_of(out.sound);
+    if (trace() && (edges || sound != kSoundNone))
+        log_info("menu: pause, VBlank %u, inputs down %04x (new %04x), sound %s, answer %d", kernel_frame_count(), down,
+                 edges, sound_name(sound), answer);
+    if (!answer && !p.menu.isOpen()) answer = 3;   // closed by the engine: the race goes on
+    if (answer) {
+        close_pause(p, answer == 3 ? "continue" : answer == 4 ? "exit" : "retry");
+        return answer | sound << 8;
+    }
+    send_list(p, false);
+    const bool settings_shown = !is_pause_page(p.menu.page());
+    return (edges || settings_shown ? 1 : 0) | sound << 8;
 }

@@ -26,6 +26,10 @@ constexpr int kLeaveProject = 0x100;
 // acts in GT4. Returns whether `data` was replaced.
 bool pad_focus(int port, uint8_t data[18]);
 
+// The items a race pause enables, as game_src/func_003C3820.cpp hands them to gt4_pause_tick (RacePause + 0x28,
+// + 0x2C, + 0x30: what the strobe's RETRYENABLE, CONFIRMEXIT and SCREENSETTINGENABLE read).
+enum PauseItem : int { kPauseRetry = 1, kPauseConfirmExit = 2, kPauseScreen = 4 };
+
 // An entry asks for the settings (M7, M8); they open at the next menu update that runs a menu project.
 void request_open();
 bool is_open();   // any thread
@@ -41,3 +45,14 @@ extern "C" int gt4_menu_tick(uint32_t project);
 // it at its first update, with a GT4 options row first that hands the pad to GT4's screen; closing the hub
 // otherwise ends GT4's Options (kLeaveProject). With ui.entry = hotkey, nothing changes.
 extern "C" void gt4_menu_entry(uint32_t project);
+
+// One frame of a race pause, from the copy of RacePause::update (game_src/func_003C3820.cpp, M7), on the thread that
+// runs the race's updatePause. `pause` is the RacePause; `items` its PauseItem bits; `screen` the brightness and
+// contrast the strobe's SETVAL writes (two ints, D_00622F4C + 0x39E34 or + 0x39E44). Returns -1 with ui.pause = gt4
+// (GT4's pause runs as it was). With ui.pause = native the pause page answers in the low byte: 0 open (the time limit
+// counts), 1 open with input this frame or a Settings tab shown (the count is cleared), or GT4's own answers 3
+// continue, 4 exit, 5 retry, the page then closed; bits 8-11 carry a MenuSound for the copy to play.
+extern "C" int gt4_pause_tick(uint32_t pause, int items, int *screen);
+
+// GT4 ended the pause `pause` itself (the race's continue or exit events, the time limit): the page closes with it.
+extern "C" void gt4_pause_end(uint32_t pause);

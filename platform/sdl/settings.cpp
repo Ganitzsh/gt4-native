@@ -111,10 +111,11 @@ const PresetTable& presetValues(Preset preset) {
 // What a preset sets besides its members (MENU_DESIGN 3.8): applyPreset sets these too, but detectPreset ignores them
 // and changing one leaves graphics.preset as it is, since they are not graphics choices. ui.entry: hotkey in the
 // original preset (GT4's screens untouched); hotkey in the others too until the host draws the pages (MENU_DESIGN M9
-// sets integrated there): before, a hub opened from GT4's Options would be invisible.
+// sets integrated there): before, a hub opened from GT4's Options would be invisible. ui.pause likewise: gt4 in all
+// of them until M9 sets native in the others (an invisible pause page would leave the race paused with no way out).
 const PresetTable& presetFollowers(Preset preset) {
-    static const PresetTable original{{"ui.entry", "hotkey"}};
-    static const PresetTable others{{"ui.entry", "hotkey"}};
+    static const PresetTable original{{"ui.entry", "hotkey"}, {"ui.pause", "gt4"}};
+    static const PresetTable others{{"ui.entry", "hotkey"}, {"ui.pause", "gt4"}};
     static const PresetTable none;
     return preset == Preset::Original ? original : preset == Preset::Custom ? none : others;
 }
@@ -226,6 +227,8 @@ std::string getOption(const Settings& settings, std::string_view key) {
 std::string unusedReason(const Settings& settings, std::string_view key) {
     if (!kHostDrawsPages && key == "ui.entry" && settings.uiEntry == UiEntry::Integrated)
         return "the host does not draw the settings pages yet (MENU_DESIGN M9): the hub GT4's Options open is invisible";
+    if (!kHostDrawsPages && key == "ui.pause" && settings.uiPause == UiPause::Native)
+        return "the host does not draw the settings pages yet (MENU_DESIGN M9): the native pause page is invisible";
     // (platform/render/pipeline.cpp: SceneSource::drawsOriginalEffects turns these off for the native GS's frames)
     if (settings.gsRenderer == GsRenderer::Native &&
         (key == "effects.bloom" || key == "post.bloom_intensity" || key == "post.tonemapper" || key == "post.auto_exposure"))
@@ -329,6 +332,11 @@ std::vector<std::string> loadSettings(Settings& settings, const std::string& pat
         settings.uiEntry = UiEntry::Hotkey;
         warnings.push_back(path + ": ui.entry = integrated is not taken from the file until the host draws the "
                            "settings pages (MENU_DESIGN M9); hotkey instead (--set ui.entry=integrated still applies)");
+    }
+    if (!kHostDrawsPages && settings.uiPause == UiPause::Native) {
+        settings.uiPause = UiPause::Gt4;
+        warnings.push_back(path + ": ui.pause = native is not taken from the file until the host draws the settings "
+                           "pages (MENU_DESIGN M9); gt4 instead (--set ui.pause=native still applies)");
     }
     return warnings;
 }

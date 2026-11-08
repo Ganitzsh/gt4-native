@@ -52,8 +52,12 @@ enum class HapticsMode : uint8_t { Original, Physics };
 // How the settings menu opens (ui.entry, settings_ui.cpp; docs/modern/MENU_DESIGN.md 3.2, 3.8): hotkey = the host's
 // keys only, integrated = GT4's own Options items too (the game's hooks, runtime/menu/menu_host.cpp).
 enum class UiEntry : uint8_t { Hotkey, Integrated };
-// Whether the host draws the settings pages (MENU_DESIGN M9 sets it): until then ui.entry = integrated is taken only
-// from --set (acceptance runs), never from the settings file, and is listed as unused (settings_ui.cpp).
+// The race pause (ui.pause, settings_ui.cpp; MENU_DESIGN 3.2 point 4, M7): gt4 = GT4's own pause.strb, native = the
+// native pause page (the game's copy of RacePause::update, game_src/func_003C3820.cpp).
+enum class UiPause : uint8_t { Gt4, Native };
+// Whether the host draws the settings pages (MENU_DESIGN M9 sets it): until then ui.entry = integrated and ui.pause =
+// native are taken only from --set (acceptance runs), never from the settings file, and are listed as unused
+// (settings_ui.cpp).
 inline constexpr bool kHostDrawsPages = false;
 
 struct Settings {
@@ -143,6 +147,7 @@ struct Settings {
 
     // [ui] (settings_ui.cpp, lane M; set by every preset, but not part of what makes one: MENU_DESIGN 3.8)
     UiEntry uiEntry = UiEntry::Hotkey;   // sent to the game (kOptionUiEntry); integrated in low to ultra from M9
+    UiPause uiPause = UiPause::Gt4;      // sent to the game (kOptionUiPause); native in low to ultra from M9
 
     // [input] (settings_input.cpp; not part of the graphics presets but for input.response)
     TriggerTravel triggerTravel = TriggerTravel::Game;   // sent to the game (kOptionTriggerTravel)

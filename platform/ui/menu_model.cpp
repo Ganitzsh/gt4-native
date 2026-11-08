@@ -113,6 +113,18 @@ void Menu::close() {
     preview_ = Preview();
 }
 
+bool Menu::selectTab(const std::string& id) {
+    for (size_t i = 0; i < tabs_.size(); ++i)
+        if (tabs_[i].page == id) {
+            stack_.clear();
+            preview_ = Preview();
+            tab_ = static_cast<int>(i);
+            pageTime_ = 0.0f;
+            return true;
+        }
+    return false;
+}
+
 Menu::Place& Menu::place() { return stack_.empty() ? tabs_[static_cast<size_t>(tab_)] : stack_.back(); }
 
 const Menu::Place* Menu::placeOrNull() const {

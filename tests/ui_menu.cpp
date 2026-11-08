@@ -219,6 +219,20 @@ int main(int argc, char** argv) {
         check(closed.closed && !menu.isOpen() && closed.sound == Sound::Cancel, "Back on a tab closes the menu");
     }
 
+    // selectTab: a tab by id, from its root, its row kept (the pause page's Settings and Back, M7).
+    {
+        Menu menu;
+        menu.setSchema(schema());
+        menu.open();
+        menu.press(Input::TabRight);
+        menu.press(Input::Down);
+        menu.press(Input::Confirm);   // into the HDR sub-page
+        const std::string first = schema().tabs.front(), second = schema().tabs[1];
+        check(menu.selectTab(first) && menu.tab() == 0 && !menu.inSubPage(), "selectTab leaves the sub-page");
+        check(menu.selectTab(second) && menu.tab() == 1 && menu.row() == 2, "selectTab keeps the tab's row");
+        check(!menu.selectTab("nowhere") && menu.tab() == 1, "an unknown tab is refused");
+    }
+
     // Live: a change is a Set request at once.
     {
         Menu menu;

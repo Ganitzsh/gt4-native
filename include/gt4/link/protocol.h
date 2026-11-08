@@ -93,7 +93,7 @@ enum Gt4LinkRecordType {
  *                     frame's BGM and movie sound, the same count of samples, for the host to add to its mix. */
 
 /* The gameplay options GT4_REC_HOST_CMD 4 carries (runtime/runtime.h GameOption): ids below GT4_GAME_OPTION_COUNT. */
-#define GT4_GAME_OPTION_COUNT 10u
+#define GT4_GAME_OPTION_COUNT 11u
 
 enum Gt4Spu2Kind { GT4_SPU2_STATE = 0, GT4_SPU2_IMAGE = 1, GT4_SPU2_RUN = 2 };   /* GT4_REC_SPU2_REGS's kinds */
 

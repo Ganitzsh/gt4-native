@@ -90,6 +90,8 @@ public:
 
     void open();
     void close();
+    // Shows the tab `id` from its root (its last row kept), as the shoulders do; false when no tab has that id.
+    bool selectTab(const std::string& id);
     bool isOpen() const { return open_; }
 
     // An input's press (its edge). Directions also repeat while held: hold() says when one is down or released.

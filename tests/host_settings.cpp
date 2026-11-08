@@ -123,12 +123,14 @@ int main() {
         applyPreset(u, Preset::High);
         check(u.uiEntry == UiEntry::Hotkey, "a quality preset sets hotkey (until M9)");
         // Until M9 wires the host's page drawing, no preset may open a page the host cannot draw (MENU_DESIGN 3.8):
-        // M9 changes this check to the table's values (ui.pause joins it with M7).
+        // M9 changes this check to the table's values.
         for (Preset preset : {Preset::Original, Preset::Low, Preset::Medium, Preset::High, Preset::Ultra}) {
             Settings t;
             t.uiEntry = UiEntry::Integrated;
+            t.uiPause = UiPause::Native;
             applyPreset(t, preset);
             check(t.uiEntry == UiEntry::Hotkey, "no preset sets ui.entry = integrated before M9");
+            check(t.uiPause == UiPause::Gt4, "no preset sets ui.pause = native before M9");
         }
         check(setOption(u, "ui.entry", "integrated").empty() && u.preset == Preset::High && detectPreset(u) == Preset::High,
               "ui.entry = integrated keeps the high preset");
@@ -170,6 +172,37 @@ int main() {
         check(clean4 && old4.uiEntry == UiEntry::Hotkey, "a high file without ui.entry is hotkey (until M9)");
         auto [clean5, old5] = loadText("version = 1\n[graphics]\npreset = original\n[ui]\nentry = bogus\n");
         check(!clean5 && old5.uiEntry == UiEntry::Hotkey, "a refused ui.entry is as if missing: the original preset's hotkey");
+    }
+
+    // ui.pause (settings_ui.cpp, MENU_DESIGN 3.8, M7): as ui.entry, gt4 in every preset until M9 draws the pages.
+    {
+        Settings u;
+        check(u.uiPause == UiPause::Gt4 && getOption(u, "ui.pause") == "gt4", "ui.pause is gt4 by default (until M9)");
+        check(unusedReason(u, "ui.pause").empty(), "gt4 is not listed as unused");
+        applyPreset(u, Preset::High);
+        check(u.uiPause == UiPause::Gt4, "a quality preset sets gt4 (until M9)");
+        check(setOption(u, "ui.pause", "native").empty() && u.preset == Preset::High && detectPreset(u) == Preset::High,
+              "ui.pause = native keeps the high preset");
+        check(!unusedReason(u, "ui.pause").empty(), "native (from --set) is taken, and listed as unused until M9");
+        check(!setOption(u, "ui.pause", "strobe").empty(), "an unknown ui.pause is refused");
+        const auto path = gt4::test::uniqueTempPath("gt4_ui_pause", ".ini");
+        saveSettings(u, path.string());
+        Settings back;
+        const auto loaded = loadSettings(back, path.string());
+        check(loaded.size() == 1 && back.uiPause == UiPause::Gt4 && back.preset == Preset::High,
+              "native is not taken from the file until M9: gt4, with one warning");
+        std::filesystem::remove(path);
+        Settings original;
+        original.uiPause = UiPause::Native;
+        applyPreset(original, Preset::Original);
+        check(original.uiPause == UiPause::Gt4 && detectPreset(original) == Preset::Original, "the original preset keeps GT4's pause");
+        const auto bogus = gt4::test::uniqueTempPath("gt4_ui_pause_bogus", ".ini");
+        { std::ofstream out(bogus, std::ios::binary); out << "version = 1\n[graphics]\npreset = original\n[ui]\npause = bogus\n"; }
+        Settings refused;
+        refused.uiPause = UiPause::Native;
+        const bool refusedClean = loadSettings(refused, bogus.string()).empty();
+        std::filesystem::remove(bogus);
+        check(!refusedClean && refused.uiPause == UiPause::Gt4, "a refused ui.pause is as if missing: the original preset's gt4");
     }
 
     // lighting.night (settings_lighting.cpp, PLAN.md F2): original by default and in the original preset, which
