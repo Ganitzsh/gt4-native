@@ -50,24 +50,30 @@ Everything else is plain memory plus polling, which crosses as it is, if the mem
   whether or not its TSO emulation is on, which keeps the publish and consume barriers under FEX (to be checked on the
   device, by the probe below). The host's acquire / release fences are native aarch64. If that holds, the ring
   protocol is correct across the boundary as written.
-- **One fix needed first: the 64-bit index is not stored atomically by the i686 game.** `g_hdr->g2h.head = head +
-  total` on a `volatile uint64_t` compiles to two 32-bit stores (checked with the game's compiler, MinGW gcc 16.2
-  i686 at -O2: `movl` low word, then `movl` high word). Under x86 ordering (low word, then high), a torn read
-  by the host is harmless: the value can only look smaller, and `head <= tail` makes the host retry. But with FEX's TSO
-  emulation off (an option some setups turn off for speed), the host may see the new high word before the new low
-  word, a `head` about 4 GiB ahead, and read garbage as records. The low word wraps every 4 GiB of traffic, which a
-  long session crosses several times (menus_boot.cap's session was 14.5 GB). The fix is a single 64-bit store and load
-  in the game (`__atomic_store_n(..., __ATOMIC_RELEASE)` and `__atomic_load_n`: one 8-byte SSE `movq` on i686,
-  checked with the same compiler, which FEX should keep single-copy atomic; the probe checks it). It is right on Windows too, where the same tear can in principle
-  happen. `runtime/link.cpp` is not in PLAN.md's ownership table: the coordinator should say whose it is.
+- **Fixed first (d78a66d on main): the rings' 64-bit indices were not read or written atomically by the i686
+  game.** A `volatile uint64_t` compiles to two 32-bit accesses (checked with the game's compiler, MinGW gcc 16.2 i686
+  at -O2: `movl` low word, then `movl` high word), and the low word wraps every 4 GiB of traffic, which a long session
+  crosses several times (menus_boot.cap's session was 14.5 GB). Two cases:
+  - the game's own head store: under x86 ordering (low word, then high) a torn read by the host can only look smaller,
+    and `head <= tail` makes the host retry; with FEX's TSO emulation off (an option some setups turn off for speed)
+    the host may see the new high word first, a `head` about 4 GiB ahead, and read garbage as records;
+  - the game's read of the host's `tail` (and `head` of the other ring): two 32-bit loads that straddle the host's
+    8-byte update can combine the new high word with the old low word, a `tail` 4 GiB ahead, **even under x86
+    ordering**, and the game then overwrites records the host has not read. This one was a risk on Windows as well.
+  The fix, in `runtime/link.cpp` (lane C's, lane A reviewing every change; PLAN.md): every access to a ring's head or
+  tail is one 8-byte `__atomic_load_n` / `__atomic_store_n` (acquire / release), one SSE `movq` on i686; the commit
+  message lists the disassembly of all seven accesses before and after. FEX should keep an aligned `movq` single-copy
+  atomic; the probe below checks it.
 
 ## Checks before the device
 
 - **Here, on Windows:** the file-backed link end to end (the host creates a file, the game opens it by path), with
-  race7 and a live session identical to the named-section link; the 64-bit store change with ctest and a long
-  session past a 4 GiB wrap of the game-to-host ring.
+  race7 and a live session identical to the named-section link; the 64-bit fix (done: d78a66d, a live race and ORIG
+  race7 unchanged).
 - **Host build:** the POSIX `GameLink` (`start`, `poll`, `write`, exit code) in `link_host.cpp` builds for x86_64
   and aarch64 Linux with zig 0.17.1 (`build/tools`, SHA-256 checked), glibc 2.35 until Armada's version is known.
 - **On the Odin (the coordinator runs it):** first a two-process probe: a native aarch64 writer and an i686 Windows
-  reader under Wine/FEX on one `/dev/shm` file, counting a million ordered records with TSO emulation on and off.
+  reader under Wine/FEX on one `/dev/shm` file, counting a million ordered records with TSO emulation on and off,
+  with the ring's indices started just below 2^32 so the low word wraps during the run (the case the 8-byte fix is
+  about; a million records alone never wraps it).
   Then the aarch64 host `--replay` on race7 (ORIG against x64), then the live game.
