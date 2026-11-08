@@ -37,15 +37,20 @@ namespace {
 // Disc image
 
 HANDLE g_iso = INVALID_HANDLE_VALUE;
+// Music and movies (disc_read) read through a handle and a lock of their own: their reads, every few VBlanks, no longer
+// wait behind a load's, nor a load behind theirs (PLAN.md D10). The same file, opened twice.
+HANDLE g_iso_streams = INVALID_HANDLE_VALUE;
 const bool g_trace_disc = getenv("GT4_TRACE_DISC") != nullptr;  // log every disc/stream request
-std::mutex g_iso_mutex;
+std::mutex g_iso_mutex, g_streams_mutex;
 constexpr uint32_t kLayer1Start = 1317040;  // absolute LBA of layer 1 (the image is linear)
 
 // `load`: a file or sector read the game waits for (GT4_LOAD_STATS counts those; not music and movie streams)
 bool iso_read(uint64_t offset, void *dst, uint32_t n, bool load = true) {
     const double started = load ? load_stats_begin() : 0.0;   // (GT4_LOAD_STATS: the disc's share of a load, D10; the lock's wait too)
-    std::lock_guard<std::mutex> lock(g_iso_mutex);
-    if (g_iso == INVALID_HANDLE_VALUE) return false;
+    const bool own = !load && g_iso_streams != INVALID_HANDLE_VALUE;   // music and movies: their own handle
+    std::lock_guard<std::mutex> lock(own ? g_streams_mutex : g_iso_mutex);
+    const HANDLE file = own ? g_iso_streams : g_iso;
+    if (file == INVALID_HANDLE_VALUE) return false;
     // Until all of it is read: under Wine (Proton) a read can stop early, as the host's read() may (it did at 64 KB
     // on a network drive)
     char *out = static_cast<char *>(dst);
@@ -55,7 +60,7 @@ bool iso_read(uint64_t offset, void *dst, uint32_t n, bool load = true) {
         ov.Offset = static_cast<DWORD>(offset + got);
         ov.OffsetHigh = static_cast<DWORD>((offset + got) >> 32);
         DWORD part = 0;
-        if (!ReadFile(g_iso, out + got, n - got, &part, &ov)) {
+        if (!ReadFile(file, out + got, n - got, &part, &ov)) {
             static int reported = 0;
             if (reported++ < 8)
                 log_warn("disc: reading %u bytes at %llx failed (Windows error %lu)", n - got,
@@ -725,7 +730,10 @@ bool disc_read(uint64_t offset, void *dst, uint32_t n) { return iso_read(offset,
 void iop_init() {
     pad_neutral();
     const char *iso = g_config.iso_path;
-    g_iso = CreateFileA(iso, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_RANDOM_ACCESS, nullptr);
+    // No FILE_FLAG_RANDOM_ACCESS (D10): GT4 reads a file from its start to its end, in blocks, so the OS's read-ahead
+    // keeps the next blocks coming (the flag turned it off). Music and movies stream: sequential scan, on their own handle.
+    g_iso = CreateFileA(iso, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    g_iso_streams = CreateFileA(iso, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
     if (g_iso == INVALID_HANDLE_VALUE)
         log_warn("disc image %s cannot be opened (set GT4_ISO or --iso): disc reads return zeros", iso);
     else
