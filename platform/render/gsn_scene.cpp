@@ -766,6 +766,7 @@ struct GsnScene::Impl {
         }
     }
 
+    std::unordered_map<uint32_t, size_t> uploadLast;   // uploadTextures: each texture's last entry in the list
     void uploadTextures(VkCommandBuffer command, uint32_t slot) {
         if (frame.resetTextures) {
             for (auto& [id, t] : textures) retireTexture(t.image);
@@ -784,7 +785,16 @@ struct GsnScene::Impl {
         VkDeviceSize offset = 0;
         vk::Barriers b;
         std::vector<std::pair<gsn::TextureImage*, VkDeviceSize>> copies;
-        for (auto& t : frame.textures) {
+        // A list that a skipped list's textures were carried into (gsn::carryOver) can name a texture twice: only its
+        // last version is uploaded, so each image is made, written and given its mips once (twice, the second
+        // generateMips found level 0 already sampled: a layout error; a version of another size was copied into the
+        // image made for the last). The pixels are the same: a list's uploads all come before its draws, so only the
+        // last version was ever sampled.
+        uploadLast.clear();
+        for (size_t i = 0; i < frame.textures.size(); ++i) uploadLast[frame.textures[i].id] = i;
+        for (size_t i = 0; i < frame.textures.size(); ++i) {
+            auto& t = frame.textures[i];
+            if (uploadLast[t.id] != i) continue;
             GpuTexture& g = textures[t.id];
             if (!g.image.valid() || g.width != t.width || g.height != t.height || g.levels != t.levels) {
                 GT4_STAGE_SCOPE("render: texture images made (pooled or new)");
