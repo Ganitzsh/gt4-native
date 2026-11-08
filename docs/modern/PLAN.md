@@ -696,8 +696,47 @@ wheel load and slip plotted over a lap, consistent with the car's motion; docume
 **D7: Wheels through LGDEV (L).** `iop.cpp:278-290` DFP emulation to `SDL_Haptic`. Depends: R15. Acceptance: a
 wheel works in GT4's menus and races with its force feedback.
 
-**D8: Physics force feedback (M).** Depends: D6, D7. **D9: Spatial audio (L).** Depends: D5, A7, A9.
-Acceptance for each as the audit's section 4 states, with session tests. (D10 and D11 moved to lane C.)
+**D8: Physics force feedback (M).** Depends: D6, D7. Acceptance as the audit's section 4 states, with session
+tests. (D10 and D11 moved to lane C.)
+
+**D9: Spatial audio (L, lane D).** The audit (section 4.2, design 3) gives the design but no acceptance; this is it
+(the architect, 2026-11-08; lane D reviewed). `audio.spatial = original | stereo | hrtf`, behind `audio.mixer =
+host` (D5). `original` in every preset while `audio.mixer` defaults to `game` (spatial does nothing there and would
+read as unused, as `audio.interpolation` does); the change that makes `host` the default (after the Odin run, the
+coordinator's call) gives low to ultra `stereo`. `hrtf` is the player's choice (it assumes headphones).
+- **Tags:** each key-on is tagged game-side with the entrant whose sound object starts it (`RaceCarSound::playStart`
+  003924D0, `EngineSound::AttachCallback` 00391930, the two engine sample objects per car from 003923D0; lane D's
+  design note maps a voice to its entrant in GT4's sound driver). Untagged voices (UI, BGM, crowd, narration) stay
+  a stereo bed, mixed as `original` mixes them.
+- **Positions:** the entrant's `Vehicle::bodyToWorld` (A9) and the main view's camera as the listener. Spatial
+  audio needs no instances, so with full records off it asks for vehicles only (`kOptionSceneRecords` 2, as D14
+  does), and that mode then also carries the main camera: the `ViewBegin` of the main view (with its `Projection`,
+  no instances), kept by the 0033EAB8 copy whatever the mode and sent in the kick's block (CONTRACTS a.1, lane A).
+  A tagged voice with no position (records off, an old capture, outside a race) plays in the bed, counted.
+- **GT4's own pan:** lane D's note settles first whether GT4's driver already pans and attenuates car voices by
+  position (`voll` / `volr` from the car relative to the camera). If it does, spatial takes a tagged voice's level
+  without GT4's pan (the power sum of `voll` and `volr`) and applies its own pan and distance curve, so nothing is
+  panned twice; the distance check below then measures spatial's curve alone.
+- **Rendering:** `stereo` pans with constant power and attenuates by distance; `hrtf` renders through an HRTF
+  library and dataset with a licence lane C checks (no Sony data). Doppler from the `Vehicle` velocities is lane
+  D's call, limited and off in `original`; occlusion is not part of D9.
+- Depends: D5, A9, A3 (the main view), D13 if the output device decides `hrtf`. Acceptance:
+  - `ORIG`; `DIFFTEST` (the tags come from game code); with `audio.spatial = original`, a session's `audio.wav`
+    bit-identical to D5's host mix.
+  - Tags, on a race session with six cars: at least 99 % of the car key-ons tagged, a car key-on being one whose
+    sample start address lies in the race's car sound banks (the regions STRP loads for the entrants, logged at
+    load), so the rate doesn't depend on the tags; no BGM, UI or narration key-on tagged; counted per frame
+    (`voicesTagged`, `voicesUntagged`, `voicesNoPosition`). Gaps the note names (e.g. a shared tyre-squeal voice)
+    are listed with their share.
+  - Direction: a session in which an AI car passes the player in the chase view; in each 100 ms window where the
+    car's view-space |x| exceeds 2 m, the sign of its tagged voices' left-right level difference matches the sign
+    of x in at least 95 % of windows, for `stereo` and `hrtf`.
+  - Distance: as that car pulls away on a straight, its voices' level falls with distance along the attenuation
+    curve within 1 dB.
+  - Balance: a lap's integrated loudness (EBU R128) within 1 LU of `original`; the bed alone identical to
+    `original`'s untagged voices.
+  - No audio drop in the host summary; the audio thread's time per buffer reported (`PERF`); with vehicles only,
+    frame pacing unchanged within noise against records off, and `STREAM`'s extra bytes reported (as D14).
 
 **Input as in current racing games (D12-D16; the owner, 2026-11-08).** The goal is the control quality of GT7, Forza
 and ACC on top of the PS2 mapping, never instead of it. The constraints:

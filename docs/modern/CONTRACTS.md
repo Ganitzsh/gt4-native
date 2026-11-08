@@ -35,13 +35,19 @@ kScene = 11,   // scene::Prefix, then the record of that kind (docs/modern/CONTR
   - **1, full** (as before): every record of this section. The host sends 1 when `sceneRecordsWanted()`
     (`render.scene != original`, `lighting.night = enhanced`, and when recording a capture with
     `GT4_HOST_RECORD_SCENE=1`, so the parity captures carry them).
-  - **2, vehicles only**: else, when `input.haptics = physics` (D14). Haptics need only the `Vehicle` records, and
+  - **2, vehicles only**: else, when `input.haptics = physics` (D14) or `audio.spatial` is not `original` (D9).
+    They need only the `Vehicle` records (and D9 the main camera, below), and
     full records would change every preset's timing through the tick deferral (a.5.1). In this mode
     `gt4_scene_on()` stays false: pgl's hooks send nothing, game code sends no `FrameBegin`, and the kick never
     defers the clock. While a race runs (`vehicle_live()`), the kick sends one `GT4_REC_GFX` block of its own:
     `FrameBegin` (flags `kFrameVehiclesOnly`), the `Vehicle`s (each padded to whole qwords), then `FrameEnd` (views,
     instances, lights, emitters, projections 0; `begins` 1). It is one block, so nothing comes between it and its
-    `FrameEnd`, and a.5.1 holds without the deferral.
+    `FrameEnd`, and a.5.1 holds without the deferral. With D9, the block also carries the main view's camera,
+    before the `Vehicle`s: its `Projection` and `ViewBegin` (role `kViewMain`) and a `ViewEnd`, no instances, as
+    the 0033EAB8 copy last loaded them (it keeps them whatever the mode); `FrameEnd` then counts 1 view and 1
+    projection. The camera goes only when the main view loaded it since the last kick, else 0 views as before, so
+    a pause, replay-menu or loading frame never carries a stale listener (D9 counts its voices as no position). The
+    block stays allocation-free (fixed structs, as the `Vehicle`s are).
 
 ### a.2 Game-side API (`compat/game/gt4_gfx.h`) and the game's copy of the structs
 
@@ -552,7 +558,7 @@ Where each record is sent (tickets in PLAN.md):
 |---|---|---|
 | `records`, `bad`, `versionUnknown`, `unknownKind`, `outsideFrame` | decoding | `bad == versionUnknown == unknownKind == 0` |
 | `framesUnclosed`, `countsMismatch` | `FrameEnd`'s counts differ from what arrived | 0 |
-| `framesVehiclesOnly` | frames flagged `kFrameVehiclesOnly`: complete with 0 views when their counts match; no consumer draws them as a scene | reported |
+| `framesVehiclesOnly` | frames flagged `kFrameVehiclesOnly`: complete with 0 views (or D9's main camera alone: 1 view, no instances) when their counts match; no consumer draws them as a scene | reported |
 | `framesTruncated` | a frame still open when the stream ends (a capture's last list, a.5.1) | reported |
 | `viewsNested`, `viewEndWithoutBegin`, `viewsUnclosed` | pairing (`viewsUnclosed`: a view still open at `FrameEnd`) | 0 |
 | `lights`, `lightsAfterViewEnd`, `lightViewUnknown` | lights by view; those that came after their view's `ViewEnd` (a.5 rule 4); those naming a view not begun this frame | `lightViewUnknown == 0` |
