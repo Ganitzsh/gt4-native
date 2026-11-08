@@ -35,6 +35,14 @@ CI, PLAN.md C4):
     GT4-Native-VERSION/game/PUT-YOUR-GAME-HERE.txt           the player's disc image goes here; gt4_host.exe makes
                                                              game/CORE.GT4.elf from it on the first start
     GT4-Native-VERSION/saves/                                empty
+--arch linux-arm64 or linux-x64 writes OUT/GT4-Native-VERSION-linux-ARCH.tar.gz instead, for a Linux handheld
+(the Odin under Armada, a Steam Deck): the host built for Linux (tools/build_linux.sh; --host gives its path, default
+build/host-linux-ARCH-Release/gt4_host), run natively, and the same gt4_game.exe under Proton's Wine:
+    GT4-Native-VERSION/gt4_host, gt4-native.sh, gt4_game.exe     gt4-native.sh starts the host with Proton's Wine
+                                                                  as the game's launcher (GT4_GAME_LAUNCHER, WINESERVER,
+                                                                  PATH; GT4_PROTON chooses the Proton)
+    and the same settings, documents, game/, textures/ and saves/ as the Windows package.
+The host is checked to be an ELF for that architecture needing no glibc newer than 2.35.
 BUILD-INFO.txt names this repository's commit, the game build's two commits (gt4-decomp: the game's sources;
 gt4-native: game_src/ and the runtime), the executables' SHA-256 and the provisional drafts. The executables are
 also checked for blocks of the original executable (orig/SCUS-97328/CORE.GT4.elf): a release must not carry any.
@@ -45,6 +53,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tarfile
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -103,6 +112,90 @@ Problems: report them with host.log and game.log from this folder.
 Not affiliated with or endorsed by Sony Interactive Entertainment or Polyphony Digital. Gran Turismo is a trademark
 of Sony Interactive Entertainment. Licence: LICENSE (GPL-3.0); third-party notices: THIRD_PARTY_NOTICES.md.
 """
+
+LINUX_README = """GT4 Native {version} for Linux ({arch})
+==============
+
+Gran Turismo 4 running as a native program, from your own copy of the game. This package contains no game data.
+Full instructions, controls, settings and known issues: https://github.com/Ganitzsh/gt4-native
+
+gt4_host runs natively; the game itself (gt4_game.exe, a 32-bit Windows program) runs under Proton's Wine, which on
+an ARM handheld runs it through FEX. Steam with a Proton installed is all it needs ({proton}).
+
+1. Put an image of your own Gran Turismo 4 disc (USA, SCUS-97328, version 1.01) as an .iso file in the game folder.
+2. Steam (desktop mode) > Games > Add a Non-Steam Game > Browse: gt4-native.sh in this folder. Do NOT set a
+   compatibility tool for it: the script runs natively and starts Proton's Wine itself. Start it from game mode.
+   From a terminal: ./gt4-native.sh
+3. The first start makes game/CORE.GT4.elf from the image (about a second) and the Wine prefix
+   (~/.local/share/gt4-native/prefix, WINEPREFIX to change it), which takes longer.
+4. Settings menu: Escape, or Select+Start on the pad.
+
+GT4_PROTON=/path/to/a/Proton/folder ./gt4-native.sh uses that Proton (by default the newest Steam has, then
+~/.steam/root/compatibilitytools.d and /usr/share/steam/compatibilitytools.d).
+Handheld: rename settings-handheld.ini to settings.ini first.
+PS2 saves: ./gt4_host --import-save /path/to/Mcd001.ps2 copies them into the saves folder.
+HD texture packs go in textures/SCUS-97328.
+Problems: report them with host.log and game.log from this folder.
+
+Not affiliated with or endorsed by Sony Interactive Entertainment or Polyphony Digital. Gran Turismo is a trademark
+of Sony Interactive Entertainment. Licence: LICENSE (GPL-3.0); third-party notices: THIRD_PARTY_NOTICES.md.
+"""
+
+# Starts the Linux host with Proton's Wine as the game's launcher. Proton's folder names have spaces ("Proton 11.0
+# (ARM64)"), and GT4_GAME_LAUNCHER is split on spaces: so its bin folder goes first on PATH and the launcher is "wine".
+# Proton's Wine also needs its own wineserver (WINESERVER), or it stops with "could not exec wineserver"
+# (docs/modern/spikes/R4-link-across-fex.md, on the Odin).
+LINUX_LAUNCHER = """#!/bin/sh
+# GT4 Native: gt4_host natively, the game (gt4_game.exe) under Proton's Wine. GT4_PROTON=<a Proton folder> chooses
+# the Proton; WINEPREFIX the Wine prefix (default ~/.local/share/gt4-native/prefix).
+here=$(cd "$(dirname "$0")" && pwd)
+case $(uname -m) in
+    aarch64|arm64) bin=bin-arm64 ;;
+    *) bin=bin ;;
+esac
+proton=${GT4_PROTON:-}
+if [ -z "$proton" ]; then
+    IFS='
+'
+    for p in $( { ls -1d "$HOME"/.local/share/Steam/steamapps/common/Proton* "$HOME"/.steam/steam/steamapps/common/Proton* \
+                  2>/dev/null | sort -rV; ls -1d "$HOME"/.steam/root/compatibilitytools.d/* \
+                  /usr/share/steam/compatibilitytools.d/* 2>/dev/null; } ); do
+        if [ -x "$p/files/$bin/wine" ]; then proton=$p; break; fi
+    done
+    unset IFS
+fi
+if [ -z "$proton" ] || [ ! -x "$proton/files/$bin/wine" ]; then
+    echo "gt4-native.sh: no Proton with files/$bin/wine found${proton:+ in $proton}: install one in Steam, or set GT4_PROTON" >&2
+    exit 1
+fi
+export PATH="$proton/files/$bin:$PATH"
+export WINESERVER="$proton/files/$bin/wineserver"
+export WINEPREFIX="${WINEPREFIX:-$HOME/.local/share/gt4-native/prefix}"
+export WINEDEBUG="${WINEDEBUG:--all}"
+export GT4_GAME_LAUNCHER=wine
+mkdir -p "$WINEPREFIX"
+echo "gt4-native.sh: Proton $proton, prefix $WINEPREFIX"
+exec "$here/gt4_host" "$@"
+"""
+
+LINUX_ARCHES = {"linux-arm64": (183, "aarch64", "Proton 11.0 (ARM64) or newer, or proton-cachyos arm64"),
+                "linux-x64": (62, "x86_64", "any Proton")}
+
+
+def linux_host_check(path, arch):
+    """A Linux host for `arch`: an ELF of that machine whose glibc symbol versions go no higher than 2.35."""
+    import re
+    import struct
+    raw = open(path, "rb").read()
+    machine, _, _ = LINUX_ARCHES[arch]
+    if raw[:4] != b"\x7fELF" or raw[4] != 2 or struct.unpack_from("<H", raw, 18)[0] != machine:
+        raise SystemExit(f"{path} is not a 64-bit {arch} Linux program")
+    versions = sorted({tuple(int(x) for x in m.split(b".")) for m in re.findall(rb"GLIBC_(2\.[0-9]+(?:\.[0-9]+)?)\x00", raw)})
+    if not versions or versions[-1] > (2, 35):
+        raise SystemExit(f"{path} needs glibc {'.'.join(map(str, versions[-1])) if versions else '(none found)'}: "
+                         "the package's host must need 2.35 at most (tools/build_linux.sh)")
+    return ".".join(map(str, versions[-1]))
+
 
 TEXTURES_NOTE = """Put an HD texture pack for Gran Turismo 4 (USA, SCUS-97328) here: its PNG files, in any subfolders, as PCSX2
 keeps them. Switch it on and off with HD textures in the settings menu (GRAPHICS).
@@ -232,14 +325,21 @@ def release(a):
     root = a.build_root or ROOT
     if not a.decomp:
         raise SystemExit("--release needs --decomp (the game build's sources are checked against it)")
-    host = os.path.join(root, os.path.relpath(HOST, ROOT)) if a.arch == "x64" else \
-        os.path.join(root, "build", "host-windows-arm64-Release", "gt4_host.exe")
+    linux = a.arch.startswith("linux-")
+    if a.host:
+        host = a.host
+    elif linux:
+        host = os.path.join(root, "build", f"host-{a.arch}-Release", "gt4_host")
+    else:
+        host = os.path.join(root, os.path.relpath(HOST, ROOT)) if a.arch == "x64" else \
+            os.path.join(root, "build", "host-windows-arm64-Release", "gt4_host.exe")
     build = a.game_build or os.path.join(root, "build", "game_release")
     stamp = checked_game_build(build, a.decomp, root)
     game = os.path.join(build, "gt4_game.exe")
     for f in (host, game):
         if not os.path.isfile(f):
             raise SystemExit(f"missing {f}")
+    glibc = linux_host_check(host, a.arch) if linux else None
     info = [f"GT4 Native {a.release}", f"gt4-native commit: {git_head(root)}",
             f"gt4_game.exe built from an empty folder (tools/release_game.py) on {stamp['built']}:",
             f"  gt4-decomp commit (the game's sources): {stamp['decomp_commit']}",
@@ -257,6 +357,8 @@ def release(a):
     print("no block of the original executable in either program")
     for f in (host, game):
         info.append(f"{os.path.basename(f)} SHA-256: {hashlib.sha256(open(f, 'rb').read()).hexdigest()}")
+    if glibc:
+        info.append(f"gt4_host: {LINUX_ARCHES[a.arch][1]} Linux, needs glibc {glibc} at most")
     info += ["", "Provisional drafts (address, source in the decomp's draft store, kind, differing/total instructions):"]
     info += [l for l in (stamp.get("draft_list") or ["(no list)"]) if not l.startswith("#")]
 
@@ -264,6 +366,8 @@ def release(a):
     sources = os.path.join(a.out, f"{name}-game-sources.zip")
     print(f"writing {sources}")
     game_sources_zip(sources, stamp, build, a.decomp, a.release)
+    if linux:
+        return linux_release(a, name, host, game, root, info, sources)
     archive = os.path.join(a.out, f"{name}-windows-{a.arch}.zip")
     files = [(f, os.path.basename(f)) for f in [host, game] + vc_runtime(a.arch)]
     files += [(os.path.join(root, d), d) for d in RELEASE_DOCS if os.path.isfile(os.path.join(root, d))]
@@ -285,6 +389,59 @@ def release(a):
         names = z.namelist()
     allowed = {f"{name}/{arc}" for _, arc in files} | {f"{name}/{arc}" for arc in texts} | {f"{name}/saves/"}
     if set(names) != allowed or any(n.lower().endswith((".iso", ".elf", ".ps2", ".psu", ".bin", ".gt4")) for n in names):
+        os.remove(archive + ".part")
+        raise SystemExit(f"unexpected entries: {sorted(set(names) - allowed)}")
+    os.replace(archive + ".part", archive)
+    digest = hashlib.sha256(open(archive, "rb").read()).hexdigest()
+    with open(archive + ".sha256", "w", newline="\n") as f:
+        f.write(f"{digest}  {os.path.basename(archive)}\n")
+    print("\n".join(info[:9]))
+    print(f"{archive}: {os.path.getsize(archive) / 2**20:.1f} MiB, SHA-256 {digest}")
+    sdigest = hashlib.sha256(open(sources, "rb").read()).hexdigest()
+    with open(sources + ".sha256", "w", newline="\n") as f:
+        f.write(f"{sdigest}  {os.path.basename(sources)}\n")
+    print(f"{sources}: {os.path.getsize(sources) / 2**20:.1f} MiB, SHA-256 {sdigest}")
+
+
+def linux_release(a, name, host, game, root, info, sources):
+    """The Linux package: a .tar.gz (it keeps gt4_host's and gt4-native.sh's execute bits), Unix line ends."""
+    import hashlib
+    import io
+    import time
+    archive = os.path.join(a.out, f"{name}-{a.arch}.tar.gz")
+    files = [(host, "gt4_host", 0o755), (game, "gt4_game.exe", 0o644)]
+    files += [(os.path.join(root, d), d, 0o644) for d in RELEASE_DOCS if os.path.isfile(os.path.join(root, d))]
+    texts = {
+        "gt4-native.sh": (LINUX_LAUNCHER, 0o755),
+        "settings.ini": ("version = 1\n\n" + PROFILES["desktop"], 0o644),
+        "settings-handheld.ini": ("version = 1\n\n" + PROFILES["handheld"], 0o644),
+        "README.txt": (LINUX_README.format(version=a.release, arch=LINUX_ARCHES[a.arch][1],
+                                           proton=LINUX_ARCHES[a.arch][2]), 0o644),
+        "BUILD-INFO.txt": ("\n".join(info) + "\n", 0o644),
+        "game/PUT-YOUR-GAME-HERE.txt": (GAME_FOLDER_NOTE, 0o644),
+        "textures/SCUS-97328/HOW-TO.txt": (TEXTURES_NOTE, 0o644),
+    }
+    now = int(time.time())
+    print(f"writing {archive}")
+    with tarfile.open(archive + ".part", "w:gz", compresslevel=9, format=tarfile.PAX_FORMAT) as z:
+        def entry(arc, mode, size=0, kind=tarfile.REGTYPE):
+            info_ = tarfile.TarInfo(f"{name}/{arc}")
+            info_.mode, info_.size, info_.type, info_.mtime = mode, size, kind, now
+            info_.uname = info_.gname = ""
+            return info_
+        for folder in ("", "game", "saves", "textures", "textures/SCUS-97328"):
+            z.addfile(entry(folder, 0o755, kind=tarfile.DIRTYPE))
+        for path, arc, mode in files:
+            data = open(path, "rb").read()
+            z.addfile(entry(arc, mode, len(data)), io.BytesIO(data))
+        for arc, (text, mode) in texts.items():
+            data = text.encode("utf-8")
+            z.addfile(entry(arc, mode, len(data)), io.BytesIO(data))
+        names = z.getnames()
+    allowed = {f"{name}/{arc}" for _, arc, _ in files} | {f"{name}/{arc}" for arc in texts} | \
+        {name} | {f"{name}/{d}" for d in ("game", "saves", "textures", "textures/SCUS-97328")}
+    if set(n.rstrip("/") for n in names) != allowed or \
+            any(n.lower().endswith((".iso", ".elf", ".ps2", ".psu", ".bin", ".gt4")) for n in names):
         os.remove(archive + ".part")
         raise SystemExit(f"unexpected entries: {sorted(set(names) - allowed)}")
     os.replace(archive + ".part", archive)
@@ -346,8 +503,10 @@ def main():
     ap.add_argument("--profile", choices=sorted(PROFILES), default="desktop")
     ap.add_argument("--textures", help="a texture pack folder (textures/SCUS-97328) for the HD textures archive")
     ap.add_argument("--out", default=os.path.join(ROOT, "build", "package"))
-    ap.add_argument("--arch", choices=("x64", "arm64"), default="x64",
-                    help="with --release: the host's architecture (arm64: a cross build, built by CI)")
+    ap.add_argument("--arch", choices=("x64", "arm64", "linux-arm64", "linux-x64"), default="x64",
+                    help="with --release: the host's system and architecture (arm64: a Windows cross build, built "
+                    "by CI; linux-*: tools/build_linux.sh's host, a .tar.gz)")
+    ap.add_argument("--host", help="with --release: the host program to package (default: the build folder's)")
     a = ap.parse_args()
     if a.arch != "x64" and not a.release:
         ap.error("--arch arm64 only builds a release archive (--release): the other packages run the host here")
