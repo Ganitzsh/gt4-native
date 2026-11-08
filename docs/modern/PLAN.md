@@ -391,8 +391,10 @@ Acceptance for each as the audit's section 4 states, with session tests.
 and ACC on top of the PS2 mapping, never instead of it. The constraints:
 - Each feature is an `input.*` setting (`settings_input.cpp`). The `original` preset keeps today's behaviour byte for
   byte (`tests/input_map.cpp`). The other presets take the defaults each ticket gives.
-- Everything happens on the host, before GT4 sees the pad. GT4's own sticks have no dead zone and a linear curve
-  (`spikes/D1-bindings.md`), so the host's response is the whole response.
+- Everything happens on the host, before GT4 sees the pad. GT4's controller layer has no dead zone and a linear
+  curve (`spikes/D1-bindings.md`), but the car's steering does not turn the wheels until the steering byte is
+  past about 160, a quarter of a side's travel (lane D measured it at a standstill, 2026-11-08). So the host
+  shapes its response knowing what lies after it, and compensates that band outside `original` (D12).
 - GT4's functions stay assigned in GT4's own controller screen (D1's decision). The host maps devices to the PS2
   pad; it never moves GT4's functions.
 - Every per-frame filter is counted in D11's latency budget.
@@ -410,8 +412,9 @@ don't rescale (`kStickDeadZone`, `input_map.cpp:62`), so steering jumps from 0 t
   CTEST covers.
 - Steering (left stick X), per side. Its dead zones are **per axis, on X only**, which is right for steering: they
   must not be made radial.
-  - `input.steer.deadzone` (inner, 0-30 %, default 5 %): below it 0; above it rescaled, so the output starts
-    at 0;
+  - `input.steer.deadzone` (inner, 0-30 %, default 0 % until the band compensation lands, the coordinator's
+    interim fix, so `modern` is never worse than `original` and GT4's band swallows stick noise; 5 % with it):
+    below it 0; above it rescaled, so the output starts at 0;
   - `input.steer.outer_deadzone` (0-30 %, default 2 %): full output that far before the end of travel;
   - `input.steer.linearity` (exponent 1.0-3.0, default 1.0): finer control near the centre above 1;
   - `input.steer.sensitivity` (0.5-2.0, default 1.0): a gain before the limit, so above 1 full lock comes early;
@@ -420,6 +423,19 @@ don't rescale (`kStickDeadZone`, `input_map.cpp:62`), so steering jumps from 0 t
 - Pedals (each trigger's travel, and the right stick's halves when GT4's analog config uses them): inner and outer
   dead zone, linearity and smoothing, the same way (`input.pedal.*`). Then GT4's own curve, and
   `input.trigger_travel` if it is `full`, apply on top as today.
+- **GT4's steering band.** Between the steer command and the wheels, GT4 keeps the wheels straight up to a
+  steering byte of about 160 and turns them roughly linearly from about 165 to 0.68-0.69 rad at 255 (D12's
+  measurement, at a standstill, `original` and `modern` alike). With the host's dead zone on top, `modern`'s
+  defaults left the first third of the stick doing nothing. `modern` compensates it: the shaped output o (0..1)
+  becomes the byte `128 + (g + (1 - g) * o) * 127` on the right and `128 - (g + (1 - g) * o) * 128` on the left
+  (`padAxis`'s scales, so both ends reach 255 and 0), so the first step past the host's dead zone moves the wheels.
+  The band is measured on both sides, with g per side if GT4's edge is not symmetric. `original` keeps the band, as the PS2 had it.
+  - g comes from the code that writes `D + 0x468`, read before g is chosen: the band's size, and whether it
+    depends on speed or a driving aid. If it is constant, g is a setting (`input.steer.game_band`, default the
+    band's last byte with the wheels straight, so the host never overshoots into a step). If it depends on speed or
+    an aid, the host computes g each frame from the same values (D6).
+  - It applies to everything that goes through the response: the stick, the keyboard ramp, and in D15 a wheel in
+    `native` mode.
 - Keyboard steering: a digital key ramps the axis at `input.steer.key_rate` (full lock in 0-500 ms, default 150 ms;
   `original` 0, today's step) and returns at twice that rate.
 - **Speed-sensitive steering**, `input.steer.speed_reduction` (0-80 % less lock at 200 km/h, default 0), comes
@@ -431,9 +447,12 @@ don't rescale (`kStickDeadZone`, `input_map.cpp:62`), so steering jumps from 0 t
     `original` map's bytes are unchanged for every input; smoothing's step response has the configured time
     constant.
   - A session test with the virtual pad sweeps the stick over 256 steps. With the defaults, every steering byte from
-    the centre to full lock is reached, with no gap over one byte. With `original`, the jump at 8 % is still there.
-  - Live: the steering angle at the wheels against the stick, standstill and 100 km/h, linearity 1 and 2, plotted
-    (D6's field). It records GT4's own speed reduction for the speed-sensitive part.
+    the compensated start to full lock is reached, with no gap over one byte. With `original`, the jump at 8 % is
+    still there.
+  - Live: the steering angle at the wheels against the stick, at a standstill and at 100 km/h, linearity 1 and 2,
+    plotted (D6's field). With `modern`'s defaults the wheels move from the first stick step past the host's dead
+    zone, with no step larger than one byte's worth of angle. The plot also records GT4's own reduction with
+    speed, for the speed-sensitive part.
 
 **D13: Devices: profiles, hot-plug, keyboard bindings (M-L).** `platform/input/devices.{h,cpp}`.
 - **Profiles.** Each device keyed by its SDL GUID and name: its bindings to the PS2 pad, D12's response, D14's
