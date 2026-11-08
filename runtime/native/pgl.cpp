@@ -132,13 +132,14 @@ uint32_t set_holding(uint32_t base) {
     return in ? in->id : 0;
 }
 
-gfx::StateRecord empty_state() {
-    gfx::StateRecord r;
+// An empty state record, made in place: every byte is set, the 4 bytes of tail padding after the palette (the
+// fields end at 156 of 160) included, so a record's bytes (and a capture's) never carry stack contents. Not returned
+// by value: a copy need not copy padding.
+void clear_state(gfx::StateRecord &r) {
     std::memset(&r, 0, sizeof r);
     r.shared = gfx::Shared();
     r.context = gfx::Context();
     r.palette = gfx::Texture();
-    return r;
 }
 
 // A state record of the groups 004AB350 would flush now (and its bookkeeping: the groups leave the dirty
@@ -149,7 +150,7 @@ bool take_state(uint32_t context, gfx::StateRecord &r) {
     if (!flush) return false;
     dirty &= ~flush;
     guest_ref<uint64_t>(context + kFlushed) |= flush;
-    r = empty_state();
+    clear_state(r);
     r.sharedGroups = static_cast<uint32_t>(flush >> 32) & 0x3FF;
     r.contextGroups = (static_cast<uint32_t>(flush) & 0x1FFF) | ((static_cast<uint32_t>(flush >> 16) & 0x1FFF) << 16);
     for (uint32_t g = 0; g < gfx::kSharedGroups; ++g)
@@ -1058,7 +1059,7 @@ void gt4_gfx_set(uint32_t context, const uint64_t *pairs, int n) {
                      (!isShared && r.contextGroups && blockContext != ctx)))
             flush();
         if (!open) {
-            r = empty_state();
+            clear_state(r);
             open = true;
         }
         if (isShared) {
