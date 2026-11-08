@@ -92,6 +92,8 @@ void gt4_scene_marker(void *context, int kind);
  * the car lamps and the course's light sources (warning lamps), as 0033EAB8 has them for the glow pass after the main
  * view (a.5 rule 4). */
 void gt4_scene_glow_lights(void *context, unsigned int view, const void *glow);
+/* The course's draws begin (on 1) or end (on 0): the Instances in between are flagged kInstCourse (nested calls count). */
+void gt4_scene_course(void *context, int on);
 #ifdef __cplusplus
 }
 #endif
