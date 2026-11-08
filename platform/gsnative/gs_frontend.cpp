@@ -787,12 +787,14 @@ void GsFrontend::emit(const Vertex* v, uint32_t n, Topology topology) {
         else if (scene.viewports.size() < 8) scene.viewports.push_back({rect, 1});
     }
     noteDraw(colour, depth, texture);
+    uint8_t bracketRule = 0;
+    const uint8_t bracket = bracketFor(colour, bracketRule);
     // Batch with the previous draw when nothing changed.
     if (!frame.commands.empty() && frame.commands.back().kind == FrameList::Command::Kind::Draw) {
         Draw& last = frame.draws[frame.commands.back().index];
         if (last.topology == topology && last.state == s && last.target == colour && last.depth == depth &&
             last.texture.kind == texture.kind && last.texture.id == texture.id && last.texture.version == texture.version &&
-            last.depthInverted == depthInverted &&
+            last.depthInverted == depthInverted && last.bracket == bracket &&
             last.first + last.count == frame.vertices.size()) {
             frame.vertices.insert(frame.vertices.end(), out, out + n);
             last.count += n;
@@ -808,6 +810,8 @@ void GsFrontend::emit(const Vertex* v, uint32_t n, Topology topology) {
     d.depth = depth;
     d.depthInverted = depthInverted;
     d.texture = texture;
+    d.bracket = bracket;
+    countBracket(bracketRule);
     frame.vertices.insert(frame.vertices.end(), out, out + n);
     frame.commands.push_back({FrameList::Command::Kind::Draw, static_cast<uint32_t>(frame.draws.size())});
     frame.draws.push_back(d);
@@ -1868,12 +1872,14 @@ void GsFrontend::model(const gfx::ModelJob& in, const uint32_t* words) {
         b.inList = true;
     }
     const uint16_t drawView = sceneSplit ? view : 0;
+    uint8_t bracketRule = 0;
+    const uint8_t bracket = bracketFor(colour, bracketRule);
     Draw* batch = nullptr;
     if (!frame.commands.empty() && frame.commands.back().kind == FrameList::Command::Kind::Draw) {
         Draw& last = frame.draws[frame.commands.back().index];
         if (last.modeled && last.topology == Topology::Triangles && last.state == s && last.target == colour && last.depth == depth &&
             last.texture.kind == texture.kind && last.texture.id == texture.id && last.texture.version == texture.version &&
-            last.first + last.count == frame.modelVertices) {
+            last.bracket == bracket && last.first + last.count == frame.modelVertices) {
             // a view change inside a run that merges: the split makes it a new draw (split off: what it would add)
             if (view != lastModelView) ++stats.sceneSplitDraws;
             if (last.view == drawView) batch = &last;
@@ -1890,6 +1896,8 @@ void GsFrontend::model(const gfx::ModelJob& in, const uint32_t* words) {
         d.texture = texture;
         d.modeled = true;
         d.view = drawView;
+        d.bracket = bracket;
+        countBracket(bracketRule);
         frame.commands.push_back({FrameList::Command::Kind::Draw, static_cast<uint32_t>(frame.draws.size())});
         frame.draws.push_back(d);
         ++stats.draws;
@@ -1978,6 +1986,8 @@ void GsFrontend::vertices(const InputVertex* in, size_t count, bool withFog) {
         for (size_t k = 0; k < count; ++k) vertex(in[k], withFog);
         return;
     }
+    uint8_t bracketRule = 0;
+    const uint8_t bracket = bracketFor(colour, bracketRule);
     TextureSource texture;
     bool first = true;
     Draw* batch = nullptr;
@@ -2035,7 +2045,7 @@ void GsFrontend::vertices(const InputVertex* in, size_t count, bool withFog) {
                 Draw& last = frame.draws[frame.commands.back().index];
                 if (last.topology == Topology::Triangles && last.state == s && last.target == colour && last.depth == depth &&
                     last.texture.kind == texture.kind && last.texture.id == texture.id && last.texture.version == texture.version &&
-                    last.first + last.count == frame.vertices.size())
+                    last.bracket == bracket && last.first + last.count == frame.vertices.size())
                     batch = &last;
             }
             if (!batch) {
@@ -2047,6 +2057,8 @@ void GsFrontend::vertices(const InputVertex* in, size_t count, bool withFog) {
                 d.target = colour;
                 d.depth = depth;
                 d.texture = texture;
+                d.bracket = bracket;
+                countBracket(bracketRule);
                 frame.commands.push_back({FrameList::Command::Kind::Draw, static_cast<uint32_t>(frame.draws.size())});
                 frame.draws.push_back(d);
                 ++stats.draws;
@@ -2343,6 +2355,36 @@ void GsFrontend::finishBinding(ViewBinding& b) {
     }
 }
 
+// N4 (PLAN.md): a draw into `colour` inside the flare's or glare's bracket is marked when it draws onto the picture: the
+// main view's principal target (decided at its ViewEnd, before the flare pass), or a screen-sized target by sceneRead's
+// rule (the display buffer after the post effects, named only by the display record, later). The flare's samples go into
+// a small target the game reads back: never marked. The flare's bracket wins should both be open.
+uint8_t GsFrontend::bracketFor(uint32_t colour, uint8_t& rule) const {
+    rule = 0;
+    const uint8_t open = (sceneBrackets >> kBracketFlare) & 1 ? kBracketFlare : (sceneBrackets >> kBracketGlare) & 1 ? kBracketGlare : 0;
+    if (!open || !colour) return 0;
+    for (const uint16_t id : sceneMainViews)
+        if (id <= viewBindings.size() && viewBindings[id - 1u].decided && viewBindings[id - 1u].target == colour) {
+            rule = 1;
+            return open;
+        }
+    if (colour <= targets.size()) {
+        const Target& t = targets[colour - 1];
+        if (!t.depth && t.bw * 64 >= 512 && t.height >= 384) {
+            rule = 2;
+            return open;
+        }
+    }
+    return 0;
+}
+
+// A new Draw made inside a bracket, counted by the rule that marked it (or kept).
+void GsFrontend::countBracket(uint8_t rule) {
+    const uint8_t open = (sceneBrackets >> kBracketFlare) & 1 ? kBracketFlare : (sceneBrackets >> kBracketGlare) & 1 ? kBracketGlare : 0;
+    if (!open) return;
+    (rule == 1 ? stats.bracketPrincipal : rule == 2 ? stats.bracketScreen : stats.bracketKept)[open]++;
+}
+
 void GsFrontend::sceneRecord(const uint8_t* payload, size_t bytes) {
     gfx::scene::Prefix prefix;
     if (bytes < sizeof prefix) return;
@@ -2353,8 +2395,27 @@ void GsFrontend::sceneRecord(const uint8_t* payload, size_t bytes) {
         sceneCuts = sceneCutsAsync = 0;
         sceneMarkerCommands.clear();
         sceneVsyncInFrame = false;
+        sceneBrackets = 0;
+        sceneMainViews.clear();
     } else if (prefix.kind == gfx::scene::kMarker && sceneOpen) {   // (SceneFrame::markerCommands, a.8)
         sceneMarkerCommands.push_back(static_cast<uint32_t>(frame.commands.size()));
+        if (bytes >= sizeof(gfx::scene::Marker)) {   // N4: the flare's and glare's brackets, in stream order (a cut list too)
+            gfx::scene::Marker m;
+            std::memcpy(&m, payload, sizeof m);
+            switch (m.marker) {
+            case gfx::scene::kMarkFlareBegin: sceneBrackets |= 1u << kBracketFlare; break;
+            case gfx::scene::kMarkFlareEnd: sceneBrackets &= ~(1u << kBracketFlare); break;
+            case gfx::scene::kMarkGlareBegin: sceneBrackets |= 1u << kBracketGlare; break;
+            case gfx::scene::kMarkGlareEnd: sceneBrackets &= ~(1u << kBracketGlare); break;
+            default: break;
+            }
+        }
+    } else if (prefix.kind == gfx::scene::kViewBegin && bytes >= sizeof(gfx::scene::ViewBegin) && sceneOpen) {
+        gfx::scene::ViewBegin begin;
+        std::memcpy(&begin, payload, sizeof begin);
+        if (begin.role == gfx::scene::kViewMain && begin.view && begin.view <= kViews &&
+            std::find(sceneMainViews.begin(), sceneMainViews.end(), begin.view) == sceneMainViews.end())
+            sceneMainViews.push_back(begin.view);   // (N4: its principal target, once decided, is the picture)
     } else if (prefix.kind == gfx::scene::kViewEnd && bytes >= sizeof(gfx::scene::ViewEnd) && sceneOpen) {
         gfx::scene::ViewEnd end;
         std::memcpy(&end, payload, sizeof end);

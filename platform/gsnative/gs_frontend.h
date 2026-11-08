@@ -90,7 +90,13 @@ struct Draw {
     // The scene view its 3D batches belong to (CONTRACTS.md a.8; ModelJob::pad[1]): set while the scene split is on
     // (GsFrontend::setSceneSplit), when merging stops at a view change; 0 none.
     uint16_t view = 0;
+    // N4 (PLAN.md): the marker bracket a draw onto the picture is in (kBracketFlare, kBracketGlare), from the scene
+    // records' markers as they arrive: drawn into the main view's principal target or a screen-sized one. The back end
+    // may skip it (GsnScene::setSkippedBrackets). 0: outside the brackets, or into another target (the flare's
+    // samples, which the game reads back: never skipped). Draws do not merge across a change of it.
+    uint8_t bracket = 0;
 };
+inline constexpr uint8_t kBracketFlare = 1, kBracketGlare = 2;
 
 // A decoded texture the back end must (re)upload: RGBA8, R in the low byte, the GS's alpha (0x80 = 1.0).
 struct TextureImage {
@@ -325,6 +331,9 @@ public:
         // HudBegin < HudEnd, by command index), those where they did not, those not checked (a cut inside the frame)
         uint64_t markersInOrder = 0, markersOutOfOrder = 0, markersNotChecked = 0, markersAbsent = 0;
         uint64_t lightBeforePost = 0, lightInsidePost = 0;   // of those in order: the Light before PostBegin, or after it
+        // N4: draws made inside a bracket (index kBracketFlare, kBracketGlare), by the rule that marked them (into the main
+        // view's principal target; else into a screen-sized one), and those left unmarked (another target: the samples)
+        uint64_t bracketPrincipal[3] = {}, bracketScreen[3] = {}, bracketKept[3] = {};
     } stats;
 
     // The state groups of include/gt4/gfx.h: a state record from the game (the shared groups, then the
@@ -553,6 +562,12 @@ private:
     std::vector<ViewBinding> viewBindings;
     uint32_t sceneCuts = 0, sceneCutsAsync = 0;
     std::vector<uint32_t> sceneMarkerCommands;   // the command index each marker of the open frame arrived at
+    // N4: the brackets open in the frame (bit kBracketFlare, bit kBracketGlare), its main views (ViewBegin role kViewMain),
+    // and the bracket a draw into `colour` gets (`rule`: 0 none or kept, 1 principal target, 2 screen-sized)
+    uint8_t sceneBrackets = 0;
+    std::vector<uint16_t> sceneMainViews;
+    uint8_t bracketFor(uint32_t colour, uint8_t& rule) const;
+    void countBracket(uint8_t rule);
     bool sceneVsyncInFrame = false;               // a VSync came while the scene frame was open (its markers: unchecked)
     uint64_t paletteHash(const GsMemory::Tex0& t);
     struct PaletteMemo {

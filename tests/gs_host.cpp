@@ -446,6 +446,140 @@ int main(int argc, char** argv) {
         expect(k.markersAbsent == 1, "markers: a PostBegin and no HudBegin is a screen without the HUD (absent)");
     }
 
+    // 2e. N4's marking (PLAN.md N4; gs_frontend.cpp bracketFor): draws inside the flare's and glare's markers are marked when
+    // they go onto the picture (the main view's principal target, or a screen-sized target), never into the small sample
+    // target the game reads back. Marked as the markers arrive, so a list cut inside the bracket is marked too; a marked
+    // draw does not merge with an unmarked one. All three draw paths: per vertex (sprites), runs (vertices) and models.
+    {
+        gt4::gsn::GsFrontend fe;
+        Gif g = setup();
+        fe.gif(3, static_cast<const uint8_t*>(g.data()), g.bytes());
+        std::vector<uint32_t> words(gt4::gfx::kModelWords, 0);
+        words[64 * 4 + 3] = 1;
+        words[65 * 4 + 3] = 3 * 3;
+        gt4::gfx::ModelJob job{};
+        job.count = 5;
+        job.prim = 4;
+        auto record = [&](const auto& r) { fe.sceneRecord(reinterpret_cast<const uint8_t*>(&r), sizeof r); };
+        auto frameBegin = [&] {
+            gt4::gfx::scene::FrameBegin b{};
+            b.prefix = {gt4::gfx::scene::kFrameBegin, gt4::gfx::scene::kVersion};
+            record(b);
+        };
+        auto marker = [&](uint16_t kind) {
+            gt4::gfx::scene::Marker m{};
+            m.prefix = {gt4::gfx::scene::kMarker, gt4::gfx::scene::kVersion};
+            m.marker = kind;
+            record(m);
+        };
+        // the 3D scene's state (depth-tested and written), 2D into a target (no depth), and the draws
+        auto scene3d = [&] {
+            Gif s2;
+            s2.ad({{FRAME_1, frame(0, 10, PSMCT32)}, {ZBUF_1, zbuf(0x70, PSMZ24, false)}, {TEST_1, test(true, 2)}, {TEX0_1, 0},
+                   {SCISSOR_1, scissor(0, 639, 0, 447)}});
+            fe.gif(3, static_cast<const uint8_t*>(s2.data()), s2.bytes());
+        };
+        auto target2d = [&](uint32_t fbp, uint32_t fbw, uint32_t height) {
+            Gif s2;
+            s2.ad({{FRAME_1, frame(fbp, fbw, PSMCT32)}, {ZBUF_1, zbuf(0x70, PSMZ24, true)}, {TEST_1, test(true, 1)}, {TEX0_1, 0},
+                   {SCISSOR_1, scissor(0, fbw * 64 - 1, 0, height - 1)}});
+            fe.gif(3, static_cast<const uint8_t*>(s2.data()), s2.bytes());
+        };
+        auto drawSprite = [&](uint32_t w, uint32_t h) {
+            Gif s2;
+            sprite(s2, 0, 0, w, h, rgbaq(255, 200, 100, 0x80));
+            fe.gif(3, static_cast<const uint8_t*>(s2.data()), s2.bytes());
+        };
+        auto drawRun = [&] {   // a triangle strip as the 3D renderers send it (GsFrontend::vertices)
+            gt4::gsn::GsFrontend::InputVertex v[3];
+            const uint32_t xy[3][2] = {{10, 10}, {200, 10}, {10, 200}};
+            for (int i = 0; i < 3; ++i) {
+                v[i].x = (2048 + xy[i][0]) << 4;
+                v[i].y = (2048 + xy[i][1]) << 4;
+                v[i].rgba = 0x80FFFFFFu;
+            }
+            fe.setPrim(4);
+            fe.vertices(v, 3, false);
+        };
+        auto drawModel = [&](uint16_t view, uint32_t serial) {
+            job.pad[0] = serial;
+            job.pad[1] = view;
+            fe.model(job, words.data());
+        };
+        using gt4::gsn::kBracketFlare;
+        using gt4::gsn::kBracketGlare;
+
+        frameBegin();
+        gt4::gfx::scene::ViewBegin vb{};
+        vb.prefix = {gt4::gfx::scene::kViewBegin, gt4::gfx::scene::kVersion};
+        vb.view = 1;
+        vb.role = gt4::gfx::scene::kViewMain;
+        record(vb);
+        scene3d();
+        drawModel(1, 1);                                   // the main view's scene: its principal is the frame at 0
+        gt4::gfx::scene::ViewEnd ve{};
+        ve.prefix = {gt4::gfx::scene::kViewEnd, gt4::gfx::scene::kVersion};
+        ve.view = 1;
+        record(ve);
+        target2d(0, 10, 448);
+        drawSprite(640, 448);                              // before the flare: not marked
+        marker(gt4::gfx::scene::kMarkFlareBegin);
+        drawSprite(640, 448);                              // the flare onto the principal: marked, not merged with the last
+        target2d(0x1C0, 1, 8);
+        drawSprite(64, 8);                                 // its sample into the 64 x 8 target: kept
+        gt4::gsn::FrameList cutList;
+        fe.cut(cutList);                                   // a read inside the bracket
+        target2d(0, 10, 448);
+        drawRun();                                         // a run onto the principal: marked
+        scene3d();
+        drawModel(0, 0);                                   // a model (untagged) onto the principal: marked
+        target2d(0x100, 10, 448);
+        drawSprite(640, 448);                              // onto another screen-sized target (the display buffer): marked
+        marker(gt4::gfx::scene::kMarkFlareEnd);
+        drawSprite(640, 448);                              // after the flare: not marked, not merged
+        marker(gt4::gfx::scene::kMarkGlareBegin);
+        drawSprite(640, 448);                              // the glare onto it: marked as glare
+        marker(gt4::gfx::scene::kMarkGlareEnd);
+        auto sf = std::make_unique<gt4::scene::SceneFrame>();
+        gt4::scene::ViewData v1;
+        v1.id = 1;
+        v1.role = gt4::gfx::scene::kViewMain;
+        sf->views.push_back(v1);
+        fe.sceneFrame(std::move(sf));
+        gt4::gsn::FrameList last;
+        fe.vsync(1, last);
+
+        auto brackets = [](const gt4::gsn::FrameList& l) {
+            std::string s;
+            for (const auto& c : l.commands)
+                if (c.kind == gt4::gsn::FrameList::Command::Kind::Draw) s += char('0' + l.draws[c.index].bracket);
+            return s;
+        };
+        const std::string cutMarks = brackets(cutList), lastMarks = brackets(last);
+        expect(cutMarks == "0010", ("N4: the cut list's draws marked in the bracket, the sample kept (got " + cutMarks + ")").c_str());
+        expect(!cutList.scene, "N4: the cut list has no scene frame, and is marked all the same");
+        expect(lastMarks == "11102", ("N4: the run, the model and the display buffer's draw marked; glare apart (got " + lastMarks + ")").c_str());
+        expect(fe.stats.bracketPrincipal[kBracketFlare] == 3 && fe.stats.bracketScreen[kBracketFlare] == 1 &&
+                   fe.stats.bracketKept[kBracketFlare] == 1,
+               "N4: the flare's draws counted by the rule that marked them, the sample as kept");
+        expect(fe.stats.bracketScreen[kBracketGlare] == 1 && fe.stats.bracketPrincipal[kBracketGlare] == 0,
+               "N4: the glare's draw counted apart");
+
+        // the next frame: no main view bound, so the size rule; a FrameBegin closes a bracket left open
+        frameBegin();
+        marker(gt4::gfx::scene::kMarkFlareBegin);
+        target2d(0, 10, 448);
+        drawSprite(640, 448);
+        frameBegin();
+        drawSprite(640, 448);
+        gt4::gsn::FrameList next;
+        fe.cut(next);
+        const std::string nextMarks = brackets(next);
+        expect(nextMarks == "10", ("N4: without a main view the size rule marks; a new frame starts outside the brackets (got " +
+                                   nextMarks + ")").c_str());
+        expect(fe.stats.bracketScreen[kBracketFlare] == 2, "N4: that draw counted by the size rule");
+    }
+
     // 3. A capture replayed through GsHost (no game: reads stay in memory): one displayed list per VBlank.
     {
         const std::filesystem::path dir = outputDir.empty() ? gt4::test::uniqueTempPath("gt4_gs_host_test") : std::filesystem::path(outputDir);

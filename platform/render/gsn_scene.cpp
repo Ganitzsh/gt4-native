@@ -180,6 +180,8 @@ struct GsnScene::Impl {
     // lighting.night (PLAN.md F2, CONTRACTS.md c.3; GsnScene::setNightLighting): the view's lamps added in
     // gsn_light.comp, from the clustered light list (F1) and an albedo estimate (gsn_night_lum.comp).
     float night = 0.0f;                        // 0: off; else the added light's strength
+    // N4 (GsnScene::setSkippedBrackets): the marked brackets whose draws are not drawn (bit gsn::kBracketFlare, kBracketGlare)
+    uint8_t skippedBrackets = 0;
     vk::Pipeline nightLumPass;
     render::LightClusters clusters;
     vk::Image nightLocal;                      // (sum of log luminance, count) per 8 x 8 block
@@ -1987,6 +1989,10 @@ void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t
             break;
         }
         const gsn::Draw& d = frame.draws[cmd.index];
+        if (d.bracket && ((skippedBrackets >> d.bracket) & 1)) {   // N4: the flare's (glare's) draws onto the picture
+            tally(d.bracket == gsn::kBracketFlare ? "N4 flare draws skipped" : "N4 glare draws skipped");
+            continue;
+        }
         auto targetIt = targets.find(d.target);
         if (targetIt == targets.end()) continue;
         const gsn::DrawState& s = d.state;
@@ -2992,6 +2998,9 @@ void GsnScene::setLighting(float occlusion, uint32_t directions, float grade, fl
 }
 
 void GsnScene::setNightLighting(float strength) { impl->night = std::max(strength, 0.0f); }
+void GsnScene::setSkippedBrackets(bool flare, bool glare) {
+    impl->skippedBrackets = static_cast<uint8_t>((flare ? 1u << gsn::kBracketFlare : 0u) | (glare ? 1u << gsn::kBracketGlare : 0u));
+}
 
 void GsnScene::prepare(const SceneFormats& formats) {
     Impl& s = *impl;

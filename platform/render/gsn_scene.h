@@ -69,6 +69,10 @@ public:
     // lighting.night (PLAN.md F2): the course's lamps added to the 3D scenes, with this strength (0: off). Needs the
     // game's scene records (sceneRecordsWanted), which carry the lamps and each view's projection.
     void setNightLighting(float strength);
+    // N4 (PLAN.md): the draws the front end marked inside the flare's (glare's) bracket onto the picture are not drawn.
+    // Counted per bracket ("N4 flare draws skipped"); GT4_GSN_LIMIT still counts them. The flare's samples, which the
+    // game reads back, are never marked.
+    void setSkippedBrackets(bool flare, bool glare);
     // Temporal anti-aliasing of the 3D scenes in the scene stage (render.aa = taa, or FSR 2): jittered draws,
     // motion vectors from the 3D renderers, a resolve against each scene's history (docs/NATIVE_RENDERER.md).
     void setTemporal(bool on);

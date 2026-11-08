@@ -876,6 +876,9 @@ struct Renderer::Impl {
             if (aspect <= 0.0f) aspect = extent.height ? static_cast<float>(extent.width) / static_cast<float>(extent.height) : 4.0f / 3.0f;
             gsnScene->setLighting(occlusion, directions, settings.lighting == gt4::LightingMode::Enhanced ? 1.0f : 0.0f, aspect);
             gsnScene->setNightLighting(settings.night == gt4::LightingMode::Enhanced ? 1.0f : 0.0f);   // lighting.night (F2)
+            // N4: the night relight replaces GT4's flare veil; render.scene = modern drops its glare too (B15)
+            gsnScene->setSkippedBrackets(settings.night == gt4::LightingMode::Enhanced,
+                                         settings.night == gt4::LightingMode::Enhanced && settings.scene == gt4::SceneRenderer::Modern);
             // Temporal anti-aliasing in the game's 3D scenes (motion vectors from its 3D renderers): for TAA, and for
             // FSR 2, whose temporal part it takes (the game's frames reach the pipeline whole, HUD included).
             gsnScene->setTemporal(settings.aa == gt4::AntiAliasing::Taa || settings.upscaler == gt4::Upscaler::Fsr2);
