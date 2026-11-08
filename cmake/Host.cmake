@@ -422,6 +422,13 @@ if(BUILD_TESTING)
   # The graphics host on the CPU (events, reads, a capture replayed into frame lists), and that capture drawn
   # by gt4_host (headless, "original" preset, compared by pixel; needs a Vulkan GPU, skipped (77) without).
   # Outputs go to the build directory.
+  # The POSIX game link (link_host.cpp: a /dev/shm file, the game started through GT4_GAME_LAUNCHER) against a fake
+  # game in a child process: every record across a ring wrap, the quit, the exit code, the file removed (PLAN.md C9).
+  if(UNIX)
+    add_executable(gt4_link_posix_test tests/link_posix.cpp)
+    target_link_libraries(gt4_link_posix_test PRIVATE gt4_gs)
+    add_test(NAME link_posix COMMAND gt4_link_posix_test)
+  endif()
   add_executable(gt4_gs_host_test tests/gs_host.cpp)
   target_link_libraries(gt4_gs_host_test PRIVATE gt4_gs)
   set(GT4_GS_TEST_OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/gs_test_output)
