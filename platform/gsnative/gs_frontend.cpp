@@ -728,7 +728,10 @@ void GsFrontend::emit(const Vertex* v, uint32_t n, Topology topology) {
                         std::fprintf(stderr, "gsn: Z24 pass at bp %X drew its first primitive again: a second inversion (%llu so far)\n", t.bp,
                                      static_cast<unsigned long long>(passes));
                 }
-                if (invertRun != t.id || again) t.inverted = !t.inverted;
+                if (invertRun != t.id || again) {
+                    t.inverted = !t.inverted;
+                    lastTexture.valid = false;   // (a Z texture of this buffer, P2c, reads it turned round now)
+                }
                 invertRun = t.id;
                 ++stats.draws;
                 return;
@@ -1550,6 +1553,43 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
             frame.reinterpretations.push_back(r);
             lastReinterpretation = {src.id, serial};
             ++stats.reinterpreted;
+            return src;
+        }
+        // A Z buffer read as a Z-format texture of its own layout (P2c: race7's pre-race frames copy a field's Z this
+        // way): built on the GPU from the depth image. Z32 and Z24 share a layout; Z16 and Z16S each have their own.
+        const bool zTexture = t.psm == PSMZ32 || t.psm == PSMZ24 || t.psm == PSMZ16 || t.psm == PSMZ16S;
+        const bool zLayout = (t.psm == PSMZ32 || t.psm == PSMZ24) ? (target.psm == PSMZ32 || target.psm == PSMZ24) : t.psm == target.psm;
+        if (target.depth && zTexture && zLayout && target.bw == t.tbw && t.tbp >= target.bp && (t.tbp - target.bp) % 32 == 0) {
+            Reinterpretation r;
+            r.target = owner;
+            r.targetBp = target.bp;
+            r.targetBw = target.bw;
+            r.targetPsm = target.psm;
+            r.texture = s.c.texture;
+            r.texAlpha0 = s.texAlpha0;
+            r.texAlpha1 = s.texAlpha1;
+            r.texBlackTransparent = s.texBlackTransparent;
+            r.width = w;
+            r.height = h;
+            r.depth = true;
+            r.depthInverted = target.inverted;
+            src.kind = TextureSource::Kind::Reinterpreted;
+            // The same as the previous one while the Z buffer has not been drawn into or turned round since: reused.
+            const LastReinterpretation& last = lastReinterpretation;
+            if (last.index < frame.reinterpretations.size()) {
+                const Reinterpretation& p = frame.reinterpretations[last.index];
+                const uint64_t written = owner < targetWritten.size() ? targetWritten[owner] : 0;
+                if (p.depth && p.target == r.target && p.texture == r.texture && sameTexAlpha(p, r) &&
+                    p.depthInverted == r.depthInverted && written <= last.serial) {
+                    src.id = last.index;
+                    return src;
+                }
+            }
+            src.id = static_cast<uint32_t>(frame.reinterpretations.size());
+            frame.reinterpretations.push_back(std::move(r));
+            lastReinterpretation = {src.id, serial};
+            ++stats.reinterpreted;
+            ++stats.depthTextures;
             return src;
         }
         src.reinterpreted = true;
