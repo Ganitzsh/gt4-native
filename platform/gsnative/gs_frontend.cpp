@@ -31,6 +31,18 @@ enum Reg : uint32_t {
 
 float asFloat(uint32_t bits) { return std::bit_cast<float>(bits); }
 
+// The mask on XYOFFSET's fraction for the draws. The register as the GS has it (R6: closer to PCSX2's software
+// renderer than half-pixel steps in the race, its menus and the garage, and no field shake at 1x to 4x on today's
+// tree; see CAPTURES' re-baselines). GT4_GSN_JITTER=mask keeps half-pixel steps, original's picture before R6
+// (d3a50ff), for comparisons.
+uint32_t originMask() {
+    static const uint32_t mask = [] {
+        const char* e = std::getenv("GT4_GSN_JITTER");
+        return e && !std::strcmp(e, "mask") ? 0xFFF8u : 0xFFFFu;
+    }();
+    return mask;
+}
+
 uint64_t mix(uint64_t h, uint64_t v) {
     h ^= v + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2);
     return h * 0xFF51AFD7ED558CCDull;
@@ -307,11 +319,8 @@ void GsFrontend::write(uint32_t r, uint64_t value) {
         reg[r] = value;
         Vertex& v = queue[std::min<uint32_t>(queued, 2)];
         const uint32_t prim = primValue();
-        // GT4 moves XYOFFSET by a quarter pixel every other frame (its field jitter); drawn at a higher
-        // resolution that shakes the picture, so offsets keep half-pixel steps (GT4_GSN_JITTER=keep: as is).
-        static const bool keepJitter = [] { const char* e = std::getenv("GT4_GSN_JITTER"); return e && !std::strcmp(e, "keep"); }();
         const gfx::Context& c = contexts[(prim & gfx::kContext2) ? 1 : 0];
-        const uint32_t jitter = keepJitter ? 0xFFFFu : 0xFFF8u;
+        const uint32_t jitter = originMask();
         const uint32_t x = static_cast<uint32_t>(value & 0xFFFF), y = static_cast<uint32_t>((value >> 16) & 0xFFFF);
         v.x = (static_cast<float>(x) - static_cast<float>(c.originX & jitter)) / 16.0f;
         v.y = (static_cast<float>(y) - static_cast<float>(c.originY & jitter)) / 16.0f;
@@ -1941,8 +1950,7 @@ void GsFrontend::model(const gfx::ModelJob& in, const uint32_t* words) {
     if (!triangles) return;
     const DrawState s = currentState(prim);
     const gfx::Context& c = contexts[(prim & gfx::kContext2) ? 1 : 0];
-    static const bool keepJitter = [] { const char* e = std::getenv("GT4_GSN_JITTER"); return e && !std::strcmp(e, "keep"); }();
-    const uint32_t jitter = keepJitter ? 0xFFFFu : 0xFFF8u;
+    const uint32_t jitter = originMask();
     const uint32_t scissorX0 = s.c.scissorX0, scissorX1 = s.c.scissorX1, scissorY0 = s.c.scissorY0, scissorY1 = s.c.scissorY1;
     const uint32_t width = s.c.colorWidth;
     const uint32_t colour = targetFor(s.c.colorBase, s.c.colorFormat, false, scissorY1 + 1, width);
@@ -2092,8 +2100,7 @@ void GsFrontend::vertices(const InputVertex* in, size_t count, bool withFog) {
     }
     const DrawState s = currentState(prim);
     const gfx::Context& c = contexts[(prim & gfx::kContext2) ? 1 : 0];
-    static const bool keepJitter = [] { const char* e = std::getenv("GT4_GSN_JITTER"); return e && !std::strcmp(e, "keep"); }();
-    const uint32_t jitter = keepJitter ? 0xFFFFu : 0xFFF8u;
+    const uint32_t jitter = originMask();
     const float ox = static_cast<float>(c.originX & jitter) / 16.0f, oy = static_cast<float>(c.originY & jitter) / 16.0f;
     const float u = static_cast<float>(reg[UV] & 0x3FFF) / 16.0f, vv = static_cast<float>((reg[UV] >> 16) & 0x3FFF) / 16.0f;
     const uint32_t fogRegister = static_cast<uint32_t>(reg[FOG] >> 56);

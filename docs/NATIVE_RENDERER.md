@@ -17,8 +17,9 @@ mostly the field lines, which the native renderer does not jitter.
 
 - **Scale per axis** from what the display shows: the race draws 224-line fields (SMODE2 FFMD), so its
   lines get the output's full height (sy = output height / 224), and the anamorphic 16:9 frame gets more
-  across than down. GT4's quarter-pixel XYOFFSET jitter between fields is dropped (it shook the picture);
-  `GT4_GSN_SCALE=1 GT4_GSN_JITTER=keep` gives the comparable 1x picture.
+  across than down. XYOFFSET is drawn as the GS has it, the field half pixel and the supersampling
+  passes' offsets included (R6: no shake at 1x to 4x); `GT4_GSN_JITTER=mask` keeps half-pixel steps, as
+  before R6. `GT4_GSN_SCALE=1` gives the comparable 1x picture.
 - **Textures**: GS bilinear (four taps, each wrapped by CLAMP's modes, 4-bit weights at 1x); the GS's own
   mipmaps (MIPTBP) at the GS's level of detail, (log2(1/Q) << L) + K, less the scale's log2 (New York's
   railings are mipmapped cut-outs: screen-derivative levels aliased them); above 1x, blit-made mip chains
