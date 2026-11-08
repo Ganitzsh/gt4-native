@@ -730,11 +730,16 @@ coordinator's call) gives low to ultra `stereo`. `hrtf` is the player's choice (
   each voice's owner and sends the tags beside the image (`GT4_SPU2_TAGS`, a new `GT4_REC_SPU2_REGS` kind; per
   voice the entrant or none, and the position; about 0.8 KB a frame; nothing allocated). Untagged voices (UI, BGM,
   crowd, pit crew, sequencer tracks, narration) stay a bed, mixed as `original` mixes them.
-- **Positions: GT4's own** (the architect, 2026-11-08, on lane D's proposal): each tagged voice's group position
-  from the `H` blocks, in GT4's listener space, of the same frame as the image. So each group has its own point,
-  spatial never disagrees with the direction GT4 intends, and D9 needs no scene records. The `Vehicle` records and
-  the main camera serve only the acceptance's direction check; if GT4's listener turns out not to be the main
-  camera (step 1 measures it), the `Vehicle` path comes back as a decision here.
+- **Directions: GT4's own** (the architect, 2026-11-08, on lane D's proposal): each tagged voice's group direction
+  from the `H` blocks, in GT4's listener space, of the same frame as the image. An `H` block holds a direction,
+  not a position (func_00391AF0: x and z over a distance-like scale, the raw y, the flips); distance stays in GT4's
+  gain (below). So each group has its own direction, spatial never disagrees with the direction GT4 intends, and
+  D9 needs no scene records.
+- **The listener is the player's car** (lane D's step 1, 2026-11-08): its position and heading, not the camera.
+  `H`'s azimuth matches the `Vehicle` records' direction of each car in the player car's axes within about 1
+  degree, cars 50 to 650 m away. Spatial keeps GT4's listener: in the chase and in-car views it agrees with the
+  camera except within a degree or two of straight ahead or behind, and in TV-camera replays it follows the car,
+  as GT4's own pan does.
 - **Level:** a tagged voice's level is the power sum of the image's `VOLL` / `VOLR` (signs dropped): GT4's pan and
   rear inversion removed, its class volume and distance gain kept. Spatial adds direction only: no second distance
   curve, and no host Doppler (GT4's own is applied; step 1 confirms it from a passing car's pitch). A voice in
@@ -750,10 +755,10 @@ coordinator's call) gives low to ultra `stereo`. `hrtf` is the player's choice (
     load), so the rate doesn't depend on the tags; no BGM, UI or narration key-on tagged; counted per frame
     (`voicesTagged`, `voicesUntagged`, `voicesNoPosition`). Gaps the note names (e.g. a shared tyre-squeal voice)
     are listed with their share.
-  - Direction: a session in which an AI car passes the player in the chase view; in each 100 ms window where the
-    car's view-space |x| exceeds 2 m, the sign of its tagged voices' left-right level difference matches the sign
-    of x in at least 95 % of windows, for `stereo` and `hrtf` (x from the `Vehicle` record and the main camera,
-    with scene records on for this session only).
+  - Direction: a session in which an AI car passes the player; in each 100 ms window where the car's |x| in the
+    player car's frame (its right axis) exceeds 2 m, the sign of its tagged voices' left-right level difference
+    matches the sign of x in at least 95 % of windows, for `stereo` and `hrtf` (x from the two cars' `Vehicle`
+    records, with scene records on for this session only).
   - Distance: as that car pulls away on a straight, its voices' level follows GT4's own distance gain within 1 dB
     (spatial adds no attenuation of its own).
   - Balance: a lap's integrated loudness (EBU R128) within 1 LU of `original`; the bed alone identical to
