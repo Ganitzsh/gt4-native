@@ -7,10 +7,15 @@ if(MSVC)
   # The same sources give the same programs, byte for byte, wherever they are built (tools/release.py: two release
   # runs, two equal Windows hosts): no timestamps or random ids (/experimental:deterministic, /Brepro), the source
   # and build folders under fixed names in the objects (/pathmap), and only the PDB's file name in the exe.
-  # (C and C++ only: rc.exe or MASM, if they ever come in, would refuse these)
+  # (C and C++ only: rc.exe or MASM, if they ever come in, would refuse these.) The two mappings end in a separator
+  # and their names are not prefixes of each other: cl maps paths both ways by text prefix, and with
+  # 'gt4-native' and 'gt4-native-build' a build folder beside the source had its precompiled header's mapped path
+  # map back into the source (C1083), as would a build folder whose path starts with the source's. The build
+  # folder's mapping comes first: cl takes the first that matches, and a build folder inside the source must map
+  # to gt4-native-bld/ (as one beside it does), not to gt4-native-src/build/..., or the programs differ by layout.
   add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:/experimental:deterministic>"
-                      "$<$<COMPILE_LANGUAGE:C,CXX>:/pathmap:${CMAKE_SOURCE_DIR}=gt4-native>"
-                      "$<$<COMPILE_LANGUAGE:C,CXX>:/pathmap:${CMAKE_BINARY_DIR}=gt4-native-build>")
+                      "$<$<COMPILE_LANGUAGE:C,CXX>:/pathmap:${CMAKE_BINARY_DIR}/=gt4-native-bld/>"
+                      "$<$<COMPILE_LANGUAGE:C,CXX>:/pathmap:${CMAKE_SOURCE_DIR}/=gt4-native-src/>")
   add_link_options(/Brepro /PDBALTPATH:%_PDB%)
 endif()
 option(GT4_STRICT_WARNINGS "Enable additional compiler diagnostics" OFF)

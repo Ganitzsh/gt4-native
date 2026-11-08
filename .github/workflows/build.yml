@@ -94,6 +94,15 @@ jobs:
         env:
           GT4_ARCH: arm64
         run: tools\build_windows.cmd Release
+      # A build folder beside the source, not inside it (CMakeLists.txt's /pathmap: a mapping that let one folder's
+      # name map back into the other broke such builds in SDL's precompiled header, C1083): SDL and one of ours.
+      - name: x64, a build folder beside the checkout (SDL's precompiled header, gt4_gs)
+        shell: cmd
+        run: |
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSPATH=%%i
+          call "%VSPATH%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 -no_logo || exit /b 1
+          cmake -S . -B ..\gt4-beside -G Ninja -DCMAKE_BUILD_TYPE=Release -DGT4_BUILD_HOST=ON -DBUILD_TESTING=OFF || exit /b 1
+          cmake --build ..\gt4-beside --target SDL3-static gt4_gs || exit /b 1
       - uses: actions/upload-artifact@v4
         with:
           name: gt4-host-windows

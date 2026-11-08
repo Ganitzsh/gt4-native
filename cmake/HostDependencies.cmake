@@ -11,6 +11,11 @@ set(SDL_STATIC ON CACHE BOOL "" FORCE)
 set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
 set(SDL_TESTS OFF CACHE BOOL "" FORCE)
 set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
+# SDL's revision string (SDL_GetRevision, in the program), stated rather than asked of git: SDL reads it with
+# git only from a .git inside our source folder, so a build folder beside the source gave
+# "SDL-3.2.28-HEAD-HASH-NOTFOUND" and one inside it "SDL-3.2.28-release-3.2.28", and the programs differed by
+# layout. This is the second, the pinned tag below; change both together.
+set(SDL_REVISION "SDL-3.2.28-release-3.2.28" CACHE STRING "" FORCE)
 FetchContent_Declare(SDL3
     GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
     GIT_TAG 7f3ae3d57459e59943a4ecfefc8f6277ec6bf540) # release-3.2.28
