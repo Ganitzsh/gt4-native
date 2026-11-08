@@ -1,8 +1,11 @@
 // The material table (platform/scene/material_table.h, ticket B6): the same key gets the same id across frames, other
 // keys other ids, an unused key is dropped after its frames and comes back under a new id, and the counters say so.
+// And the scene cache's per-frame instances: a billboard run (kInstBillboard) gets its materials and no mesh.
 #include "material_table.h"
+#include "scene_cache.h"
 
 #include <cstdio>
+#include <vector>
 
 namespace {
 
@@ -62,6 +65,34 @@ int main() {
     expect(s.dropped == 2, "dropped counts b and c");
     expect(s.held == 3, "held: a, b again and d");
     expect(s.requests == 10, "requests counts every call");
+
+    // B6 for A7 step 1b: a billboard run's quads are rebuilt every frame, so no mesh is asked for (no key hashed, no
+    // decode queued), mesh 0 counted as per-frame; its material is made as any other (the glow classifier needs it).
+    {
+        gt4::scene::SceneCache cache(1);
+        gt4::gfx::ModelJob job{};
+        job.count = job.nloop = 4;
+        std::vector<uint32_t> words(gt4::gfx::kModelWords, 0);
+        gt4::gfx::Context context{};
+        gt4::scene::ItemSource item;
+        item.batch = {&job, words.data()};
+        item.prim = 0x14;
+        item.context = &context;
+        item.texture = 0x1234;
+        gt4::scene::InstanceData billboard;
+        billboard.flags = gt4::gfx::scene::kInstBillboard;
+        std::vector<MaterialId> materials;
+        gt4::scene::SceneCounters counters;
+        const gt4::scene::InstanceIds ids = cache.assign(billboard, &item, 1, materials, counters);
+        expect(ids.mesh == 0 && counters.meshesPerFrame == 1 && counters.meshesNew == 0 && cache.meshes().stats().requests == 0,
+               "a billboard run: mesh 0, per-frame, no mesh asked for");
+        expect(ids.materialCount == 1 && materials.size() == 1 && materials[0] != 0 && counters.materialsNew == 1,
+               "a billboard run: its material made");
+        gt4::scene::InstanceData course;   // (the same item without the flag: a mesh asked for)
+        counters = {};
+        cache.assign(course, &item, 1, materials, counters);
+        expect(counters.meshesNew == 1 && cache.meshes().stats().requests == 1, "without the flag: a mesh asked for");
+    }
 
     std::printf("material_table: %s\n", failures ? "FAILED" : "passed");
     return failures ? 1 : 0;

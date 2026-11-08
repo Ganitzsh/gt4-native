@@ -878,6 +878,8 @@ enum InstanceFlags : uint16_t {
     kInstSky = 64,
     kInstCourseObject = 128,   // a placed course object: inside the course bracket at another matrix-stack depth (its
                                //   display program pushed its own objectToWorld)
+    kInstBillboard = 256,      // a batch run of BillboardSet__render 004506F0 (A7 step 1b): camera-facing quads built
+                               //   every frame, objectToView = the camera; per-frame to B6 (mesh 0), never course
 };
 struct Instance {
     Prefix prefix;

@@ -107,9 +107,14 @@ InstanceIds SceneCache::assign(const InstanceData& instance, const ItemSource* i
         materials.push_back(lastId);
         last = &item;
     }
-    // The mesh: none for geometry that is this frame's only.
+    // The mesh: none for geometry that is this frame's only: skinned, and the billboards' quads, built facing the camera
+    // every frame (A7 step 1b): no key hashed, no decode queued (their materials above still feed the classifier, F2b).
     if (instance.flags & gfx::scene::kInstSkinned) {
         ++counters.meshesSkinned;
+        return ids;
+    }
+    if (instance.flags & gfx::scene::kInstBillboard) {
+        ++counters.meshesPerFrame;
         return ids;
     }
     refs.resize(count);

@@ -38,7 +38,7 @@ class SceneCache {
 public:
     explicit SceneCache(unsigned meshWorkers = 0);
 
-    // One instance: its mesh (0: skinned, an item with a key-frame blend, or still decoding) and its materials appended
+    // One instance: its mesh (0: skinned, a billboard run, a key-frame blend, or still decoding) and its materials appended
     // to `materials` (one per item, in the mesh's item order), counted into `counters` (meshesNew, meshesPending,
     // materialsNew, meshesSkinned, meshesPerFrame).
     InstanceIds assign(const InstanceData& instance, const ItemSource* items, size_t count, std::vector<MaterialId>& materials,

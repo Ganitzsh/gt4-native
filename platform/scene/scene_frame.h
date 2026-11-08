@@ -101,8 +101,9 @@ struct SceneCounters {
     uint64_t fallbackNotBound = 0, fallbackMeshPending = 0, fallbackPipelinePending = 0, fallbackValidation = 0,
              fallbackReadPending = 0;
     uint64_t meshesNew = 0, meshesPending = 0, materialsNew = 0;
-    // B6: instances given mesh 0 because their geometry is this frame's only: skinned (kInstSkinned), or an item with
-    // a key-frame blend (MeshCache's per-frame items); B7 draws them per frame
+    // B6: instances given mesh 0 because their geometry is this frame's only: skinned (kInstSkinned); per frame, a
+    // billboard run (kInstBillboard) or an item with a key-frame blend (MeshCache's per-frame items). B7 leaves them on the
+    // GS path
     uint64_t meshesSkinned = 0, meshesPerFrame = 0;
     void add(const SceneCounters& o);   // running totals
     // the gates of CONTRACTS.md a.7 that hold on any stream (not the ones that need the front end)
