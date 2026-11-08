@@ -272,6 +272,15 @@ public:
     // Ends the frame: `out` receives it (swapped, so its buffers are reused).
     void vsync(uint64_t vblank, FrameList& out);
     const GsMemory& memory() const { return mem; }
+    // A mid-run recording's state (gs_host.cpp): a read of each colour target that still owns a page of GS memory,
+    // the whole target in its own format. Its pixels are on the GPU only; the memory model has stale bytes there.
+    struct DrawnTarget {
+        ReadRequest read;
+        uint32_t bp = 0, bw = 0;      // where its pixels go back in GS memory
+        std::vector<uint16_t> pages;  // the 8 KiB pages it still owns: only those take its pixels (another target, or
+                                      // an upload, can hold the rest, in another format: GT4 reuses addresses)
+    };
+    std::vector<DrawnTarget> drawnTargets() const;
     void setEventSink(EventSink sink) { events = std::move(sink); }
     // A texture pack's replacements for textures in GS memory (texture_pack.h), used while switched on
     // (setReplacements may be called from any thread; it takes effect at the next frame).
