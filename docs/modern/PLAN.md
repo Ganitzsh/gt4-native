@@ -28,13 +28,13 @@ Sizes: **S** = 1-3 days, **M** = 1-3 weeks, **L** = 1-3 months, for one agent. R
 9. **Comment- and docs-only commits** (the coordinator, 2026-11-08). A commit that changes only comments or docs,
    even inside a file that triggers a gate (`game_src`, `gfx.h`, shaders, section 2's `DIFFTEST` files), skips the
    build and run gates: the release builds of rule 4, `CTEST`, `ORIG`, `DIFFTEST` and the ticket's other runs. CI
-   and the review (rule 3) still apply. The author shows that the diff touches no code, and the commit message
-   says so. For C, C++ and GLSL files: each changed file's old and new versions, comments stripped by the
-   compiler (`g++ -fpreprocessed -dD -E -P`, whitespace and CRs collapsed), are equal. Reading `git diff -w` line
-   by line is not enough (lane U): a `//` comment ending in a backslash swallows the unchanged line below it, and
-   a `/*` and a `*/` on two changed lines comment out the unchanged code between them. In data files only their
-   comment lines count: `tools/eeref/known.txt`'s `#` lines (its entries, reasons included, are data, and lane U
-   reviews them).
+   and the review (rule 3) still apply. The author shows that the diff touches no code: `tools/comment_only.py`
+   over the commit's range exits 0, and the commit message says so. The tool (lane U) compares each changed C,
+   C++ or GLSL file's old and new versions with comments stripped; allows only `#` lines in
+   `tools/eeref/known.txt` (its entries, reasons included, are data, and lane U reviews them); passes docs; and
+   fails anything else as not provable. Reading `git diff -w` line by line is not enough: a `//` comment ending
+   in a backslash swallows the unchanged line below it, and a `/*` and a `*/` on two changed lines comment out
+   the unchanged code between them.
 
 ---
 
