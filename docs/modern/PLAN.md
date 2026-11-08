@@ -147,11 +147,34 @@ follows R1's rule. Depends: A3, R6. Acceptance: `REL`; `ORIG`; `SCENE` on the sh
 env face's views bound to the 128 x 256 env target; `runsAfterInstance == 0` in race frames once both paths send
 `Instance`s.
 
-**A7: Light records (M).** 003B8EA0 (draft: course glows, view position from shared vector 31, width, height,
-colour, intensity); 0x00341A30 (car-light reflections); car lamps from the car instances (A6 / D6); `kSrcWarning`
-where the game marks blinking lamps. Depends: A3, R2 verdict on 003B8EA0. Acceptance: `REL`; `ORIG`; on a night
-capture, each glow quad the GS path draws has a `Light` whose position projected through the view's
-projection and viewport lands inside that quad (count of misses = 0).
+**A7: Light records (M).** Sources, corrected by lane A from the code (2026-11-08, a scan of the ELF for every
+store to the lists' counts). The light-glow pass 003B88C8 draws from two per-frame lists in its object:
+- **Step 1, course lamps and warning lamps: `entries2[100]`** at `+0x184C` (count at `+0x1848`; 24-byte hits:
+  view-space x, y, z, distance, a visibility flag, the source pointer, which gives the params index). Its only
+  writer is 003B7B70 (matched source, `src/race/unit_003B7470`, so R2 does not block it), reached from
+  `RacePS2Base` virtual 126 (method 0x3F0) -> 00397288 -> 00397AE8 -> 00397BA0. Each source has `params[index]`
+  with a blink value: above 0 it is a warning lamp (`kSrcWarning`, its smooth blink factor 0..1 in `intensity`),
+  otherwise a lamp (`kSrcCourseGlow`). One `Light` per hit: point, range 0, colour = the light's rgb x the
+  pass's rgb / 255, intensity without the view-dependent term (fields as agreed with lane F).
+  - When: 0033EAB8 empties both lists (003B80E8, which also saves the current matrix at `+0x21B0`) after the main
+    `ViewEnd` and the mirror view, then 003B7B70 fills `entries2[]` in method 0x3F0, with this frame's camera
+    (positions through the matrix current at fill time, vf28-31), before the flare read 003B8848 and the glow draws
+    (003B88C8 from 0033F2E8). The `Light`s are sent right after the fill, tagged with the main view's id: a `Light`
+    may follow its view's `ViewEnd` within the frame (CONTRACTS a.5 rule 4). F2 reads them from the frame's
+    `SceneFrame` by view id, wherever the Light command falls.
+  - Checked on a night capture before relying on it: the counts per frame, that the positions are in the main
+    camera's space, and where the Light command falls against the fill.
+- **Step 2, car lamps** (headlights, tail and brake lamps): `entries[100]` at `+0xA38` (count at `+0xA34`; view-space
+  x, y, z with -z as depth, a `Light*` with width `+0x40`, height `+0x44`, rgb `+0x54`, a flag, dx / dy). Its only
+  writer is 003B8530, called only from `RaceCarModel` virtual 35 (003911D0); 003B8EA0, from virtual 36 (00391470),
+  draws the same lamps' glows. The step reads the lamps from `entries[]` (if 003B8530 is not a draft; it is not in
+  the decomp's `src/`, lane A checks) or from 003B8EA0 (a draft: R2's verdict). It also needs A6 / D6 for the car.
+  The car lights' reflections (0x00341A30) are not sent as lights: they would light the scene twice, and N3 handles
+  their sprites.
+Depends: A3; step 2 also A6, D6, and R2 on 003B8EA0 or 003B8530. Acceptance: `REL`; `ORIG`; on a night capture,
+each glow quad the GS path draws has a `Light` whose position projected through the view's projection and viewport
+lands inside that quad (count of misses = 0); step 1 with the course and warning glows, step 2 with the car
+lamps; `SCENE`: `lightViewUnknown == 0`, `lightsAfterViewEnd` reported.
 
 **A8: Emitter records (M).** `RaceSmoke::update` 0x003E7A58, `SparkParticle::Update` 0x003C1430,
 `ParticleManager::Update` 0x003C2780 (drafts). Depends: A3, R2. Acceptance: `REL`; `ORIG`; on a race capture with
@@ -664,8 +687,8 @@ No two day-one tickets edit the same file except `main.cpp` / `renderer.cpp` (B2
 |---|---|---|
 | 0. Foundations (weeks 1-3) | A0, A1, A10, A2, A3; B2, B1, B5, B3; C1-C4, C10; E1-E4; F0, F1, N0, N1; spikes R1-R7, R9-R12 | `SCENE` gates on race and event captures; B3 `PRESETS` |
 | 1. Parity (weeks 3-8) | B4, B6, B7, A4, A5a, A6, A11a; D-track (D12, D13 first) | `PARITY` on REF |
-| 2. Hybrid ships (weeks 8-10) | B8, B9, F2, N3, N4 (hybrid parts) | `render.scene = hybrid` in presets low-ultra; `R5` gates in hybrid |
-| 3. Modern lighting (weeks 10-18) | B10-B15, F3, F4, A7, A8 (N2b/c and A11b only if N2 reopens) | `R5` gates in modern; owner review |
+| 2. Hybrid ships (weeks 8-10) | A7 step 1, B8, B9, F2, N3, N4 (hybrid parts) | `render.scene = hybrid` in presets low-ultra; `R5` gates in hybrid |
+| 3. Modern lighting (weeks 10-18) | B10-B15, F3, F4, A7 step 2, A8 (N2b/c and A11b only if N2 reopens) | `R5` gates in modern; owner review |
 | 4. Resolution and effects | B16-B22, F5, E6-E9 | per ticket |
 | 5. Optional | B23, C6 on devices, research track | per ticket |
 

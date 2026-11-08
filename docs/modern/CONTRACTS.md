@@ -207,12 +207,11 @@ static_assert(sizeof(Instance) == 120);
 // --- Lights ---------------------------------------------------------------------------------------------
 enum LightKind : uint8_t { kLightPoint = 1, kLightSpot = 2, kLightDirectional = 3 };
 enum LightSource : uint8_t {
-    kSrcCourseGlow = 1,      // 003B8EA0 (night courses' lamps)
+    kSrcCourseGlow = 1,      // 003B88C8's entries2[], sources whose blink is 0 (the course's lamps; A7 step 1)
     kSrcHeadlight = 2, kSrcTailLight = 3, kSrcBrakeLight = 4,
-    kSrcCarLightReflection = 5,   // render_reflection_car_lights 0x00341A30
+    kSrcCarLightReflection = 5,   // 0x00341A30: not sent as lights (reflections; N3 handles their sprites)
     kSrcSun = 6,
-    kSrcWarning = 7,         // blinking warning lamps (when the game's object says so; else the host flags
-                             // lights whose intensity toggles over frames)
+    kSrcWarning = 7,         // 003B88C8's entries2[], a source with blink > 0 (warning lamps; A7 step 1)
     kSrcOther = 15,
 };
 struct Light {
@@ -226,7 +225,8 @@ struct Light {
     float direction[3];          // view space, unit (spot, directional)
     float height;                // glow quad half height, 0 none
     float colour[3];             // the game's colour, 0..1, before its clamp
-    float intensity;             // the game's intensity this frame (003B8EA0's term), 1 when it has none
+    float intensity;             // the game's intensity this frame, without the view-dependent term; 1 when none;
+                                 //   warning lamps: their smooth blink factor 0..1, not thresholded
     float range;                 // view units, 0 unknown (the host picks per source)
     float cosInner, cosOuter;    // spot cone, 0 unknown
     uint32_t reserved;
@@ -314,7 +314,7 @@ Where each record is sent (tickets in PLAN.md):
 | `Projection` | `game_src/func_0049D328.cpp`, before the `Instance`, when set 1 (as 0049E480 picks it) or the viewport / clamp the batch holds (the runtime's copy of the last qwords 197..199 written by 0049E548) differ from the last `Projection` sent this frame (a 64 + 48-byte compare); also for each view's camera load, before its `ViewBegin` | A2, A3 |
 | `Instance` | `game_src/func_0049D328.cpp`, after 0049E480 / 0049E548, before the item loop; A and B read as 0049E480 picks them (by `s->current`) even when it does not run (R1: it recomposed for 16 % of the Cmds) | A2 |
 | object identity | 00455708 (draft) sets a runtime-global "model context" that A2 reads | A4 |
-| `Light` | 003B8EA0 (draft), 0x00341A30, car lamps from A6 | A7 |
+| `Light` | step 1: 003B88C8's `entries2[]` (course lamps, warning lamps), sent in 0033EAB8 right after 003B7B70 fills it in method 0x3F0, tagged with the main view's id (a.5 rule 4); step 2: car lamps from `entries[]` (003B8530, `RaceCarModel` virtual 35) or 003B8EA0 (draft, virtual 36), with A6 | A7 |
 | `Emitter` | 0x003E7A58, 0x003C1430, 0x003C2780 | A8 |
 | `Marker` | `kMarkPost*` at the start and end of render_post_effect (`game_src/func_0033F890.cpp`, virtual 105); `kMarkHud*` at the start and end of RaceBasic::render_panel (`game_src/func_0038B5A0.cpp`, which RaceSolitaire's calls and RaceSplitBattleBase's reaches per player). Both are reached through the race's vtable after `render_world`, so they are inside the kick's frame (a.5.1) | A5 |
 | `Vehicle` | where D-S6 finds the per-car state | A9 |
@@ -384,7 +384,7 @@ Where each record is sent (tickets in PLAN.md):
    - no `kScene` block at call depth > 0 on the race and menu routes (the Home garage, showroom, event screens):
      the race is measured (none); the menus are still to do;
    - no kick in a race has a menu `FrameBegin` before `render_world`'s (its flags would stand).
-2. `ViewBegin` / `ViewEnd` pairs do not nest. Instances and lights appear only inside a view.
+2. `ViewBegin` / `ViewEnd` pairs do not nest. Instances appear only inside a view; lights as rule 4 says.
 3. An `Instance` is followed by its `items` `kBatchRun` records (with the `kBatchWrite`, `kBatchModel`,
    `kState`, `kTexSet` records its items and callbacks send), before the next `Instance`, `ViewEnd` or `Marker`.
    - The decoder tags those `items` runs' `ModelJob`s with the instance (`ModelJob::pad[0]` = its position in
@@ -398,8 +398,17 @@ Where each record is sent (tickets in PLAN.md):
      takes the next tag slot. That pushes the Cmd's own last run past `items`, untagged. The per-job matrix
      check flags the wrong tag unless the callback draws with the same matrix. `runsAfterSameMatrix` (a.7)
      catches it either way: the displaced run always carries the closed instance's matrix.
-4. `Light` comes inside the view whose space it uses. `Emitter` and `Vehicle` come anywhere between
-   `FrameBegin` and `FrameEnd`.
+4. A `Light` names the view whose space it uses (`Light::view`). It comes inside that view, or after the view's
+   `ViewEnd` within the same frame. The course glows and warning lamps (A7 step 1) are filled after the main view
+   and the mirror: 0033EAB8 fills their list through its method 0x3F0 (003B7B70), with this frame's camera,
+   after the main `ViewEnd`.
+   - The decoder adds every `Light` to its view's lights in `SceneFrame`, by id, at `FrameEnd`.
+   - The view's `SceneView` package (a.8) is made at its `ViewEnd` and is const once shared, so it holds only the
+     lights that came before then. A later light reaches consumers through `FrameList::scene`.
+   - A consumer that runs in a partial list cut before `FrameEnd` doesn't have the later lights. It counts that,
+     and F2 adds no light in that frame.
+   - A `Light` naming a view this frame hasn't begun is `lightViewUnknown`, and is dropped.
+   `Emitter` and `Vehicle` come anywhere between `FrameBegin` and `FrameEnd`.
 4a. A `Projection` comes before the first record that names its id (`ViewBegin::projection`,
    `Instance::projection`); ids are per frame and never reused within it. A `Projection` may come outside a view
    (`view` 0): the env-map passes' come before the main view opens.
@@ -470,6 +479,7 @@ Where each record is sent (tickets in PLAN.md):
 | `framesUnclosed`, `countsMismatch` | `FrameEnd`'s counts differ from what arrived | 0 |
 | `framesTruncated` | a frame still open when the stream ends (a capture's last list, a.5.1) | reported |
 | `viewsNested`, `viewEndWithoutBegin`, `viewsUnclosed` | pairing (`viewsUnclosed`: a view still open at `FrameEnd`) | 0 |
+| `lights`, `lightsAfterViewEnd`, `lightViewUnknown` | lights by view; those that came after their view's `ViewEnd` (a.5 rule 4); those naming a view not begun this frame | `lightViewUnknown == 0` |
 | `instances`, `instancesWithoutView` | | `instancesWithoutView == 0` in race frames (the HUD widget is inside the frame, in its `kViewHud` view) |
 | `begins` | `FrameEnd::begins`: the `FrameBegin`s the runtime merged into one frame (render_world plus each 00217058 call) | reported |
 | `itemsMismatch` | an instance closed (by the next `Instance`, `ViewEnd` or `Marker`) with fewer `kBatchRun` than `items` | 0 |
@@ -575,7 +585,7 @@ read, then the one that receives `FrameEnd`. (Race route: 38 reads in about 4900
       ViewData view;                              // view.valid: the verdict at ViewEnd (below)
       std::vector<InstanceData> instances;        // copies, in arrival order
       std::vector<ProjectionData> projections;    // the ones the view and its instances name
-      std::vector<gfx::scene::Light> lights;      // the view's (a.5.4)
+      std::vector<gfx::scene::Light> lights;      // the view's, as far as its ViewEnd (later ones: a.5 rule 4)
       std::vector<gfx::scene::Emitter> emitters;  // frame-wide records that arrived before this ViewEnd
       std::vector<gfx::scene::Vehicle> vehicles;  //   (later ones are not available to a partial substitution)
   };

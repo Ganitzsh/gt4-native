@@ -53,7 +53,8 @@ instances' `objectToView` (if R1.4 says course objects are in world space), flag
 ## R2: Drafts in the hook paths (blocks A4, A7, A8; informs A5)
 
 **What is known.** These functions on the extraction path run from provisional drafts: 00455708 (model display
-program), 004A5348 (matrix set switch), 003B8EA0 (light glow), 004ABEC0 (light parameters), 00340950
+program), 004A5348 (matrix set switch), 003B8EA0 (car lamp glows, A7 step 2, or 003B8530 which fills
+their list; not the course's, which come from the matched 003B7B70), 004ABEC0 (light parameters), 00340950
 (`render_cars`), 003E7A58 and 003E7F08 (smoke), 003C1430 (sparks), 0049CC48 (per-packet texture events), 003924D0
 (`RaceCarSound::playStart`). docs/DRAFT_AUDIT.md: 15 of 427 drafts behaved wrongly when audited; nearly is not
 the same behaviour. A draft bug in a hook path looks like an extraction bug.
