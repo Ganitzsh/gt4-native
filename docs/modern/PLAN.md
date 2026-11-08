@@ -692,7 +692,10 @@ A5b, B4, F4 for `modern`.
   (B15).
 - Acceptance: `CTEST` (the marking on a synthetic list: markers, draws, targets, a cut list); `ORIG` unchanged;
   the flare readback's bytes identical with the suppression on and off (`GT4_READ_HASH`), so GT4's own flare
-  strengths don't change; `R5` on the warning capture with the markers (A5b): blink-synchronous tint amplitude
+  strengths don't change. Every other read is compared too, on a night route with the markers (A5b): GT4's
+  luminance probe (00330AE8) reads the picture, and if it follows the flare's bracket it sees a frame without the
+  veil, so the game's night exposure would differ from the PS2's. A read that changes goes on R9's reader list for
+  a decision (lane B's point). `R5` on the warning capture with the markers (A5b): blink-synchronous tint amplitude
   below 0.002 in Oklab b and a, outside the lamp discs (the GS path's amplitude for comparison); the lamps still
   visibly blink and bloom.
 
