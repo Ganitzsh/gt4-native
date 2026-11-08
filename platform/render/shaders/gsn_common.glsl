@@ -20,7 +20,7 @@ layout(push_constant) uniform Draw {
     uint parityJob;
     float parityT;
     float parityTPrevious;
-    uint parityPad;
+    uint paritySide;       // B8's side-channel pass: the item's entry in SideItems (modern_parity.vert GSN_SIDE)
 #endif
 } draw;
 

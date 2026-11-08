@@ -126,13 +126,15 @@ const ParityView::Placed* ParityView::place(const scene::Mesh& mesh, scene::Mesh
 void ParityView::plan(const gsn::FrameList& list, std::vector<ParitySpan>& spans, std::vector<uint8_t>& staging,
                       std::vector<ParityCopy>& copies) {
     spans.clear();
-    for (const gsn::FrameList::ViewOnList& view : list.views) {
+    for (uint32_t viewIndex = 0; viewIndex < list.views.size(); ++viewIndex) {
+        const gsn::FrameList::ViewOnList& view = list.views[viewIndex];
         if (!view.package) continue;
         if (view.ids.empty() || view.items.empty()) {   // cut or not valid: wholly on the GS path (its items unknown)
             ++counters.viewsNotSubstituted;
             continue;
         }
-        for (const scene::InstanceIds& ids : view.ids) {
+        for (uint32_t k = 0; k < view.ids.size(); ++k) {
+            const scene::InstanceIds& ids = view.ids[k];
             counters.items += ids.materialCount;
             if (!ids.mesh) {
                 counters.meshNone += ids.materialCount;
@@ -179,6 +181,9 @@ void ParityView::plan(const gsn::FrameList& list, std::vector<ParitySpan>& spans
                 s.indexOffset = p->indexOffset;
                 s.firstIndex = item.firstIndex;
                 s.indexCount = item.indexCount;
+                s.view = viewIndex;
+                s.instance = k;
+                s.material = ids.firstMaterial + j < view.materials.size() ? view.materials[ids.firstMaterial + j] : 0;
                 spans.push_back(s);
                 ++counters.drawn;
             }

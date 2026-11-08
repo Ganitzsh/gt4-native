@@ -61,8 +61,16 @@ struct ParityConstants {
     DrawConstants draw;
     uint32_t job;
     float t, tPrevious;
-    uint32_t pad;
+    uint32_t side;   // B8's side-channel pass: the item's SideItem (gsn_common.glsl paritySide)
 };
+// B8 step 2: one per item the side-channel pass draws (modern_parity.vert GSN_SIDE): its instance's objectToView, as
+// GT4 keeps it (row vectors: copied as they are, a GLSL mat4's columns are GT4's rows, so M x p is GT4's p x M), and its
+// material.
+struct SideItem {
+    float objectToView[4][4];
+    uint32_t material, pad[3];
+};
+static_assert(sizeof(SideItem) == 80);
 static_assert(sizeof(ParityConstants) == 104);
 
 // The temporal anti-aliasing's sub-pixel offsets: Halton (2, 3), 8 phases, in render pixels from the centre.
@@ -210,6 +218,37 @@ struct GsnScene::Impl {
     uint64_t paritySpansOutside = 0;   // spans not inside their draw's vertices (drawn on the GS path; should be 0)
     bool parityPlanned = false;        // a list planned this frame (endPending ends the view's frame then)
     void planParity();
+    // B8 step 2 (render.scene = hybrid, PLAN B8): the side channels of each substituted view's colour target (view-space
+    // normal, material, view-space depth), written by a pass per GT4 depth partition: before each Z clear of the view's Z
+    // buffer and at its Light, the partition's items redrawn with the depth test EQUAL (modern_side.frag), after a reset
+    // where the partition wrote Z (gsn_side_reset.*: material 0, GT4's colour as it is).
+    bool hybrid = false;
+    struct SideImages {
+        vk::Image normal, material, depth;
+        VkExtent2D grown{};
+    };
+    std::unordered_map<uint32_t, SideImages> sideTargets;   // by the view's colour target
+    struct SideBound {
+        size_t command = 0, from = 0;   // the pass runs before `command`, for the view's items drawn from `from` on
+        uint32_t view = 0;              // a view drawing there (FrameList::views): its target and Z buffer name the pass's;
+                                        // the pass draws the items of every view on that target (the main view and
+                                        // the mirror share one: R5), with one reset
+        float clearDepth = 0.0f;        // the Z the partition's own Z clear left (gsn.vert's sprite depth)
+        uint32_t clearRect[4] = {};     // ... over its scissor (GS pixels x0, y0, x1, y1 inclusive): the partition's region
+                                        // (the mirror's clear covers its own rectangle only)
+        bool cleared = false;           // the partition began with a Z clear (else no reset)
+        bool light = false;             // the pass before the view's Light (its last: GT4_SIDE_VIEW shows it)
+    };
+    std::vector<SideBound> sideBounds;  // this list's, by command
+    size_t sideNext = 0;
+    std::vector<size_t> spanCommand;    // per span: its draw's command
+    std::unordered_set<uint32_t> sideClearedThisList;
+    std::vector<vk::Buffer> sideItemRing;
+    vk::Buffer* sideItems = nullptr;
+    vk::Pipeline sidePass, sideResetPass, sideViewPass, sideVeilPass;
+    uint64_t sidePasses = 0, sideItemsDrawn = 0, sideResets = 0, sideVeils = 0;
+    void planSides();
+    void runSide(const SideBound& bound);
     vk::Pipeline& parityPipeline(uint32_t blendKey, uint32_t mask, bool depth, bool exports);
     vk::Pipeline nightLumPass;
     render::LightClusters clusters;
@@ -592,6 +631,17 @@ struct GsnScene::Impl {
         for (auto& [key, p] : parityPipelines) vk::destroy(device, p);
         for (vk::Buffer& b : parityBlocks) vk::destroy(device, b);
         for (vk::Buffer& b : parityStagingRing) vk::destroy(device, b);
+        for (auto& [id, side] : sideTargets)
+            for (vk::Image* i : {&side.normal, &side.material, &side.depth}) vk::destroy(device, *i);
+        for (vk::Buffer& b : sideItemRing) vk::destroy(device, b);
+        vk::destroy(device, sidePass);
+        vk::destroy(device, sideResetPass);
+        vk::destroy(device, sideViewPass);
+        vk::destroy(device, sideVeilPass);
+        if (hybrid)
+            std::printf("Hybrid side channels: %llu passes (%llu with a reset), %llu items drawn, %llu blended draws marking veiled\n",
+                        static_cast<unsigned long long>(sidePasses), static_cast<unsigned long long>(sideResets),
+                        static_cast<unsigned long long>(sideItemsDrawn), static_cast<unsigned long long>(sideVeils));
         if (parity) {   // B7's fallbacks by reason (PLAN B7's acceptance lists them)
             const render::ParityStats& s = parityView.stats();
             std::printf("Parity path: %llu of %llu items drawn from the mesh cache; on the GS path: mesh 0 %llu, mesh evicted %llu, "
@@ -1287,6 +1337,89 @@ void GsnScene::Impl::planParity() {
     }
     for (const render::ParitySpan& s : paritySpans) ++parityAt[s.draw + 1];
     for (size_t d = 1; d < parityAt.size(); ++d) parityAt[d] += parityAt[d - 1];
+    if (hybrid) planSides();
+}
+
+// B8 step 2: where this list's side-channel passes run (before each Z clear of a substituted view's Z buffer, and at its
+// Light), and its items' SideItems. A Z clear is a draw into the view's Z buffer that writes Z unconditionally (the test
+// off or ALWAYS): R5's clear sprites and its alpha-test-never Z-only fills.
+void GsnScene::Impl::planSides() {
+    sideBounds.clear();
+    sideNext = 0;
+    sideClearedThisList.clear();
+    if (paritySpans.empty()) return;
+    std::vector<size_t> drawCommand(frame.draws.size(), SIZE_MAX);
+    for (size_t at = 0; at < frame.commands.size(); ++at)
+        if (frame.commands[at].kind == gsn::FrameList::Command::Kind::Draw && frame.commands[at].index < drawCommand.size())
+            drawCommand[frame.commands[at].index] = at;
+    spanCommand.resize(paritySpans.size());
+    for (size_t i = 0; i < paritySpans.size(); ++i) spanCommand[i] = drawCommand[paritySpans[i].draw];
+    std::vector<std::pair<uint32_t, uint32_t>> planned;   // (target, Z buffer) pairs already bounded
+    for (uint32_t v = 0; v < frame.views.size(); ++v) {
+        const gsn::FrameList::ViewOnList& view = frame.views[v];
+        if (view.ids.empty() || !view.target || !view.depth) continue;
+        if (std::find(planned.begin(), planned.end(), std::make_pair(view.target, view.depth)) != planned.end()) continue;
+        planned.emplace_back(view.target, view.depth);
+        size_t from = 0;
+        bool cleared = false;
+        float clearDepth = 0.0f;
+        uint32_t clearRect[4] = {};
+        for (size_t at = 0; at < frame.commands.size(); ++at) {
+            const auto& cmd = frame.commands[at];
+            if (cmd.kind == gsn::FrameList::Command::Kind::Light) {
+                if (cmd.index < frame.lights.size() && frame.lights[cmd.index].target == view.target) {
+                    sideBounds.push_back({at, from, v, clearDepth, {clearRect[0], clearRect[1], clearRect[2], clearRect[3]}, cleared, true});
+                    from = at;
+                    cleared = false;   // (draws after the Light are no part of that clear's partition: no reset against it)
+                }
+                continue;
+            }
+            if (cmd.kind != gsn::FrameList::Command::Kind::Draw || cmd.index >= frame.draws.size()) continue;
+            const gsn::Draw& d = frame.draws[cmd.index];
+            const gfx::Context& c = d.state.c;
+            if (d.modeled || d.depth != view.depth || !c.depthWrite || (c.depthTest && c.depthFunc != 1) || !d.count) continue;
+            sideBounds.push_back({at, from, v, clearDepth, {clearRect[0], clearRect[1], clearRect[2], clearRect[3]}, cleared, false});
+            from = at;
+            // The next partition's reset: only for a clear of one Z (all its vertices), over what it covered (its scissor
+            // and its vertices' bounds: a GS pixel is covered from floor(min) to ceil(max) - 1). A Z-only fill of shaped
+            // geometry or of several Zs is a boundary without a reset.
+            const gsn::Vertex* q = frame.vertices.data() + d.first;
+            bool oneZ = d.first + d.count <= frame.vertices.size();
+            float x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;
+            for (uint32_t k = 0; oneZ && k < d.count; ++k) {
+                oneZ = q[k].z == q[0].z;
+                x0 = std::min(x0, q[k].x), x1 = std::max(x1, q[k].x), y0 = std::min(y0, q[k].y), y1 = std::max(y1, q[k].y);
+            }
+            const int64_t cx0 = std::max<int64_t>(c.scissorX0, int64_t(std::floor(x0))), cy0 = std::max<int64_t>(c.scissorY0, int64_t(std::floor(y0))),
+                          cx1 = std::min<int64_t>(c.scissorX1, int64_t(std::ceil(x1)) - 1), cy1 = std::min<int64_t>(c.scissorY1, int64_t(std::ceil(y1)) - 1);
+            cleared = oneZ && cx1 >= cx0 && cy1 >= cy0;
+            clearDepth = float(q[0].z) * (1.0f / 4294967296.0f);   // (gsn.vert's sprite depth)
+            clearRect[0] = cleared ? uint32_t(cx0) : 0;
+            clearRect[1] = cleared ? uint32_t(cy0) : 0;
+            clearRect[2] = cleared ? uint32_t(cx1) : 0;
+            clearRect[3] = cleared ? uint32_t(cy1) : 0;
+        }
+    }
+    std::sort(sideBounds.begin(), sideBounds.end(), [](const SideBound& a, const SideBound& b) { return a.command < b.command; });
+    // the items' instances and materials
+    vk::Buffer& items = buffer(sideItemRing, ex.slot, paritySpans.size() * sizeof(SideItem), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    SideItem* out = static_cast<SideItem*>(items.mapped);
+    for (size_t i = 0; i < paritySpans.size(); ++i) {
+        const render::ParitySpan& s = paritySpans[i];
+        const gsn::FrameList::ViewOnList& view = frame.views[s.view];
+        SideItem item{};
+        if (view.package && s.instance < view.package->instances.size()) {   // diag(axisScale x k, 1) x objectToView (CONTRACTS
+            // a.8's matrix check: k = shapeScale, or 1 when 0): the mesh's positions to view space
+            const scene::InstanceData& in = view.package->instances[s.instance];
+            std::memcpy(item.objectToView, in.objectToView.m, sizeof item.objectToView);
+            const float k = in.shapeScale != 0.0f ? in.shapeScale : 1.0f;
+            for (int r = 0; r < 3; ++r)
+                for (int c = 0; c < 4; ++c) item.objectToView[r][c] *= in.axisScale[r] * k;
+        }
+        item.material = s.material;
+        out[i] = item;
+    }
+    sideItems = &items;
 }
 
 vk::Pipeline& GsnScene::Impl::parityPipeline(uint32_t blendKey, uint32_t mask, bool depth, bool exports) {
@@ -2149,6 +2282,8 @@ void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t
     }
     for (size_t at = from; at < to; ++at) {
         const auto& cmd = frame.commands[at];
+        // B8 step 2: a side-channel pass before a substituted view's Z clear or Light (planSides)
+        while (sideNext < sideBounds.size() && sideBounds[sideNext].command <= at) runSide(sideBounds[sideNext++]);
         if (cmd.kind == gsn::FrameList::Command::Kind::Light) {
             executeLight(command, slot, at);
             continue;
@@ -2600,7 +2735,282 @@ void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t
     // keeps a skipped Light inside its range), and their first act is end() anyway, so the commands are the same, and no
     // render pass stays open across a graph pass's boundary (lane A, B4 step 2b: barriers between passes must not land
     // inside one). execute() calls the pieces in segments()'s order too.
+    // (B8 step 2: the pass before a Light that follows this range, as the Light is its own segment)
+    while (sideNext < sideBounds.size() && sideBounds[sideNext].command <= to) runSide(sideBounds[sideNext++]);
     end();
+}
+
+// B8 step 2: one side-channel pass (planSides' bound): the partition's reset, then its items with the depth test EQUAL.
+void GsnScene::Impl::runSide(const SideBound& bound) {
+    if (bound.view >= frame.views.size() || !sideItems) return;
+    const gsn::FrameList::ViewOnList& view = frame.views[bound.view];
+    auto targetIt = targets.find(view.target);
+    auto depthIt = targets.find(view.depth);
+    if (targetIt == targets.end() || depthIt == targets.end() || !targetIt->second.image.valid() || !depthIt->second.image.valid()) return;
+    // (nothing to do: no item in the partition, and no channel of this list's to reset yet)
+    const bool first = !sideClearedThisList.count(view.target);
+    bool any = false;
+    auto ours = [&](size_t i) {   // an item of a view drawing into this pass's target and Z buffer, in its partition
+        const gsn::FrameList::ViewOnList& v = frame.views[paritySpans[i].view];
+        return v.target == view.target && v.depth == view.depth && spanCommand[i] >= bound.from && spanCommand[i] < bound.command;
+    };
+    for (size_t i = 0; i < paritySpans.size() && !any; ++i) any = ours(i);
+    if (!any && (first || !bound.cleared)) return;
+    sideClearedThisList.insert(view.target);   // (the channels cleared at the list's first pass)
+    const VkCommandBuffer command = ex.command;
+    vk::Barriers& b = ex.b;
+    ex.end();
+    GpuTarget& colourTarget = targetIt->second;
+    vk::Image& depth = depthIt->second.image;
+    const VkExtent2D extent = colourTarget.image.extent;
+    SideImages& side = sideTargets[view.target];
+    const VkImageUsageFlags usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    ensureWork(side.normal, side.grown, extent, VK_FORMAT_R16G16B16A16_SFLOAT, usage, "gsn side normal");
+    ensureWork(side.material, side.grown, extent, VK_FORMAT_R32_UINT, usage, "gsn side material");
+    ensureWork(side.depth, side.grown, extent, VK_FORMAT_R32_SFLOAT, usage, "gsn side depth");
+    for (vk::Image* i : {&side.normal, &side.material, &side.depth}) vk::toColor(b, *i, first);
+    vk::toDepth(b, depth);
+    b.flush(command);
+    if (!sidePass.valid()) {
+        vk::GraphicsDesc desc;
+        desc.vertex = shaders::modern_side_vert();
+        desc.fragment = shaders::modern_side_frag();
+        desc.colors = {VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R32_UINT, VK_FORMAT_R32_SFLOAT};
+        desc.depth = kDepth;
+        desc.stencil = kDepth;
+        desc.depthTest = true;
+        desc.depthWrite = false;
+        desc.depthCompare = VK_COMPARE_OP_EQUAL;
+        desc.vertices.stride = sizeof(scene::MeshRawVertex);
+        desc.vertices.attributes = {{0, 0, VK_FORMAT_R32G32B32_UINT, offsetof(scene::MeshRawVertex, position)},
+                                    {1, 0, VK_FORMAT_R32G32B32_UINT, offsetof(scene::MeshRawVertex, st)},
+                                    {2, 0, VK_FORMAT_R32G32B32A32_UINT, offsetof(scene::MeshRawVertex, colour)},
+                                    {3, 0, VK_FORMAT_R32G32_UINT, offsetof(scene::MeshRawVertex, next)},
+                                    {4, 0, VK_FORMAT_R32_UINT, offsetof(scene::MeshRawVertex, flags)},
+                                    {5, 0, VK_FORMAT_R32G32B32_UINT, offsetof(scene::MeshRawVertex, before)},
+                                    {6, 0, VK_FORMAT_R32G32B32_UINT, offsetof(scene::MeshRawVertex, before) + 12}};
+        desc.types = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                      VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
+        desc.pushSize = sizeof(ParityConstants);
+        desc.provokingLast = device.provokingLast;
+        desc.name = "gsn side channels";
+        sidePass = vk::createGraphics(device, desc);
+        vk::GraphicsDesc reset;
+        reset.vertex = shaders::gsn_side_reset_vert();
+        reset.fragment = shaders::gsn_side_reset_frag();
+        reset.colors = desc.colors;
+        reset.depth = kDepth;
+        reset.stencil = kDepth;
+        reset.depthTest = true;
+        reset.depthWrite = false;
+        reset.depthCompare = VK_COMPARE_OP_NOT_EQUAL;
+        reset.pushSize = sizeof(float);
+        reset.name = "gsn side reset";
+        sideResetPass = vk::createGraphics(device, reset);
+        // the veiled marking: the GS path's own vertices (gsn.vert), depth test GREATER, only the normal channel's w
+        vk::GraphicsDesc veil = drawDesc(0, 0, true, gsn::Topology::Triangles, false);
+        veil.fragment = shaders::gsn_side_veil_frag();
+        veil.colors = desc.colors;
+        veil.depth = kDepth;
+        veil.stencil = kDepth;
+        // (one blend state for all three, as independentBlend is not required: alpha only, which the material and depth
+        // channels, single-channel R32 formats, don't have, so only the normal channel's w is written)
+        VkPipelineColorBlendAttachmentState mark{};
+        mark.colorWriteMask = VK_COLOR_COMPONENT_A_BIT;
+        veil.blendStates = {mark, mark, mark};
+        veil.dynamics.clear();
+        veil.depthTest = true;
+        veil.depthWrite = false;
+        veil.depthCompare = VK_COMPARE_OP_GREATER;   // (strictly in front: GT4's coplanar blended layers, the lit road and
+                                                     // tyre marks at the surface's own Z, are the surface, not a veil)
+        veil.name = "gsn side veil";
+        sideVeilPass = vk::createGraphics(device, veil);
+        ++counters.pipelines;
+    }
+    VkRenderingAttachmentInfo colours[3]{};
+    vk::Image* images[3] = {&side.normal, &side.material, &side.depth};
+    for (int i = 0; i < 3; ++i) {
+        colours[i].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        colours[i].imageView = images[i]->view;
+        colours[i].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        colours[i].loadOp = first ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+        colours[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    }
+    VkRenderingAttachmentInfo ds{};
+    ds.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    ds.imageView = depth.view;
+    ds.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    ds.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    ds.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    VkRenderingInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    info.renderArea = {{0, 0}, {std::min(extent.width, depth.extent.width), std::min(extent.height, depth.extent.height)}};
+    info.layerCount = 1;
+    info.colorAttachmentCount = 3;
+    info.pColorAttachments = colours;
+    info.pDepthAttachment = &ds;
+    info.pStencilAttachment = &ds;
+    vkCmdBeginRendering(command, &info);
+    const VkViewport viewport{0, 0, static_cast<float>(extent.width), static_cast<float>(extent.height), 0, 1};
+    vkCmdSetViewport(command, 0, 1, &viewport);
+    vkCmdSetScissor(command, 0, 1, &info.renderArea);
+    ++sidePasses;
+    const uint32_t sx = colourTarget.scaleX, sy = colourTarget.scaleY;
+    if (bound.cleared) {   // the channels cleared where this partition wrote Z (the stored Z differs from the clear's), within
+                           // the clear's own region
+        const uint32_t x0 = std::min(bound.clearRect[0] * sx, info.renderArea.extent.width),
+                       y0 = std::min(bound.clearRect[1] * sy, info.renderArea.extent.height),
+                       x1 = std::min((bound.clearRect[2] + 1) * sx, info.renderArea.extent.width),
+                       y1 = std::min((bound.clearRect[3] + 1) * sy, info.renderArea.extent.height);
+        const VkRect2D region{{static_cast<int32_t>(x0), static_cast<int32_t>(y0)}, {x1 > x0 ? x1 - x0 : 0, y1 > y0 ? y1 - y0 : 0}};
+        vkCmdSetScissor(command, 0, 1, &region);
+        vk::bind(command, sideResetPass);
+        vk::pushConstants(command, sideResetPass, &bound.clearDepth, sizeof(float));
+        vkCmdDraw(command, 3, 1, 0, 0);
+        ++sideResets;
+    }
+    // the partition's items, through the parity vertex stage (the same Z to the bit), depth test EQUAL
+    vk::bind(command, sidePass);
+    vk::Descriptors()
+        .sampled(0, blank.view, samplers[0])
+        .storageBuffer(1, ex.jobs->buffer, 0, frame.models.size() * sizeof(gfx::ModelJob))
+        .storageBuffer(2, ex.words->buffer, 0, frame.modelData.size() * 4)
+        .storageBuffer(3, sideItems->buffer, 0, paritySpans.size() * sizeof(SideItem))
+        .push(command, sidePass);
+    for (size_t i = 0; i < paritySpans.size(); ++i) {
+        const render::ParitySpan& sp = paritySpans[i];
+        if (!ours(i)) continue;
+        const gsn::Draw& d = frame.draws[sp.draw];
+        const gfx::Context& c = d.state.c;
+        if (d.depth != view.depth || !c.depthTest || !c.depthWrite || c.colorKeep == 0xFFFFFFFFu) continue;   // (Z-tested and
+        // Z-writing items only: a blended one without Z write is the veiled marking's, next)
+        const uint32_t right = std::min((uint32_t(c.scissorX1) + 1) * sx, info.renderArea.extent.width),
+                       bottom = std::min((uint32_t(c.scissorY1) + 1) * sy, info.renderArea.extent.height);
+        if (right <= c.scissorX0 * sx || bottom <= c.scissorY0 * sy) continue;
+        const VkRect2D scissor{{static_cast<int32_t>(c.scissorX0 * sx), static_cast<int32_t>(c.scissorY0 * sy)},
+                               {right - c.scissorX0 * sx, bottom - c.scissorY0 * sy}};
+        vkCmdSetScissor(command, 0, 1, &scissor);
+        ParityConstants pc{};
+        pc.draw.targetSize[0] = static_cast<float>(extent.width);
+        pc.draw.targetSize[1] = static_cast<float>(extent.height);
+        pc.draw.scale[0] = static_cast<float>(sx);
+        pc.draw.scale[1] = static_cast<float>(sy);
+        pc.draw.sourceScale[0] = pc.draw.scale[0];
+        pc.draw.sourceScale[1] = pc.draw.scale[1];
+        if (spanCommand[i] < ex.jittered.size() && ex.jittered[spanCommand[i]]) {
+            pc.draw.jitter[0] = ex.phase[0] / float(sx);
+            pc.draw.jitter[1] = ex.phase[1] / float(sy);
+        }
+        pc.job = sp.job;
+        pc.t = modelT;
+        pc.tPrevious = modelTPrevious;
+        pc.side = static_cast<uint32_t>(i);
+        vk::pushConstants(command, sidePass, pc);
+        const VkDeviceSize vertexAt = sp.vertexOffset;
+        vkCmdBindVertexBuffers(command, 0, 1, &parityBlocks[sp.block].buffer, &vertexAt);
+        vkCmdBindIndexBuffer(command, parityBlocks[sp.block].buffer, sp.indexOffset, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(command, sp.indexCount, 1, sp.firstIndex, 0, 0);
+        ++sideItemsDrawn;
+    }
+    // the veiled marking: the partition's blended draws into the target that write no Z (items' and untagged ones' alike,
+    // from the GS path's vertices, which gsn_models.comp writes for every job), strictly in front of the surface
+    bool veilBound = false;
+    for (size_t at = bound.from; at < bound.command; ++at) {
+        const auto& cmd = frame.commands[at];
+        if (cmd.kind != gsn::FrameList::Command::Kind::Draw || cmd.index >= frame.draws.size()) continue;
+        const gsn::Draw& d = frame.draws[cmd.index];
+        const gfx::Context& c = d.state.c;
+        if (d.target != view.target || d.depth != view.depth || d.topology != gsn::Topology::Triangles || !d.count) continue;
+        // (blended, Z-tested against the surface (GEQUAL or GREATER: a draw with the test off or ALWAYS, as R5's full-screen
+        // draws at 0.47 of the order, is a screen effect with no depth of its own), and writing no Z)
+        // A view's own blended layers (GT4's road detail, decals: tagged runs, drawn slightly in front of their base) are its
+        // surface, not a veil: only draws of no view's items (Draw::view 0: untagged runs, sprites; smoke, particles, glare)
+        // mark it.
+        if (d.view || !((d.state.prim >> 6) & 1) || !c.depthTest || c.depthFunc < 2 || c.depthWrite || c.colorKeep == 0xFFFFFFFFu) continue;
+        if (d.bracket && ((skippedBrackets >> d.bracket) & 1)) continue;   // (N4: not drawn)
+        const uint32_t right = std::min((uint32_t(c.scissorX1) + 1) * sx, info.renderArea.extent.width),
+                       bottom = std::min((uint32_t(c.scissorY1) + 1) * sy, info.renderArea.extent.height);
+        if (right <= c.scissorX0 * sx || bottom <= c.scissorY0 * sy) continue;
+        if (!veilBound) {
+            vk::bind(command, sideVeilPass);
+            const VkDeviceSize zero = 0;
+            vkCmdBindVertexBuffers(command, 0, 1, &ex.vertices->buffer, &zero);
+            veilBound = true;
+        }
+        const VkRect2D scissor{{static_cast<int32_t>(c.scissorX0 * sx), static_cast<int32_t>(c.scissorY0 * sy)},
+                               {right - c.scissorX0 * sx, bottom - c.scissorY0 * sy}};
+        vkCmdSetScissor(command, 0, 1, &scissor);
+        DrawConstants k{};
+        k.targetSize[0] = static_cast<float>(extent.width);
+        k.targetSize[1] = static_cast<float>(extent.height);
+        k.scale[0] = static_cast<float>(sx);
+        k.scale[1] = static_cast<float>(sy);
+        k.sourceScale[0] = k.scale[0];
+        k.sourceScale[1] = k.scale[1];
+        if (at < ex.jittered.size() && ex.jittered[at]) {
+            k.jitter[0] = ex.phase[0] / float(sx);
+            k.jitter[1] = ex.phase[1] / float(sy);
+        }
+        vk::pushConstants(command, sideVeilPass, k);
+        vkCmdDraw(command, d.count, 1, d.modeled ? ex.modelBase + d.first : d.first, 0);
+        ++sideVeils;
+    }
+    vkCmdEndRendering(command);
+    // B8 step 3 (debugging): GT4_SIDE_VIEW=normal|material|depth|veiled shows that channel in place of the scene target's colour
+    // at its Light (alpha kept), so the picture is what the scene stage will light with
+    static const int sideView = [] {
+        const char* e = std::getenv("GT4_SIDE_VIEW");
+        if (!e) return -1;
+        const std::string v = e;
+        return v == "normal" ? 0 : v == "material" ? 1 : v == "depth" ? 2 : v == "veiled" ? 3 : -1;
+    }();
+    if (bound.light && sideView >= 0) {
+        for (vk::Image* i : {&side.normal, &side.material, &side.depth}) vk::toSampled(b, *i, vk::kFragment);
+        vk::toColor(b, colourTarget.image);
+        b.flush(command);
+        if (!sideViewPass.valid()) {
+            vk::GraphicsDesc desc;
+            desc.vertex = shaders::fullscreen_vert();
+            desc.fragment = shaders::gsn_side_view_frag();
+            desc.colors = {kColour};
+            VkPipelineColorBlendAttachmentState write{};
+            write.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT;
+            desc.blendStates = {write};
+            desc.types = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER};
+            desc.pushSize = 8;
+            desc.name = "gsn side view";
+            sideViewPass = vk::createGraphics(device, desc);
+        }
+        VkRenderingAttachmentInfo target{};
+        target.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        target.imageView = colourTarget.image.view;
+        target.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        target.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        target.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        VkRenderingInfo shown{};
+        shown.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        shown.renderArea = info.renderArea;
+        shown.layerCount = 1;
+        shown.colorAttachmentCount = 1;
+        shown.pColorAttachments = &target;
+        vkCmdBeginRendering(command, &shown);
+        vkCmdSetViewport(command, 0, 1, &viewport);
+        vkCmdSetScissor(command, 0, 1, &info.renderArea);
+        vk::bind(command, sideViewPass);
+        vk::Descriptors()
+            .sampled(0, side.normal.view, samplers[0])
+            .sampled(1, side.material.view, samplers[0])
+            .sampled(2, side.depth.view, samplers[0])
+            .push(command, sideViewPass);
+        const struct { uint32_t channel; float depthRange; } constants{static_cast<uint32_t>(sideView), 300.0f};
+        vk::pushConstants(command, sideViewPass, &constants, sizeof constants);
+        vkCmdDraw(command, 3, 1, 0, 0);
+        vkCmdEndRendering(command);
+    }
+    ex.rendering = false;
+    ex.boundPipeline = VK_NULL_HANDLE;
+    ex.recorded = ExecuteState::Recorded{};
 }
 
 // The scene stage at the list's Light command `at` (`frame.commands[at]`), as the commands' loop ran it.
@@ -3233,6 +3643,7 @@ void GsnScene::setAnisotropy(int anisotropy) { impl->makeMipSamplers(static_cast
 
 void GsnScene::setTemporal(bool on) { impl->temporal = on; }
 void GsnScene::setParity(bool on) { impl->parity = on; }
+void GsnScene::setHybrid(bool on) { impl->hybrid = on; }
 void GsnScene::setFieldMode(bool clean) { impl->fieldClean = clean; }
 // GT4_GPU_PROFILE=1's labels from the render graph's pass timings of one frame (ticket B4 step 4; lane C keeps
 // --profile-json's "gs_passes" under these labels for one release, so a comparison across the change holds them to the

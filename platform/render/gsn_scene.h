@@ -96,6 +96,9 @@ public:
     // B7's parity path (render.scene = parity, docs/modern/PLAN.md B7): the substituted views' 3D items drawn from the mesh
     // cache with GT4's lighting and depth, in place of gsn_models.comp's output; a check against the GS path, not a mode.
     void setParity(bool on);
+    // B8 (render.scene = hybrid, PLAN B8): the parity path's substitution plus the side channels (view-space normal,
+    // material, view-space depth) written per GT4 depth partition for the scene stage to light with. Implies setParity.
+    void setHybrid(bool on);
     bool antiAliasesItself() const override;
 
     void prepare(const SceneFormats& formats) override;

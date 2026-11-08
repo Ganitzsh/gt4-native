@@ -10,6 +10,9 @@
 // the raw vertex carries the two vertices before it. The ADC bit and a flat triangle's colour are the last vertex's:
 // the provoking vertex is the strip's last (the arena's third index, render/modern/parity_view.h), and gsn.frag reads
 // them flat. The triangles come in the GS path's vertex order, so Z interpolates as there.
+//
+// GSN_SIDE (B8 step 2): the side-channel pass's variant, the same stage (so the same Z to the bit for its EQUAL test)
+// with the item's view-space position and material for modern_side.frag.
 #define GSN_PARITY 1
 #include "gsn_common.glsl"
 
@@ -53,6 +56,16 @@ layout(location = 7) out float outFogW;
 layout(location = 8) out float outW;
 layout(location = 9) flat out uint outHomogeneous;   // 1, | 2 flat shading, | 4 the ADC bit (gsn.frag GSN_PARITY)
 layout(location = 10) flat out vec4 outFlatColour;
+#if defined(GSN_SIDE)
+// the item's instance (its objectToView, CONTRACTS a.8) and its material (B6), one entry per item drawn (gsn_scene.cpp)
+struct SideItem {
+    mat4 objectToView;
+    uint material, pad0, pad1, pad2;
+};
+layout(std430, set = 0, binding = 3) readonly buffer SideItems { SideItem sideItems[]; };
+layout(location = 11) out vec3 outViewPosition;
+layout(location = 12) flat out uint outMaterial;
+#endif
 
 invariant gl_Position;   // as gsn.vert's: the same expressions on the same inputs, so the same position (and Z)
 
@@ -132,4 +145,9 @@ void main() {
     outW = w;
     outHomogeneous = 1u | ((job.flags & 2u) == 0u ? 2u : 0u) | (adc ? 4u : 0u);
     outFlatColour = colour;
+#if defined(GSN_SIDE)
+    const SideItem item = sideItems[draw.paritySide];
+    outViewPosition = (item.objectToView * vec4(v.position.xyz, 1.0)).xyz;
+    outMaterial = item.material;
+#endif
 }

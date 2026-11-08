@@ -52,6 +52,10 @@ struct ParitySpan {
     uint64_t vertexOffset = 0;         // its raw vertices in the block (bytes: bound as the vertex buffer's offset)
     uint64_t indexOffset = 0;          // its triangles in the block (bytes: the index buffer's offset)
     uint32_t firstIndex = 0, indexCount = 0;   // the item's triangles among the mesh's
+    // B8's side channels: where the item's instance and material are (FrameList::views[view].package->instances[instance],
+    // its MaterialId)
+    uint32_t view = 0, instance = 0;
+    scene::MaterialId material = 0;
 };
 
 // A copy the caller records before the list's draws: `bytes` from the staging stream at `from` into `block` at `to`.

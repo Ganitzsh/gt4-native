@@ -209,16 +209,19 @@ int main() {
         check(r.scene == SceneRenderer::Original && getOption(r, "render.scene") == "original", "render.scene is original by default");
         check(original.scene == SceneRenderer::Original, "the original preset draws scenes on the GS path");
         check(setOption(r, "render.scene", "original").empty(), "render.scene = original is taken");
-        for (const char* later : {"hybrid", "modern"}) {
-            const std::string error = setOption(r, "render.scene", later);
+        {
+            const std::string error = setOption(r, "render.scene", "modern");
             check(error.find("modern renderer") != std::string::npos && r.scene == SceneRenderer::Original,
-                  "hybrid and modern are refused until the modern renderer lands, with the reason");
+                  "modern is refused until the modern renderer lands, with the reason");
         }
+        check(setOption(r, "render.scene", "hybrid").empty() && r.scene == SceneRenderer::Hybrid &&
+                  formatSettings(r).find("scene = hybrid") == std::string::npos,
+              "render.scene = hybrid is taken (B8), never saved");
         check(setOption(r, "render.scene", "parity").empty() && r.scene == SceneRenderer::Parity, "render.scene = parity is taken (B7)");
         check(formatSettings(r).find("\nscene = original\n") != std::string::npos && formatSettings(r).find("scene = parity") == std::string::npos,
               "parity is a session's check: never saved (written as original)");
         check(setOption(r, "render.scene", "original").empty() && r.scene == SceneRenderer::Original, "and back to original");
-        check(setOption(r, "render.scene", "bogus") == "render.scene: expected original or parity", "a bad value names the ones taken");
+        check(setOption(r, "render.scene", "bogus") == "render.scene: expected original, parity or hybrid", "a bad value names the ones taken");
         check(formatSettings(r).find("[render]") < formatSettings(r).find("\nscene = original\n") &&
                   formatSettings(r).find("\nscene = original\n") < formatSettings(r).find("[texture]"),
               "render.scene is written in the [render] section");
