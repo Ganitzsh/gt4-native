@@ -171,18 +171,25 @@ def compile_eeorig(out, gen):
     for n in sorted(os.listdir(os.path.join(ROOT, "tools", "eeref"))):   # GT4_DIFFTEST's tests (difftest.h)
         if n.startswith("difftest") and n.endswith(".cpp"):
             jobs.append((os.path.join(ROOT, "tools", "eeref", n), os.path.join(objdir, n[:-4] + ".o"),
-                         ["-I", os.path.join(ROOT, "runtime"), "-I", os.path.join(ROOT, "include")]))
+                         ["-I", os.path.join(ROOT, "runtime"), "-I", os.path.join(ROOT, "include"), "-I",
+                          os.path.join(ROOT, "platform")]))
+    # the host's VIF1 decoder: the tests of functions that send packets compare what the packets deliver (Test::stream)
+    jobs.append((os.path.join(ROOT, "platform", "gs", "vif1.cpp"), os.path.join(objdir, "vif1.o"),
+                 ["-I", os.path.join(ROOT, "include")]))
 
-    # the bridge and the tests also depend on tools/eeref's headers and the runtime's shared state
+    # the bridge and the tests also depend on tools/eeref's headers, the runtime's headers they include, the record
+    # layouts and the unpack formats (include/gt4) and the decoder's header
     eeref = os.path.join(ROOT, "tools", "eeref")
     headers = [os.path.join(eeref, h) for h in os.listdir(eeref) if h.endswith(".h")] + \
-        [os.path.join(ROOT, "runtime", "shared_state.h")]
+        [os.path.join(ROOT, "runtime", h) for h in ("shared_state.h", "guest.h", "image.h", "log.h")] + \
+        [os.path.join(ROOT, "include", "gt4", h) for h in ("gfx.h", "unpack.h")] + \
+        [os.path.join(ROOT, "platform", "gs", "vif1.h")]
     headers_time = max(os.path.getmtime(h) for h in headers)
 
     def build(job):
         src, obj, extra = job
         newest = os.path.getmtime(src)
-        if os.path.dirname(src) == eeref:
+        if os.path.dirname(src) == eeref or os.path.basename(src) == "vif1.cpp":
             newest = max(newest, headers_time)
         if not (os.path.exists(obj) and os.path.getmtime(obj) >= newest):
             run([tool("g++"), "-c"] + flags + extra + [src, "-o", obj], env=mingw_env())

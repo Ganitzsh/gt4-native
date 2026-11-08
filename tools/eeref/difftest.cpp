@@ -7,6 +7,9 @@
 // yet (the test runs before the game starts).
 #include "difftest.h"
 
+#include "gs/vif1.h"
+#include "gt4/gfx.h"
+#include "gt4/unpack.h"
 #include "guest.h"
 #include "image.h"
 #include "log.h"
@@ -199,6 +202,319 @@ struct Snapshot {
     }
 };
 
+// What a packet delivers (Test::stream): the batches it runs (each with its buffer as the renderer would read it)
+// and the two batch buffers at the end, through the host's VIF1 decoder, which takes the original's VIF codes and the
+// native's batch records alike; the vertices it draws, from the original's GIF data (DIRECT) and the native's draw
+// records alike; and the other native records, as bytes (the original code calls native functions too, which send
+// records). `problem`: what the packet holds that this cannot compare.
+struct Delivered {
+    struct Run {
+        std::uint32_t entry, itop, top, buffer;
+        std::vector<std::uint32_t> words;
+    };
+    struct Vertex {   // the GS's view: PRIM, then the registers a vertex kick takes
+        std::uint32_t prim, xy, z, fog_kick, rgba, q, s, t, uv;   // fog_kick: fog | 0x100 when the vertex draws
+    };
+    std::vector<Run> runs;
+    std::vector<std::uint32_t> buffers;
+    std::vector<Vertex> vertices;
+    std::vector<std::vector<std::uint8_t>> records;   // each: the batch runs before it (4 bytes), then the record
+    std::uint32_t cursor = 0, start = 0, end = 0;     // the cursor's address, the packet from start to end
+    bool holds(std::uint32_t a) const { return a == cursor || (a >= start && a < end); }
+    std::string problem;
+};
+
+// The GIF data a packet sends through DIRECT, as GS register writes: a vertex at each XYZF2/XYZ2 (drawing) and
+// XYZF3/XYZ3 (not drawing) with the PRIM, RGBAQ, ST, UV and FOG values set before it.
+struct Draws {
+    Delivered &d;
+    Delivered::Vertex cur{};
+    explicit Draws(Delivered &out) : d(out) {
+        const float one = 1.0f;
+        std::memcpy(&cur.q, &one, 4);
+    }
+    void problem(const char *what) {
+        if (d.problem.empty()) d.problem = what;
+    }
+    void reg(std::uint32_t r, std::uint64_t v) {
+        const std::uint32_t lo = static_cast<std::uint32_t>(v), hi = static_cast<std::uint32_t>(v >> 32);
+        switch (r) {
+        case 0x00: cur.prim = lo & 0x7FF; break;                       // PRIM
+        case 0x01: cur.rgba = lo; cur.q = hi; break;                   // RGBAQ
+        case 0x02: cur.s = lo; cur.t = hi; break;                      // ST
+        case 0x03: cur.uv = lo & 0x3FFF3FFF; break;                    // UV
+        case 0x04: case 0x0C:                                          // XYZF2, XYZF3
+            cur.xy = lo;
+            cur.z = hi & 0xFFFFFF;
+            cur.fog_kick = (hi >> 24) | (r == 0x04 ? 0x100u : 0u);
+            d.vertices.push_back(cur);
+            break;
+        case 0x05: case 0x0D:                                          // XYZ2, XYZ3
+            cur.xy = lo;
+            cur.z = hi;
+            cur.fog_kick = (cur.fog_kick & 0xFF) | (r == 0x05 ? 0x100u : 0u);
+            d.vertices.push_back(cur);
+            break;
+        case 0x0A: cur.fog_kick = (cur.fog_kick & 0x100) | (hi >> 24); break;   // FOG
+        case 0x0F: break;                                                       // NOP
+        default: {
+            char why[64];
+            std::snprintf(why, sizeof why, "GIF register %02x (not compared)", r);
+            problem(why);
+        }
+        }
+    }
+    void gif(std::uint32_t, const std::uint8_t *p, std::size_t bytes) {
+        for (std::size_t at = 0; at + 16 <= bytes;) {
+            std::uint64_t tag[2];
+            std::memcpy(tag, p + at, 16);
+            at += 16;
+            const std::uint32_t nloop = tag[0] & 0x7FFF, flg = (tag[0] >> 58) & 3;
+            const std::uint32_t nreg = ((tag[0] >> 60) & 0xF) ? static_cast<std::uint32_t>((tag[0] >> 60) & 0xF) : 16;
+            if (flg == 0 && ((tag[0] >> 46) & 1)) reg(0x00, (tag[0] >> 47) & 0x7FF);   // PRE (PACKED only): PRIM
+            auto desc = [&](std::uint32_t k) { return static_cast<std::uint32_t>(tag[1] >> (4 * k)) & 0xF; };
+            if (flg == 1) {   // REGLIST: 64 bits a register
+                const std::size_t values = std::size_t(nloop) * nreg;
+                if (at + values * 8 > bytes) return problem("a GIF REGLIST past its data");
+                for (std::size_t k = 0; k < values; ++k) {
+                    std::uint64_t v;
+                    std::memcpy(&v, p + at + k * 8, 8);
+                    reg(desc(static_cast<std::uint32_t>(k % nreg)), v);
+                }
+                at += (values * 8 + 15) & ~std::size_t(15);
+            } else if (flg == 0) {   // PACKED: a qword a register
+                if (at + std::size_t(nloop) * nreg * 16 > bytes) return problem("a GIF PACKED past its data");
+                for (std::uint32_t l = 0; l < nloop; ++l)
+                    for (std::uint32_t k = 0; k < nreg; ++k, at += 16) {
+                        std::uint32_t w[4];
+                        std::memcpy(w, p + at, 16);
+                        const std::uint32_t r = desc(k);
+                        const bool noKick = (w[3] >> 15) & 1;   // ADC
+                        switch (r) {
+                        case 0x00: reg(0x00, w[0]); break;
+                        case 0x01:
+                            reg(0x01, (w[0] & 0xFF) | (w[1] & 0xFF) << 8 | (w[2] & 0xFF) << 16 | (w[3] & 0xFFu) << 24 |
+                                          std::uint64_t(cur.q) << 32);
+                            break;
+                        case 0x02: cur.q = w[2]; reg(0x02, w[0] | std::uint64_t(w[1]) << 32); break;
+                        case 0x03: reg(0x03, (w[0] & 0x3FFF) | (w[1] & 0x3FFF) << 16); break;
+                        case 0x04:
+                            reg(noKick ? 0x0C : 0x04, (w[0] & 0xFFFF) | (w[1] & 0xFFFF) << 16 |
+                                                          std::uint64_t((w[2] >> 4) & 0xFFFFFF) << 32 |
+                                                          std::uint64_t((w[3] >> 4) & 0xFF) << 56);
+                            break;
+                        case 0x05:
+                            reg(noKick ? 0x0D : 0x05,
+                                (w[0] & 0xFFFF) | (w[1] & 0xFFFF) << 16 | std::uint64_t(w[2]) << 32);
+                            break;
+                        case 0x0A: reg(0x0A, std::uint64_t((w[3] >> 4) & 0xFF) << 56); break;
+                        case 0x0E: reg(w[2] & 0xFF, w[0] | std::uint64_t(w[1]) << 32); break;   // A+D
+                        default: reg(r, 0);
+                        }
+                    }
+            } else {
+                return problem("a GIF IMAGE transfer (not compared)");
+            }
+        }
+    }
+    // A native draw record (include/gt4/gfx.h DrawRecord): the same registers, set as its flags say.
+    void draw(const gt4::gfx::DrawRecord &r, const std::uint8_t *vertices) {
+        namespace gfx = gt4::gfx;
+        if (r.flags & gfx::kDrawPrim) cur.prim = r.prim & 0x7FF;
+        for (std::uint32_t k = 0; k < r.count; ++k) {
+            gfx::Vertex x;
+            std::memcpy(&x, vertices + k * sizeof x, sizeof x);
+            if (r.flags & gfx::kDrawColor) {
+                cur.rgba = x.rgba;
+                std::memcpy(&cur.q, &x.q, 4);
+            }
+            if (r.flags & gfx::kDrawSt) {
+                std::memcpy(&cur.s, &x.s, 4);
+                std::memcpy(&cur.t, &x.t, 4);
+                std::memcpy(&cur.q, &x.q, 4);
+            }
+            if (r.flags & gfx::kDrawUv) cur.uv = x.u | std::uint32_t(x.v) << 16;
+            cur.xy = x.x | std::uint32_t(x.y) << 16;
+            cur.z = r.flags & gfx::kDrawFog ? x.z & 0xFFFFFF : x.z;
+            cur.fog_kick = (r.flags & gfx::kDrawFog ? x.fog : cur.fog_kick & 0xFF) | (x.kick ? 0x100u : 0u);
+            if (!(r.flags & gfx::kDrawAttributesOnly)) d.vertices.push_back(cur);
+        }
+    }
+};
+
+bool readable(std::uint32_t at, std::uint32_t bytes) {
+    if (at >= 0x70000000u && at < 0x70004000u) return bytes <= 0x70004000u - at;   // the scratchpad
+    return gt4::rt::in_guest_ram(at, bytes);
+}
+
+std::vector<std::uint32_t> batch_words(const gt4::ps2::BatchBuffer &b) {
+    return std::vector<std::uint32_t>(&b.words[0][0], &b.words[0][0] + gt4::ps2::BatchBuffer::kQwords * 4);
+}
+
+// The packet from `start` to the cursor as a DMA chain of CNT and REF tags (END and REFE end it), each tag's upper
+// half and its data taken as VIF1 codes: DIRECT's GIF data to Draws, native records to their decoders, and every
+// other command to the host's batch decoder (Vif1, one command at a time through batchModel, which decodes UNPACK,
+// the state codes, ITOP and MSCAL), starting as the frame head leaves VIF1 (Vif1::batchFrame).
+Delivered deliver(const Test &t, std::uint32_t cursor, std::uint32_t start, const char *side, bool raw_gif = false) {
+    namespace gfx = gt4::gfx;
+    Delivered d;
+    d.cursor = cursor;
+    d.start = start;
+    std::memcpy(&d.end, ram(cursor), 4);
+    char why[160];
+    auto problem = [&](const char *what) {
+        if (d.problem.empty()) d.problem = what;
+    };
+    gt4::ps2::Vif1 v;
+    Draws draws(d);
+    v.batchFrame();
+    if (t.stream_mask) std::memcpy(&v.mask, ram(t.stream_mask), 4);
+    v.onBatch = [&](const gt4::ps2::Batch3d &b) {
+        d.runs.push_back({b.entry, b.itop, b.top, b.buffer == &v.buffers[1] ? 1u : 0u, batch_words(*b.buffer)});
+    };
+    auto records = [&](const std::uint8_t *p, std::size_t bytes) {
+        for (std::size_t at = 0; at + sizeof(gfx::Header) <= bytes;) {
+            gfx::Header h;
+            std::memcpy(&h, p + at, sizeof h);
+            const std::uint8_t *payload = p + at + sizeof h;
+            if (h.bytes() > bytes - at - sizeof h) {
+                problem("a record runs past its block");
+                return;
+            }
+            switch (h.type()) {
+            case gfx::kNop: break;
+            case gfx::kBatchFrame: v.batchFrame(); break;
+            case gfx::kBatchWrite: {
+                gfx::BatchWrite w;
+                if (h.bytes() < sizeof w) return problem("a short batch write record");
+                std::memcpy(&w, payload, sizeof w);
+                if (h.bytes() < sizeof w + std::size_t(w.count) * 16) return problem("a short batch write record");
+                std::vector<std::uint32_t> words(std::size_t(w.count) * 4);
+                if (w.count) std::memcpy(words.data(), payload + sizeof w, words.size() * 4);
+                v.batchWrite(w.qword, words.data(), w.count, w.lanes);
+                break;
+            }
+            case gfx::kBatchRun: {
+                gfx::BatchRun r;
+                if (h.bytes() < sizeof r) return problem("a short batch run record");
+                std::memcpy(&r, payload, sizeof r);
+                v.batchRun(r.entry, r.itop);
+                break;
+            }
+            case gfx::kDraw: {
+                gfx::DrawRecord r;
+                if (h.bytes() < sizeof r) return problem("a short draw record");
+                std::memcpy(&r, payload, sizeof r);
+                if (h.bytes() < sizeof r + std::size_t(r.count) * sizeof(gfx::Vertex))
+                    return problem("a short draw record");
+                draws.draw(r, payload + sizeof r);
+                break;
+            }
+            default: {   // compared as bytes, padding included (ef5764a zeroes it), with the batches run before it
+                const std::uint32_t runs = static_cast<std::uint32_t>(d.runs.size());
+                std::vector<std::uint8_t> r(4 + sizeof h + h.bytes());
+                std::memcpy(r.data(), &runs, 4);
+                std::memcpy(r.data() + 4, p + at, sizeof h + h.bytes());
+                d.records.push_back(std::move(r));
+            }
+            }
+            at += std::size_t(gfx::recordQwords(h.bytes())) * 16;
+        }
+    };
+    std::vector<std::uint32_t> codes;   // the VIF1 words along the chain
+    auto take = [&](std::uint32_t from, std::uint32_t bytes) {
+        const std::size_t old = codes.size();
+        codes.resize(old + bytes / 4);
+        std::memcpy(codes.data() + old, ram(from), bytes / 4 * 4);
+    };
+    std::uint32_t at = start;
+    if (raw_gif) {   // the original's GIF data, inside a DIRECT its caller opened (Test::stream_gif)
+        if (d.end < start || !readable(start, d.end - start)) problem("the GIF data does not end at the cursor");
+        else draws.gif(2, ram(start), d.end - start);
+        at = d.end;
+    }
+    for (int tags = 0; d.problem.empty() && at != d.end; ++tags) {
+        if (tags == 4096 || at > d.end || !readable(at, 16)) {
+            std::snprintf(why, sizeof why, "the DMA chain from %08x does not end at the cursor (%08x)", start, d.end);
+            problem(why);
+            break;
+        }
+        std::uint32_t tag[4];
+        std::memcpy(tag, ram(at), 16);
+        const std::uint32_t qwc = tag[0] & 0xFFFF, id = (tag[0] >> 28) & 7;
+        const std::uint32_t addr = tag[1] & 0x80000000u ? 0x70000000u | (tag[1] & 0x3FF0) : tag[1] & 0x0FFFFFF0u;
+        take(at + 8, 8);   // the tag's upper half: VIF codes
+        const bool here = id == 1 || id == 7;   // CNT, END: the data follows the tag; REF, REFS, REFE: at addr
+        if (!here && id != 3 && id != 4 && id != 0) {
+            std::snprintf(why, sizeof why, "DMA tag %08x at %08x (only CNT, REF, REFS, END, REFE are followed)",
+                          tag[0], at);
+            problem(why);
+            break;
+        }
+        const std::uint32_t data = here ? at + 16 : addr;
+        if (!readable(data, qwc * 16)) {
+            std::snprintf(why, sizeof why, "DMA tag at %08x: %u qwords at %08x outside guest memory", at, qwc, data);
+            problem(why);
+            break;
+        }
+        take(data, qwc * 16);
+        at += here ? 16 + qwc * 16 : 16;
+        if ((id == 7 || id == 0) && at != d.end) problem("the DMA chain ends before the cursor");
+        if (id == 7 || id == 0) break;
+    }
+    for (std::size_t i = 0; d.problem.empty() && i < codes.size();) {
+        const std::uint32_t code = codes[i], cmd = (code >> 24) & 0x7F, imm = code & 0xFFFF;
+        std::size_t words = 1;   // the command's, its data included
+        if (cmd >= 0x60) words += gfx::unpackWords(cmd, (code >> 16) & 0xFF ? (code >> 16) & 0xFF : 256, v.cl, v.wl);
+        else if (cmd == 0x20) words = 2;                                   // STMASK
+        else if (cmd == 0x30 || cmd == 0x31) words = 5;                    // STROW, STCOL
+        else if (cmd == 0x50 || cmd == 0x51) words += (imm ? imm : 65536) * 4;   // DIRECT, DIRECTHL
+        else if (cmd == 0x08) words += std::size_t(imm) * 4;               // native records (include/gt4/gfx.h)
+        else if (cmd == 0x4A) {
+            problem("an MPG (not compared)");
+            break;
+        }
+        if (i + words > codes.size()) {
+            std::snprintf(why, sizeof why, "VIF code %08x runs past the packet", code);
+            problem(why);
+            break;
+        }
+        const std::uint8_t *bytes = reinterpret_cast<const std::uint8_t *>(codes.data() + i);
+        if (cmd == 0x50 || cmd == 0x51) draws.gif(2, bytes + 4, (words - 1) * 4);
+        else if (cmd == 0x08) records(bytes + 4, (words - 1) * 4);
+        else v.batchModel(bytes, words * 4, v.mask);   // keeps the mask as it is (STMASK in it changes it)
+        i += words;
+    }
+    if (v.stats.unknownCodes) problem("unknown VIF codes");
+    if (v.stats.outsideBatch) problem("unpacks outside both batch buffers");
+    // GT4_DIFFTEST_DUMP=1: the packets of a test's first two trials that cannot be compared, in the log (=all: the
+    // first two trials' packets)
+    static const char *dumping = nullptr;
+    static int dumps = 0;
+    const char *dump = getenv("GT4_DIFFTEST_DUMP");
+    if (dumping != t.name) {
+        dumping = t.name;
+        dumps = dump ? 4 : 0;
+    }
+    if ((!d.problem.empty() || (dump && !std::strcmp(dump, "all"))) && dumps > 0 && dumps--) {
+        std::string words;
+        const std::uint32_t stop = d.end > start && d.end - start < 0x400 ? d.end : start + 0x100;
+        for (std::uint32_t a = start & ~3u; a < stop && readable(a, 4); a += 4) {
+            std::uint32_t w;
+            std::memcpy(&w, ram(a), 4);
+            std::snprintf(why, sizeof why, "%s%08x", (a - start) % 16 ? " " : "\n  ", w);
+            words += why;
+        }
+        gt4::rt::log_info("difftest %s: %s packet %08x..%08x (%s):%s", t.name, side, start, d.end, d.problem.c_str(),
+                          words.c_str());
+    }
+    for (const gt4::ps2::BatchBuffer &b : v.buffers) {
+        const std::vector<std::uint32_t> w = batch_words(b);
+        d.buffers.insert(d.buffers.end(), w.begin(), w.end());
+    }
+    return d;
+}
+
 bool run(const Test &t, int trials) {
     if (t.double_size && t.double_size < 8) {   // a region of doubles holds at least one
         gt4::rt::log_error("difftest %s: double_size %u is under 8 bytes", t.name, t.double_size);
@@ -221,6 +537,13 @@ bool run(const Test &t, int trials) {
         std::uint32_t args[8] = {};
         t.setup(args);
         before.take(regions);
+        const std::uint32_t native_cursor = t.stream_native ? t.stream_native : t.stream;
+        std::uint32_t start = 0, native_start = 0;
+        if (t.stream) {
+            std::memcpy(&start, ram(t.stream), 4);
+            std::memcpy(&native_start, ram(native_cursor), 4);
+        }
+        Delivered native_out, orig_out;
         std::uint64_t native_ret = 0;
         if (t.ret == 'w')
             native_ret = reinterpret_cast<Fn8w>(fn)(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7]);
@@ -229,9 +552,14 @@ bool run(const Test &t, int trials) {
         else
             native_ret = reinterpret_cast<Fn8>(fn)(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7]);
         native.take(regions);
+        if (t.stream) native_out = deliver(t, native_cursor, native_start, "native");
         before.put(regions);
         std::uint64_t orig_ret = gt4_orig_run_kinds(args, t.addr, t.kinds, t.ret == 's' ? 'v' : t.ret);
         original.take(regions);
+        if (t.stream) orig_out = deliver(t, t.stream, start, "original", t.stream_gif);
+        // the packets themselves and the cursors are not compared (each side's packet and cursor, in both runs'
+        // memory): what they deliver is, below
+        auto packet = [&](std::uint32_t a) { return native_out.holds(a) || orig_out.holds(a); };
         if (t.ret != 'w') {
             native_ret &= 0xFFFFFFFFu;
             orig_ret &= 0xFFFFFFFFu;
@@ -261,6 +589,7 @@ bool run(const Test &t, int trials) {
         for (int r = 0; r < 4; ++r)
             for (std::uint32_t k = 0; k < regions[r].size; k += 4) {
                 const std::uint32_t a = regions[r].addr + k;
+                if (t.stream && packet(a)) continue;
                 if (t.double_size && a >= t.double_addr && a - t.double_addr <= t.double_size - 8 &&
                     ((a - t.double_addr) & 7) == 0 && k + 8 <= regions[r].size) {
                     std::uint64_t xb, yb;   // one double: compared whole, not as two unrelated words
@@ -299,11 +628,69 @@ bool run(const Test &t, int trials) {
                     word("vector", static_cast<std::uint32_t>(v * 4 + k), bits(native.vectors[v][k]), bits(original.vectors[v][k]));
         word("matrix stack top", 0, native.top, original.top, true);
         word("random state", 0, native.random, original.random, true);
+        std::string stream_note;
+        if (t.stream) {
+            if (!native_out.problem.empty() || !orig_out.problem.empty()) {
+                stream_note = "; packet not compared: native " +
+                              (native_out.problem.empty() ? "-" : native_out.problem) + ", original " +
+                              (orig_out.problem.empty() ? "-" : orig_out.problem);
+                same = false;
+            } else {
+                word("batch runs", 0, static_cast<std::uint32_t>(native_out.runs.size()),
+                     static_cast<std::uint32_t>(orig_out.runs.size()), true);
+                for (std::size_t i = 0; same && i < native_out.runs.size() && i < orig_out.runs.size(); ++i) {
+                    const Delivered::Run &x = native_out.runs[i], &y = orig_out.runs[i];
+                    const std::uint32_t id = static_cast<std::uint32_t>(i) << 16;   // reported: run << 16 | word
+                    word("run entry", id, x.entry, y.entry, true);
+                    word("run itop", id, x.itop, y.itop, true);
+                    word("run top", id, x.top, y.top, true);
+                    word("run buffer", id, x.buffer, y.buffer, true);
+                    for (std::size_t k = 0; k < x.words.size(); ++k)
+                        word("run's batch", id | static_cast<std::uint32_t>(k), x.words[k], y.words[k]);
+                }
+                for (std::size_t k = 0; k < native_out.buffers.size(); ++k)   // buffer << 10 | qword << 2 | lane
+                    word("batch buffers", static_cast<std::uint32_t>(k), native_out.buffers[k], orig_out.buffers[k]);
+                word("vertices", 0, static_cast<std::uint32_t>(native_out.vertices.size()),
+                     static_cast<std::uint32_t>(orig_out.vertices.size()), true);
+                for (std::size_t i = 0; same && i < native_out.vertices.size() && i < orig_out.vertices.size(); ++i) {
+                    const Delivered::Vertex &x = native_out.vertices[i], &y = orig_out.vertices[i];
+                    const std::uint32_t id = static_cast<std::uint32_t>(i);
+                    word("vertex PRIM", id, x.prim, y.prim, true);
+                    // a projected position or depth one unit apart (1/16 pixel) is rounding when `floats`: the VU's
+                    // arithmetic against x87's before the conversion to fixed point
+                    auto off_by_one = [](std::uint32_t a, std::uint32_t b) { return (a > b ? a - b : b - a) <= 1; };
+                    const bool xy1 = off_by_one(x.xy & 0xFFFF, y.xy & 0xFFFF) && off_by_one(x.xy >> 16, y.xy >> 16);
+                    if (x.xy != y.xy && t.floats && xy1) ++rounding;
+                    else word("vertex XY", id, x.xy, y.xy, true);
+                    if (x.z != y.z && t.floats && off_by_one(x.z, y.z)) ++rounding;
+                    else word("vertex Z", id, x.z, y.z, true);
+                    word("vertex fog, kick", id, x.fog_kick, y.fog_kick, true);
+                    word("vertex RGBA", id, x.rgba, y.rgba, true);
+                    word("vertex Q", id, x.q, y.q);
+                    word("vertex S", id, x.s, y.s);
+                    word("vertex T", id, x.t, y.t);
+                    word("vertex UV", id, x.uv, y.uv, true);
+                }
+                word("records", 0, static_cast<std::uint32_t>(native_out.records.size()),
+                     static_cast<std::uint32_t>(orig_out.records.size()), true);
+                for (std::size_t i = 0; same && i < native_out.records.size() && i < orig_out.records.size(); ++i) {
+                    const std::vector<std::uint8_t> &x = native_out.records[i], &y = orig_out.records[i];
+                    word("record size", static_cast<std::uint32_t>(i), static_cast<std::uint32_t>(x.size()),
+                         static_cast<std::uint32_t>(y.size()), true);
+                    for (std::size_t k = 0; same && k + 4 <= x.size() && k + 4 <= y.size(); k += 4) {
+                        std::uint32_t a, b;
+                        std::memcpy(&a, &x[k], 4);
+                        std::memcpy(&b, &y[k], 4);
+                        word("record", static_cast<std::uint32_t>(i << 16 | k), a, b, true);
+                    }
+                }
+            }
+        }
         if (!same && ++differ <= 3)
             gt4::rt::log_warn("difftest %s trial %d (args %08x %08x %08x %08x): return native %016llx original %016llx; first "
-                              "differing word: %s %08x native %08x original %08x",
+                              "differing word: %s %08x native %08x original %08x%s",
                               t.name, n, args[0], args[1], args[2], args[3], static_cast<unsigned long long>(native_ret),
-                              static_cast<unsigned long long>(orig_ret), where, at, na, oa);
+                              static_cast<unsigned long long>(orig_ret), where, at, na, oa, stream_note.c_str());
     }
     gt4::rt::log_info("difftest %s: %d trials, %d differ (%d words within float rounding, %d within 1e-3)", t.name, trials,
                       differ, rounding, drifted);
