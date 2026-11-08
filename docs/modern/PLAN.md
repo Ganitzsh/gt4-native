@@ -1241,8 +1241,10 @@ commits).** What is left of docs/NATIVE_V2.md (step 1's textures are done):
 - **P2c: reinterpretations as explicit copies** from the named source target, on the GPU (as `gsn_scene`'s
   reinterpret pass already is). The fallback (004A9470, never seen) stays, and is counted.
   - **First, depth targets read as textures** (lane B, found with P2a, 2026-11-08). The race's Z buffer is sampled
-    as a PSMZ24 texture at its own address and width (bp 0 and 0x8C0, width 10, about 1.7 a frame in a race;
-    over the captures race7 1,000, race_boot 16,754, menus_boot 34,175, before and after P2a). The direct path
+    as a PSMZ24 texture at its own address and width (bp 0 and 0x8C0, width 10: about 10 lookups a frame on
+    race7, from one full-screen Z24 sprite copy a frame (a field's Z from the 448-line Z buffer at 0 / 0x8C0,
+    alternating by frame); the counter counts texture lookups, not draws; over the captures race7 1,000,
+    race_boot 16,754, menus_boot 34,175, before and after P2a). The direct path
     takes only colour targets, so these reads decode `gs_memory`, which never holds the drawn depths: a picture
     bug of the GS path, `original` included. Fix: a Z-format texture whose surface is a depth target reads that
     target (the depth image, by P2a's key), its depths converted to the GS's Z24 texel: the host keeps float depth
