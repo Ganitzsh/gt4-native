@@ -35,27 +35,33 @@ kScene = 11,   // scene::Prefix, then the record of that kind (docs/modern/CONTR
   `kOptionSceneRecords` is, since the GS path in `original` uses it. GT4 sets the drawing origin (XYOFFSET) in
   004A2BC8 as base + (int)((ox + sx * px) * 16) per axis, at most 15 sixteenths: ox / oy the field part (004A2B58,
   from the display mode: 0 or half a pixel by field), sx * px / sy * py the supersampling part (004A2C58's jitter
-  passes: the garage and showroom car, photo, the race's HUD gauges). The register holds only the sum, so our
-  copy of 004A2BC8 sends `gfx::OriginParts` (8 bytes, 12 with its `Header`) before the origin it sets reaches the
-  stream: `contexts` (bit 0 context 1, bit 1 context 2), `fieldX`/`fieldY`, `superX`/`superY` (004A2BC8's own
-  value with ox = oy = 0, clamped as it clamps) and `sumX`/`sumY` (what it added to the base), all in sixteenths,
-  0..15. Both parts are sent because the sum clamps at 15: with ox = 0.5 and a supersampling 0.5 the register
-  holds 15, and 15 - 8 is not the no-field value 8. An `OriginParts` in a display list called from the frame list
-  goes out once per call, with that call's own origin write (only `kScene` records are dropped there), so the
-  pairing stays one to one.
+  passes: the garage and showroom car, photo, the race's HUD gauges). The register holds only the sum, so our copy of
+  004A2BC8 sends `gfx::OriginParts` (8 bytes, 12 with its `Header`) before the origin it sets reaches the stream:
+  `contexts` (bit 0 context 1, bit 1 context 2), `fieldX`/`fieldY`, `superX`/`superY` (004A2BC8's own value with ox =
+  oy = 0, clamped as it clamps) and `sumX`/`sumY` (what it added to the base), all in sixteenths, 0..15; and `flags`
+  (the former reserved byte) bit 0, `kOriginFrameMode`: 004A2BC8 saw px = py = 1 (004A2A10's types 0, 5-8 and any type
+  outside 1-4 and 9; the field modes 1-4 and 9 have py = 0.5; lane A, from lane A's next commit). Both parts are sent
+  because the sum clamps at 15: with ox = 0.5 and a supersampling 0.5 the register holds 15, and 15 - 8 is not the
+  no-field value 8. An `OriginParts` in a display list called from the frame list goes out once per call, with that
+  call's own origin write (only `kScene` records are dropped there), so the pairing stays one to one.
   - The host pairs a record with each named context's next origin write, by register (XYOFFSET_1/2) or by a
-    state record's origin group. A pairing is valid only if the write's fraction (origin & 15) equals `sum`; then
-    it draws from (origin & ~15) + super (`original` until R6's field question is decided: no field jitter, the
-    supersampling exact), and the raw register stays behind `GT4_GSN_JITTER=keep`. It applies only while the
+    state record's origin group. A pairing is valid only if the write's fraction (origin & 15) equals `sum`; then,
+    if `flags` bit 0 (frame mode) is set, it draws from the register as is, the supersampling exact (the garage,
+    showroom and photo passes; lane A's PCSX2 pairing showed it closer). In field modes, and with the bit clear
+    (every record from a game before the bit), it masks as before: the field part (0 or 8 by field) is the
+    field's line placement, which the mask keeps, and the constant quarter pixel of the default sy = 0.5 at py =
+    0.5 is what d3a50ff's mask drops, so `ORIG` on the race captures doesn't move. The raw register in every
+    mode stays behind `GT4_GSN_JITTER=keep`. (A first rule, (origin & ~15) + super everywhere, moved nearly every
+    field-mode frame by up to 150 levels on `race_grid43_r6`: lane B's scope run.) It applies only while the
     context's origin is still the paired write's value, so an origin set by any path that skips the hook falls
     back to the mask. Otherwise, and for every unpaired write, it masks as before. A record still waiting at its
     own context's next draw, or when the next record for that context arrives, is counted as unpaired and never
     applied late; it may wait through the other context's draws, since pgl flushes a context's origin only while
     that context is enabled. A stream without these records (older captures, an older game) masks everything, as
     before, never reading 'field part 0'.
-  - Counters: `xyoffsetPaired`, `xyoffsetMasked`, `xyoffsetPairMismatch`, `xyoffsetUnpaired`. Rate (lane A): about
-    120 a frame on the garage and 118 on a Route 5 race, mostly from 004A2BC8's other callers (each base or field
-    change), not only the jitter passes.
+  - Counters: `xyoffsetPaired`, `xyoffsetExact` (paired writes drawn exact in frame modes), `xyoffsetMasked`,
+    `xyoffsetPairMismatch`, `xyoffsetUnpaired`. Rate (lane A): about 120 a frame on the garage and 118 on a Route 5
+    race, mostly from 004A2BC8's other callers (each base or field change), not only the jitter passes.
 - Records are sent only when the host sets game option `kOptionSceneRecords = 5` (`runtime/runtime.h:26`):
   - **0, off**: nothing (the `original` preset).
   - **1, full** (as before): every record of this section. The host sends 1 when `sceneRecordsWanted()`
