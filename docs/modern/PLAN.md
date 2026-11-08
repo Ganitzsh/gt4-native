@@ -395,7 +395,8 @@ and ACC on top of the PS2 mapping, never instead of it. The constraints:
 - Everything happens on the host, before GT4 sees the pad. GT4's controller layer has no dead zone and a linear
   curve (`spikes/D1-bindings.md`), but the car's steering does not turn the wheels until the steering byte is
   past about 160, a quarter of a side's travel (lane D measured it at a standstill, 2026-11-08). So the host
-  shapes its response knowing what lies after it, and compensates that band outside `original` (D12).
+  shapes its response knowing what lies after it, and that band is compensated outside `original` (D12). The one
+  exception to "on the host": the band's compensation is applied game-side, while a race is loaded (D12).
 - GT4's functions stay assigned in GT4's own controller screen (D1's decision). The host maps devices to the PS2
   pad; it never moves GT4's functions.
 - Every per-frame filter is counted in D11's latency budget.
@@ -442,9 +443,15 @@ don't rescale (`kStickDeadZone`, `input_map.cpp:62`), so steering jumps from 0 t
   - So g is one constant: `input.steer.game_band`, percent of a side, 0-40, default 29 in `modern`; `original`
     never applies it. On the right, 128 + 0.29 x 127 = 165, the last zero byte (no overshoot). On the left,
     128 - 0.29 x 128 = 91, one or two bytes of residual band (90, maybe 89; the allowed undershoot).
-  - Still to confirm before the default is final: the band is the same at speed (expected, since it comes before
-    the car), and whether a Driving Force Pro's input passes through the same analogue path (for D15's `dfp`
-    mode).
+  - **Applied game-side (`kOptionSteerBand`) while a race is loaded, never in menus outside it** (lane D with lane
+    C). Menus read left X too, and a menu threshold in untraced code can't be ruled out. So the host sends g as game
+    option 7 (`kOptionSteerBand`, per mille; 0 in `original`), and `scePad2Read` (`runtime/iop.cpp`) remaps left
+    X only while `vehicle_conductor()` finds the race's cars, next to the car's own band. Menus outside races read
+    exactly what they did. The one gap: a race's own pause menu sees compensated bytes, at most 37 bytes further
+    out than the stick.
+  - **The same at speed** (lane D, a GT-mode run to 166 km/h): the command is 0 for bytes 92-164 at 98-160 km/h,
+    and the edge values match the standstill run byte for byte. So the default of 29 % is final (68866e4). Whether
+    a Driving Force Pro's input passes through the same path is checked in D15, with the same log column.
   - It applies to everything that goes through the response: the stick, the keyboard ramp, and in D15 a wheel in
     `native` mode.
 - Keyboard steering: a digital key ramps the axis at `input.steer.key_rate` (full lock in 0-500 ms, default 150 ms;
@@ -452,6 +459,9 @@ don't rescale (`kStickDeadZone`, `input_map.cpp:62`), so steering jumps from 0 t
 - **Speed-sensitive steering**, `input.steer.speed_reduction` (0-80 % less lock at 200 km/h, default 0), comes
   after D6 (speed, `D + 0x5C4`). It is set only after measuring how GT4 already reduces lock with speed (the
   steering angle at the wheels, `D + 0x468`, at full stick from 0 to 200 km/h), so the host never doubles it.
+  A first, indicative reading (lane D): at about 120 km/h the wheel angle per command unit is roughly an eighth of
+  the standstill one, so GT4 already reduces lock a lot. The clean measurement needs full-stick pulses on a
+  straight at speed; until it shows room for more, the default stays 0.
 - Depends: D1. Acceptance:
   - `CTEST` (a new `input_response` test): the output is continuous at the inner dead zone's edge (0 at the edge,
     one steering byte step just above it), monotonic, and full travel gives full lock at saturation 100 %; the
@@ -527,7 +537,9 @@ The kerb signal waits for the id table (or comes from stroke speed alone until t
 - Depends: D7, D8, D12, D13, R15. Acceptance:
   - `CTEST` (effect translation, on recorded fields);
   - session test (the effect stream over a lap);
-  - live on each available wheel: centring, the loss of weight at understeer, kerbs; `dfp` behaves as D7.
+  - live on each available wheel: centring, the loss of weight at understeer, kerbs; `dfp` behaves as D7;
+  - whether the D12 band applies to a wheel in `dfp` mode (the steer command at `D + 0x454` against the wheel's
+    position, as D12 logged it), so `native` and `dfp` steer alike near the centre.
 
 **D16: Gyro steering (S-M).** `input.gyro = off | steer` (default `off` in every preset). The controller's roll,
 fused from gyro and accelerometer (`SDL_SetGamepadSensorEnabled`), steers. Full lock at `input.gyro.range` (30-180
