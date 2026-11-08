@@ -218,7 +218,11 @@ void strp(uint32_t fno, uint8_t *send, uint32_t, uint8_t *recv, uint32_t rsize) 
         const uint32_t h = rd32(send), spu = rd32(send + 4), n = rd32(send + 8);
         if (h < g_streams.size() && g_streams[h].used && spu < (2u << 20)) {
             const uint32_t len = std::min<uint32_t>(n, (2u << 20) - spu);
-            iso_read(g_streams[h].pos, spu_ram() + spu, len);
+            // read beside SPU RAM, then copied in under the audio lock: the game's and a host mixer's voices both see
+            // the write at once, between two frames (spu_ram_write, PLAN.md D5)
+            std::vector<uint8_t> data(len);
+            iso_read(g_streams[h].pos, data.data(), len);
+            spu_ram_write(spu, data.data(), len);
             g_streams[h].pos += n;
         }
         break;

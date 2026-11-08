@@ -41,6 +41,8 @@ enum class Preset : uint8_t { Original, Low, Medium, High, Ultra, Custom };
 enum class AiCatchUp : uint8_t { Original, Reduced, Off };
 // The pedals' pressure scale (input.trigger_travel, settings_input.cpp; docs/modern/spikes/D1-bindings.md).
 enum class TriggerTravel : uint8_t { Game, Full };
+// Who mixes the SPU2's voices (audio.mixer, settings_audio.cpp; PLAN.md D5).
+enum class AudioMixer : uint8_t { Game, Host };
 // The sticks' and pedals' response (input.response, platform/input/response.h; PLAN.md D12).
 enum class InputResponse : uint8_t { Original, Modern };
 // Gamepad haptics (input.haptics, platform/input/haptics.h; PLAN.md D14): original = GT4's own rumble only (D2).
@@ -126,6 +128,9 @@ struct Settings {
 
     // [gameplay] (sent to the game; not part of the graphics presets)
     AiCatchUp aiCatchUp = AiCatchUp::Original;
+
+    // [audio] (settings_audio.cpp; not part of the graphics presets)
+    AudioMixer audioMixer = AudioMixer::Game;   // sent to the game (kOptionHostMixer)
 
     // [input] (settings_input.cpp; not part of the graphics presets but for input.response)
     TriggerTravel triggerTravel = TriggerTravel::Game;   // sent to the game (kOptionTriggerTravel)

@@ -36,9 +36,9 @@ enum Gt4LinkRecordType {
     GT4_REC_GS_PRIV_RETIRED = 4,
     GT4_REC_VSYNC = 5,      /* VBlank: u32 field (CSR.FIELD), u32 vblank count; present the frame */
     GT4_REC_GS_READ = 6,    /* GS->EE transfer request (BUSDIR): u32 id, u32 qwc; the host answers GT4_REC_GS_IMAGE */
-    GT4_REC_AUDIO = 7,      /* audio: u32 stream (0 SPU2 mix, 1 BGM, 2 voice, 3 movie), u32 rate, s16 stereo frames */
-    GT4_REC_SPU2_REGS = 8,  /* the SPUP register image of a VBlank (2 x 0x1D0 bytes) */
-    GT4_REC_SPU2_RAM = 9,   /* SPU2 RAM write: u32 address, then bytes */
+    GT4_REC_AUDIO = 7,      /* u32 stream (0 the game's mix, 1 BGM + movies, host mixing), u32 rate, s16 L/R frames */
+    GT4_REC_SPU2_REGS = 8,  /* the SPU2 for a host mixer: u32 kind (GT4_SPU2_*), u32 value, then the kind's bytes */
+    GT4_REC_SPU2_RAM = 9,   /* SPU2 RAM write for a host mixer: u32 address, then bytes */
     GT4_REC_LOG = 10,       /* text */
     GT4_REC_STATE = 11,     /* host captures only: the state a capture taken mid-run starts from (GraphicsStream::saveState) */
     GT4_REC_GFX_DATA = 12,  /* bytes a native record refers to (include/gt4/gfx.h): u32 game address, u32 bytes, then the bytes */
@@ -84,7 +84,18 @@ enum Gt4LinkRecordType {
  *                     (docs/modern/MENU_DESIGN.md 3.6). At most 64 KiB; a longer list is dropped and counted.
  *   GT4_REC_SETTINGS_SET  game -> host: set, revert or act on a setting by key; the host answers with a
  *                     GT4_REC_SETTINGS result carrying the request's number, then the values that changed.
- *   GT4_REC_SETTINGS  host -> game: the schema (at the game's request), values, or a request's result. */
+ *   GT4_REC_SETTINGS  host -> game: the schema (at the game's request), values, or a request's result.
+ *   GT4_REC_SPU2_REGS, _RAM  game -> host while audio.mixer = host (runtime.h kOptionHostMixer, PLAN.md D5):
+ *                     in the order the game's SPU2 sees them. GT4_SPU2_STATE (value 0, then the voices' state,
+ *                     platform/audio/spu Spu2::saveState) once at the switch, after the whole SPU RAM (one RAM write
+ *                     at 0); GT4_SPU2_IMAGE (value 0, then SPUP fno 4's 2 x 0x1D0 bytes); GT4_SPU2_RUN (value: the
+ *                     samples at 48 kHz the SPU2 runs, once a frame). Stream 1 of GT4_REC_AUDIO then carries the
+ *                     frame's BGM and movie sound, the same count of samples, for the host to add to its mix. */
+
+/* The gameplay options GT4_REC_HOST_CMD 4 carries (runtime/runtime.h GameOption): ids below GT4_GAME_OPTION_COUNT. */
+#define GT4_GAME_OPTION_COUNT 9u
+
+enum Gt4Spu2Kind { GT4_SPU2_STATE = 0, GT4_SPU2_IMAGE = 1, GT4_SPU2_RUN = 2 };   /* GT4_REC_SPU2_REGS's kinds */
 
 typedef struct Gt4LinkRecord {
     uint32_t type;

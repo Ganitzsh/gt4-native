@@ -744,6 +744,7 @@ void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload)
     case GT4_REC_SPU2_REGS:
     case GT4_REC_SPU2_RAM:
         ++counters.audio;   // the audio stream belongs to the audio back end
+        if (spuWriter) spuWriter(header.type, payload, size);   // (the host's SPU2 mixer, platform/audio)
         break;
     case GT4_REC_RUMBLE:   // (the pad's motors: the host's gamepad, main.cpp)
         if (rumbleWriter && size >= 12) {

@@ -15,6 +15,9 @@ void audio_init();
 void audio_frame();  // mixes one frame of sound (called by the frame clock)
 
 uint8_t *spu_ram();  // 2 MB
+// A write into SPU RAM (STRP): copied in under the audio lock, between two frames of the voices, and sent to a host
+// mixer at that same point, so both sides' voices see it at once (PLAN.md D5).
+void spu_ram_write(uint32_t address, const uint8_t *data, uint32_t bytes);
 void spu_apply(const uint8_t *image);  // SPUP fno 4: 2 cores x 0x1D0 bytes
 void spu_status(uint8_t *reply);       // per core: u32 ENDX, u16 ENVX[24] (0x34 bytes)
 

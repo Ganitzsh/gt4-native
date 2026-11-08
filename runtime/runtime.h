@@ -2,6 +2,8 @@
 // Process-wide settings and the host services that replace the PS2's (kernel, IOP, disc, pad...).
 #include <cstdint>
 
+#include "gt4/link/protocol.h"
+
 namespace gt4::gfx::scene {
 struct FrameBegin;
 struct FrameEnd;
@@ -32,8 +34,12 @@ void profile_start();
 // kOptionTriggerTravel: input.trigger_travel, 0 game, 1 full (runtime/pad_pedals.h; lane D, iop.cpp scale_pedals).
 // kOptionSteerBand: input.steer.game_band in permille, 0 = off (original): GT4's steering band compensated in the left
 // stick's byte while a race is loaded (runtime/pad_steer.h; lane D, iop.cpp steer_band_pad).
+// kOptionHostMixer: audio.mixer, 0 game (the game mixes, as always), 1 host: the game keeps answering GT4's SPU status
+// from its own voices and sends the register images and SPU RAM for the host to mix (runtime/audio.cpp, PLAN.md D5).
 enum GameOption : uint32_t { kOptionAiCatchUp = 0, kOptionMirrorDetail = 1, kOptionModelDetail = 2, kOptionRaceFrames = 3, kOptionAspect = 4,
-                             kOptionSceneRecords = 5, kOptionTriggerTravel = 6, kOptionSteerBand = 7, kGameOptionCount = 8 };
+                             kOptionSceneRecords = 5, kOptionTriggerTravel = 6, kOptionSteerBand = 7,
+                             kOptionHostMixer = 8, kGameOptionCount = 9 };
+static_assert(kGameOptionCount == GT4_GAME_OPTION_COUNT, "the options the host sends: include/gt4/link/protocol.h");
 void set_game_option(uint32_t id, uint32_t value);   // GT4_REC_HOST_CMD 4 (runtime/link.cpp)
 
 // Scene records (docs/modern/CONTRACTS.md a.5.1): a scene frame is one kicked list. At the kick (runtime/frame.cpp)

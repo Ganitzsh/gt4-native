@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <type_traits>
 
 namespace gt4::spu {
 
@@ -212,13 +213,13 @@ void envelope(Voice& v) {
     }
 }
 
-// The block at v.block: its loop flags (timing) and, mixing, its samples.
-template <bool kMix> void Spu2::loadBlock(Voice& v) {
+// The block at v.block: its loop flags and its samples.
+void Spu2::loadBlock(Voice& v) {
     v.block &= kRamBytes - 16;
     const uint8_t* b = ram_ + v.block;
     v.flags = b[1];
     if (v.flags & 4) v.loop = v.block;
-    if constexpr (kMix) decodeBlock(b, v.s1, v.s2, v.samples);
+    decodeBlock(b, v.s1, v.s2, v.samples);
 }
 
 void Spu2::keyOn(Voice& v) {
@@ -230,11 +231,11 @@ void Spu2::keyOn(Voice& v) {
     v.index = 0;
     v.counter = 0;
     v.last = v.cur = 0;
-    loadBlock<true>(v);   // (decoded on both sides: the samples are then right if this side mixes)
+    loadBlock(v);
     v.cur = v.samples[0];
 }
 
-// One output sample of a voice (before volumes; 0 when not mixing), advancing it by its pitch.
+// One output sample of a voice (before volumes; not computed when not mixing), advancing it by its pitch.
 template <bool kMix> int32_t Spu2::voiceSample(Core& c, int n, Voice& v) {
     int32_t s = 0;
     if constexpr (kMix) {
@@ -258,12 +259,10 @@ template <bool kMix> int32_t Spu2::voiceSample(Core& c, int n, Voice& v) {
             } else {
                 v.block += 16;
             }
-            loadBlock<kMix>(v);
+            loadBlock(v);
         }
-        if constexpr (kMix) {
-            v.last = v.cur;
-            v.cur = v.samples[v.index];
-        }
+        v.last = v.cur;
+        v.cur = v.samples[v.index];
     }
     return s;
 }
@@ -337,7 +336,7 @@ void Spu2::apply(const uint8_t* image) {
                 fx.set(e[3], rd16(e + 8), rd16(e + 10));
                 fx.depth[0] = static_cast<int16_t>(rd16(e + 4));
                 fx.depth[1] = static_cast<int16_t>(rd16(e + 6));
-                if (e[2]) std::fill(fx.buf.begin(), fx.buf.end(), 0);
+                if (e[2]) std::fill(fx.buf.begin(), fx.buf.end(), int16_t{0});
                 if (e[0] && onEffect) onEffect(c, fx, e);
             }
         }
@@ -377,6 +376,124 @@ void Spu2::apply(const uint8_t* image) {
                 }
         }
     }
+}
+
+// ---- the state, for the other side (saveState / loadState)
+
+namespace {
+
+static_assert(std::is_trivially_copyable_v<Voice>);
+constexpr uint32_t kStateMagic = 0x32555053;   // "SPU2"
+constexpr uint32_t kStateVersion = 1;
+
+struct Writer {
+    std::vector<uint8_t>& out;
+    template <typename T> void put(const T& v) {
+        static_assert(std::is_trivially_copyable_v<T>);
+        const auto* p = reinterpret_cast<const uint8_t*>(&v);
+        out.insert(out.end(), p, p + sizeof v);
+    }
+    void bytes(const void* p, size_t n) {
+        const auto* b = static_cast<const uint8_t*>(p);
+        out.insert(out.end(), b, b + n);
+    }
+};
+
+struct Reader {
+    const uint8_t* at;
+    const uint8_t* end;
+    bool ok = true;
+    template <typename T> void get(T& v) {
+        static_assert(std::is_trivially_copyable_v<T>);
+        bytes(&v, sizeof v);
+    }
+    void bytes(void* p, size_t n) {
+        if (!ok || static_cast<size_t>(end - at) < n) {
+            ok = false;
+            return;
+        }
+        std::memcpy(p, at, n);
+        at += n;
+    }
+};
+
+}  // namespace
+
+std::vector<uint8_t> Spu2::saveState() const {
+    std::vector<uint8_t> out;
+    Writer w{out};
+    w.put(kStateMagic);
+    w.put(kStateVersion);
+    for (const Core& c : core) {
+        w.bytes(c.v, sizeof c.v);
+        w.put(c.endx);
+        w.put(c.vmixl);
+        w.put(c.vmixr);
+        w.put(c.vmixel);
+        w.put(c.vmixer);
+        w.bytes(c.evol, sizeof c.evol);
+        w.bytes(c.effect, sizeof c.effect);
+        const Reverb& f = c.fx;
+        w.put(f.on);
+        w.put(f.mode);
+        w.bytes(f.depth, sizeof f.depth);
+        w.bytes(f.r, sizeof f.r);
+        w.put(static_cast<uint32_t>(f.buf.size()));
+        w.bytes(f.buf.data(), f.buf.size() * sizeof f.buf[0]);
+        w.put(f.pos);
+        w.bytes(f.in, sizeof f.in);
+        w.bytes(f.out, sizeof f.out);
+        w.bytes(f.prev, sizeof f.prev);
+        w.put(f.odd);
+    }
+    return out;
+}
+
+bool Spu2::loadState(const uint8_t* data, size_t size) {
+    Reader r{data, data + size};
+    uint32_t magic = 0, version = 0;
+    r.get(magic);
+    r.get(version);
+    if (!r.ok || magic != kStateMagic || version != kStateVersion) return false;
+    Core loaded[2];
+    for (Core& c : loaded) {
+        r.bytes(c.v, sizeof c.v);
+        // (a state can come from a file, a replayed capture: values that would index past a table, or spin the pitch
+        // loop, refuse it. A voice that ended inside the pitch loop keeps up to 0x3FFE in its counter: below the bound)
+        for (const Voice& v : c.v) {
+            const int phase = static_cast<int>(v.phase);
+            if (r.ok && (phase < kOff || phase > kRelease || v.index < 0 || v.index >= 28 || v.counter >= 0x8000 ||
+                         v.env < 0 || v.env > 0x7FFF))
+                return false;
+        }
+        r.get(c.endx);
+        r.get(c.vmixl);
+        r.get(c.vmixr);
+        r.get(c.vmixel);
+        r.get(c.vmixer);
+        r.bytes(c.evol, sizeof c.evol);
+        r.bytes(c.effect, sizeof c.effect);
+        Reverb& f = c.fx;
+        r.get(f.on);
+        r.get(f.mode);
+        r.bytes(f.depth, sizeof f.depth);
+        r.bytes(f.r, sizeof f.r);
+        uint32_t n = 0;
+        r.get(n);
+        if (!r.ok || n > (1u << 20)) return false;
+        f.buf.assign(n, 0);
+        r.bytes(f.buf.data(), n * sizeof f.buf[0]);
+        r.get(f.pos);
+        r.bytes(f.in, sizeof f.in);
+        r.bytes(f.out, sizeof f.out);
+        r.bytes(f.prev, sizeof f.prev);
+        r.get(f.odd);
+        if (r.ok && (f.buf.empty() || f.pos >= f.buf.size())) return false;
+    }
+    if (!r.ok || r.at != r.end) return false;
+    core[0] = std::move(loaded[0]);
+    core[1] = std::move(loaded[1]);
+    return true;
 }
 
 void Spu2::status(uint8_t* reply) const {

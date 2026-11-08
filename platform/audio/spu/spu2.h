@@ -6,8 +6,9 @@
 //
 // One source for the game and the host (PLAN.md D5, spikes/R16-audio-reply-timing.md): the game answers GT4's status
 // from it in the same SPUP call, the host mixes the same voices. Both step the voices with run(): advance() keeps the
-// voices' timing only (key state, envelope, address, ENDX), mix() also decodes and mixes them, and the timing is
-// the same either way, so a voice ends at the same sample on both sides. Pure C++: no SDL, no runtime calls.
+// voices' whole state (key state, envelope, address, ENDX, the decoded samples), mix() also applies the volumes and
+// the reverb and adds the output. A voice ends at the same sample on both sides, and either side's state can be
+// handed to the other (saveState). Pure C++: no SDL, no runtime calls.
 #include <cstdint>
 #include <vector>
 
@@ -26,14 +27,14 @@ enum Phase { kOff, kAttack, kDecay, kSustain, kRelease };
 struct Voice {
     uint16_t pitch = 0, voll = 0, volr = 0, adsr1 = 0, adsr2 = 0;   // registers
     uint32_t ssa = 0;
-    // timing: what the status depends on
+    // what the status depends on
     Phase phase = kOff;
     int32_t env = 0, env_wait = 0;
     uint32_t block = 0, loop = 0;   // byte addresses in SPU RAM
     uint8_t flags = 0;              // the current block's loop flags
     int index = 0;                  // sample in the block
     uint32_t counter = 0;           // 12-bit fraction
-    // the samples: mixing only
+    // the decoded block and the interpolation's two samples
     int16_t samples[28] = {};
     int32_t s1 = 0, s2 = 0;
     int16_t last = 0, cur = 0;
@@ -79,13 +80,18 @@ public:
     void apply(const uint8_t* image);
     // The status GT4's driver reads (kStatusBytes): per core ENDX (a voice that is off counts as ended), ENVX.
     void status(uint8_t* reply) const;
-    // `n` output samples: the voices' timing only (key state, envelope, address, ENDX).
+    // `n` output samples: the voices advanced, nothing mixed.
     void advance(int n);
     // `n` output samples mixed and added to `stereo` (2n values); the same timing as advance. `dryOnly`: the effect
     // sends come back dry at the effect return volume instead of through the reverb.
     void mix(int32_t* stereo, int n, bool dryOnly);
     // The next frame (the frame clock's): the key-on gaps below count frames.
     void tick() { ++counters.frame; }
+
+    // The voices', the cores' and the reverbs' whole state (not SPU RAM, not the counters): another Spu2 that loads it
+    // goes on exactly as this one would. loadState returns false, changing nothing, for bytes of another layout.
+    std::vector<uint8_t> saveState() const;
+    bool loadState(const uint8_t* data, size_t size);
 
     Core core[2];
 
@@ -103,7 +109,7 @@ public:
 private:
     const uint8_t* ram_;
     void keyOn(Voice& v);
-    template <bool kMix> void loadBlock(Voice& v);
+    void loadBlock(Voice& v);
     template <bool kMix> int32_t voiceSample(Core& core, int n, Voice& v);
     template <bool kMix> void run(int32_t* stereo, int n, bool dryOnly);
 };

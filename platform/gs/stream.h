@@ -90,6 +90,10 @@ public:
     void setSettingsSetWriter(std::function<void(const uint8_t*, size_t)> writer) {
         settingsSetWriter = std::move(writer);
     }
+    // GT4_REC_SPU2_REGS and GT4_REC_SPU2_RAM (audio.mixer = host, PLAN.md D5): the record, on the stream's thread.
+    void setSpuWriter(std::function<void(uint32_t type, const uint8_t*, uint32_t)> writer) {
+        spuWriter = std::move(writer);
+    }
 
     // One whole record (header + payload).
     void record(const Gt4LinkRecord& header, const uint8_t* payload);
@@ -258,6 +262,7 @@ private:
     AudioWriter audioWriter;
     std::function<void(uint32_t, uint32_t, uint32_t)> rumbleWriter;
     std::function<void(const uint8_t*, size_t)> uiWriter, settingsSetWriter;
+    std::function<void(uint32_t, const uint8_t*, uint32_t)> spuWriter;
     Stats counters;
     scene::SceneDecoder sceneDecoder_;   // the kScene records (docs/modern/CONTRACTS.md a.5, a.7; ticket A10)
     // a.5.1's checks: VSyncs that came while a scene frame was open (a list split across FrameLists), FrameLists that

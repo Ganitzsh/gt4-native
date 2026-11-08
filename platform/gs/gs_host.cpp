@@ -13,9 +13,11 @@
 #include "glow_classifier.h"   // (F2b: the scene cache's material classifier)
 #include "gs_frontend.h"
 
+#include "host_mixer.h"
 #include "link_host.h"
 #include "stream.h"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -583,6 +585,7 @@ struct GsHost::Impl {
     Options options;
     std::unique_ptr<NativeTarget> target;
     std::unique_ptr<QueuedTarget> frontThread;   // the front end's own thread, in front of target (GT4_GS_THREADS)
+    std::unique_ptr<audio::HostMixer> mixer;     // the game's sound (platform/audio, PLAN.md D5); outlives the stream
     std::unique_ptr<ps2::GraphicsStream> stream;
     std::unique_ptr<ps2::GameLink> link;
     std::unique_ptr<ps2::ReplaySource> replay;
@@ -590,7 +593,12 @@ struct GsHost::Impl {
     std::atomic<bool> stop{false}, done{false};
     std::atomic<bool> refused{false};   // a replayed capture of the old format (GIF / VIF records, PLAN.md P1)
     bool paused = false;   // the game was asked to pause (setPaused)
-    int64_t gameOptions[8] = {-1, -1, -1, -1, -1, -1, -1, -1};   // gameplay option values sent (setGameOption)
+    // gameplay option values sent (setGameOption); -1: none yet
+    std::array<int64_t, GT4_GAME_OPTION_COUNT> gameOptions = [] {
+        std::array<int64_t, GT4_GAME_OPTION_COUNT> a;
+        a.fill(-1);
+        return a;
+    }();
 
     mutable std::mutex frameMutex;
 
@@ -976,10 +984,18 @@ std::unique_ptr<GsHost> GsHost::create(const Options& options, std::string& erro
     const char* threads = std::getenv("GT4_GS_THREADS");
     if (!(threads && std::atoi(threads) == 1)) h.frontThread = std::make_unique<QueuedTarget>(*h.target);
     h.stream = std::make_unique<ps2::GraphicsStream>(h.frontThread ? static_cast<ps2::GsTarget&>(*h.frontThread) : *h.target);
-    if (options.audio)
-        h.stream->setAudioWriter([sink = options.audio](uint32_t stream, uint32_t rate, const int16_t* frames, size_t count) {
-            if (stream == 0) sink(rate, frames, count);  // stream 0: the game's final mix
+    // The game's sound (platform/audio/host_mixer.h): its own mix (stream 0), or with audio.mixer = host the SPU2's
+    // records mixed here and BGM and movies (stream 1) added. GT4_HOST_AUDIO_WAV records it without an output too.
+    if (options.audio || std::getenv("GT4_HOST_AUDIO_WAV")) {
+        h.mixer = std::make_unique<audio::HostMixer>(options.audio);
+        h.stream->setAudioWriter(
+            [m = h.mixer.get()](uint32_t stream, uint32_t rate, const int16_t* frames, size_t count) {
+                m->audio(stream, rate, frames, count);
+            });
+        h.stream->setSpuWriter([m = h.mixer.get()](uint32_t type, const uint8_t* payload, uint32_t size) {
+            m->record(type, payload, size);
         });
+    }
     if (options.rumble) h.stream->setRumbleWriter(options.rumble);
     if (options.ui) h.stream->setUiWriter(options.ui);
     if (options.settingsSet) h.stream->setSettingsSetWriter(options.settingsSet);
@@ -1121,7 +1137,8 @@ void GsHost::sendRequests() {
 }
 
 void GsHost::setGameOption(uint32_t id, uint32_t value) {
-    if (!impl->link || !impl->link->running() || id >= 8 || impl->gameOptions[id] == value) return;
+    if (!impl->link || !impl->link->running() || id >= GT4_GAME_OPTION_COUNT || impl->gameOptions[id] == value)
+        return;
     impl->gameOptions[id] = value;
     const uint32_t payload[3] = {4u, id, value};
     impl->link->write(GT4_REC_HOST_CMD, payload, sizeof payload);

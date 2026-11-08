@@ -17,6 +17,8 @@
 #include <mutex>
 #include <vector>
 
+extern "C" int gt4_game_option(int id);   // runtime/sdk.cpp: the host's options (runtime.h kOption*)
+
 namespace gt4::rt {
 namespace {
 
@@ -39,6 +41,26 @@ uint32_t rd32(const uint8_t *p) {
 // (platform/audio/spu/spu2.h, PLAN.md D5)
 
 spu::Spu2 g_spu{g_ram.data()};
+
+// audio.mixer = host (kOptionHostMixer, PLAN.md D5): the game keeps its voices (GT4's status comes from them, in the
+// same call, R16) and sends, in the order they happen here, the register images, the SPU RAM writes and each frame's
+// sample count (GT4_REC_SPU2_REGS / _RAM), with BGM and movie sound as stream 1; the host's Spu2 mixes the same voices.
+// On the switch to host, the whole SPU RAM and the voices' state go first. Under g_mutex.
+bool g_host = false;
+
+void host_mixer_sync() {
+    const bool host = link_active() && gt4_game_option(static_cast<int>(kOptionHostMixer)) == 1;
+    if (host == g_host) return;
+    g_host = host;
+    if (host) {
+        const uint32_t at = 0;
+        link_send(GT4_REC_SPU2_RAM, &at, 4, g_ram.data(), spu::kRamBytes);
+        const std::vector<uint8_t> state = g_spu.saveState();
+        const uint32_t head[2] = {GT4_SPU2_STATE, 0};
+        link_send(GT4_REC_SPU2_REGS, head, sizeof head, state.data(), static_cast<uint32_t>(state.size()));
+    }
+    log_info("audio: the %s mixes the SPU2 (audio.mixer)", host ? "host" : "game");
+}
 
 // ---- BGM: .ads ("SShd" header, then "SSbd" data) streamed from the disc image
 
@@ -198,9 +220,21 @@ void audio_init() {
 
 uint8_t *spu_ram() { return g_ram.data(); }
 
+void spu_ram_write(uint32_t address, const uint8_t *data, uint32_t bytes) {
+    if (!bytes || address >= spu::kRamBytes) return;
+    const uint32_t n = std::min(bytes, spu::kRamBytes - address);
+    std::lock_guard<std::mutex> lock(g_mutex);
+    std::memcpy(g_ram.data() + address, data, n);
+    if (g_host) link_send(GT4_REC_SPU2_RAM, &address, 4, g_ram.data() + address, n);
+}
+
 void spu_apply(const uint8_t *image) {
     std::lock_guard<std::mutex> lock(g_mutex);
     g_spu.apply(image);
+    if (g_host) {
+        const uint32_t head[2] = {GT4_SPU2_IMAGE, 0};
+        link_send(GT4_REC_SPU2_REGS, head, sizeof head, image, spu::kImageBytes);
+    }
 }
 
 // RISKS R16: GT4_SPU_REPLY_DELAY=N (0-8, debugging) answers each status with the one N calls before (one a VBlank): how
@@ -364,19 +398,34 @@ void audio_frame() {
     const int n = static_cast<int>(g_frames_due / 60000);
     g_frames_due %= 60000;
     if (n <= 0) return;
-    std::vector<int32_t> mix(2 * n, 0);
+    std::vector<int32_t> mix(2 * n, 0), rest(2 * n, 0);   // the SPU2's mix; BGM and movie sound
+    bool host = false;
     {
         std::lock_guard<std::mutex> lock(g_mutex);
+        host_mixer_sync();
+        host = g_host;
         static const bool dry_only = std::getenv("GT4_REVERB") && !std::strcmp(std::getenv("GT4_REVERB"), "off");
-        g_spu.mix(mix.data(), n, dry_only);
-        bgm_mix(mix.data(), n);
+        // with the host mixing, the game only advances its voices, unless it writes its own mix (GT4_AUDIO_WAV: the
+        // two mixes of one run compared, D5's acceptance)
+        if (!host || g_wav) g_spu.mix(mix.data(), n, dry_only);
+        else g_spu.advance(n);
+        if (host) {
+            const uint32_t head[2] = {GT4_SPU2_RUN, static_cast<uint32_t>(n)};
+            link_send(GT4_REC_SPU2_REGS, head, sizeof head);
+        }
+        bgm_mix(rest.data(), n);
         const int m = static_cast<int>(std::min<size_t>(g_movie.size() / 2, static_cast<size_t>(n)));
-        for (int i = 0; i < 2 * m; ++i) mix[i] += g_movie[i];
+        for (int i = 0; i < 2 * m; ++i) rest[i] += g_movie[i];
         g_movie.erase(g_movie.begin(), g_movie.begin() + 2 * m);
     }
     std::vector<int16_t> out(2 * n);
-    for (int i = 0; i < 2 * n; ++i) out[i] = static_cast<int16_t>(std::clamp(mix[i], -32768, 32767));
-    if (link_active()) {
+    if (host && link_active()) {   // stream 1: BGM and movie sound, for the host to add to its SPU2 mix
+        for (int i = 0; i < 2 * n; ++i) out[i] = static_cast<int16_t>(std::clamp(rest[i], -32768, 32767));
+        const uint32_t head[2] = {1, kRate};
+        link_send(GT4_REC_AUDIO, head, sizeof head, out.data(), static_cast<uint32_t>(out.size() * 2));
+    }
+    for (int i = 0; i < 2 * n; ++i) out[i] = static_cast<int16_t>(std::clamp(mix[i] + rest[i], -32768, 32767));
+    if (!host && link_active()) {   // stream 0: the game's mix
         const uint32_t head[2] = {0, kRate};
         link_send(GT4_REC_AUDIO, head, sizeof head, out.data(), static_cast<uint32_t>(out.size() * 2));
     }

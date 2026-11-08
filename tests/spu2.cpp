@@ -182,12 +182,74 @@ int main() {
                 for (int k = 0; k < 24 && same; ++k) {
                     const Voice &x = mixed.core[c].v[k], &y = timed.core[c].v[k];
                     same = x.phase == y.phase && x.env == y.env && x.env_wait == y.env_wait && x.block == y.block &&
-                           x.loop == y.loop && x.index == y.index && x.counter == y.counter;
+                           x.loop == y.loop && x.index == y.index && x.counter == y.counter && x.flags == y.flags &&
+                           x.s1 == y.s1 && x.s2 == y.s2 && x.last == y.last && x.cur == y.cur &&
+                           std::memcmp(x.samples, y.samples, sizeof x.samples) == 0;
                 }
         }
-        expect(same, "mixing and advancing: the same voices' timing and status at every frame");
+        expect(same, "mixing and advancing: the same voices (timing, samples) and status at every frame");
         expect(frames == 600 && heard, "600 frames, sound mixed");
         expect(mixed.counters.konTotal == timed.counters.konTotal && mixed.counters.konTotal > 8, "key-ons counted");
+    }
+
+    // the state handed over mid-run (the mixer setting switched): the side that loads it mixes exactly what the side
+    // that saved it would have, reverb tail included; another layout is refused, changing nothing
+    {
+        Spu2 a(ram.data()), b(ram.data());
+        auto frame = [&](Spu2& s, int f, std::vector<int32_t>& out) {
+            Image im;
+            if (f == 0) {
+                im.reverb(0, 5);
+                for (int n = 0; n < 6; ++n) {
+                    im.voice(0, n, static_cast<uint16_t>(0x0900 + 0x0280 * n), n % 2 ? 0x5000 : 0x6000, 0x0A0F, 0x1FC6);
+                    im.keyOn(0, n);
+                }
+            }
+            if (f % 29 == 7) im.keyOn(0, f % 6);
+            s.apply(im.bytes);
+            out.assign(2 * 800, 0);
+            s.mix(out.data(), 800, false);
+        };
+        std::vector<int32_t> oa, ob;
+        for (int f = 0; f < 100; ++f) frame(a, f, oa);
+        const std::vector<uint8_t> state = a.saveState();
+        expect(b.loadState(state.data(), state.size()), "the state loads");
+        bool same = true;
+        for (int f = 100; f < 300 && same; ++f) {
+            frame(a, f, oa);
+            frame(b, f, ob);
+            same = oa == ob;
+        }
+        expect(same, "after the hand-over: the same mix, sample for sample, for 200 frames");
+        {   // a one-shot at the highest pitch, ended inside the pitch loop (its counter left above 0x1000): a live
+            // state, taken (lane C's question on the bounds)
+            Spu2 e(ram.data());
+            Image im;
+            im.voice(1, 7, 0x3FFF, 0x6000, 0x000F, 0x0000);
+            im.keyOn(1, 7);
+            e.apply(im.bytes);
+            e.advance(200);
+            const std::vector<uint8_t> s = e.saveState();
+            Spu2 f(ram.data());
+            expect(e.core[1].v[7].phase == kOff && e.core[1].v[7].counter >= 0x1000 && f.loadState(s.data(), s.size()),
+                   "a voice that ended mid pitch loop: its state taken");
+        }
+        {   // a voice's sample index past its block: refused
+            std::vector<uint8_t> wild = state;
+            Voice v;
+            std::memcpy(&v, wild.data() + 8, sizeof v);
+            v.index = 28;
+            std::memcpy(wild.data() + 8, &v, sizeof v);
+            Spu2 d(ram.data());
+            expect(!d.loadState(wild.data(), wild.size()), "a voice index past its block refused");
+        }
+        std::vector<uint8_t> bad = state;
+        bad[4] ^= 1;   // another version
+        Spu2 c(ram.data());
+        const uint8_t before = static_cast<uint8_t>(c.core[0].v[0].phase);
+        expect(!c.loadState(bad.data(), bad.size()) && !c.loadState(state.data(), state.size() - 1) &&
+                   static_cast<uint8_t>(c.core[0].v[0].phase) == before,
+               "another layout or a short state refused");
     }
 
     if (failures) return 1;
