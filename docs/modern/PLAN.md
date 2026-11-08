@@ -35,7 +35,7 @@ Every ticket's acceptance uses these names.
 | Name | What runs | Pass |
 |---|---|---|
 | `CTEST` | full ctest, Release | all pass (77 = skipped is a pass only where the ticket says) |
-| `ORIG` | `tools/frame_diff.py --baseline OLD NEW --preset original` on the REF captures, every frame; plus `host_replay` | identical frames |
+| `ORIG` | `tools/frame_diff.py --baseline OLD NEW --preset original` on the REF captures, every frame; plus `host_replay` | identical frames. One re-baseline, agreed by the coordinator (2026-11-08): the commit that makes the shared transform and lighting shaders precise (CONTRACTS b.10, B7) moves `ORIG` once, after its changed near-tie pixels are compared with PCSX2's software renderer on `race7` and its `PERF` is checked. Its new reference (captures and hashes) is recorded and announced to every lane; `ORIG` gates compare against it from that commit on |
 | `PRESETS` | the same at `original`, `low`, `medium`, `high`, `ultra`, and the test scene's `tests/scenarios/features.json` captures | identical frames |
 | `PARITY` | `render.scene=parity` against the GS path at 1x on the REF captures, per frame | >= 97.5 % of pixels identical, >= 99.97 % within 4 per channel (the GPU-models step's bar, docs/NATIVE_V2.md:90) |
 | `VAL` | REF captures with `VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation`, synchronization validation on | zero messages |
@@ -350,8 +350,10 @@ The scene target's other draws between the view's passes (R5's clears, Z-only dr
     draws that run from `gsn_models.comp` as today; a view not valid, or cut, stays wholly on the GS path. The
     mirror falls back unless it binds and validates as the main view does.
   - Not in B7: B8's substitution, jitter and TAA (parity is 1x).
-- **Order of work:** B6's `items` (inert without the parity path) and the shader split, as a pure refactor
-  (`PRESETS` identical), in either order; then the parity path; then the acceptance.
+- **Order of work:** B6's `items` (inert without the parity path); the shader split together with "precise"
+  arithmetic (CONTRACTS b.10), which moves `ORIG` once: the one re-baseline of section 2, after the PCSX2
+  near-tie comparison and `PERF`; then the parity path; then the acceptance. The split alone is not a pure
+  refactor: moving identical expressions changed 15 of 30 `race7` frames through the driver's fusion.
 Depends: A2, A3, A10, B4, B5, B6, R3, R5.
 Acceptance: `PARITY` on the race, flyover and event captures at 1x; Z equal to the GS path wherever both draw (a
 debug compare pass counts mismatches: 0); `VAL`; `viewFallbacks` reasons listed; `ORIG` and `PRESETS` identical (the

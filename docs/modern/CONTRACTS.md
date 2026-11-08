@@ -969,6 +969,25 @@ public:
 Gate for the two port tickets (B3, B4): every preset's output on the reference captures is bit-identical before
 and after, and Vulkan synchronization validation reports nothing.
 
+### b.10 Shared shader arithmetic is precise
+
+Shader code that more than one stage, renderer or device must compute identically is written with explicit
+arithmetic: `precise` (SPIR-V `NoContraction`), so no compiler fuses a multiply and an add on its own. Every stage
+and every device then computes the same bits. This covers GT4's transform, GS Z, the window point (the origin
+subtraction, `gt4WindowPoint`) and the lighting chains (`gt4_transform.glsl`, `gt4_lighting.glsl`), shared by
+`gsn_models.comp` and B7's `modern_parity.vert`, and the parity stage's fog word (its ADC bit hides a triangle).
+- Code shared only between vertex stages on one device (`gsnPosition` in `gsn_common.glsl`, used by `gsn.vert`,
+  `gsn_velocity.vert` and `modern_parity.vert`) relies on `invariant gl_Position` instead, which is enough
+  there. Making it precise would move `ORIG` again for nothing.
+- Why (lane B, B7, 2026-11-08): without it the GS path's 3D was one driver's fusion choice. Moving identical
+  expressions into includes changed 15 of 30 `race7` frames (1 level); `precise` on the transform alone moved 9 %
+  of pixels, because positions and Z moved by one rounding and GT4's near-equal depth tests (RISKS R3) flipped.
+  Explicit `fma()` orders didn't reproduce the driver either. So the PC and the Odin already drew those pixels
+  differently, and B7's vertex stage couldn't give the compute stage's Z by sharing source alone.
+- It matches the VU's structure (no fused multiply-add) and the CPU renderers' (`renderers3d.cpp`), though not the
+  VU's truncating rounding.
+- Adopting it moved `ORIG` once (PLAN section 2: the one-time re-baseline).
+
 ---
 
 ## (c) The light list
