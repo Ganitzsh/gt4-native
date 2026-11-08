@@ -274,7 +274,7 @@ enum MarkerKind : uint16_t {
     // GT4 effects the modern path suppresses (RISKS R11, R12). The draws between a pair can be skipped as a group.
     kMarkFlareBegin = 7, kMarkFlareEnd = 8,           // the flare pass: 003B8848 / 003B88C8 samples and what it draws from them
     kMarkGlareBegin = 9, kMarkGlareEnd = 10,          // glare 003BADF8 (inside the post-effect pair)
-    kMarkLampBandsBegin = 11, kMarkLampBandsEnd = 12, // the draws that make the lamp bands on the road (found by R11)
+    kMarkLampBandsBegin = 11, kMarkLampBandsEnd = 12, // reserved, never sent: no call site (A5b); N3 uses a B6 class
 };
 struct Marker {
     Prefix prefix;

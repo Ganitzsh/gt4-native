@@ -135,10 +135,13 @@ frames; LOD changes reported with distance.
 on race and event captures, every frame with a Light command has `PostBegin` < `PostEnd` < `HudBegin` < `HudEnd`
 in command order after it; the draws between `HudBegin/End` are the HUD (`GT4_GSN_DRAWS=all` listing).
 
-**A5b: Flare, glare and lamp-band markers (S).** `kMarkFlare*` around 003B8848's flare pass (003B88C8 samples and
-its draws); `kMarkGlare*` around 003BADF8 (from 0033F1C8); `kMarkLampBands*` around the draws RISKS R11 finds.
-Depends: A3, R11, R12. Acceptance: `REL`; `ORIG`; on the N0 captures, the bracketed draws are exactly the ones R11
-and R12 listed.
+**A5b: Flare and glare markers (S).** `kMarkFlare*` around the flare read 003B8848 (in 0033EAB8) and around
+003B88C8's samples and glows (in 0033F2E8); `kMarkGlare*` around 003BADF8 (in a copy of 0033F1C8). No lamp-band
+markers: the lit-road layer is course geometry with no call site of its own, so N3 finds it by a B6 material class
+instead (`kMarkLampBands*` stay reserved and are never sent). Depends: A3, R12. Acceptance: `REL`; `ORIG`;
+`hook_lint` 0; on a night race with records, no frame ends with a bracket open, and with N4's marking the flare
+bracket's draws onto the picture and its kept samples are counted (the samples never land on the picture); the glare
+bracket on a day race, since 0033F1C8 applies 003BADF8's settings only when their flag bit is set.
 
 **A6: Further views (M).** Env-map passes 0044E660 / 0044EB10 (`kViewEnvFace`), the road reflection
 (`render_reflection` 003411D0, `kViewReflection`), showroom jitter passes, Photo Travel. `Instance` records for
@@ -716,19 +719,29 @@ N2a (blending grading and fog parameters) is dropped and N2 is not designed.
   crossing (the GS path's step, measured by N1, for comparison), no new step above 4 % anywhere except camera cuts;
   `ORIG` unchanged (the step stays in `original`).
 
-**N3: Lamp bands suppressed (S-M).** The draws R11 identified are skipped in `hybrid` and `modern` between
-`kMarkLampBands*` (A5b), and the lamps light the road through the clustered lights (F2 in `hybrid`, F3 in
+**N3: Lamp bands suppressed (S-M).** The lamps light the road through the clustered lights (F2 in `hybrid`, F3 in
 `modern`), the street lamps from F2b. R10 and R11 found two things on the road (`spikes/R10.md`, `spikes/R11.md`;
-draw numbers are those of replay 2514, and the draws are found by their source, as R11 does):
-- **the lit-road layer** (draws 305-308): world-fixed and without a lighting chain (measured), so probably the lamps'
-  light baked into the course (PCSX2 to confirm). It is skipped exactly when the renderer draws the lamps' own
-  light on the road (F2 in `hybrid`, F3 in `modern`), so the road gets the lamps' light once: never twice, and
-  never dark. With F2 off (a `hybrid` preset without the night relight), the layer stays. `original` keeps it.
-- **the light-image glow** (draws 325-326: a blurred image of the lights in target 71, from target 37, spread as 60
-  sprites weighted by the scene's alpha): R11's first band candidate, skipped with the bands if R11 confirms it.
-Depends: R11, A5b, A7, B4, F2, F2b. Acceptance `R5` on the lamps capture: band ratio at most 1.3 in every frame (the
-GS path's value for comparison); suppression counter > 0 on the frames where the GS path draws them; `ORIG`
-unchanged.
+draw numbers are those of replay 2514, and the draws are found by what they are, not their numbers):
+- **the lit-road layer** (draws 305-308): world-fixed and without a lighting chain (measured), so probably the
+  lamps' light baked into the course (PCSX2 to confirm). It is course geometry: modeled strips in course instances
+  (tagged jobs, renderers 1 and 4, lighting body 0) with a state of its own ((Cs - Cd) As + Cd, z GEQUAL, no z
+  write, its own textures). There is no call site to bracket (A5b), so it is found by a B6 material class, as F2b's
+  glow bit is: lane F's classifier, from that signature plus a computed check of the texture (no hash list). It is
+  skipped exactly when the renderer draws the lamps' own light on the road (F2 in `hybrid`, F3 in `modern`), so the
+  road gets the lamps' light once: never twice, and never dark. With F2 off (a `hybrid` preset without the night
+  relight), the layer stays. `original` keeps it.
+- **the light-image glow** (draws 325-326: GT4's reflection view of course geometry into target 71, blurred and
+  spread over the road; F2b's step 0): R11's first band candidate, skipped only if R11 finds it makes the bands.
+- **Step 0:** on a night capture with records, the lit-road layer's instances (Cmd, set, model) and their
+  materials. The signature alone isn't unique: other course draws share it (lane F, replay 2514: textures 18957,
+  22853, 27077 / 27078 beside the layer's 20203 / 20204). So step 0 finds a property computed from the texture or
+  the mesh that separates the layer from them (coverage of the road surface, the texture's grain), checked on both
+  courses (`r11_csr5r.cap` the second); a false positive would skip ordinary course geometry. Then how the
+  GS back end skips a modeled draw of that class, given that B6's ids are known at the view's `ViewEnd` (designed
+  with lanes A and B, before the skip is written).
+Depends: R11, A7, B4, B6, F2, F2b. Acceptance `R5` on the lamps capture: band ratio at most 1.3 in every frame (the
+GS path's value for comparison); suppression counter > 0 on the frames where the GS path draws the layer; on the
+second course, no other draw skipped; `ORIG` unchanged.
 
 **N4: Warning-light tint suppressed (S-M).** The flare (and, in `modern`, glare) draws R12 identified are skipped
 between their markers (A5b); each light keeps its own bloom (pipeline bloom on linear light, F4). Depends: R12,
