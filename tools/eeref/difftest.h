@@ -8,7 +8,8 @@
 // random inputs and gives the arguments; both versions then run from that state, and what they leave is compared
 // (difftest.cpp, run(): the scratch area, the matrix stack, the scratchpad, the test's data region, shared vectors
 // 8..31, the matrix stack's top, the random state) with the return (floats within 1e-5, or 1e-3 counted as drift,
-// when `floats`).
+// when `floats`). The native call is not guarded: a test that crashes ends the process before the tests after it
+// report (and the order of tests from different files is not fixed), so run a suspect alone (GT4_DIFFTEST=NAME).
 #include <cstdint>
 
 namespace difftest {
@@ -25,6 +26,8 @@ struct Test {
     std::uint32_t data_addr = 0, data_size = 0;   // game data the function writes, compared too (saved and restored)
     int loose_vector = -1, loose_lanes = 0;        // lanes (x 1, y 2, z 4, w 8) of one shared vector not compared:
                                                    // what the original leaves there is a register's stale bits
+    void *native = nullptr;   // another native version to run instead of the linked one (an older draft, a
+                              // candidate fix) under its own name; the original side is the same either way
 };
 
 void add(const Test &t);

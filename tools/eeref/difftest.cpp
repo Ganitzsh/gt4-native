@@ -197,7 +197,7 @@ struct Snapshot {
 };
 
 bool run(const Test &t, int trials) {
-    void *fn = native_fn(t.addr);
+    void *fn = t.native ? t.native : native_fn(t.addr);
     if (!fn) {
         gt4::rt::log_error("difftest %s: no native function", t.name);
         return false;
