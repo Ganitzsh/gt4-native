@@ -272,7 +272,7 @@ static_assert(sizeof(Marker) == 8);
 // --- Vehicle state: one per running car per frame, at the kick (fields: D6, RISKS R14; a.5 rule 4) ----------
 enum VehicleFields : uint16_t {
     kVehTransform = 1, kVehVelocity = 2, kVehEngine = 4, kVehInputs = 8, kVehWheelContact = 16,
-    kVehWheelForces = 32, kVehWheelSlip = 64, kVehSteeringTorque = 128,
+    kVehWheelForces = 32, kVehWheelSlip = 64, kVehSteeringTorque = 128, kVehWheelStroke = 256,
 };
 struct Wheel {
     float contact[3];            // world space
@@ -280,15 +280,17 @@ struct Wheel {
     float slipRatio, slipAngle;  // -, radians
     float forceLateral, forceLongitudinal;   // N
     float spin;                  // rad/s
-    float compression;           // 0..1
+    float compression;           // 0..1; 0 and unflagged until a car's suspension travel is known
     uint8_t surface, onGround, pad0, pad1;
-    float reserved;
+    float strokeSpeed;           // m/s, + compressing (R14: W + 0x98); kVehWheelStroke (was reserved, 0)
 };
 static_assert(sizeof(Wheel) == 48);
 struct Vehicle {
     Prefix prefix;
     uint8_t entrant;             // 0..5
-    uint8_t flags;               // 1 player, 2 AI, 4 replay
+    uint8_t flags;               // 1 player, 2 AI, 4 replay. Not filled until R14 finds the player bit; until
+                                 //   then consumers take entrant 0 as pad 1's car and 1 as pad 2's (split
+                                 //   screen), as seen in Arcade and GT mode
     uint16_t valid;              // VehicleFields that are filled
     float bodyToWorld[4][4];
     float velocity[3], speed;    // world units / s; m/s
@@ -461,6 +463,9 @@ Where each record is sent (tickets in PLAN.md):
 - Each record carries its kind's layout version. This release: all kinds at 1 (`kVersion`). The R1 changes
   (`ViewBegin`, `Projection`, `Instance::projection`, `FrameEnd`) came before any code landed, so they stay at
   version 1. So does `FrameEnd::begins`, which replaced a reserved field before any `FrameEnd` was sent.
+  `Wheel::strokeSpeed` replaced `Wheel::reserved` after `Vehicle` records were sent, but that field was
+  defined 0 and the new one counts only with its valid bit (`kVehWheelStroke`), so old records read as "not
+  filled" and `Vehicle` stays at version 1 too.
   Its 0 reads as "not counted".
 - A layout change adds fields at the end, bumps that kind's version, and keeps the old version decodable for one
   release (old captures). Never reorder or resize fields in place.
