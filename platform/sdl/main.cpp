@@ -691,11 +691,12 @@ int run(const Options& options) {
         profilesPath.assign(p.begin(), p.end());
     }
     gt4::PadDevices pads(profilesPath, session != nullptr);
+    SDL_JoystickID sessionPads[2] = {};   // a session's virtual pads as the ports last saw them
     bool pad2Sent = false;            // pad 2 sent as connected, so its removal is told to the game
     uint32_t rumbleApplied[2] = {};    // g_rumble as last given to the gamepads (and a session's events)
     Uint64 rumbleSentAt[2] = {};
     Uint64 padLast = 0;                // when the pads were last read (their response's dt)
-    uint8_t padRecorded[18] = {};      // pad 1's bytes as a session last recorded them
+    uint8_t padRecorded[2][18] = {};   // each pad's bytes as a session last recorded them
     auto save = [&] {
         if (interactive && !settingsPath.empty()) {
             try { gt4::saveSettings(settings, settingsPath); }
@@ -887,6 +888,17 @@ int run(const Options& options) {
         if (session) {
             running &= session->tick(*renderer, sdlWindow, frames);
             if (!running) break;
+            // The session's plugs and unplugs reach the ports in this frame, not when SDL's events are polled in the
+            // next one: a first press of a newly plugged pad would otherwise be lost, and an unplugged one read for a
+            // frame (lane C's review of D13). The events that follow find the work done (added and removed are
+            // idempotent).
+            for (int p = 0; p < 2; ++p) {
+                const SDL_JoystickID id = session->padId(p);
+                if (id == sessionPads[p]) continue;
+                if (sessionPads[p]) pads.removed(sessionPads[p]);
+                if (id) pads.added(id);
+                sessionPads[p] = id;
+            }
         }
         // display.gpu changed (key, session or settings): choose the device again with a new renderer.
         if (settings.gpu != activeGpu) {
@@ -970,13 +982,15 @@ int run(const Options& options) {
                 uint8_t pad[18];
                 gt4::ps2::encodePad(input, pad);
                 gs->sendPad(0, true, pad);
-                // a session records pad 1's bytes when they change (its tests read what the game was sent)
-                if (session && std::memcmp(pad, padRecorded, sizeof pad) != 0) {
-                    std::memcpy(padRecorded, pad, sizeof pad);
+                // a session records each pad's bytes when they change (its tests read what the game was sent)
+                const auto recordPad = [&](int port, const uint8_t* bytes) {
+                    if (!session || std::memcmp(bytes, padRecorded[port], 18) == 0) return;
+                    std::memcpy(padRecorded[port], bytes, 18);
                     char hex[37];
-                    for (int i = 0; i < 18; ++i) std::snprintf(hex + 2 * i, 3, "%02x", pad[i]);
-                    session->record("pad", std::string("\"port\":0,\"bytes\":\"") + hex + "\"");
-                }
+                    for (int i = 0; i < 18; ++i) std::snprintf(hex + 2 * i, 3, "%02x", bytes[i]);
+                    session->record("pad", "\"port\":" + std::to_string(port) + ",\"bytes\":\"" + hex + "\"");
+                };
+                recordPad(0, pad);
                 // Pad 2: the gamepad holding port 2 (no keyboard), held back like pad 1. Without one, port 2 is empty:
                 // the game sees no controller there, as on a PS2 (runtime/iop.cpp scePad2GetState); told once when it
                 // goes. (in a session: its second virtual pad, button2 / axis2)
@@ -985,11 +999,14 @@ int run(const Options& options) {
                     if (menu.isOpen() || padHeldBack) input2 = gt4::ps2::PadInput{};
                     gt4::ps2::encodePad(input2, pad);
                     gs->sendPad(1, true, pad);
+                    recordPad(1, pad);
                     pad2Sent = true;
                 } else if (pad2Sent) {
                     gt4::ps2::encodePad(gt4::ps2::PadInput{}, pad);
                     gs->sendPad(1, false, pad);
                     pad2Sent = false;
+                    if (session) session->record("pad", "\"port\":1,\"connected\":false");
+                    std::memset(padRecorded[1], 0, 18);   // (a pad plugged in again is recorded again)
                 }
                 // The game's pad motors (GT4's own Options > Vibration decides whether it sends any) on the gamepads:
                 // the DUALSHOCK 2's large motor as the low-frequency rumble, its small one (on / off) as the high one.

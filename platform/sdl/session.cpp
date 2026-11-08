@@ -365,6 +365,7 @@ bool Session::tick(Renderer& renderer, SDL_Window* window, uint32_t frame) {
 float Session::horizontal() const { return SDL_GetGamepadAxis(impl->gamepad, SDL_GAMEPAD_AXIS_LEFTX) / 32768.0f; }
 SDL_Gamepad* Session::gamepad() const { return impl->gamepad; }
 SDL_Gamepad* Session::gamepad2() const { return impl->gamepad2; }
+uint32_t Session::padId(int pad) const { return pad == 0 ? (impl->joystick ? impl->id : 0) : (impl->joystick2 ? impl->id2 : 0); }
 bool Session::action() const { return SDL_GetGamepadButton(impl->gamepad, SDL_GAMEPAD_BUTTON_SOUTH); }
 void Session::submitAudio(const int16_t* samples, uint32_t frames) { impl->submit(samples, frames); }
 void Session::onSetting(std::function<std::string(const std::string&, const std::string&)> handler) {
