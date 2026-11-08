@@ -1220,7 +1220,7 @@ changes, `ORIG` and `STREAM` with records off and no page opened. In order:
 | **M1** UI and settings records (`ui.h`, `protocol.h` 16, 17, 68, host commands 6, 7 new and 5 documented; the version serialised with P1 and P3a) | S | none left |
 | **M2** Page engine (`platform/ui/`) | M | none |
 | **M3** UI renderer and asset pipeline | M | E5, E6 |
-| **M4** Settings bridge | S-M | M1, M2, E1 |
+| **M4** Settings bridge (and M7's Settings-in-a-race checks) | S-M | M1, M2, E1; M7 for those checks |
 | **M5** Game-side page host (`runtime/menu/`; the pad focus in `iop.cpp`, lane D reviews) | M | M0, M1, M2 |
 | **M6** Options entry (a copy of 00109D00: both ways into GT4's Options reach `startProject`; the hub opens over GT4's Options, whose project runs the menu update the pages tick in) | S | M5 |
 | **M7** Native pause page (a copy of 003C3820 `RacePause::update`, which every mode's `updatePause` reaches) | M | M5, M0 |

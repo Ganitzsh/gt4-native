@@ -178,8 +178,9 @@ Each hook is a `game_src` copy of a matched function with one added call, guarde
    mode, and puts Retry where a mode with Retry shows it), then Settings last: Retry when `+0x28` (`RETRYENABLE`);
    Exit, confirmed with Continue preselected when `+0x2C` (`CONFIRMEXIT`); Screen when `+0x30`
    (`SCREENSETTINGENABLE`: brightness and contrast, -5 to 5 as GT4's sliders, written where `SETVAL` writes them,
-   `D_00622F4C + 0x39E34`, or `+ 0x39E44` when `+0x34`); Settings, the host's tabs after the pause tab. Triangle on
-   the pause's pages continues, as anywhere in GT4's pause (M0). The answers are GT4's codes (1 open, 3 continue, 4
+   `D_00622F4C + 0x39E34`, or `+ 0x39E44` when `+0x34`); Settings, the host's tabs after the pause tab (until M4
+   the host sends no schema, and Settings shows disabled). Triangle on the pause's pages continues, as anywhere in
+   GT4's pause (M0). The answers are GT4's codes (1 open, 3 continue, 4
    exit, 5 retry), so each mode's `updatePause` switch and all after it are GT4's; the race's continue and exit
    events (`0x16`, `0x17`) and the time limit (2) end the page with the pause. With `ui.pause = gt4` the copy runs
    as GT4's function (DIFFTEST) and `pause.strb` shows as before.
@@ -497,7 +498,10 @@ goldens); HDR measured at paper white.
 **M4: Settings bridge (S-M).** `platform/ui/settings_schema.*` and the page layout table of section 4; host side
 of `SETTINGS` / `SETTINGS_SET`. Depends: M1, M2, E1. Acceptance: `CTEST`: every option in `describe()` is on a page
 or listed as hidden, from day one; a set through the bridge equals `setOption`; the four apply classes; a session
-`set` and `--set` never start confirm's revert; `detectPreset` ignores `ui.*`.
+`set` and `--set` never start confirm's revert; `detectPreset` ignores `ui.*`. Depends also on M7 for two checks
+M7 cannot make before the host answers the pause page's schema request: in a race with `--set ui.pause=native`,
+pause, Settings, change a live option, close, Continue: race time, lap and car state identical to a pause with no
+page; and the pause time limit not counting while a Settings tab shows (3.2, point 4).
 
 **M5: Game-side page host (M).** `runtime/menu/menu_host.*`, the pad focus in `runtime/iop.cpp` (lane D reviews),
 sounds through `func_0023F8C8`. Depends: M0, M1, M2. Acceptance: session test (`tools/host_session.py`): with a
@@ -515,10 +519,11 @@ log); `STREAM` with a page open (lane A: the UI list's rate, up to about 3.8 MB/
 **M7: Native pause page (M).** A copy of `RacePause::update` 003C3820 (3.2, point 4); `ui.pause = gt4` in every
 preset until M9 (3.8). Depends: M5, M0. Acceptance: `DIFFTEST` (a `game_src` copy); `ORIG`; session tests with
 `--set ui.pause=native`: a pause in GT mode (`RaceBasic::updatePause`'s switch), in free run (`RaceFreeRun`'s own
-switch) and in a mode with Retry, whose answer 5 must reach its switch; in GT mode: pause, Settings, change a live
-option, close, Continue: race time, lap and car state identical to a run that paused without opening Settings (D6's
-fields or A9); Retry and Exit give GT4's results; brightness and contrast stored as GT4's pause stores them. A
-`SimplePause` mode (`RaceSolitaire` or `RaceSinglePlayer`) under `native` shows GT4's own pause, unchanged.
+switch) and in a mode with Retry, whose answer 5 must reach its switch; in GT mode: pause, Screen, Continue: race
+time, lap and car state identical to a pause with no page (D6's fields or A9); Retry and Exit give GT4's results;
+brightness and contrast stored as GT4's pause stores them. Settings shows disabled until M4's bridge sends the
+schema, and never enabled without one (the Settings-in-a-race check and the time limit on a Settings tab are M4's).
+A `SimplePause` mode (`RaceSolitaire` or `RaceSinglePlayer`) under `native` shows GT4's own pause, unchanged.
 `ui.pause = gt4` loads `pause.strb` as before.
 
 **M8: Start on the GT mode map (S).** The map detection and the button from M0. Depends: M5, M0. Acceptance:
