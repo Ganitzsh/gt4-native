@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <utility>
 
 namespace {
 int failures = 0;
@@ -100,6 +101,53 @@ int main() {
         applyPreset(f, Preset::High);
         check(setOption(f, "display.field_mode", "blend").empty() && f.preset == Preset::Custom, "field_mode is a preset member");
         check(!setOption(f, "display.field_mode", "bob").empty(), "an unknown field mode is refused");
+    }
+
+    // ui.entry (settings_ui.cpp, MENU_DESIGN 3.8): every preset sets it, hotkey in original and integrated in the
+    // others, but it decides no preset: changing it keeps graphics.preset, and the file round trip keeps the player's.
+    {
+        Settings u;
+        check(u.uiEntry == UiEntry::Integrated && getOption(u, "ui.entry") == "integrated", "ui.entry is integrated by default");
+        applyPreset(u, Preset::Original);
+        check(u.uiEntry == UiEntry::Hotkey && detectPreset(u) == Preset::Original, "the original preset opens by hotkey only");
+        check(setOption(u, "ui.entry", "integrated").empty() && u.preset == Preset::Original && detectPreset(u) == Preset::Original,
+              "ui.entry = integrated keeps the original preset");
+        applyPreset(u, Preset::High);
+        check(u.uiEntry == UiEntry::Integrated, "a quality preset sets integrated");
+        check(setOption(u, "ui.entry", "hotkey").empty() && u.preset == Preset::High && detectPreset(u) == Preset::High,
+              "ui.entry = hotkey keeps the high preset");
+        check(!setOption(u, "ui.entry", "start").empty(), "an unknown ui.entry is refused");
+        const auto path = gt4::test::uniqueTempPath("gt4_ui_entry", ".ini");
+        saveSettings(u, path.string());
+        Settings back;
+        check(loadSettings(back, path.string()).empty() && back.uiEntry == UiEntry::Hotkey && back.preset == Preset::High,
+              "the file keeps ui.entry = hotkey under the high preset");
+        std::filesystem::remove(path);
+        // A file from before ui.entry: the loaded preset's value, whether the file names the preset or only matches it.
+        auto loadText = [](const std::string& text) {
+            const auto file = gt4::test::uniqueTempPath("gt4_ui_entry_old", ".ini");
+            { std::ofstream out(file, std::ios::binary); out << text; }
+            Settings s;
+            const bool clean = loadSettings(s, file.string()).empty();
+            std::filesystem::remove(file);
+            return std::make_pair(clean, s);
+        };
+        auto [clean1, old1] = loadText("version = 1\n[graphics]\npreset = original\n");
+        check(clean1 && old1.preset == Preset::Original && old1.uiEntry == UiEntry::Hotkey,
+              "an original file without ui.entry opens by hotkey only");
+        Settings originalValues;
+        applyPreset(originalValues, Preset::Original);
+        originalValues.preset = Preset::Custom;
+        std::string custom = formatSettings(originalValues);
+        custom = custom.substr(0, custom.find("\n[ui]")) + "\n";
+        auto [clean2, old2] = loadText(custom);
+        check(clean2 && old2.preset == Preset::Original && old2.uiEntry == UiEntry::Hotkey,
+              "a file whose values are the original preset's, without ui.entry, opens by hotkey only");
+        auto [clean3, old3] = loadText("version = 1\n[graphics]\npreset = original\n[ui]\nentry = integrated\n");
+        check(clean3 && old3.preset == Preset::Original && old3.uiEntry == UiEntry::Integrated,
+              "an original file that sets ui.entry = integrated keeps it");
+        auto [clean4, old4] = loadText("version = 1\n[graphics]\npreset = high\n");
+        check(clean4 && old4.uiEntry == UiEntry::Integrated, "a high file without ui.entry is integrated");
     }
 
     // lighting.night (settings_lighting.cpp, PLAN.md F2): original by default and in the original preset, which

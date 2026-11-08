@@ -301,7 +301,8 @@ set(GT4_SETTINGS_SOURCES
     platform/sdl/settings_effects.cpp
     platform/sdl/settings_lighting.cpp
     platform/sdl/settings_input.cpp
-    platform/sdl/settings_audio.cpp)
+    platform/sdl/settings_audio.cpp
+    platform/sdl/settings_ui.cpp)
 
 add_executable(gt4_host
     platform/sdl/main.cpp

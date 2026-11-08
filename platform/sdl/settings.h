@@ -47,6 +47,9 @@ enum class AudioMixer : uint8_t { Game, Host };
 enum class InputResponse : uint8_t { Original, Modern };
 // Gamepad haptics (input.haptics, platform/input/haptics.h; PLAN.md D14): original = GT4's own rumble only (D2).
 enum class HapticsMode : uint8_t { Original, Physics };
+// How the settings menu opens (ui.entry, settings_ui.cpp; docs/modern/MENU_DESIGN.md 3.2, 3.8): hotkey = the host's
+// keys only, integrated = GT4's own Options items too (the game's hooks, runtime/menu/menu_host.cpp).
+enum class UiEntry : uint8_t { Hotkey, Integrated };
 
 struct Settings {
     static constexpr int kVersion = 1;
@@ -131,6 +134,9 @@ struct Settings {
 
     // [audio] (settings_audio.cpp; not part of the graphics presets)
     AudioMixer audioMixer = AudioMixer::Game;   // sent to the game (kOptionHostMixer)
+
+    // [ui] (settings_ui.cpp, lane M; set by every preset, but not part of what makes one: MENU_DESIGN 3.8)
+    UiEntry uiEntry = UiEntry::Integrated;   // sent to the game (kOptionUiEntry); hotkey in the original preset
 
     // [input] (settings_input.cpp; not part of the graphics presets but for input.response)
     TriggerTravel triggerTravel = TriggerTravel::Game;   // sent to the game (kOptionTriggerTravel)

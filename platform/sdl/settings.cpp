@@ -28,6 +28,7 @@ const std::vector<Option>& options() {
         lightingOptions(o);   // settings_lighting.cpp
         inputOptions(o);      // settings_input.cpp
         audioOptions(o);      // settings_audio.cpp
+        uiOptions(o);         // settings_ui.cpp
         o.push_back(enumOption("graphics.preset", &Settings::preset, kPresets,
             "Applies a set of the options above: original (PS2-faithful), low, medium, high, ultra. Changing "
             "any member afterwards makes it custom."));
@@ -107,6 +108,16 @@ const PresetTable& presetValues(Preset preset) {
     return none;
 }
 
+// What a preset sets besides its members (MENU_DESIGN 3.8): applyPreset sets these too, but detectPreset ignores them
+// and changing one leaves graphics.preset as it is, since they are not graphics choices. ui.entry: hotkey in the
+// original preset (GT4's screens untouched), integrated in the others.
+const PresetTable& presetFollowers(Preset preset) {
+    static const PresetTable original{{"ui.entry", "hotkey"}};
+    static const PresetTable others{{"ui.entry", "integrated"}};
+    static const PresetTable none;
+    return preset == Preset::Original ? original : preset == Preset::Custom ? none : others;
+}
+
 bool isPresetMember(std::string_view key) {
     for (int p = 0; p < static_cast<int>(Preset::Custom); ++p)
         for (const auto& [member, value] : presetValues(static_cast<Preset>(p)))
@@ -168,11 +179,12 @@ float aspectValue(AspectRatio ratio) {
 }
 
 void applyPreset(Settings& settings, Preset preset) {
-    for (const auto& [key, value] : presetValues(preset)) {
-        const auto* option = find(key);
-        if (!option || !option->set(settings, value).empty())
-            throw std::logic_error(std::string("Invalid preset entry ") + key);
-    }
+    for (const PresetTable* table : {&presetValues(preset), &presetFollowers(preset)})
+        for (const auto& [key, value] : *table) {
+            const auto* option = find(key);
+            if (!option || !option->set(settings, value).empty())
+                throw std::logic_error(std::string("Invalid preset entry ") + key);
+        }
     settings.preset = preset;
 }
 
@@ -266,6 +278,7 @@ std::vector<std::string> loadSettings(Settings& settings, const std::string& pat
     std::ifstream file(path, std::ios::binary);
     if (!file) return warnings;
     std::string line, section;
+    std::vector<std::string> seen;   // the options the file sets
     int number = 0;
     while (std::getline(file, line)) {
         ++number;
@@ -294,8 +307,13 @@ std::vector<std::string> loadSettings(Settings& settings, const std::string& pat
         const auto* option = find(qualified);
         if (!option || !option->persistent) { warnings.push_back(where + "unknown option " + qualified); continue; }
         if (auto error = setOption(settings, qualified, value); !error.empty()) warnings.push_back(where + error);
+        seen.push_back(qualified);
     }
     settings.preset = detectPreset(settings);
+    // A follower the file does not set (written before it existed) takes the loaded preset's value: an original
+    // player's file from before ui.entry keeps GT4's screens untouched.
+    for (const auto& [key, value] : presetFollowers(settings.preset))
+        if (std::find(seen.begin(), seen.end(), key) == seen.end()) find(key)->set(settings, value);
     return warnings;
 }
 

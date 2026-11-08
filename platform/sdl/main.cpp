@@ -1028,6 +1028,7 @@ int run(const Options& options) {
                                          ? static_cast<uint32_t>(std::lround(settings.steerGameBand * 10.0f)) : 0u);
                 // kOptionHostMixer: audio.mixer (platform/audio/host_mixer.h, PLAN.md D5)
                 gs->setGameOption(8, settings.audioMixer == gt4::AudioMixer::Host ? 1u : 0u);
+                gs->setGameOption(9, static_cast<uint32_t>(settings.uiEntry));   // kOptionUiEntry (MENU_DESIGN 3.2)
                 // Nothing reaches the game while the menu is open, nor afterwards until every button is up
                 // (the button that closed the menu would act in the game).
                 // the frame's time for the pads' response (its filters and the keys' ramp): a 60 Hz tick under

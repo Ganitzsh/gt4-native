@@ -7,6 +7,7 @@
 //   settings_lighting.cpp  lighting.* (night lighting, lane F)
 //   settings_input.cpp     input.* (lane D)
 //   settings_audio.cpp     audio.* (lane D)
+//   settings_ui.cpp        ui.* (the settings menu itself, lane M)
 // The order of the parts and of the options in them is the order of the settings file: an option goes after the
 // others of its section, in its module's part. Internal to the settings: not for other code.
 #include "settings.h"
@@ -177,5 +178,6 @@ void effectsOptions(std::vector<Option>& o);    // settings_effects.cpp
 void lightingOptions(std::vector<Option>& o);   // settings_lighting.cpp
 void inputOptions(std::vector<Option>& o);      // settings_input.cpp
 void audioOptions(std::vector<Option>& o);      // settings_audio.cpp
+void uiOptions(std::vector<Option>& o);         // settings_ui.cpp
 
 }  // namespace gt4::settings_table
