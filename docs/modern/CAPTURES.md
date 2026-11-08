@@ -58,7 +58,7 @@ says how many of its frames show a picture: a capture that replays black proves 
 |---|---|---|---|
 | `race7.cap` | 100 | a race | **A fields-mode race** (recorded at `display.race_frames = fields`): its frames are interlaced and the field blend applies, so `display.field_mode = clean` changes it (98 of 100 frames at ultra). Do not use it as a progressive race. 99 of 100 frames lit at `original`. |
 | `menus_boot.cap` | 18,931 | from boot: the title menu over its attract video, Arcade > Time Trial > Original Circuits and City Courses, browsed | Recorded live from boot (14.5 GB) with a copy of `C:/Users/julie/gt4-native-game/build/r5_saves`, `--preset original`, interpolation and texture pack off. Windows (host frames, within a few VBlanks): title menu 6,450-8,050; Original Circuits row 12,900-15,050 (taps at about 13,600, 13,730, 13,860, 13,985, 14,110); City Courses row 17,200-18,700. A replay of it takes one heavy slot with a host from 70e7fdb on (both with an older one: over 2 GB). |
-| `race_boot.cap` | 4,914 | from boot, GT mode with the approved save: Home, the event screen, the race-start flyover, the grid countdown and the race | Recorded live from boot (2.1 GB) by the procedure below with `docs/modern/routes/race_gt_pe2.txt`, scene records on. Windows (replay frames, the capture's VBlanks): event screen (the entry list) 3,225-3,425; race-start flyover 3,475-3,850; grid and countdown 3,900-4,050; START at 4,075 and the race to the end (bumper view, chase view from about 4,750). Dark only at transitions (3,175-3,200 the race load, 3,450): 121 of 125 frames sampled with `--capture-frames 1900-5000/25` are lit (over 5 % of their pixels not black). Replaces `race.cap` and `event.cap`, which replayed black (no display records). One heavy slot. |
+| `race_boot.cap` | 4,914 | from boot, GT mode with the approved save: Home, the event screen, the race-start flyover, the grid countdown and the race | Recorded live from boot (2.1 GB) by the procedure below with `docs/modern/routes/race_gt_pe2.txt`, scene records on. Windows (replay frames, the capture's VBlanks): event screen (the entry list) 3,225-3,425; race-start flyover 3,475-3,850; grid and countdown 3,900-4,050; START at 4,075 and the race to the end (bumper view, chase view from about 4,750). Dark only at transitions (3,175-3,200 the race load, 3,450): 117 of 121 frames sampled with `--frames 4914 --capture-frames 1900-4914/25` are lit (over 5 % of their pixels not black). Replaces `race.cap` and `event.cap`, which replayed black (no display records). One heavy slot. |
 
 ### Recording a REF capture
 
@@ -94,8 +94,9 @@ gt4_host --headless --size 1280x720 --session-dir build/sessions/<name> --no-aud
 
    `<COUNT>`: the route's `vwait` total plus a margin (`race_gt_pe2.txt`: 4,906, so 5000). The host exits 1 when
    the route's `quit` comes before `--frames` runs out; the capture is complete all the same.
-5. Replay the capture once (one heavy slot) with `--frames <COUNT> --capture-frames <first>-<COUNT>/25` (the
-   race: `1900-5000/25`, 125 frames from Home on) and read the scenes' windows from those frames: the live session's
+5. Replay the capture once (one heavy slot) with `--frames <N> --capture-frames <first>-<N>/25`, N the capture's
+   VBlanks (the replay's "vsyncs" line; past them the host shows the last frame again, which is not in the capture;
+   the race: `--frames 4914 --capture-frames 1900-4914/25`, 121 frames from Home on) and read the scenes' windows from those frames: the live session's
    frame numbers lag the capture's VBlanks by an amount that changes from run to run (23 to 90 frames on the race
    route), so windows are given in replay frames, and a second recording's transitions fall a few frames apart.
    Count the lit frames (over 5 % of the pixels not black, as tools/frame_diff.py's lit check).
