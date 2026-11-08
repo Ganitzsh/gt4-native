@@ -29,7 +29,7 @@ slot, so the audit below checked every draft whose difference class is not `regi
 | 003F28B8 | assist output, mode 6: state 0's transitions under case 1, state 0 never left |
 | 0022BC20 | a handle released before the loop that still uses it |
 | 00458340 | grid row/column counts read as 32-bit words at 0x10/0x14 instead of halves at 0x10/0x12 |
-| 004C7B38 | a character-class switch: case 0 merged with default (one extra index increment) |
+| 004C7B38 | a character-class switch: case 0 merged with default (one extra index increment; a stack overrun, below) |
 | 004C2048 | a list head dereferenced before the null test |
 | 004AA6B8 | a scratchpad list entry's state cleared after `return` (dead code) |
 | 0057F2F8, 0057FAF8 | soft-float double to 64-bit / unsigned 32-bit integer: unrelated computations, rewritten |
@@ -50,3 +50,27 @@ The one-ulp constants are not a draft problem. ee-gcc converts decimal floating 
 Every inexact constant of every matched source was one ulp off natively. `tools/game_cc.py` now rewrites
 each decimal constant to the decimal that rounds, to nearest, to the EE's value (outside comments and
 literals; hexadecimal constants were already exact).
+
+## Re-check, 2026-11-08 (decomp 6dbbf48f4)
+
+- **Which drafts run.** Until 25d737c, `GT4_TRACE_HITS` logged most game functions as 00000000: they are
+  called through their PS2 trampolines, and the address `-finstrument-functions` gives is the PS2 one, which
+  the host-code lookup does not know. On lane A's race route (`docs/modern/routes/race_gt_pe2.txt`) 56 of the
+  336 drafts run where the old trace showed 31, so the 115 drafts reached above are likely an undercount.
+- **004C7B38 was a stack overrun.** On an empty text run the old draft's start index is 1, so 004C7478 copies
+  255 characters into a 48-entry stack buffer and calls on with a corrupted owner. `GT4_DIFFTEST=004C7B38`
+  (`tools/eeref/difftest_text.cpp`): the game_src copy agrees on 200 trials; the old draft crashes on trial 1.
+- **The route's drafts, replayed.** 55 of the 56 recorded (three calls each, `GT4_RECORD_DELTA`) and replayed
+  on the original. 0026F0A8 is not checked: armed, but it first runs at the route's very end (line 8,952 of the
+  trace's 9,035) and the recording run did not reach it. Of the 55: 36 agree on every call, 2 agree where they
+  do not stop, 9 stop on syscalls (they wait on other threads: untestable in eeref), 2 are `known`. 6 differ
+  for reasons outside the draft: three replays follow host pointers left in guest RAM and derail; 002F4A10's
+  draft is `void` and the original's `v0` is a leftover its callers ignore; 00316EA8 stores, where the original
+  stores PS2 addresses (`00317BF0`, and `0068FD50`/`00697678` in its data), addresses in the native image's
+  `.text` above the guest section (`gt4fn_00317BF0`'s entry, and code inside `gt4fn_005D52C0` and
+  `gt4fn_005D0B10`); 00214D28's differing words are all in the block its matched callee 0055FB40 fills. No new
+  draft bug.
+- **Host addresses in guest RAM.** Native code uses those 00316EA8 values as host pointers, which works only
+  while host addresses fit the guest's 32-bit fields; original code (eeref, `GT4_ORIG`) reads them as PS2
+  pointers and cannot follow them, which is what derails the three replays above. A 32-bit-host assumption to
+  keep in mind for a 64-bit host (P3, R17), not a draft bug.
