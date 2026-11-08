@@ -1541,6 +1541,13 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
         }
         src.reinterpreted = true;
         ++stats.reinterpreted;
+        ++stats.readFallbacks;   // (P2: counted apart, 0 expected)
+        // GT4_GSN_FALLBACKS=N (debugging): the first N, with the texture and the target it overlaps
+        static const long fallbackLog = std::getenv("GT4_GSN_FALLBACKS") ? std::strtol(std::getenv("GT4_GSN_FALLBACKS"), nullptr, 10) : 0;
+        if (static_cast<long>(stats.readFallbacks) <= fallbackLog)
+            std::printf("[gsn fallback] frame %llu tex %X/%u psm %X %ux%u cbp %X: target %u bp %X/%u psm %X depth %d h %u\n",
+                        static_cast<unsigned long long>(frameCount), t.tbp, t.tbw, t.psm, w, h, t.cbp, owner, target.bp, target.bw,
+                        target.psm, target.depth ? 1 : 0, target.height);
     }
     // From here the texture is read from memory by address: the set pages it covers go into memory now (P2a: a
     // target's pixels and its reinterpretations, above, are the GPU's and never needed them).

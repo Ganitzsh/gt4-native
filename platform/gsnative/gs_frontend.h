@@ -371,6 +371,9 @@ public:
         // LOCAL), the CLUT loads.
         uint64_t setPagesByCause[5] = {};
         uint64_t uploadBytes = 0, copyBytes = 0, clutLoads = 0;
+        // reads of a target in another format than the GPU builds, decoded from memory without what was drawn (textureFor;
+        // PLAN P2's reinterpretation fallbacks: 0 expected on the captures)
+        uint64_t readFallbacks = 0;
         uint64_t byAddress = 0;   // textures still named by graphics-memory address (lookups)
         uint64_t droppedDraws = 0;   // past the target limit (targetFor)
         uint64_t targetsReused = 0;  // slots given to a new buffer at the limit
