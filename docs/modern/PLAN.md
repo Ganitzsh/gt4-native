@@ -457,6 +457,39 @@ bytes are in, R7), how to take PCSX2 software-renderer stills at the same scene 
 race, Photo Travel), where they live (`build/caps`, `build/refs`, never committed). Depends: none (scene re-records
 after A3). Acceptance: REF.txt complete on the main dev machine; the procedure followed once by a second agent.
 
+**D10: Loading (M; lane C, moved from lane D on 2026-11-08).** From the audit (section 4.5, not in the repo): every
+disc read is a synchronous `ReadFile` loop under one global mutex (`iop.cpp`), on an image opened
+`FILE_FLAG_RANDOM_ACCESS` (no OS read-ahead); stream reads run inline in `sceSifCallRpc` with the frame interrupt
+held; GT4's volume files are inflated on the game thread; no load time is measured anywhere.
+- Measure first: time `Pipe::open` 004B0E28 and `GranTurismo4::LoadingMode` 0x00104E30 for a race load and the
+  main menus.
+- Then: memory-map the image, or read ahead per stream on a worker (a stream's size is known at open); drop
+  `FILE_FLAG_RANDOM_ACCESS`; give BGM and movies their own readers. If the loading screens turn out to be paced by
+  whole frames, run the frame clock faster on loading screens outside `original`.
+- Acceptance: the load times (race and menus) reported before and after, with the targets lane C proposes from its
+  first measurement and the architect agrees; `ORIG` unchanged in its picture and the game's pacing (faster reads
+  shorten `original`'s loads too, which is the point; the faster frame clock stays outside it); saves and replays
+  unaffected (session test).
+
+**D11: Latency (S-M; lane C, moved from lane D).** The input-to-photon budget D12-D16's filters count against. From
+the audit (section 4.6): two frames in flight today, and the pad sampled every host frame. Design: one frame in
+flight when the GPU has room, and the pad sampled just before the game's frame tick. Acceptance: input-to-present
+latency measured (mean and p95) before and after, with the target lane C proposes from that measurement; `PERF` no
+worse; `ORIG` unchanged.
+
+**C11: One-command release pipeline (M).** From one commit, one command makes the Windows zip and the linux-arm64
+tar (clean release builds through `tools/release_game.py` and the host build), a `BUILD-INFO` (the gt4-native and
+decomp commits, the build machines' tool versions), checksums, and a draft release note. It makes files only and
+publishes nothing. Depends: C2, C4, C6. Acceptance:
+- both archives from one clean commit, their checksums verified; a dirty tree is refused;
+- one game in both: `gt4_game.exe` built once by `release_game.py`, the same SHA-256 in the zip and the tar, named
+  in `BUILD-INFO` with the commits;
+- each host built from an empty folder (`tools/build_windows.cmd`; `tools/build_linux.sh` for linux-arm64), each
+  with its glibc and architecture check, as `package_game.py` does;
+- the draft note made from CHANGELOG.md's newest section, the archives' names and SHA-256s, and a line saying the
+  linux-arm64 package is untested on the device until the owner's test (R4's eleven points);
+- no Sony or Polyphony asset in either (docs/RELEASE_POLICY.md).
+
 ### Lane D: systems
 
 **D1: Input action map (M).** `platform/input/input_map.{h,cpp}` replaces `readPad` (`main.cpp:394-443`); both
@@ -495,8 +528,7 @@ wheel load and slip plotted over a lap, consistent with the car's motion; docume
 wheel works in GT4's menus and races with its force feedback.
 
 **D8: Physics force feedback (M).** Depends: D6, D7. **D9: Spatial audio (L).** Depends: D5, A7, A9.
-**D10: Loading (M).** Measure 004B0E28 and 0x00104E30, then mapped reads. **D11: Latency (S-M).**
-Acceptance for each as the audit's section 4 states, with session tests.
+Acceptance for each as the audit's section 4 states, with session tests. (D10 and D11 moved to lane C.)
 
 **Input as in current racing games (D12-D16; the owner, 2026-11-08).** The goal is the control quality of GT7, Forza
 and ACC on top of the PS2 mapping, never instead of it. The constraints:
