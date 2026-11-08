@@ -43,7 +43,9 @@ McDateTime to_ps2_time(const fs::path &p) {
     std::error_code ec;
     const auto t = fs::last_write_time(p, ec);
     if (ec) return {};
-    tt = std::chrono::system_clock::to_time_t(std::chrono::file_clock::to_sys(t));
+    // (cast: libc++'s file_clock counts nanoseconds in 128 bits, which system_clock's time_point does not take as it is)
+    tt = std::chrono::system_clock::to_time_t(
+        std::chrono::time_point_cast<std::chrono::system_clock::duration>(std::chrono::file_clock::to_sys(t)));
 #endif
     tt += 9 * 3600;
     std::tm tm{};
