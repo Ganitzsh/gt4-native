@@ -198,6 +198,13 @@ std::vector<std::string> describeGpus(VkInstance instance, SDL_Window* window) {
 
 struct Renderer::Impl {
     std::function<void()> waitCallback;   // setWaitCallback: called in the frame fence's and the acquire's waits
+    // A wait slice, then the callback. A driver may end a short timeout at once: the slice then sleeps out the rest of
+    // its millisecond first, so the sliced waits cannot spin a core.
+    void waitSlice(Uint64 sliceStarted) {
+        const Uint64 elapsed = SDL_GetTicksNS() - sliceStarted;
+        if (elapsed < 900000ull) SDL_DelayPrecise(1000000ull - elapsed);
+        waitCallback();
+    }
     SDL_Window* window = nullptr;
     VkInstance instance = VK_NULL_HANDLE;
     VkSurfaceKHR surface = VK_NULL_HANDLE;
@@ -823,9 +830,11 @@ struct Renderer::Impl {
                 check(vkWaitForFences(device.device, 1, &frame.fence, VK_TRUE, UINT64_MAX), "vkWaitForFences");
             } else {   // (in 1 ms slices, the callback between them)
                 VkResult waited;
-                while ((waited = vkWaitForFences(device.device, 1, &frame.fence, VK_TRUE, 1000000)) == VK_TIMEOUT) {
-                    GT4_STAGE_SCOPE("render: the wait callback (fence)");
-                    waitCallback();
+                for (Uint64 started = SDL_GetTicksNS();
+                     (waited = vkWaitForFences(device.device, 1, &frame.fence, VK_TRUE, 1000000)) == VK_TIMEOUT;
+                     started = SDL_GetTicksNS()) {
+                    GT4_STAGE_SCOPE("render: the wait callback (fence)");   // (each a stage: their count shows)
+                    waitSlice(started);
                 }
                 check(waited, "vkWaitForFences");
             }
@@ -853,10 +862,11 @@ struct Renderer::Impl {
                     return vkAcquireNextImageKHR(device.device, swapchain, 1000000, frame.acquired, VK_NULL_HANDLE,
                                                  &index);
                 };
-                while ((result = acquire()) == VK_TIMEOUT || result == VK_NOT_READY) {
+                for (Uint64 started = SDL_GetTicksNS(); (result = acquire()) == VK_TIMEOUT || result == VK_NOT_READY;
+                     started = SDL_GetTicksNS()) {
                     if (SDL_GetTicksNS() >= giveUp) break;
                     GT4_STAGE_SCOPE("render: the wait callback (acquire)");
-                    waitCallback();
+                    waitSlice(started);
                 }
             }
             if (result == VK_TIMEOUT || result == VK_NOT_READY) return false;

@@ -926,7 +926,9 @@ int run(const Options& options) {
     }();
     // ...and while Renderer::draw waits for the frame slot or a swapchain image (vsync without a frame-rate cap: the
     // pass waits there, not above), through its wait callback.
+    uint64_t drawWaitCalls = 0;   // (GT4_TRACE_LATENCY's present lines: the wait callback's calls since the last)
     const auto padsInDraw = [&] {
+        ++drawWaitCalls;
         if (gs && gs->live()) {
             SDL_PumpEvents();   // (the keyboard's and the gamepads' state; their events stay queued)
             sendPads(true);
@@ -1356,6 +1358,9 @@ int run(const Options& options) {
         if (presented && traceLatency) {
             std::printf("latency: present VBlank %llu at %.0f\n", static_cast<unsigned long long>(newestAdded),
                         qpcUs(SDL_GetPerformanceCounter()));
+            if (drawWaitCalls)
+                std::printf("latency: draw waited %llu slices\n", static_cast<unsigned long long>(drawWaitCalls));
+            drawWaitCalls = 0;
             std::fflush(stdout);
         }
         if (presented && freshPending) {
