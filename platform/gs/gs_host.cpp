@@ -197,6 +197,18 @@ public:
         }
         const bool statsNow = triggered || statsAt.second < 0 ||
                               (static_cast<long>(count) >= statsAt.first && static_cast<long>(count) <= statsAt.second);
+        // P2's metric (docs/modern/PLAN.md P2): what went into the GS memory model since the last VBlank: set pages by
+        // cause (GsFrontend::MaterializeCause), bytes sent, bytes copied, CLUT loads.
+        uint64_t memoryFrame[8] = {};
+        if (native && stats) {
+            const auto& s = native->stats;
+            const uint64_t now[8] = {s.setPagesByCause[0], s.setPagesByCause[1], s.setPagesByCause[2], s.setPagesByCause[3],
+                                     s.setPagesByCause[4], s.uploadBytes, s.copyBytes, s.clutLoads};
+            for (int k = 0; k < 8; ++k) {
+                memoryFrame[k] = now[k] - memoryBefore[k];
+                memoryBefore[k] = now[k];
+            }
+        }
         if (native && stats && statsNow) {
             uint32_t memory = 0, targets = 0, untextured = 0;
             for (const auto& d : list.draws) {
@@ -268,6 +280,10 @@ public:
                         list.display.record.circuit[0].enabled, list.display.record.circuit[1].enabled,
                         list.display.record.shown().base, list.display.record.shown().width, list.display.record.shown().x,
                         list.display.record.shown().y, list.display.record.shownWidth(), list.display.record.shownHeight());
+            const auto n = [&](int k) { return static_cast<unsigned long long>(memoryFrame[k]); };
+            std::printf("[gsn] vblank %u: GS memory: %llu set pages (texture %llu, draw %llu, write %llu, read %llu, other %llu), "
+                        "%llu bytes sent, %llu copied, %llu CLUT loads\n", count, n(0) + n(1) + n(2) + n(3) + n(4), n(0), n(1), n(2),
+                        n(3), n(4), n(5), n(6), n(7));
             if (triggered) std::fflush(stdout);
         }
         // Both read circuits off: nothing is displayed this VBlank.
@@ -351,6 +367,7 @@ public:
     }
     void writeVram(const void* data) override { native->restoreMemory(data); }
     uint64_t blankFrames = 0, gpuReads = 0, staleReads = 0, laterReads = 0;
+    uint64_t memoryBefore[8] = {};   // P2's metric at the last VBlank (vsync)
 private:
     std::function<void(gsn::FrameList&)> publishNative;
     std::function<void(gsn::FrameList&)> queueLater;
@@ -1224,6 +1241,14 @@ std::string GsHost::summary() const {
         const auto& s = h.target->frontend().stats;
         out << "; native textures: " << s.setTextures << " lookups by set, " << s.setMisses << " not held, " << s.setDecodes << " decoded, " << s.streamed << " stream frames in place, " << s.setPagesWritten << " set pages into memory, "
             << s.byAddress << " lookups by address (" << s.targetReads << " of targets, " << s.reinterpreted << " reinterpreted)";
+    }
+    if (h.target && h.vsyncs.load()) {   // P2's metric (docs/modern/PLAN.md P2), a frame
+        const auto& s = h.target->frontend().stats;
+        const double f = static_cast<double>(h.vsyncs.load());
+        out << "; GS memory a frame: " << s.setPagesWritten / f << " set pages (texture " << s.setPagesByCause[0] / f << ", draw "
+            << s.setPagesByCause[1] / f << ", write " << s.setPagesByCause[2] / f << ", read " << s.setPagesByCause[3] / f << ", other "
+            << s.setPagesByCause[4] / f << "), " << s.uploadBytes / 1024.0 / f << " KiB sent, " << s.copyBytes / 1024.0 / f << " KiB copied, "
+            << s.clutLoads / f << " CLUT loads";
     }
     if (h.target && (h.target->gpuReads || h.target->staleReads))
         out << "; " << h.target->gpuReads << " reads of drawn pixels from the GPU, " << h.target->staleReads << " from GS memory";

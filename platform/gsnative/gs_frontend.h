@@ -342,6 +342,9 @@ public:
     // next frame says so with resetTextures.
     void resetTextures();
 
+    // Why a set's page went into graphics memory (Stats::setPagesByCause): a texture or palette read by address, a draw
+    // over the page, an upload or copy into it, a GS -> host read, anything else (a content going, a full dump).
+    enum MaterializeCause : uint32_t { kForTexture, kForDraw, kForWrite, kForRead, kForOther };
     struct Stats {
         uint64_t primitives = 0, draws = 0, uploads = 0, copies = 0, decoded = 0, replaced = 0, targetReads = 0, reinterpreted = 0;
         uint64_t named = 0, found = 0;   // textures looked up in the texture pack, and those it has
@@ -349,6 +352,11 @@ public:
         uint64_t streamed = 0;           // new contents of a stream decoded into its texture (textureFor)
         uint64_t setTextures = 0, setMisses = 0, setDecodes = 0;   // textures named by their set; not held now; decodes
         uint64_t setPagesWritten = 0;   // pages of sets written into graphics memory (materializePage)
+        // P2's metric (docs/modern/PLAN.md P2): what goes into the GS memory model. The set pages above by what made them
+        // (MaterializeCause), the bytes of image transfers and uploads sent into memory, the bytes copied within it (LOCAL ->
+        // LOCAL), the CLUT loads.
+        uint64_t setPagesByCause[5] = {};
+        uint64_t uploadBytes = 0, copyBytes = 0, clutLoads = 0;
         uint64_t byAddress = 0;   // textures still named by graphics-memory address (lookups)
         uint64_t droppedDraws = 0;   // past the target limit (targetFor)
         uint64_t targetsReused = 0;  // slots given to a new buffer at the limit
@@ -586,12 +594,12 @@ private:
     // A page that holds a set's content (not written since) gets its bytes in graphics memory before anything
     // reads or writes it there; sets themselves are not written into it (most of their pages are only read as
     // textures and palettes, from the content).
-    void materializePage(uint32_t page);
-    void materializeRect(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y, uint32_t w, uint32_t h);
+    void materializePage(uint32_t page, MaterializeCause cause);
+    void materializeRect(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y, uint32_t w, uint32_t h, MaterializeCause cause);
     std::unordered_map<uint64_t, std::vector<uint32_t>> setPalettes;   // palettes from sets' contents (clutWritten)
     std::unordered_map<uint64_t, std::vector<uint8_t>> setPageBytes;   // (content, page) -> its 8 KiB (materializePage)
 public:
-    void materializeAll() { for (uint32_t page = 0; page < 512; ++page) materializePage(page); }
+    void materializeAll() { for (uint32_t page = 0; page < 512; ++page) materializePage(page, kForOther); }
 private:
     // Scene records (A10's front-end half): the frame between its FrameBegin and FrameEnd, each view's bound target (by
     // view id - 1), whether it has tagged draws in the list being built (a cut marks those views), the frame's cuts.

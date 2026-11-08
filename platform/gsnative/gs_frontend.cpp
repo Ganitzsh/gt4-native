@@ -362,6 +362,7 @@ void GsFrontend::clutWritten(const gfx::Texture& texture) {
     const GsMemory::Tex0 t = GsMemory::Tex0::of(texture);
     if (!mem.tex0Written(t)) return;
     ++clutLoads;
+    ++stats.clutLoads;
     // A palette in a page that holds a set's content (not in graphics memory): from the content, each (content,
     // place, load) read once.
     if (nativeTextures) {
@@ -428,8 +429,9 @@ void GsFrontend::transferStarted(uint32_t dir) {
         memoryWritten(t.dbp, t.dbw, t.dpsm, t.dsax, t.dsay, t.rrw, t.rrh, false);
         ++stats.uploads;
     } else if (dir == 2) {
-        materializeRect(t.sbp, t.sbw, t.spsm, t.ssax, t.ssay, t.rrw, t.rrh);
-        materializeRect(t.dbp, t.dbw, t.dpsm, t.dsax, t.dsay, t.rrw, t.rrh);
+        materializeRect(t.sbp, t.sbw, t.spsm, t.ssax, t.ssay, t.rrw, t.rrh, kForWrite);
+        materializeRect(t.dbp, t.dbw, t.dpsm, t.dsax, t.dsay, t.rrw, t.rrh, kForWrite);
+        stats.copyBytes += uint64_t(t.rrw) * t.rrh * psmBits(t.dpsm) / 8;
         mem.copy(t);   // a copy out of a render target is stale here (the target lives on the GPU)
         memoryWritten(t.dbp, t.dbw, t.dpsm, t.dsax, t.dsay, t.rrw, t.rrh);
         ++stats.copies;
@@ -460,7 +462,7 @@ void GsFrontend::read(const gfx::ReadRecord& r) {
 // A GS -> host read starts: the packed pixels from the memory model, or from the GPU where a draw made them.
 void GsFrontend::readStarted(const GsMemory::Transfer& t) {
     {
-        materializeRect(t.sbp, t.sbw, t.spsm, t.ssax, t.ssay, t.rrw, t.rrh);
+        materializeRect(t.sbp, t.sbw, t.spsm, t.ssax, t.ssay, t.rrw, t.rrh, kForRead);
         readData = mem.read(t);
         readPos = 0;
         // Whether a draw wrote any of the source pages after the last transfer into them.
@@ -564,6 +566,7 @@ void GsFrontend::restoreMemory(const void* data) {
 }
 
 void GsFrontend::imageWritten(const uint8_t* bytes, size_t size) {
+    stats.uploadBytes += size;
     if (!mem.write(bytes, size)) return;
     static const bool logChanges = std::getenv("GT4_GSN_XFER") != nullptr;
     if (logChanges) std::printf("[gsn changed] %zu bytes, %zu pages\n", size, uploadPages.size());
@@ -572,7 +575,7 @@ void GsFrontend::imageWritten(const uint8_t* bytes, size_t size) {
 }
 
 void GsFrontend::memoryWritten(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y, uint32_t w, uint32_t h, bool changed) {
-    materializeRect(bp, bw, psm, x, y, w, h);   // (a write into part of a set's page keeps the rest)
+    materializeRect(bp, bw, psm, x, y, w, h, kForWrite);   // (a write into part of a set's page keeps the rest)
     if (!changed) uploadPages.clear();
     uint32_t pw, ph;
     pageSize(psm, pw, ph);
@@ -972,7 +975,7 @@ void GsFrontend::markWritten(uint32_t targetId, uint32_t bp, uint32_t bw, uint32
     const uint32_t first = std::min(x0 / pw, perRow - 1), last = std::min(x1 / pw, perRow - 1);
     for (uint32_t py = y0 / ph; py <= y1 / ph; ++py)
         for (uint32_t px = first; px <= last; ++px) {
-            materializePage(bp / 32 + py * perRow + px);   // (a draw over part of a set's page keeps the rest)
+            materializePage(bp / 32 + py * perRow + px, kForDraw);   // (a draw over part of a set's page keeps the rest)
             PageOwner& p = pages[(bp / 32 + py * perRow + px) & 511];
             if (p.target != targetId) ++ownerChanges;
             p = {targetId, ++serial};
@@ -990,7 +993,7 @@ bool sameTexAlpha(const Reinterpretation& a, const Reinterpretation& b) {
 // A page's content hash (64-bit words, multiply-xorshift), computed again only after a transfer wrote the page.
 uint64_t GsFrontend::pageContent(uint32_t page) {
     page &= 511;
-    materializePage(page);
+    materializePage(page, kForTexture);
     if (pageHashGeneration[page] == pageGeneration[page]) return pageHash[page];
     const uint8_t* bytes = mem.data() + size_t(page) * 8192;
     uint64_t h = 0x9E3779B97F4A7C15ull ^ page;
@@ -1068,7 +1071,7 @@ void GsFrontend::texSet(const uint8_t* payload, size_t bytes) {
         auto it = setContents.find(gone);
         if (it == setContents.end()) return;
         for (uint32_t page = 0; page < 512; ++page)
-            if (setPages[page].hash == gone) materializePage(page);
+            if (setPages[page].hash == gone) materializePage(page, kForOther);
         setContentBytes -= it->second.bytes.size();
         if (assetLoaded == gone) assetLoaded = 0;
         setContents.erase(it);
@@ -1211,7 +1214,7 @@ void GsFrontend::loadSetContent(uint64_t hash, const SetContent& sc) {
     assetLoaded = hash;
 }
 
-void GsFrontend::materializePage(uint32_t page) {
+void GsFrontend::materializePage(uint32_t page, MaterializeCause cause) {
     page &= 511;
     SetPage& sp = setPages[page];
     if (!sp.id || sp.materialized || pages[page].serial != sp.serial) return;
@@ -1231,9 +1234,11 @@ void GsFrontend::materializePage(uint32_t page) {
     }
     std::memcpy(mem.data() + size_t(page) * 8192, bytes.data(), 8192);
     ++stats.setPagesWritten;
+    ++stats.setPagesByCause[cause];
 }
 
-void GsFrontend::materializeRect(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+void GsFrontend::materializeRect(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y, uint32_t w, uint32_t h,
+                                 MaterializeCause cause) {
     uint32_t pw, ph;
     pageSize(psm, pw, ph);
     const uint32_t perRow = std::max<uint32_t>(1, (psm == PSMT8 || psm == PSMT4) ? bw / 2 : bw);
@@ -1241,7 +1246,7 @@ void GsFrontend::materializeRect(uint32_t bp, uint32_t bw, uint32_t psm, uint32_
         for (uint32_t px = x / pw; px <= (x + std::max<uint32_t>(w, 1) - 1) / pw; ++px)
             for (uint32_t extra = 0; extra < 2; ++extra) {
                 if (extra && !(bp % 32)) break;
-                materializePage(bp / 32 + py * perRow + px + extra);
+                materializePage(bp / 32 + py * perRow + px + extra, cause);
             }
 }
 
@@ -1434,7 +1439,7 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
             for (uint32_t extra = 0; extra < 2; ++extra) {
                 if (extra && !(t.tbp % 32)) break;
                 const uint32_t page = (t.tbp / 32 + py * perRow + px + extra) & 511;
-                materializePage(page);   // (read from memory by address)
+                materializePage(page, kForTexture);   // (read from memory by address)
                 generation += pageGeneration[page] * (page + 1);
                 content = mix(content, page);
                 if (pages[page].target && pages[page].serial > newest) {
@@ -1869,7 +1874,7 @@ void GsFrontend::effect(const gfx::EffectRecord& r) {
     t.psm = PSMT8;
     t.cpsm = PSMCT32;
     t.cbp = r.clutBase;
-    materializeRect(r.clutBase, 1, PSMCT32, 0, 0, 16, 16);
+    materializeRect(r.clutBase, 1, PSMCT32, 0, 0, 16, 16, kForTexture);
     mem.readClut(t, e.curve.data());
     sceneRead(e.source);   // (a 3D scene read into another: complete)
     markWritten(e.destination, r.destinationPage * 32u, r.width, r.destinationFormat, e.x0, e.x1, e.y0, e.y1);
