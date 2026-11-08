@@ -2346,6 +2346,10 @@ void GsFrontend::sceneRecord(const uint8_t* payload, size_t bytes) {
         sceneOpen = true;
         viewBindings.clear();
         sceneCuts = sceneCutsAsync = 0;
+        sceneMarkerCommands.clear();
+        sceneVsyncInFrame = false;
+    } else if (prefix.kind == gfx::scene::kMarker && sceneOpen) {   // (SceneFrame::markerCommands, a.8)
+        sceneMarkerCommands.push_back(static_cast<uint32_t>(frame.commands.size()));
     } else if (prefix.kind == gfx::scene::kViewEnd && bytes >= sizeof(gfx::scene::ViewEnd) && sceneOpen) {
         gfx::scene::ViewEnd end;
         std::memcpy(&end, payload, sizeof end);
@@ -2442,6 +2446,54 @@ void GsFrontend::sceneFrame(std::unique_ptr<scene::SceneFrame> f) {
     }
     c.cuts = sceneCuts;
     c.cutsAsync = sceneCutsAsync;
+    // the markers' command indices (a.8), and A5a's order after the frame's first Light command
+    f->markerCommands.assign(sceneMarkerCommands.begin(), sceneMarkerCommands.end());
+    {
+        uint32_t light = UINT32_MAX;
+        for (uint32_t k = 0; k < frame.commands.size(); ++k)
+            if (frame.commands[k].kind == FrameList::Command::Kind::Light) {
+                light = k;
+                break;
+            }
+        if (sceneCuts || sceneVsyncInFrame) {
+            ++stats.markersNotChecked;   // (its Light and markers may be in an earlier list: a cut or a VSync inside the frame)
+        } else if (light != UINT32_MAX) {
+            if (f->markerCommands.size() != f->markers.size()) {
+                ++stats.markersNotChecked;   // (markers the front end did not see)
+            } else {
+                // the markers' kinds in order: one or more Post pairs, then one or more Hud pairs (split screen: one a
+                // player), each Begin followed by its End, indices non-decreasing, the first Light before the first PostEnd
+                bool post = false, hud = false, ordered = true;   // (a Post / HUD pair begun: present, complete or not)
+                uint16_t open = 0;
+                uint32_t last = 0, firstPostBegin = UINT32_MAX, firstPostEnd = UINT32_MAX;
+                for (size_t m = 0; m < f->markers.size(); ++m) {
+                    const uint16_t kind = f->markers[m].marker;
+                    if (kind < 1 || kind > 4) continue;   // (other markers: not A5a's)
+                    const uint32_t at = f->markerCommands[m];
+                    if (at < last) ordered = false;
+                    last = at;
+                    if (kind == 1 || kind == 3) {   // a Begin: none open, and no Post after the HUD
+                        if (open || (kind == 1 && hud)) ordered = false;
+                        open = kind;
+                        (kind == 1 ? post : hud) = true;
+                        if (kind == 1 && firstPostBegin == UINT32_MAX) firstPostBegin = at;
+                    } else {                        // an End: its Begin open
+                        if (open != kind - 1) ordered = false;
+                        open = 0;
+                        if (kind == 2 && firstPostEnd == UINT32_MAX) firstPostEnd = at;
+                    }
+                }
+                if (open) ordered = false;
+                if (!post || !hud) {
+                    ++stats.markersAbsent;   // (no PostBegin or no HudBegin: the garage car, RaceSolitaire's own panel)
+                } else {
+                    ordered = ordered && light < firstPostEnd;
+                    ++(ordered ? stats.markersInOrder : stats.markersOutOfOrder);
+                    if (ordered) ++(light < firstPostBegin ? stats.lightBeforePost : stats.lightInsidePost);
+                }
+            }
+        }
+    }
     ++stats.sceneFrames;
     stats.viewSplitTargets += c.viewSplitTargets;
     stats.viewsUnbound += c.viewsUnbound;
@@ -2457,6 +2509,7 @@ void GsFrontend::sceneFrame(std::unique_ptr<scene::SceneFrame> f) {
 void GsFrontend::vsync(uint64_t vblank, FrameList& out) {
     packetsThisFrame = 0;
     lastModelView = 0;
+    if (sceneOpen) sceneVsyncInFrame = true;   // (its markers' indices span two lists: not checked)
     for (ViewBinding& v : viewBindings) v.inList = false;
     scenes.clear();
     // The texture pack switched on or off: every texture decodes again, with or without its replacement.

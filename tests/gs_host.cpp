@@ -382,6 +382,70 @@ int main(int argc, char** argv) {
         expect(fe.stats.splitByReason[4] == 1, "binding: rule 4 counted once (the view sampling its own principal)");
     }
 
+    // 2d. A5a's marker check (gs_frontend.cpp sceneFrame): a frame whose list has a Light command, its post and HUD markers'
+    // command order. 'S' a 3D scene in the frame (68 triangles, depth-tested), 'L' a draw sampling it (the Light), '1'..'4'
+    // PostBegin, PostEnd, HudBegin, HudEnd, 'C' a cut.
+    {
+        auto run = [&](const char* steps) {
+            gt4::gsn::GsFrontend fe;
+            Gif g = setup();
+            fe.gif(3, static_cast<const uint8_t*>(g.data()), g.bytes());
+            std::vector<uint32_t> words(gt4::gfx::kModelWords, 0);
+            words[64 * 4 + 3] = 1;
+            words[65 * 4 + 3] = 68 * 3;   // one strip of 70 vertices: 68 triangles (a scene needs 64)
+            gt4::gfx::ModelJob job{};
+            job.count = 70;
+            gt4::gfx::scene::FrameBegin begin{};
+            begin.prefix = {gt4::gfx::scene::kFrameBegin, gt4::gfx::scene::kVersion};
+            fe.sceneRecord(reinterpret_cast<const uint8_t*>(&begin), sizeof begin);
+            auto sf = std::make_unique<gt4::scene::SceneFrame>();
+            gt4::gsn::FrameList cutList;
+            for (const char* c = steps; *c; ++c) {
+                if (*c == 'S' || *c == 'L') {
+                    Gif s2;
+                    if (*c == 'S')
+                        s2.ad({{FRAME_1, frame(0, 10, PSMCT32)}, {ZBUF_1, zbuf(0x70, PSMZ24, false)}, {TEST_1, test(true, 2)}, {TEX0_1, 0}});
+                    else
+                        s2.ad({{FRAME_1, frame(0x100, 10, PSMCT32)}, {ZBUF_1, zbuf(0x70, PSMZ24, true)}, {TEST_1, test(true, 1)},
+                               {TEX0_1, tex0(0, 10, PSMCT32, 10, 9, true, 0)}});
+                    fe.gif(3, static_cast<const uint8_t*>(s2.data()), s2.bytes());
+                    job.prim = *c == 'S' ? 4 : (4 | (1 << 4));
+                    fe.model(job, words.data());
+                } else if (*c == 'C') {
+                    fe.cut(cutList);
+                } else {
+                    gt4::gfx::scene::Marker m{};
+                    m.prefix = {gt4::gfx::scene::kMarker, gt4::gfx::scene::kVersion};
+                    m.marker = static_cast<uint16_t>(*c - '0');
+                    fe.sceneRecord(reinterpret_cast<const uint8_t*>(&m), sizeof m);
+                    sf->markers.push_back(m);   // (the decoder's list, in arrival order)
+                }
+            }
+            fe.sceneFrame(std::move(sf));
+            return fe.stats;
+        };
+        auto a = run("S1L234");
+        expect(a.markersInOrder == 1 && a.lightInsidePost == 1, "markers: the Light inside the post, in order");
+        auto b = run("SL1234");
+        expect(b.markersInOrder == 1 && b.lightBeforePost == 1, "markers: the Light before the post, in order");
+        auto c = run("S1L324");
+        expect(c.markersOutOfOrder == 1 && c.markersInOrder == 0, "markers: HudBegin before PostEnd is out of order");
+        auto d = run("SL");
+        expect(d.markersAbsent == 1 && d.markersOutOfOrder == 0, "markers: a frame with a Light but no markers is counted absent");
+        auto e = run("S1L2C34");
+        expect(e.markersNotChecked == 1 && e.markersInOrder == 0 && e.markersOutOfOrder == 0, "markers: a frame cut by a read is not checked");
+        auto f = run("S1L23434");
+        expect(f.markersInOrder == 1, "markers: split screen's HUD pair per player, in sequence, in order");
+        auto h = run("S1L2343");
+        expect(h.markersOutOfOrder == 1, "markers: a HUD pair left open is out of order");
+        auto i = run("S1L23");
+        expect(i.markersOutOfOrder == 1 && i.markersAbsent == 0, "markers: the only HUD pair left open is out of order, not absent");
+        auto j = run("S1L3");
+        expect(j.markersOutOfOrder == 1 && j.markersAbsent == 0, "markers: both pairs begun, neither ended, is out of order");
+        auto k = run("S1L");
+        expect(k.markersAbsent == 1, "markers: a PostBegin and no HudBegin is a screen without the HUD (absent)");
+    }
+
     // 3. A capture replayed through GsHost (no game: reads stay in memory): one displayed list per VBlank.
     {
         const std::filesystem::path dir = outputDir.empty() ? gt4::test::uniqueTempPath("gt4_gs_host_test") : std::filesystem::path(outputDir);
