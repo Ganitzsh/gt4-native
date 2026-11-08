@@ -287,6 +287,36 @@ each on x64.
 
 **Time box.** 1 day of reading, 1 of build tests.
 
+**Result (lane C, 2026-11-08; the coordinator, the architect and lane B agreed).** FSR 3.1 is cleared; DLSS and
+XeSS are not. The project is GPLv3 (`LICENSE`), and RELEASE_POLICY.md says never to package proprietary SDK
+artifacts.
+
+- **FSR 3.1: cleared.** FidelityFX SDK v1.1.4 (tag c6efa6b, upscaler 3.1.4) is MIT (`LICENSE.txt`,
+  `sdk/LICENSE.txt`). It has the upscaler's whole source: the host side (`sdk/src/components/fsr3upscaler/`) and
+  the ten Vulkan GLSL passes (`sdk/src/backends/vk/shaders/fsr3upscaler/`), with their headers under
+  `sdk/include/FidelityFX/gpu/` (`fsr3upscaler/`, `spd/`, `fsr1/`). It is vendored unmodified, as FSR 2.2.1 is,
+  with a THIRD_PARTY_NOTICES row. Its GLSL is compiled with our glslang, and our own Vulkan glue replaces AMD's
+  `ffx_vk.cpp` and shader compiler. It builds into `gt4_host`, so the zip and the tar carry no extra file.
+  Build test (x64, MSVC and the host's glslang): all ten passes compile to SPIR-V (`--target-env vulkan1.1`,
+  FSR 2's option set), and `ffx_fsr3upscaler.cpp`, `ffx_assert.cpp` and `ffx_object_management.cpp` compile
+  (`cl /std:c++20 /W3`) without errors. Linux and arm64 use the same sources as FSR 2's path, and B17's CI builds
+  prove them. SDK 2.x (2.0 to 2.4) ships the upscaler as AMD-signed DLLs under a licence that grants
+  redistribution "in binary form only" and forbids reverse engineering. So a later FSR means re-reading its
+  licence first; it is not a pin bump.
+- **DLSS: not cleared.** NVIDIA RTX SDKs licence (NVIDIA/DLSS `LICENSE.txt`). The SDK is binary only
+  (`nvngx_dlss.dll`, `libnvidia-ngx-dlss.so`). Its 4.e says "You may not use the SDK in any manner that would
+  cause it to become subject to an open source software license". Its supplement licenses it "only for their
+  use in systems with NVIDIA GPUs" and requires the NVIDIA marks on splash screens, the about box and the credits.
+  A GPLv3 program that ships a proprietary library which is not a system library needs a GPLv3 section 7
+  exception from every copyright holder.
+- **XeSS: not cleared.** Intel Simplified Software License (intel/xess `LICENSE.txt`). The SDK is "provided in
+  binary form only", redistributed "without modification", with "No reverse engineering, decompilation, or
+  disassembly". It is `libxess.dll` plus the MSVC runtime DLLs, for Windows x64 only (no Linux, no arm64). It has
+  the same GPLv3 and policy conflict.
+
+Allowing DLSS or XeSS would take a GPLv3 exception and a change to RELEASE_POLICY.md. That is the owner's decision,
+not a lane's, and it is on the owner's list. B17 is FSR 3.1 only.
+
 ---
 
 ## R14: Vehicle state (blocks D6, A9, D8, B19, D9)

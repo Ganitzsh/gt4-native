@@ -563,9 +563,13 @@ between targets, the reads' downscale). `original` never takes a fractional scal
 67 % at 4K upscaled by FSR 2 without TAA ghosting on the flyover (review), motion vectors exact (velocity debug
 view).
 
-**B17: FSR 3.1, DLSS, XeSS (M; lane C, moved from lane B on 2026-11-08, lane B reviewing).** Backends of B16's
-interface: FSR 3.1 first, at today's integer scales; DLSS and XeSS only if R13 clears them. Depends: B16, R13
-(B16b for fractional scales). Acceptance: each where available; `VAL`; `PERF`.
+**B17: FSR 3.1 (M; lane C, moved from lane B on 2026-11-08, lane B reviewing).** A backend of B16's interface:
+FSR 3.1 only, from FidelityFX SDK v1.1.4 (MIT), vendored unmodified with our glslang and our own Vulkan glue, at
+today's integer scales. Its depth flags are the ones b.9 states (B16 (1); FSR 2's today: inverted, for GT4's
+larger-is-nearer Z, and an infinite far plane). DLSS and XeSS are out: R13 finds their licences incompatible with
+GPLv3 and RELEASE_POLICY.md, and only the owner can change that. Depends: B16, R13 (B16b for fractional scales).
+Acceptance: `VAL`; `PERF`; as for FSR 2, the same frames on every device class CI runs (the Linux and arm64 cross
+builds).
 
 **B18: GPU particles from emitters (M).** Depends: A8, B22. Acceptance: `VAL`; smoke and sparks at the emitters
 (review against the GS path's sprites); in the reactive mask.
