@@ -380,12 +380,21 @@ struct SceneFrameState {
     int course = 0;      // the course's draws under way (gt4_scene_course: nested), its Cmds' Instances kInstCourse (A11a)
     int coursePaused = 0;   // inside them, draws that are not world-space course (billboards facing the camera): unflagged
     uint16_t courseTop = 0;   // gt4_matrix_stack_top when the outermost course bracket opened (kInstCourse's depth)
+    int billboards = 0;       // BillboardSet__render's group draws under way (A7 step 1b): each batch run an Instance
+    int billboardsPaused = 0;   // inside them, a model's display program (a 0x8000 entry): its Cmd's own Instances
+    uint32_t flushSerial = 0;   // the serial of the current flush's first billboard Instance (0: none yet)
+    uint16_t billboardCount = 0;   // the flush's billboards kept (g_billboards)
     uint16_t openView = 0, viewInstances = 0;
     uint16_t mainView = 0;   // the frame's last kViewMain view (A7: the glow pass's lights name it)
     bool haveProjection = false;
     float clip[16] = {}, viewport[12] = {};   // the last Projection sent
 };
 SceneFrameState g_scene;
+// A7 step 1b: the current flush's billboards (view-space centre, half sizes, colour), sent after it as kSrcBillboard
+// candidates. Fixed storage: BillboardSet__render runs in the frame's draw, which must not allocate.
+struct BillboardKept { float position[3], halfWidth, halfHeight, colour[3], alpha; };
+BillboardKept g_billboards[512];
+uint32_t g_billboards_dropped = 0;   // billboards past the 512 a flush keeps, this run (logged)
 
 // Appends a scene record to the open frame and counts it by kind (FrameEnd's counts, a.5.1). Records while no frame
 // is open are dropped here (a.5.6).
@@ -680,7 +689,117 @@ void gt4_scene_cmd(uint32_t context, uint32_t cmd) {
     if (g_scene.openView) ++g_scene.viewInstances;
 }
 
+// A7 step 1b (CONTRACTS.md kInstBillboard, kSrcBillboard): BillboardSet__render's group draws (game_src/func_004506F0.cpp)
+// open a billboard context. Its batch runs are each an Instance of their own (items 1, objectToView = set 0: the quads
+// are built in world space, facing the camera), flagged kInstBillboard and nothing else; a flush may split into several
+// runs, so the Instance goes with the run (gt4_gfx_batch_run), not with the flush.
+void gt4_scene_billboards(uint32_t context, int on) {
+    (void)context;
+    if (!gt4_scene_on()) return;
+    g_scene.billboards = on ? g_scene.billboards + 1 : (g_scene.billboards > 0 ? g_scene.billboards - 1 : 0);
+    if (!g_scene.billboards) {   // (a flush sends its candidates; anything left over belongs to none)
+        g_scene.billboardCount = 0;
+        g_scene.flushSerial = 0;
+        g_scene.billboardsPaused = 0;
+    }
+}
+
+// Around a billboard group's model entries (0x8000: 0049D308, a display program whose Cmd sends its own Instance and
+// runs): the context paused, so those runs keep their Cmd's Instance. The flush before that call has sent the
+// candidates; the count and the serial stay as they are.
+void gt4_scene_billboards_pause(uint32_t context, int on) {
+    (void)context;
+    if (!gt4_scene_on()) return;
+    g_scene.billboardsPaused = on ? g_scene.billboardsPaused + 1
+                                  : (g_scene.billboardsPaused > 0 ? g_scene.billboardsPaused - 1 : 0);
+}
+
+// A billboard of the current flush: its world centre (the entry's x, its base y plus half the item's height, z) and half
+// sizes, through set 0 into view space, and its item's colour, kept for gt4_scene_billboard_flush. The half width is
+// the item's +0 as it is: 004506F0 spans the quad over +- D_00846590 (the camera's unit right vector) x that value.
+// `colours` is the item's vertex colours as 0049BE10 unpacks them (V4-8: four RGBA bytes per vertex, four vertices;
+// 0x80 is 1, the GS's modulate unit, so a channel may reach 2); their mean is the colour and the alpha's mean the
+// intensity. 0: none (white).
+void gt4_scene_billboard(uint32_t context, float x, float y, float z, float halfWidth, float halfHeight,
+                         uint32_t colours) {
+    (void)context;
+    if (!gt4_scene_on() || !g_scene.inFrame || !g_scene.billboards || g_scene.billboardsPaused) return;
+    if (g_scene.billboardCount >= 512) {   // (its quad still draws, in a tagged run: only the candidate is lost)
+        if ((g_billboards_dropped++ & 0x3FF) == 0)
+            log_warn("pgl: a billboard flush past 512 billboards: its candidate dropped (%u so far)",
+                     g_billboards_dropped);
+        return;
+    }
+    float set0[16], set1[16];
+    currentSets(set0, set1);
+    BillboardKept &b = g_billboards[g_scene.billboardCount++];
+    for (int j = 0; j < 3; ++j) b.position[j] = x * set0[j] + y * set0[4 + j] + z * set0[8 + j] + set0[12 + j];
+    b.halfWidth = halfWidth;
+    b.halfHeight = halfHeight;
+    unsigned sum[4] = {0, 0, 0, 0};
+    if (colours) {
+        const uint8_t *c = static_cast<const uint8_t *>(guest_ptr(colours & 0x0FFFFFFF));
+        for (int v = 0; v < 4; ++v)
+            for (int j = 0; j < 4; ++j) sum[j] += c[v * 4 + j];
+    } else {
+        sum[0] = sum[1] = sum[2] = sum[3] = 4 * 0x80;
+    }
+    for (int j = 0; j < 3; ++j) b.colour[j] = static_cast<float>(sum[j]) / (4 * 128.0f);
+    b.alpha = static_cast<float>(sum[3]) / (4 * 128.0f);
+}
+
+// After a flush (0049BBF0): its billboards as kSrcBillboard candidates of the main view (inside it: a.5 rule 4's plain
+// case), id = the serial of the flush's first Instance. The host keeps one only when that instance's material has the
+// glow class (F2b): tree billboards light nothing.
+void gt4_scene_billboard_flush(uint32_t context) {
+    namespace scene = gfx::scene;
+    if (gt4_scene_on() && g_scene.inFrame && g_scene.flushSerial && g_scene.openView) {
+        for (uint16_t k = 0; k < g_scene.billboardCount; ++k) {
+            const BillboardKept &b = g_billboards[k];
+            scene::Light r{};
+            r.prefix = {scene::kLight, scene::kVersion};
+            r.view = g_scene.openView;
+            r.kind = scene::kLightPoint;
+            r.source = scene::kSrcBillboard;
+            r.id = g_scene.flushSerial;
+            r.entrant = 0xFFFFFFFFu;
+            std::memcpy(r.position, b.position, sizeof r.position);
+            r.width = b.halfWidth;
+            r.height = b.halfHeight;
+            std::memcpy(r.colour, b.colour, sizeof r.colour);
+            r.intensity = b.alpha;
+            sceneAppend(context, &r, sizeof r);
+        }
+    }
+    g_scene.billboardCount = 0;
+    g_scene.flushSerial = 0;
+}
+
 }  // extern "C"
+
+// A billboard batch run's Instance (inside the billboard context, before the run's kBatchRun): items 1, objectToView = set 0,
+// kInstBillboard; the flush's first one names its candidates.
+static void sceneBillboardInstance(uint32_t context) {
+    namespace scene = gfx::scene;
+    float set0[16], set1[16];
+    currentSets(set0, set1);
+    scene::Instance r{};
+    r.prefix = {scene::kInstance, scene::kVersion};
+    r.view = g_scene.openView;
+    r.flags = scene::kInstBillboard;
+    r.serial = static_cast<uint32_t>(g_scene.instances) + 1;   // (counted as it is appended)
+    r.entrant = 0xFFFFFFFFu;
+    std::memcpy(r.objectToView, set0, sizeof r.objectToView);
+    const bool axisScaled = guest_ref<uint8_t>(kSpr + 0xE) != 0;
+    for (int i = 0; i < 3; ++i) r.axisScale[i] = axisScaled ? sprFloats(0xBD0)[i] : 1.0f;
+    r.items = 1;
+    r.matrixSet = guest_ref<uint8_t>(kSpr + 1);
+    r.section = 0xFFFF;
+    r.projection = sceneProjection(context, set1, g_batchViewport, g_scene.openView);
+    if (!g_scene.flushSerial) g_scene.flushSerial = r.serial;
+    sceneAppend(context, &r, sizeof r);
+    if (g_scene.openView) ++g_scene.viewInstances;
+}
 
 // The kick closes the frame (CONTRACTS.md a.5.1): FrameEnd with the counts appended since its FrameBegin.
 bool gt4::rt::scene_frame_end(void *record, uint32_t bytes, uint32_t *thread) {
@@ -907,6 +1026,8 @@ void gt4_gfx_effect_end(uint32_t context) {
 
 // The batch run (itop 0xFFFFFFFF: the lighting chain the last run had).
 void gt4_gfx_batch_run(uint32_t context, uint32_t entry, uint32_t itop) {
+    if (g_scene.billboards && !g_scene.billboardsPaused && g_scene.inFrame && gt4_scene_on())
+        sceneBillboardInstance(context);   // (A7 step 1b)
     const gfx::BatchRun r{entry, itop};
     append(context, gfx::kBatchRun, &r, sizeof r);
 }

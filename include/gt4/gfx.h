@@ -911,6 +911,10 @@ enum LightSource : uint8_t {
     kSrcSun = 6,
     kSrcWarning = 7,              // blinking warning lamps
     kSrcCarLamp = 8,              // a car lamp whose group is not known (003B88C8's entries[], A7 step 1a): point, no direction
+    kSrcBillboard = 9,            // a course billboard's centre, half sizes and item colour (A7 step 1b),
+                                  //   sent after its flush, id = the serial of the flush's first kInstBillboard
+                                  //   instance: a candidate the host keeps as kSrcCourseGlow only when that
+                                  //   instance's material has the glow class (F2b)
     kSrcOther = 15,
 };
 struct Light {

@@ -416,6 +416,8 @@ void checks() {
     const auto placed = oneJob(none, rec::kInstCourseObject, translate(3.0f, 0.0f, 0.0f) * worldToView());
     check(placed.courseObjects == 1 && placed.cameraChecked == 0 && placed.cameraMismatch == 0,
           "kInstCourseObject: a placed course object is counted, not camera-checked (A11a)");
+    const auto billboard = oneJob(none, rec::kInstBillboard, translate(3.0f, 0.0f, 0.0f) * worldToView());
+    check(billboard.billboards == 1 && billboard.cameraChecked == 0, "kInstBillboard: a billboard run is counted, not camera-checked (A7)");
     {   // a NaN in the camera itself (worldToView): the course instance carries the same NaN, and it still counts
         SceneDecoder d;
         put(d, frameBegin(1));

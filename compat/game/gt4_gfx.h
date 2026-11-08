@@ -92,6 +92,15 @@ void gt4_scene_marker(void *context, int kind);
  * the car lamps and the course's light sources (warning lamps), as 0033EAB8 has them for the glow pass after the main
  * view (a.5 rule 4). */
 void gt4_scene_glow_lights(void *context, unsigned int view, const void *glow);
+/* A7 step 1b: BillboardSet__render's group draws open (on 1) and close (on 0) a billboard context, in which each batch run
+ * gets an Instance of its own (kInstBillboard); gt4_scene_billboard keeps a billboard's world centre, half sizes and
+ * item colour (the address of the item's vertex colours), and gt4_scene_billboard_flush, after each 0049BBF0, sends
+ * them as kSrcBillboard candidates of the flush's first Instance. */
+void gt4_scene_billboards(void *context, int on);
+void gt4_scene_billboard(void *context, float x, float y, float z, float halfWidth, float halfHeight, unsigned colours);
+void gt4_scene_billboard_flush(void *context);
+/* Around a billboard group's model entry (0049D308, a Cmd with its own Instance): the billboard context paused. */
+void gt4_scene_billboards_pause(void *context, int on);
 /* The course's draws begin (on 1) or end (on 0): the Instances in between are flagged kInstCourse (nested calls count). */
 void gt4_scene_course(void *context, int on);
 /* Inside the course's draws, a draw that is not its world-space geometry (camera-facing billboards) pauses the flag. */

@@ -73,7 +73,7 @@ void SceneCounters::add(const SceneCounters& o) {
     runsAfterSameMatrix += o.runsAfterSameMatrix; matrixChecked += o.matrixChecked;
     matrixMismatch += o.matrixMismatch; matrixMaxError = std::max(matrixMaxError, o.matrixMaxError);
     viewportMismatch += o.viewportMismatch; guardUnexpected += o.guardUnexpected; cameraChecked += o.cameraChecked;
-    cameraMismatch += o.cameraMismatch; courseObjects += o.courseObjects; lights += o.lights; lightsAfterViewEnd += o.lightsAfterViewEnd;
+    cameraMismatch += o.cameraMismatch; courseObjects += o.courseObjects; billboards += o.billboards; lights += o.lights; lightsAfterViewEnd += o.lightsAfterViewEnd;
     lightViewUnknown += o.lightViewUnknown; emitters += o.emitters; markers += o.markers;
     vehicles += o.vehicles; viewSplitTargets += o.viewSplitTargets; viewsUnbound += o.viewsUnbound;
     fallbackNotBound += o.fallbackNotBound; fallbackMeshPending += o.fallbackMeshPending;
@@ -366,6 +366,7 @@ void SceneDecoder::instance(const rec::Instance& r) {
             objects_[key] = d.objectToWorld;
         }
         if (r.flags & rec::kInstCourseObject) ++c.courseObjects;   // (a placed course object: its own objectToWorld)
+        if (r.flags & rec::kInstBillboard) ++c.billboards;         // (a BillboardSet batch run: camera-facing quads)
         if (r.flags & rec::kInstCourse) {   // the course's world-space geometry (R1): objectToView is the camera
             ++c.cameraChecked;
             const float scale = std::max(largest(view->worldToView), 1.0f);
