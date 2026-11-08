@@ -5,7 +5,9 @@
 #include <SDL3/SDL_keyboard.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -14,6 +16,8 @@
 namespace gt4 {
 
 namespace {
+
+void calm(SDL_Gamepad* pad, bool ds5Sent);   // (below: before a pad is closed)
 
 // The keyboard and one gamepad now (standard layout), for the pad map (platform/input/input_map.h).
 input::Snapshot readInput(SDL_Gamepad* gamepad) {
@@ -76,9 +80,12 @@ PadDevices::PadDevices(std::string profilesPath, bool virtualOnly) : path_(std::
     for (int p = 0; p < input::Ports::kPorts; ++p) rebuild(p);
 }
 
-PadDevices::~PadDevices() {
+PadDevices::~PadDevices() {   // (before SDL_Quit: main's SdlRuntime outlives it)
     for (auto& p : port_)
-        if (p.gamepad) SDL_CloseGamepad(p.gamepad);
+        if (p.gamepad) {
+            calm(p.gamepad, p.ds5Sent);
+            SDL_CloseGamepad(p.gamepad);
+        }
     for (SDL_Gamepad* g : waiting_) SDL_CloseGamepad(g);
 }
 
@@ -110,6 +117,7 @@ void PadDevices::removed(SDL_JoystickID id) {
     const int port = ports_.disconnect(id);
     if (port < 0) return;
     std::printf("Input: port %d: %s left (the game sees the port empty)\n", port + 1, SDL_GetGamepadName(port_[port].gamepad));
+    calm(port_[port].gamepad, port_[port].ds5Sent);
     SDL_CloseGamepad(port_[port].gamepad);
     port_[port].gamepad = nullptr;
     port_[port].profile = -1;
@@ -131,6 +139,12 @@ void PadDevices::removed(SDL_JoystickID id) {
 }
 
 void PadDevices::take(SDL_Gamepad* pad, int port) {
+    Port& p = port_[port];
+    p.low = p.high = p.triggerLeft = p.triggerRight = 0;   // (a new pad: nothing sent to it yet)
+    p.motorsAt = p.triggersAt = 0;
+    p.noImpulseTriggers = false;
+    p.ds5Brake = p.ds5Throttle = 0;
+    p.ds5Sent = false;
     port_[port].gamepad = pad;
     port_[port].profile = profileFor(SDL_GetGamepadID(pad));
     rebuild(port);
@@ -169,6 +183,102 @@ ps2::PadInput PadDevices::read(int port, const Settings& settings, float dt) {
     ps2::PadInput in = input::apply(p.map, s);
     p.response.step(in, s, responseConfig(settings), dt);
     return in;
+}
+
+namespace {
+
+uint16_t to16(float x) { return static_cast<uint16_t>(std::lround(std::clamp(x, 0.0f, 1.0f) * 65535.0f)); }
+
+// A DualSense's output report effects block (SDL's HIDAPI PS5 driver passes it through SDL_SendGamepadEffect; the layout
+// SDL's testcontroller uses). Bits 0x04 / 0x08 of the first byte say the right / left trigger effects are set; the
+// rumble and lights bits stay clear, so those are left as they are.
+struct Ds5Effects {
+    uint8_t enable1, enable2, rumbleRight, rumbleLeft, headphoneVolume, speakerVolume, micVolume, audioEnable;
+    uint8_t micLight, audioMute;
+    uint8_t rightTrigger[11], leftTrigger[11];
+    uint8_t unknown1[6], ledFlags, unknown2[2], ledAnim, ledBrightness, padLights, red, green, blue;
+};
+static_assert(sizeof(Ds5Effects) == 47);
+
+// Trigger effects (testcontroller's): 0x05 off; 0x01 resistance from a start position with a force; 0x06 vibration
+// at a frequency and an amplitude (0..63) from a start position.
+void ds5Resistance(uint8_t out[11], uint8_t step) {   // step 0..15
+    std::memset(out, 0, 11);
+    out[0] = step ? 0x01 : 0x05;
+    if (step) out[2] = static_cast<uint8_t>(40 + step * 14);   // force: firm from the first step, 250 at the last
+}
+void ds5Vibration(uint8_t out[11], uint8_t step) {
+    std::memset(out, 0, 11);
+    out[0] = step ? 0x06 : 0x05;
+    if (step) {
+        out[1] = 15;                                         // frequency
+        out[2] = static_cast<uint8_t>(10 + step * 53 / 15);  // amplitude, up to 63
+        out[3] = 0;                                          // from the start of the travel
+    }
+}
+
+// Before a pad is closed (it left its port, or the host ends): its motors stopped, and a DualSense's trigger effects set
+// off. Those stay on the pad until something replaces them (SDL's close does not), so a host that quit mid-brake would
+// leave the brake stiff in the next program (lane C's review).
+void calm(SDL_Gamepad* pad, bool ds5Sent) {
+    if (!pad) return;
+    SDL_RumbleGamepad(pad, 0, 0, 0);
+    if (ds5Sent) {
+        Ds5Effects e{};
+        e.enable1 = 0x04 | 0x08;
+        ds5Resistance(e.leftTrigger, 0);
+        ds5Vibration(e.rightTrigger, 0);
+        SDL_SendGamepadEffect(pad, &e, sizeof e);
+    }
+}
+
+}  // namespace
+
+void PadDevices::feel(int port, uint32_t gt4Rumble, const input::HapticsOut& h, uint64_t now) {
+    Port& p = port_[port];
+    SDL_Gamepad* pad = p.gamepad;
+    if (!pad) return;
+    // the motors: GT4's (the DUALSHOCK 2's large motor as the low-frequency one, its on / off small one as the high
+    // one) and the physics', the larger of each
+    const uint16_t low = std::max(static_cast<uint16_t>((gt4Rumble & 0xFF) * 257), to16(h.low));
+    const uint16_t high = std::max(static_cast<uint16_t>((gt4Rumble & 0x100) ? 0xFFFF : 0), to16(h.high));
+    const bool on = low || high;
+    if (low != p.low || high != p.high || (on && now - p.motorsAt >= 1000)) {
+        SDL_RumbleGamepad(pad, low, high, on ? 2000 : 0);
+        p.low = low;
+        p.high = high;
+        p.motorsAt = now;
+    }
+    if (SDL_GetGamepadType(pad) == SDL_GAMEPAD_TYPE_PS5) {
+        // adaptive triggers, in 16 steps so a small change sends nothing: the brake's resistance, the throttle's pulse
+        const auto step = [](float x) { return static_cast<uint8_t>(std::lround(std::clamp(x, 0.0f, 1.0f) * 15.0f)); };
+        const uint8_t brake = step(h.brakeResistance), throttle = step(h.throttlePulse);
+        if (p.ds5Sent && brake == p.ds5Brake && throttle == p.ds5Throttle) return;
+        Ds5Effects e{};
+        e.enable1 = 0x04 | 0x08;
+        ds5Vibration(e.rightTrigger, throttle);
+        ds5Resistance(e.leftTrigger, brake);
+        if (SDL_SendGamepadEffect(pad, &e, sizeof e)) {
+            p.ds5Brake = brake;
+            p.ds5Throttle = throttle;
+            p.ds5Sent = true;
+        }
+        return;
+    }
+    // impulse triggers (Xbox, through SDL's Windows.Gaming.Input or GameInput, over USB or the wireless adapter): SDL
+    // says false otherwise, which is said once, and then they are not tried again for this pad
+    if (p.noImpulseTriggers) return;
+    const uint16_t tl = to16(h.triggerLeft), tr = to16(h.triggerRight);
+    const bool triggersOn = tl || tr;
+    if (tl == p.triggerLeft && tr == p.triggerRight && !(triggersOn && now - p.triggersAt >= 1000)) return;
+    if (!SDL_RumbleGamepadTriggers(pad, tl, tr, triggersOn ? 2000 : 0) && triggersOn) {
+        p.noImpulseTriggers = true;
+        std::printf("Input: port %d: %s: impulse triggers not supported on this connection\n", port + 1,
+                    SDL_GetGamepadName(pad));
+    }
+    p.triggerLeft = tl;
+    p.triggerRight = tr;
+    p.triggersAt = now;
 }
 
 void PadDevices::save() const {

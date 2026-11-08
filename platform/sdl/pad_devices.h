@@ -6,6 +6,7 @@
 // A session's virtual pads come through SDL's events like real ones (only virtual ones are taken in a session), so
 // its plug and unplug commands exercise the same ports.
 #include "devices.h"
+#include "haptics.h"
 #include "response.h"
 #include "settings.h"
 
@@ -35,6 +36,10 @@ public:
     bool connected(int port) const { return port == 0 || gamepad(port) != nullptr; }
     // The port's pad for this frame: its devices' bindings, then its response (input.response; dt in seconds).
     ps2::PadInput read(int port, const Settings& settings, float dt);
+    // The port's motors and triggers now: GT4's own rumble (D2's g_rumble: bit 8 the small motor, bits 0-7 the large
+    // one) and the physics' haptics (D14), the larger per motor; sent when they change and every second while on
+    // (SDL's rumble lasts as long as asked). Triggers: an Xbox pad's impulse triggers, or a DualSense's adaptive ones.
+    void feel(int port, uint32_t gt4Rumble, const input::HapticsOut& haptics, uint64_t nowMs);
 
 private:
     struct Port {
@@ -42,6 +47,12 @@ private:
         int profile = -1;          // in profiles_ (-1: none)
         input::Map map;            // the keyboard's (pad 1) and the gamepad's bindings
         input::Response response{map};
+        // what feel() last sent
+        uint16_t low = 0, high = 0, triggerLeft = 0, triggerRight = 0;
+        uint64_t motorsAt = 0, triggersAt = 0;
+        bool noImpulseTriggers = false;   // SDL said no (XInput, Bluetooth): said once, not tried again
+        uint8_t ds5Brake = 0, ds5Throttle = 0;   // a DualSense's trigger effects, in 16 steps (0: off)
+        bool ds5Sent = false;
     };
     void take(SDL_Gamepad* pad, int port);
     int profileFor(SDL_JoystickID id);   // found or added (the type's defaults)

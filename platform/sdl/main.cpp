@@ -707,8 +707,22 @@ int run(const Options& options) {
     gt4::PadDevices pads(profilesPath, session != nullptr);
     SDL_JoystickID sessionPads[2] = {};   // a session's virtual pads as the ports last saw them
     bool pad2Sent = false;            // pad 2 sent as connected, so its removal is told to the game
-    uint32_t rumbleApplied[2] = {};    // g_rumble as last given to the gamepads (and a session's events)
-    Uint64 rumbleSentAt[2] = {};
+    uint32_t rumbleApplied[2] = {};    // g_rumble as a session last recorded it
+    // The players' cars for the haptics (D14): the newest Vehicle record of entrant 0 (pad 1) and 1 (pad 2, split screen;
+    // CONTRACTS a.4 Vehicle::flags), from the frames' scene records, and when it came.
+    gt4::gfx::scene::Vehicle playerCar[2] = {};
+    Uint64 playerCarAt[2] = {};
+    int hapticsRecorded[2][4] = {};     // a session's last recorded haptics, in percent
+    auto takeCars = [&](const std::vector<gt4::gsn::FrameList>& lists) {
+        for (const auto& list : lists) {
+            if (!list.scene || !list.scene->complete) continue;
+            for (const gt4::gfx::scene::Vehicle& v : list.scene->vehicles)
+                if (v.entrant < 2) {
+                    playerCar[v.entrant] = v;
+                    playerCarAt[v.entrant] = SDL_GetTicks();
+                }
+        }
+    };
     Uint64 padLast = 0;                // when the pads were last read (their response's dt)
     uint8_t padRecorded[2][18] = {};   // each pad's bytes as a session last recorded them
     auto save = [&] {
@@ -942,6 +956,7 @@ int run(const Options& options) {
             if (lockstep) gs->advance();
             if (gs->takeNativeFrames(nativeFrames)) {
                 GT4_STAGE_SCOPE("main: frames to the renderer");
+                takeCars(nativeFrames);
                 for (const auto& list : nativeFrames) {
                     freshPending = freshPending || list.displayed;
                     if (list.displayed) newestAdded = std::max(newestAdded, list.vblank);
@@ -956,7 +971,10 @@ int run(const Options& options) {
             if (gs->takeReadRequest(read)) {
                 GT4_STAGE_SCOPE("main: a read the game waits for");
                 servedRead = true;
-                if (gs->takeNativeFrames(nativeFrames)) renderer->addNativeFrames(nativeFrames);
+                if (gs->takeNativeFrames(nativeFrames)) {
+                    takeCars(nativeFrames);
+                    renderer->addNativeFrames(nativeFrames);
+                }
                 std::vector<uint8_t> pixels;
                 const bool ok = renderer->readGsTarget(read, pixels);
                 gs->completeRead(ok, std::move(pixels));
@@ -970,7 +988,9 @@ int run(const Options& options) {
                 gs->setGameOption(1, static_cast<uint32_t>(settings.mirror));      // kOptionMirrorDetail
                 gs->setGameOption(2, static_cast<uint32_t>(settings.modelDetail)); // kOptionModelDetail
                 gs->setGameOption(3, static_cast<uint32_t>(settings.raceFrames));  // kOptionRaceFrames
-                gs->setGameOption(5, gt4::sceneRecordsWanted(settings) ? 1u : 0u);  // kOptionSceneRecords
+                // kOptionSceneRecords (CONTRACTS a.1): 1 full, else 2 the Vehicles only for the haptics (D14), else 0
+                gs->setGameOption(5, gt4::sceneRecordsWanted(settings) ? 1u
+                                     : settings.hapticsMode == gt4::HapticsMode::Physics ? 2u : 0u);
                 {   // kOptionAspect: the content's shape now (aspect.ratio, or the window's)
                     const VkExtent2D e = renderer->drawableExtent();
                     const float a = settings.aspect == gt4::AspectRatio::Window ? (e.height ? float(e.width) / float(e.height) : 0.0f)
@@ -1028,22 +1048,37 @@ int run(const Options& options) {
                     if (session) session->record("pad", "\"port\":1,\"connected\":false");
                     std::memset(padRecorded[1], 0, 18);   // (a pad plugged in again is recorded again)
                 }
-                // The game's pad motors (GT4's own Options > Vibration decides whether it sends any) on the gamepads:
-                // the DUALSHOCK 2's large motor as the low-frequency rumble, its small one (on / off) as the high one.
-                // Re-sent every second while running (SDL's rumble lasts as long as asked); a session records them.
+                // The pads' motors and triggers: GT4's own rumble (its Options > Vibration decides whether it sends any;
+                // D2) and, with input.haptics = physics, what the player's car does (D14, platform/input/haptics.h),
+                // from the newest Vehicle record (a quarter of a second old at most; none with the menu open or the pad
+                // held back). A session records both (it has no real pad).
                 for (int p = 0; p < 2; ++p) {
                     const uint32_t v = g_rumble[p].load();
                     const Uint64 now = SDL_GetTicks();
-                    const bool motorOn = (v & 0x1FFu) != 0;
-                    if (v == rumbleApplied[p] && !(motorOn && now - rumbleSentAt[p] >= 1000)) continue;
-                    if (v != rumbleApplied[p] && session)
-                        session->record("rumble", "\"port\":" + std::to_string(p) + ",\"small\":" + std::to_string((v >> 8) & 1) +
-                                                      ",\"large\":" + std::to_string(v & 0xFF));
-                    rumbleApplied[p] = v;
-                    rumbleSentAt[p] = now;
-                    if (SDL_Gamepad* target = session ? nullptr : pads.gamepad(p))
-                        SDL_RumbleGamepad(target, static_cast<Uint16>((v & 0xFF) * 257), (v & 0x100) ? 0xFFFF : 0,
-                                          motorOn ? 2000 : 0);
+                    gt4::input::HapticsOut h;
+                    if (settings.hapticsMode == gt4::HapticsMode::Physics && playerCarAt[p] && now - playerCarAt[p] < 250 &&
+                        !menu.isOpen() && !padHeldBack)
+                        h = gt4::input::haptics(playerCar[p], {settings.hapticsStrength / 100.0f, settings.triggerEffects,
+                                                               settings.hapticsUndersteer, settings.hapticsLockUp,
+                                                               settings.hapticsWheelspin, settings.hapticsKerbs});
+                    if (session) {
+                        if (v != rumbleApplied[p])
+                            session->record("rumble", "\"port\":" + std::to_string(p) + ",\"small\":" +
+                                                          std::to_string((v >> 8) & 1) + ",\"large\":" + std::to_string(v & 0xFF));
+                        rumbleApplied[p] = v;
+                        const int now4[4] = {static_cast<int>(std::lround(h.low * 100)), static_cast<int>(std::lround(h.high * 100)),
+                                             static_cast<int>(std::lround(h.triggerLeft * 100)),
+                                             static_cast<int>(std::lround(h.triggerRight * 100))};
+                        if (std::memcmp(now4, hapticsRecorded[p], sizeof now4) != 0) {
+                            std::memcpy(hapticsRecorded[p], now4, sizeof now4);
+                            session->record("haptics", "\"port\":" + std::to_string(p) + ",\"low\":" + std::to_string(now4[0]) +
+                                                           ",\"high\":" + std::to_string(now4[1]) + ",\"left\":" +
+                                                           std::to_string(now4[2]) + ",\"right\":" + std::to_string(now4[3]) +
+                                                           ",\"vblank\":" + std::to_string(gs->vblanks()));
+                        }
+                    } else {
+                        pads.feel(p, v, h, now);
+                    }
                 }
             }
             renderer->setStatus(gs->status());

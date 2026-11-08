@@ -51,6 +51,26 @@ void inputOptions(std::vector<Option>& o) {
         "The pedals: the curve's exponent. 1 = linear; above 1, finer near the start of travel."));
     o.push_back(floatOption("input.pedal.smoothing", &Settings::pedalSmoothing, 0.0f, 100.0f,
         "The pedals: a filter's time constant in ms (0 = none)."));
+    o.push_back(enumOption("input.haptics", &Settings::hapticsMode, {"original", "physics"},
+        "The gamepad's rumble. original = GT4's own (its Options > Vibration; crashes and such), as on the PS2. "
+        "physics = that, plus what the car does: understeer, lock-up and wheelspin on the low-frequency motor, kerbs and "
+        "rough ground on the high-frequency one (each motor the larger of the two). It asks the game for its cars' state "
+        "each frame while a race runs."));
+    o.push_back(floatOption("input.haptics.strength", &Settings::hapticsStrength, 0.0f, 100.0f,
+        "How strong the physics' rumble and trigger effects are, percent (GT4's own rumble is not scaled)."));
+    o.push_back(boolOption("input.haptics.understeer", &Settings::hapticsUndersteer,
+        "With input.haptics = physics: the low-frequency motor when the front tyres slide more than the rear ones."));
+    o.push_back(boolOption("input.haptics.lockup", &Settings::hapticsLockUp,
+        "With input.haptics = physics: the low-frequency motor and the brake's trigger effects when a wheel locks."));
+    o.push_back(boolOption("input.haptics.wheelspin", &Settings::hapticsWheelspin,
+        "With input.haptics = physics: the low-frequency motor and the throttle's trigger effects when a wheel spins."));
+    o.push_back(boolOption("input.haptics.kerbs", &Settings::hapticsKerbs,
+        "With input.haptics = physics: the high-frequency motor on kerbs and rough ground."));
+    o.push_back(boolOption("input.trigger_effects", &Settings::triggerEffects,
+        "With input.haptics = physics: an Xbox pad's impulse triggers (lock-up on the left, wheelspin on the right; over "
+        "USB or the Xbox Wireless Adapter only) and a DualSense's adaptive triggers (the brake's resistance as the front "
+        "wheels near lock-up, a pulse on the throttle as the rear ones spin). Steam Input or DS4Windows running can hold "
+        "the pad and swallow them."));
 }
 
 }  // namespace gt4::settings_table

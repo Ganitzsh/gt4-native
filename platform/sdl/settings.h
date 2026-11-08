@@ -43,6 +43,8 @@ enum class AiCatchUp : uint8_t { Original, Reduced, Off };
 enum class TriggerTravel : uint8_t { Game, Full };
 // The sticks' and pedals' response (input.response, platform/input/response.h; PLAN.md D12).
 enum class InputResponse : uint8_t { Original, Modern };
+// Gamepad haptics (input.haptics, platform/input/haptics.h; PLAN.md D14): original = GT4's own rumble only (D2).
+enum class HapticsMode : uint8_t { Original, Physics };
 
 struct Settings {
     static constexpr int kVersion = 1;
@@ -141,6 +143,11 @@ struct Settings {
     float pedalOuterDeadzone = 2.0f;    // percent
     float pedalLinearity = 1.0f;        // exponent
     float pedalSmoothing = 0.0f;        // ms
+    // (input.haptics and input.trigger_effects are graphics-preset members: original, off in the original preset)
+    HapticsMode hapticsMode = HapticsMode::Physics;
+    float hapticsStrength = 100.0f;     // percent
+    bool triggerEffects = true;
+    bool hapticsUndersteer = true, hapticsLockUp = true, hapticsWheelspin = true, hapticsKerbs = true;
 
     // [scene] (test scene only; not saved)
     bool animate = true;
