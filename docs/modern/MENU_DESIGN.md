@@ -140,11 +140,11 @@ The game decides what is on screen and when; the host decides how it looks at th
 | Game-side page host | `runtime/menu/menu_host.{h,cpp}` | M | New | Ticks the engine once a game frame, owns input focus, plays sounds, holds the race pause, talks to the host. |
 | Flow hooks | `game_src/func_00109D00.cpp`, `func_0010FE40.cpp`, `func_0038B428.cpp`, `func_0038B2B0.cpp` (copies of matched code) | M (A reviews) | New | One call each into `runtime/menu` (section 3.2). `tools/hook_lint.py` clean. |
 | Pad focus | `runtime/iop.cpp` `gt4_replace_scePad2Read` | D's file, M's change | Changed (one test) | Neutral pad to GT4 while a page owns the pad. |
-| Settings bridge | `platform/ui/settings_schema.{h,cpp}` (host) | M (E reviews) | New | Builds the schema from `describe()` plus the page layout table (section 4); applies `SettingsSet`. |
-| UI renderer | `platform/ui/ui_renderer.{h,cpp}` on `platform/render/modern/layer2d.*` | M on E's layer | New | Draws a `DrawList`: textured quads, nine-slices, gradients, SDF text (E5), at output resolution, HDR at paper white. |
+| Settings bridge | `platform/ui/settings_schema.{h,cpp}` (host) | M (C reviews) | New | Builds the schema from `describe()` plus the page layout table (section 4); applies `SettingsSet`. |
+| UI renderer | `platform/ui/ui_renderer.{h,cpp}` on `platform/render/modern/layer2d.*` | M (C reviews) | New | Draws a `DrawList`: textured quads, nine-slices, gradients, SDF text (E5), at output resolution, HDR at paper white. |
 | Assets | `assets/ui/` (PNG sources, `manifest.json`, `prompts/`), `tools/ui_assets.py` | M | New | Section 5.4. Packed into an atlas at build time; installed beside the host. |
 | Host wiring | `platform/sdl/main.cpp` | C's order | Changed | Old menu removed; Guide / Esc sends "open"; UI list to the renderer; no-game modes run the engine on the host. |
-| Old menu | `platform/sdl/settings_menu.*`, menu drawing in `overlay.cpp` | E | **Deleted** | After M9 replaces every use. `chord_guard.h` and its test stay (the chord is a way in). |
+| Old menu | `platform/sdl/settings_menu.*`, menu drawing in `overlay.cpp` | M (C reviews) | **Deleted** | After M9 replaces every use. `chord_guard.h` and its test stay (the chord is a way in). |
 
 ### 3.2 Entry points
 
@@ -457,7 +457,7 @@ open; a capture taken with no page open carries no UI record.
 Depends: none. Acceptance: `CTEST`: navigation, repeat, tab memory, apply classes, confirm-revert timer, layout at
 16:9, 21:9 and 4:3 against golden draw lists (text, not images).
 
-**M3: UI renderer and assets pipeline (M).** `platform/ui/ui_renderer.*` on E's `layer2d`, `assets/ui/`,
+**M3: UI renderer and assets pipeline (M).** `platform/ui/ui_renderer.*` on `layer2d`, `assets/ui/`,
 `tools/ui_assets.py`. Depends: E5 (SDF font), E6's layer for HDR at paper white. Acceptance: `VAL`; the test scene
 draws the hub from a recorded draw list at 720p, 1440p and 4K (these images are our own art only: committed as
 goldens); HDR measured at paper white.
@@ -517,14 +517,16 @@ about progression later.
 
 ### 7.2 Order and lanes
 
-- Lane M owns `platform/ui/`, `runtime/menu/`, `assets/ui/`, `tools/ui_assets.py`, the menu-flow `game_src`
-  copies (00109D00, 0010FE40, 0038B428, 0038B2B0) and `include/gt4/ui.h`.
+- Lane M owns (PLAN 549aacf) `platform/ui/`, `runtime/menu/`, `assets/ui/`, `tools/ui_assets.py`, the menu-flow
+  `game_src` copies (00109D00, 0010FE40, 0038B428, 0038B2B0), `include/gt4/ui.h`, a future `settings_ui.cpp`, and
+  `settings_menu.*`, `layer2d.*`, `overlay.*`, the UI draw list and SDF text, with lane C reviewing; and the tickets
+  E5, E6, E7 and E9. So E5 before M3 is lane M's own order.
 - Shared files: `protocol.h` serialised with P1 and P3a (section 3.6; A, D review); `runtime/link.cpp` (C's, A
   reviews); `runtime/iop.cpp` (D reviews; M5's pad focus sits after D13's mapping); `stream.cpp`; `main.cpp` (C's
-  order); `settings*` and `layer2d` (lane E's; who reviews them while no lane E session runs is the coordinator's
-  call). E5 comes before M3. `settings_menu.*` is deleted by M9.
-- PLAN.md's E8a and E8b become M11's pages (their content unchanged). E9 keeps its HUD work; M11 only draws its rows.
-  E5 and E6 stay lane E's and M depends on them.
+  order); the settings table (`settings.{h,cpp}`, `settings_table.h`, presets and the shared display, render,
+  effects and scene files) is lane C's; per-module files stay with their lanes (`settings_input` and
+  `settings_audio` D, `settings_lighting` F), lane C reviewing. `settings_menu.*` is deleted by M9.
+- PLAN.md's E8a and E8b become M11's pages (their content unchanged); E9's HUD work and its rows are lane M's.
 
 ### 7.3 Cost
 
