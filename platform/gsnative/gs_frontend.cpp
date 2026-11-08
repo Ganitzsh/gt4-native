@@ -1050,6 +1050,32 @@ void GsFrontend::texSet(const uint8_t* payload, size_t bytes) {
     });
 }
 
+std::vector<GsFrontend::DrawnTarget> GsFrontend::drawnTargets() const {
+    // (a target the game drew before a recording that starts mid-run, then only samples: a night sky drawn at the
+    // race load. Without its pixels in the state the replay samples whatever the memory model held there)
+    std::vector<DrawnTarget> out;
+    for (const Target& t : targets) {
+        if (t.depth || !t.id || !t.height) continue;
+        uint32_t pw, ph;
+        pageSize(t.psm, pw, ph);
+        const uint32_t perRow = std::max<uint32_t>(1, t.bw), rows = (t.height + ph - 1) / ph;
+        DrawnTarget d;
+        for (uint32_t p = 0; p < perRow * rows; ++p) {
+            const uint32_t page = (t.bp / 32 + p) & 511;
+            if (pages[page].target == t.id) d.pages.push_back(static_cast<uint16_t>(page));
+        }
+        if (d.pages.empty()) continue;
+        d.read.target = t.id;
+        d.read.width = perRow * 64;
+        d.read.height = t.height;
+        d.read.psm = t.psm;
+        d.bp = t.bp;
+        d.bw = t.bw;
+        out.push_back(d);
+    }
+    return out;
+}
+
 size_t GsFrontend::exportSets(const std::function<void(const gfx::TexSetRecord&, const std::vector<gfx::TexSetUpload>&,
                                                      const std::vector<uint8_t>&)>& out) const {
     // the contents kept with no set holding them (id 0, in the order they went), then each set in graphics memory

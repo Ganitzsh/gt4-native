@@ -291,6 +291,47 @@ public:
         native->materializeAll();   // (the sets' pages too)
         std::memcpy(out, native->memory().data(), gsn::GsMemory::kBytes);
     }
+    // readVram, and the pixels of every colour target still holding GS memory read back from the GPU into it: the
+    // state a recording that starts mid-run begins with. A target drawn before the recording and only sampled after
+    // it (the night sky of a race, drawn at its load) has its pixels on the GPU only; without them its replay samples
+    // stale bytes until the game draws it again (lane F's r5_ss_ab2.cap, frames 130-190). Returns the targets read.
+    size_t readVramWithTargets(void* out) {
+        readVram(out);
+        if (!serveRead) return 0;
+        gsn::GsMemory copy, scratch;
+        std::memcpy(copy.data(), out, gsn::GsMemory::kBytes);
+        // (what is not drawn yet: drawn with the first read, once. This cuts the live run's list once at the recording's
+        // start: with scene records on, that frame is a cut frame, its open views not substituted, markersNotChecked + 1;
+        // one in a recorded session's summary is this, not a fault. Each read waits up to 1.5 s: a one-time stall)
+        gsn::FrameList partial;
+        native->cut(partial);
+        bool partialSent = false;
+        size_t read = 0;
+        for (const gsn::GsFrontend::DrawnTarget& d : native->drawnTargets()) {
+            std::vector<uint8_t> pixels;
+            gsn::FrameList none;
+            const bool ok = serveRead(partialSent ? none : partial, d.read, pixels);
+            partialSent = true;
+            if (!ok || pixels.empty()) continue;
+            // written whole into a scratch copy of the state so far (a page it covers only in part keeps the rest), then
+            // only the pages the target still owns copied into the state: a page another target or an upload holds
+            // keeps that owner's bytes, whatever the order (lanes B and D)
+            std::memcpy(scratch.data(), copy.data(), gsn::GsMemory::kBytes);
+            gsn::GsMemory::Transfer tr;
+            tr.dbp = d.bp;
+            tr.dbw = d.bw;
+            tr.dpsm = d.read.psm;
+            tr.rrw = d.read.width;
+            tr.rrh = d.read.height;
+            scratch.beginWrite(tr);
+            scratch.write(pixels.data(), pixels.size());
+            for (const uint16_t page : d.pages)
+                std::memcpy(copy.data() + size_t(page) * 8192, scratch.data() + size_t(page) * 8192, 8192);
+            ++read;
+        }
+        std::memcpy(out, copy.data(), gsn::GsMemory::kBytes);
+        return read;
+    }
     void writeVram(const void* data) override { native->restoreMemory(data); }
     uint64_t blankFrames = 0, gpuReads = 0, staleReads = 0, laterReads = 0;
 private:
@@ -691,7 +732,9 @@ struct GsHost::Impl {
                 if (!recorder->started && recorder->from) {   // mid-run: the state the replay starts from
                     std::vector<uint8_t> vram(gsn::GsMemory::kBytes);
                     if (frontThread) frontThread->drain();   // the front end's thread idle from here
-                    target->readVram(vram.data());
+                    // (with the drawn targets' pixels from the GPU: what is sampled later without being drawn again)
+                    if (const size_t drawn = target->readVramWithTargets(vram.data()))
+                        std::printf("GS: recording from here: %zu drawn targets read back from the GPU into the state\n", drawn);
                     const std::vector<uint8_t> state = stream->saveState(vram.data());
                     recorder->out->write(GT4_REC_STATE, state.data(), static_cast<uint32_t>(state.size()));
                     // the set upload contents the runtime counts on the host keeping (gfx::kDataKeep), oldest first
