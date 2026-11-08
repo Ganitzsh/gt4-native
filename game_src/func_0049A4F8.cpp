@@ -3,7 +3,8 @@
  * differed in 107 of 112 instructions): writes a GS packet of n untextured vertices with their own
  * colours at ctx->packet (+0x1F8) and advances it. Header (only when the quadword count, n + 3, is
  * not 0): DMA cnt tag, VIF FLUSH, VIF DIRECT; then a REGLIST GIF tag (NLOOP 1) with PRIM =
- * (ctx->prim (+0x4A) | flags) without TME and bit 0; then a REGLIST GIF tag with NLOOP n, EOP,
+ * (ctx->prim (+0x4A) | flags) without TME (the original's mask, -0x11, is ~0x10: bit 0, the type's
+ * low bit, stays); then a REGLIST GIF tag with NLOOP n, EOP,
  * registers RGBAQ, XYZF2. Each vertex: the point (x, y) at pos[i] goes to the screen (gt4_project_2d)
  * and the four floats at colors[i] become RGBA bytes (gt4_colour_2d: clamped to 0..1, scaled by shared
  * vector 15), as the original's VU0 microprogram 0x678 does. RGBAQ = those bytes with Q = 1.0,
@@ -33,7 +34,7 @@ extern "C" void func_0049A4F8(Ctx *ctx, int flags, int n, int pos, int colors)
     const int count = n;   /* for gt4_menu_band_widen */
     const char *src1 = (const char *)pos;
     const char *src3 = (const char *)colors;
-    unsigned long long prim = (unsigned long long)(long long)(int)(((unsigned int)ctx->prim | (unsigned int)flags) & ~0x11u);
+    unsigned long long prim = (unsigned long long)(long long)(int)(((unsigned int)ctx->prim | (unsigned int)flags) & ~0x10u);
     struct gt4_vertex *out = (struct gt4_vertex *)__builtin_alloca(n * sizeof(struct gt4_vertex));
     struct gt4_vertex *v = out;
     do {
