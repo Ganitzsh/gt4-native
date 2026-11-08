@@ -1511,7 +1511,7 @@ void GsnScene::Impl::planSides() {
         for (size_t i = 0; i < paritySpans.size(); ++i) {
             const render::ParitySpan& s = paritySpans[i];
             const gsn::FrameList::ViewOnList& view = frame.views[s.view];
-            if (!view.package || (view.package->view.role != gfx::scene::kViewMain && view.package->view.role != gfx::scene::kViewMenu) || s.instance >= view.package->instances.size()) continue;
+            if (!view.package || (view.package->view.role != gfx::scene::kViewMain && view.package->view.role != gfx::scene::kViewMenu && view.package->view.role != gfx::scene::kViewPhoto) || s.instance >= view.package->instances.size()) continue;
             const scene::InstanceData& in = view.package->instances[s.instance];
             if (s.job >= frame.models.size()) continue;
             const gfx::ModelJob& job = frame.models[s.job];
