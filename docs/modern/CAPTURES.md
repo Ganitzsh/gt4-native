@@ -39,6 +39,9 @@ removed). Only runners from main since the queue take tickets: run `tools/slot.p
 Two waits that are meant, not bugs. While a `heavy-both` waiter waits for the second heavy slot, the free one stays
 idle: the younger `heavy` waiters behind it don't take it, so the two-slot job is never starved. And the oldest
 waiter, held at its memory floor, holds back the younger ones for the same slots, even those with lower floors.
+Until the owner's next reboot (the coordinator, 2026-11-08: available memory stuck under 7 GB), a job without a heavy
+slot (`game`, or `live-game` alone) waits for at most 5.5 GB, whatever `--min-gb` says (`LIGHT_FLOOR_GB` in
+`tools/slot.py`); a job with `heavy` or `heavy-both` keeps its own floor.
 
 | Slot | For | Limits |
 |---|---|---|

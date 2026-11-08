@@ -314,9 +314,27 @@ def ahead_of(ticket):
     return None
 
 
+# The memory floor's ceiling for jobs that take no heavy slot (the coordinator, 2026-11-08: the machine's available
+# memory sits under 7 GB, a kernel leak only the owner's reboot clears). A game build (one at a time: the slot) waits
+# for at most this, whatever --min-gb asks; a job with heavy or heavy-both keeps its own. None after the reboot.
+LIGHT_FLOOR_GB = 5.5
+LIGHT_KINDS = {"game", "live-game"}
+
+
+def floor_for(kinds, min_gb):
+    """The available memory to wait for: min_gb, lowered to LIGHT_FLOOR_GB when every kind is a light one."""
+    if LIGHT_FLOOR_GB is not None and set(kinds) <= LIGHT_KINDS:
+        return min(min_gb, LIGHT_FLOOR_GB)
+    return min_gb
+
+
 def take(kinds, what, min_gb=8.0, poll=5.0):
     """Wait for this waiter's turn (no older live ticket for any of the same slots), the memory and the slots, then
     take them: the paths held. The ticket goes when the slots are taken, or with this process if it is stopped."""
+    floor = floor_for(kinds, min_gb)
+    if floor != min_gb:
+        log_line(f"memory floor {floor:g} GB for {'+'.join(kinds)}, not {min_gb:g} (LIGHT_FLOOR_GB)")
+        min_gb = floor
     ticket = enqueue(kinds, what)
     said = None
     try:
@@ -475,6 +493,9 @@ def self_test():
             expect(ahead_of(older) is None, "and that waiter has no one ahead of it")
             for p in (mine, other, older):
                 os.remove(p)
+            expect(floor_for(["game"], 7) == min(7, LIGHT_FLOOR_GB or 7) and floor_for(["heavy"], 7) == 7 and
+                   floor_for(["heavy", "live-game"], 7) == 7 and floor_for(["game"], 4) == 4,
+                   "the light floor lowers only jobs without a heavy slot, and never raises one")
             got = take(["heavy"], "self-test", min_gb=0)
             expect(bool(got) and not os.listdir(queue_dir()), "a take with no one ahead gets a slot; its ticket goes")
         finally:
