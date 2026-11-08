@@ -6,6 +6,7 @@
 // that buffer too, so that they stay in order with the packets that are left: a DMA CNT tag whose upper
 // half ends with the record code (gfx::kStreamCode | qwords), followed by the record.
 #include "../guest.h"
+#include "../image.h"
 #include "../kernel.h"
 #include "../link.h"
 #include "../log.h"
@@ -19,6 +20,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -381,7 +383,8 @@ struct SceneFrameState {
     int coursePaused = 0;   // inside them, draws that are not world-space course (billboards facing the camera): unflagged
     uint16_t courseTop = 0;   // gt4_matrix_stack_top when the outermost course bracket opened (kInstCourse's depth)
     uint16_t openView = 0, viewInstances = 0;
-    uint16_t mainView = 0;   // the frame's last kViewMain view (A7: the glow pass's lights name it)
+    uint16_t mainView = 0;
+    int runsLeft = 0;   // DEBUG (A6): the open Cmd's item runs still to come   // the frame's last kViewMain view (A7: the glow pass's lights name it)
     bool haveProjection = false;
     float clip[16] = {}, viewport[12] = {};   // the last Projection sent
 };
@@ -673,6 +676,7 @@ void gt4_scene_cmd(uint32_t context, uint32_t cmd) {
     for (int i = 0; i < 3; ++i) r.axisScale[i] = axisScaled ? sprFloats(0xBD0)[i] : 1.0f;
     r.shapeScale = guest_ref<float>(cmd + 4);
     r.items = guest_ref<uint16_t>(cmd + 10);
+    g_scene.runsLeft = r.items;   // DEBUG (A6)
     r.matrixSet = guest_ref<uint8_t>(kSpr + 1);
     r.section = 0xFFFF;
     r.projection = sceneProjection(context, set1, g_batchViewport, g_scene.openView);
@@ -907,6 +911,45 @@ void gt4_gfx_effect_end(uint32_t context) {
 
 // The batch run (itop 0xFFFFFFFF: the lighting chain the last run had).
 void gt4_gfx_batch_run(uint32_t context, uint32_t entry, uint32_t itop) {
+    if (gt4_scene_on() && g_scene.inFrame) {   // DEBUG (A6): a run outside a Cmd's items, inside a view: who sends it
+        if (g_scene.runsLeft > 0) {
+            --g_scene.runsLeft;
+        } else if (g_scene.openView) {
+            static uint32_t keys[64], counts[64];
+            static int used = 0;
+            static uint64_t total = 0;
+            const uint32_t *sp = static_cast<const uint32_t *>(__builtin_frame_address(0));
+            char callers[400] = "";
+            size_t at = 0;
+            uint32_t key = 0, last = 0;
+            int depth = 0;
+            for (int k = 0; k < 400 && at < sizeof callers - 60 && depth < 10; ++k) {
+                uint32_t guest = 0;
+                const char *n = native_name_for(sp[k], &guest);
+                if (n && *n && std::strncmp(n, "gt4fn_", 6) == 0 && guest != last) {
+                    at += static_cast<size_t>(snprintf(callers + at, sizeof callers - at, " %s", n));
+                    key = key * 31 + guest;
+                    last = guest;
+                    ++depth;
+                }
+            }
+            int slot = -1;
+            for (int i = 0; i < used; ++i)
+                if (keys[i] == key) slot = i;
+            if (slot < 0 && used < 64) {
+                slot = used++;
+                keys[slot] = key;
+                log_info("A6 debug: untagged run (entry %u, view %u, main %u) from:%s", entry, g_scene.openView, g_scene.mainView, callers);
+            }
+            if (slot >= 0) ++counts[slot];
+            if (++total % 20000 == 0) {
+                char line[512] = "";
+                size_t u = 0;
+                for (int i = 0; i < used && u < sizeof line - 24; ++i) u += static_cast<size_t>(snprintf(line + u, sizeof line - u, " %u", counts[i]));
+                log_info("A6 debug: untagged runs %llu, by caller chain:%s", (unsigned long long)total, line);
+            }
+        }
+    }
     const gfx::BatchRun r{entry, itop};
     append(context, gfx::kBatchRun, &r, sizeof r);
 }
