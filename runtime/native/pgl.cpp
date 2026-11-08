@@ -378,6 +378,7 @@ struct SceneFrameState {
     DWORD thread = 0;   // the thread that opened the frame (the kick must be the same: A3's check)
     uint32_t flags = 0;  // the opening FrameBegin's (they stand for the frame)
     uint16_t openView = 0, viewInstances = 0;
+    uint16_t mainView = 0;   // the frame's last kViewMain view (A7: the glow pass's lights name it)
     bool haveProjection = false;
     float clip[16] = {}, viewport[12] = {};   // the last Projection sent
 };
@@ -523,6 +524,7 @@ uint32_t gt4_scene_view_begin(uint32_t context, int role, int flags, uint32_t pa
     sceneAppend(context, &r, sizeof r);
     g_scene.openView = view;
     g_scene.viewInstances = 0;
+    if (role == scene::kViewMain) g_scene.mainView = view;
     return view;
 }
 
@@ -549,10 +551,10 @@ void gt4_scene_marker(uint32_t context, int kind) {
     sceneAppend(context, &r, sizeof r);
 }
 
-// A7 step 1a (CONTRACTS.md a.5 rule 4, PLAN A7): the light-glow object's two lists as Lights naming the main view (`view`),
-// read only (the flare read 003B8848 and the glows 003B88C8 see them unchanged), after 0033EAB8's method 0x3F0: the lists
-// are emptied by 003B80E8 after the main view and the mirror and filled since, with this frame's camera. In `glow`
-// (RacePS2Base +0xDA0):
+// A7 step 1a (CONTRACTS.md a.5 rule 4, PLAN A7): the light-glow object's two lists as Lights naming the main view (`view`;
+// 0: the frame's last kViewMain), read only, from 0033F2E8 right before 003B88C8 draws them: the lists as drawn (entries
+// added after 0033EAB8's method 0x3F0 included). They are emptied by 003B80E8 after the main view and the mirror and
+// filled since, with this frame's camera. In `glow` (RacePS2Base +0xDA0):
 // - entries[] at +0xA38, count at +0xA34 (36 bytes): the car lamps, from RaceCarModel's virtual 35 (003B8530): the lamp
 //   element's +0x30 point in view space, the element at +0xC, the visibility flag at +0x10. The element has the lamp's
 //   size (+0x40, +0x44) and rgb (+0x54). Sent as kSrcCarLamp: its flags don't say which lamp it is (the group does,
@@ -570,6 +572,7 @@ void gt4_scene_marker(uint32_t context, int kind) {
 // further scale. The distance attenuation is left out (view-dependent; the host's range).
 void gt4_scene_glow_lights(uint32_t context, uint32_t view, uint32_t glow) {
     namespace scene = gfx::scene;
+    if (!view) view = g_scene.mainView;   // (0: the frame's main view)
     if (!gt4_scene_on() || !g_scene.inFrame || !view || !glow) return;
     auto light = [&](uint8_t source, uint32_t id) {
         scene::Light r{};

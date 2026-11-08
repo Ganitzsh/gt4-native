@@ -255,6 +255,7 @@ extern "C" void func_0033F2E8(char *self, int *rs, void *tex, int unused0, float
             func_003E7CC8(self+0x31d0,tex,0,*(short *)(view+I(view,0x9bc)*0x19c+0x1c));
         else func_003E7CC8(self+0x31d0,tex,0,-1);
         gt4_scene_marker(spr_base(), 7);   /* kMarkFlareBegin */
+        gt4_scene_glow_lights(spr_base(), 0, self+0xda0);   /* A7: the lists as the glow pass draws them, as Lights of the main view */
         func_003B88C8(self+0xda0);
         gt4_scene_marker(spr_base(), 8);   /* kMarkFlareEnd */
     }
