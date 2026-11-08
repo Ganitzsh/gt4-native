@@ -5,6 +5,7 @@
 #include "audio.h"
 #include "gt4/link/protocol.h"
 #include "pad_pedals.h"
+#include "vehicle.h"
 #include "guest.h"
 #include "image.h"
 #include "kernel.h"
@@ -609,6 +610,12 @@ void scale_pedals(int port, uint8_t *data) {
 }  // namespace
 
 extern "C" int gt4_replace_scePad2Read(int id, uint8_t *data) {
+    // GT4_VEHICLE_LOG (D6, debugging): the cars' state once a VBlank (pad 1's read), for the lap plot. On the pad's
+    // thread, so a line can mix two physics ticks; the scene records come from the frame's kick (lane A's path).
+    if ((id & 1) == 0 && vehicle_log_on()) {
+        gt4::gfx::scene::Vehicle cars[car::kMaxCars];
+        vehicle_records(cars, static_cast<int>(car::kMaxCars));
+    }
     if (!link_pad(id & 1, data)) std::memcpy(data, g_pad[id & 1], 18);
     scale_pedals(id & 1, data);
     static const std::vector<ScriptedPress> script = pad_script();
