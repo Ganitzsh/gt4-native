@@ -678,6 +678,39 @@ on the sections capture); the warning capture's tint stays below N4's bar.
 
 ---
 
+### Cross-lane: PS2 mechanisms removed (P1-P6, PS2_REMOVAL.md)
+
+The owner's direction (2026-11-08): no PS2 concept beyond what the game logic needs. [PS2_REMOVAL.md](PS2_REMOVAL.md)
+lists what is kept and why. These tickets remove or lift the rest. Each is checked with `ORIG` and `PRESETS`, since
+`original` keeps the PS2 picture.
+
+**P1: Retire the GIF and VIF records (S, lane C; lane B reviews the decoders' removal).** The live game sends none
+(`GT4_REC_GIF`, `VIF1`, `VIF0`, protocol.h). Convert or re-record every capture CAPTURES.md lists that still has
+them, then delete the record kinds, the host's GIF decoder and `vif1.cpp`'s stream path (its model-packet decoder
+stays). Depends: none. Acceptance: `CTEST`; `ORIG`; `PRESETS`; every listed capture replays; a capture with an old
+record is refused with a message, not misdrawn.
+
+**P2: Native targets (L, lane B).** Finish docs/NATIVE_V2.md steps 1 and 3. Targets become native images keyed
+by the game's surface, not GS memory. Reinterpretations become explicit copies. A GS view of memory stays only for
+reads (R9) and where `original` needs one. Depends: B4, R9. Acceptance: `PRESETS` identical; `VAL`; `PERF` no
+worse; the host's GS memory bytes per race frame reported, lower than today's.
+
+**P3: Draw state in renderer terms (L, lane A with lane B).** `include/gt4/gfx.h` records carry blend, depth,
+texture and target handles instead of GS register images. pgl's API, the game logic's calls, stays as it is. The
+GS encoding moves into the GS back end, which `original` still uses. The frame list's DMA-tag block links become
+plain offsets. Depends: B8, P2, A10. Acceptance: `CTEST`; `ORIG` and `PRESETS` identical; `STREAM` no larger;
+`hook_lint` 0.
+
+**P4: No preemptive frame delivery (S-M, lane A).** Find the threads that make no syscall for 50 ms (17 of 8,911
+deliveries in a session to a race used the fallback), give each a safe point, then delete the thread freeze and
+`GT4_FRAME_DELIVERY=preemptive` (`runtime/kernel.cpp:258-273`). Depends: none. Acceptance: `REL`; `ORIG`; a GT
+mode session, a race and the menus: 0 preemptive deliveries before the code goes; `gt4_game --self-test` passes
+without it.
+
+**P5: Spike R17, guest memory beyond 32 MB (S, lane A).** RISKS.md R17. If it finds a use, a ticket follows.
+
+**P6: Spike R18, the sound driver without the SPU2 register image (M, lane D).** RISKS.md R18. Depends: D5.
+
 ## 5. Day one, per lane
 
 | Lane | Day-one tickets | Notes |
@@ -707,10 +740,10 @@ No two day-one tickets edit the same file except `main.cpp` / `renderer.cpp` (B2
 | Phase | Tickets | Gate to leave it |
 |---|---|---|
 | 0. Foundations (weeks 1-3) | A0, A1, A10, A2, A3; B2, B1, B5, B3; C1-C4, C10; E1-E4; F0, F1, N0, N1; spikes R1-R7, R9-R12 | `SCENE` gates on race and event captures; B3 `PRESETS` |
-| 1. Parity (weeks 3-8) | B4, B6, B7, A4, A5a, A6, A11a; D-track (D12, D13 first) | `PARITY` on REF |
+| 1. Parity (weeks 3-8) | B4, B6, B7, A4, A5a, A6, A11a, P1, P4, P5; D-track (D12, D13 first; P6 after D5) | `PARITY` on REF |
 | 2. Hybrid ships (weeks 8-10) | A7 step 1, B8, B9, F2, N3, N4 (hybrid parts) | `render.scene = hybrid` in presets low-ultra; `R5` gates in hybrid |
 | 3. Modern lighting (weeks 10-18) | B10-B15, F3, F4, A7 step 2, A8 (N2b/c and A11b only if N2 reopens) | `R5` gates in modern; owner review |
-| 4. Resolution and effects | B16-B22, F5, E6-E9 | per ticket |
+| 4. Resolution and effects | B16-B22, F5, E6-E9, P2, P3 | per ticket |
 | 5. Optional | B23, C6 on devices, research track | per ticket |
 
 Critical path: A0 -> A1 -> A10 -> A2/A3 -> B7 (also needs B1 -> B3 -> B4 and B5 -> B6) -> B8 -> B10 -> B15.

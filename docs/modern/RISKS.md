@@ -304,6 +304,41 @@ cut sounds in a race.
 
 ---
 
+## R17: Guest memory beyond 32 MB (PLAN P5)
+
+**What is known.** The runtime gives the game the PS2's 32 MB: `kRamSize`, `GetMemorySize` returns 32 MB and
+`EndOfHeap` 0x01E00000 (`runtime/kernel.cpp:1179-1189`). Uncached mirrors of the RAM sit at 0x20000000 and 0x30000000
+(`guest.cpp:99`), and the scratchpad at 0x70000000.
+
+**Question.** What sizes the game's heaps: newlib's heap from `SetupHeap` / `EndOfHeap`, the game's own pools (such
+as 008744D0, `GT4_HEAP_LOG`), or constants in its code? Would any of them use more memory, and for what (more cars
+on track, longer replays, fewer loading stalls)? Does any game code still use the uncached mirrors?
+
+**Method.** Follow the heap setup in the decomp; a session with `GT4_HEAP_LOG` to see each pool's high-water mark; an
+audit run that leaves the mirrors unmapped and logs the faulting functions.
+
+**Time box.** 2 days. The answer is "lift it, to N MB, for this" or "nothing would use it".
+
+---
+
+## R18: The sound driver without the SPU2 register image (PLAN P6)
+
+**What is known.** GT4's sound driver (game logic) writes an SPU2 register image every frame (SPUP fno 4). It frees
+voices by the ENVX / ENDX replies. `runtime/audio.cpp` (and D5's host mixer) mixes voices the way SPU2 does: ADPCM,
+ADSR, pitch, reverb.
+
+**Question.** Can a native voice API, called where the driver decides to play, pitch, set volume and release, replace
+the register image, with the same timing and voice release? Or does the driver depend on the register image's
+semantics too deeply to gain anything?
+
+**Method.** Map the driver's call sites from the decomp (where it builds the image); count the register fields it
+reads back; prototype one sound class (the engine) on a native voice and compare a session's audio (D5's -60 dB
+bar).
+
+**Time box.** 3 days, after D5.
+
+---
+
 ## Other risks, no spike needed now
 
 - **Draw count of the modern path.** 1,000 instances and 1,702 batches a race frame: welded meshes and GPU culling
