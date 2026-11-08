@@ -41,6 +41,7 @@ int __gt4_ee_syscall(int number, unsigned int a0, unsigned int a1, unsigned int 
 void gt4_game_text_end();  // tools/game_link.py: the end of the game's code, the start of the runtime's
 void gt4_replace_setjmp();   // runtime/setjmp.s
 void gt4_replace_longjmp();
+void gt4_replace_func_004B01F8(unsigned char *self);   // runtime/pending.cpp: longjmp to self + 0x50
 }
 
 // g_ram and g_spr are placed at 0 and 0x70000000 by the link (--defsym): guest addresses are host addresses.
@@ -256,6 +257,17 @@ bool gt4_orig_native(Cpu &c, std::uint32_t addr) {
         target == reinterpret_cast<std::uintptr_t>(&gt4_replace_setjmp) ||
         target == reinterpret_cast<std::uintptr_t>(&gt4_replace_longjmp) || (target >= g_thunks && target < g_thunks_end))
         return false;
+    // A runtime stand-in that longjmps (004B01F8: a file-device thread's exit, to the jmp_buf at self + 0x50) on a
+    // buffer the native setjmp did not fill (no marker at +24, runtime/setjmp.s): the original code's setjmp
+    // filled it, so the original code's longjmp must restore it. Run 004B01F8's original code instead.
+    // A self that does not hold a whole jmp_buf in guest RAM keeps the stand-in: a bad pointer is then reported
+    // where the stand-in uses it, not read here (lane C's review).
+    if (target == reinterpret_cast<std::uintptr_t>(&gt4_replace_func_004B01F8) &&
+        gt4::rt::in_guest_ram(c.r[4].w[0] + 0x50, 28)) {
+        std::uint32_t marker;
+        std::memcpy(&marker, gt4::rt::guest_ptr(c.r[4].w[0] + 0x50 + 24), 4);
+        if (marker != 0x504D4A4Eu) return false;
+    }
     // the stack arguments: 8-byte slots from $sp (sceSifCallRpc's ninth is its end function's argument)
     using Fn = std::uint64_t (*)(std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t,
                                  std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t);
