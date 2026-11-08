@@ -771,8 +771,9 @@ def main():
     ap.add_argument("--objlist", default="", help="file listing the game objects to link (instead of --objs)")
     ap.add_argument("--exclude", default="", help="file of object basenames to leave out (one per line)")
     ap.add_argument("--out", default=os.path.join(ROOT, "build", "game"))
-    ap.add_argument("--eeorig", default="", help="eerecomp's output (tools/eeref/build.cmd: build/eeref/gen): link the "
-                    "original code, translated, for GT4_ORIG (tools/eeref/orig_bridge.cpp)")
+    ap.add_argument("--eeorig", default="", help="eerecomp's output (tools/eeref/build.cmd: build/eeref/genh, the "
+                    "hook-wrapped code): link the original code, translated, for GT4_ORIG "
+                    "(tools/eeref/orig_bridge.cpp)")
     ap.add_argument("--strict-drafts", action="store_true", help="stop, instead of leaving it out, on a provisional "
                     "draft at an address a matched source provides (tools/release_game.py)")
     a = ap.parse_args()
