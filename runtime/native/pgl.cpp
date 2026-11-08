@@ -1033,7 +1033,11 @@ void gt4_replace_func_004A5178(uint32_t address, int format, int width, int x, i
     read.w = static_cast<uint16_t>(w);
     read.h = static_cast<uint16_t>(h);
     read.destination = destination;
-    read.qwords = qwords | (g_read_async ? gfx::kReadAsync : 0u);
+    // Asynchronous only if the game won't wait for it (link_read_wait_first: the first of all is waited for, as is one too
+    // large to land). The host answers a read marked asynchronous with a later list, after the next VSync. If the game
+    // waited for one inside a walk, which with scene records on holds the frame clock's ticks (runtime/frame.cpp), no
+    // VSync came: the read was answered only by the game's 31 s give-up (night races with scene records on, 2026-11-08).
+    read.qwords = qwords | (g_read_async && !link_read_wait_first(qwords) ? gfx::kReadAsync : 0u);
     append(kContext, gfx::kRead, &read, sizeof read);
 }
 

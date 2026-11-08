@@ -46,7 +46,8 @@ struct AsyncRead {
 constexpr int kAsyncMax = 8;
 constexpr uint32_t kAsyncMaxQwc = 512;   // 64 x 32 PSMCT32: the flare target is 64 x N, N = 8 in every race seen
 AsyncRead g_async[kAsyncMax];
-bool g_async_landed = false;       // one has arrived (the first is waited for)
+bool g_async_landed = false;       // the first was taken (waited for in the walk, or sent as an ordinary read by
+                                   // link_read_wait_first); the rest are not waited for
 int async_depth() {
     static const int depth = [] {
         const char *e = std::getenv("GT4_READ_ASYNC_DEPTH");
@@ -439,6 +440,15 @@ bool link_read_image(uint32_t qwc, void *dst) {
     else if (took >= 50 && (++slow <= 20 || slow % 100 == 0))
         log_warn("link: a %u-qword GS read took %lu ms (read %u, %u slow so far)", qwc, static_cast<unsigned long>(took), reads, slow);
     return done;
+}
+
+bool link_read_wait_first(uint32_t qwc) {
+    if (qwc > kAsyncMaxQwc) return true;
+    KernelScope ks;
+    std::lock_guard<std::recursive_mutex> poll_lock(g_poll_mutex);
+    if (g_async_landed) return false;
+    g_async_landed = true;   // (this one, sent as an ordinary read, is the first; the rest are not waited for)
+    return true;
 }
 
 bool link_read_image_async(uint32_t qwc, void *dst) {

@@ -30,8 +30,14 @@ void link_poll();
 bool link_read_image(uint32_t qwc, void *dst);
 // The same without waiting (gfx::kReadAsync, the PS2's interrupt-driven downloads): the pixels land in a buffer of
 // the runtime when the host's GS_IMAGE arrives and reach dst through link_async_deliver. Never waits (a host far
-// behind: the read sent untracked); the first of all is read as link_read_image does.
+// behind: the read sent untracked). The first of all is waited for, but pgl sends that one as an ordinary read
+// (link_read_wait_first, below); this function's own first-read branch is a fallback for any other caller.
 bool link_read_image_async(uint32_t qwc, void *dst);
+// For a read the game would make asynchronous (runtime/native/pgl.cpp, when it builds the read record): true when it is
+// to be waited for after all, so its record goes as an ordinary read (no gfx::kReadAsync) and the host answers it at
+// once. That is one larger than the landing buffers, and the first of all (nothing has landed yet for the game to read
+// the frame after), which this call takes: the reads after it are asynchronous, as link_read_image_async treats them.
+bool link_read_wait_first(uint32_t qwc);
 // Its pixels go into dst only here: the newest that landed for dst, if any (called by the code that owns dst, when
 // it runs again: runtime/native/pgl.cpp, 00497F48 and 00497EF8).
 void link_async_deliver(void *dst);
