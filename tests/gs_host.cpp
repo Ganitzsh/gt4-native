@@ -1028,6 +1028,46 @@ int main(int argc, char** argv) {
         expect(!fe.textureSummary(identity ^ 1, summary), "F2b: no summary for an identity never decoded");
     }
 
+    // 2i. P2c: a Z buffer read as a Z texture of its own layout (race7's pre-race frames copy a field's Z this way) is
+    // built on the GPU from the depth image, not decoded from memory: a depth reinterpretation, no fallback. Read again
+    // unchanged it is reused; after GT4's Z24 pass has turned the buffer round in place, it is a new one, turned round.
+    {
+        gt4::gsn::GsFrontend fe;
+        Gif g = setup();
+        g.ad({{ZBUF_1, zbuf(0x70, PSMZ24, false)}});   // Z written: the Z buffer at page 0x70, block 0xE00 (Z24, 640 wide)
+        sprite(g, 0, 0, 640, 448, rgbaq(1, 2, 3, 0x80));
+        const auto copyZ = [&] {   // a field's Z into a Z24 frame at block 0x3600, sampled as Z24 from the buffer's base
+            g.ad({{FRAME_1, frame(0x3600 / 32, 10, PSMZ24)}, {ZBUF_1, zbuf(0x70, PSMZ24, true)}, {TEST_1, test(true, 1)},
+                  {TEX0_1, tex0(0xE00, 10, PSMZ24, 10, 9, true, 1)}});
+            g.reglist(prim(6, false, true, false, true), {UV, XYZ2, UV, XYZ2}, {uv(0, 0), xyz(0, 0), uv(640, 448), xyz(640, 224)});
+        };
+        copyZ();
+        copyZ();
+        // GT4's Z24 pass: white drawn into the Z buffer's memory as a Z24 frame, (Cs - Cd) x 128 / 128
+        g.ad({{FRAME_1, frame(0x70, 10, PSMZ24)}, {ALPHA_1, 0 | (1u << 2) | (2u << 4) | (2u << 6) | (uint64_t(0x80) << 32)},
+              {TEST_1, test(true, 1)}});
+        sprite(g, 0, 0, 640, 448, rgbaq(255, 255, 255, 0x80), true);
+        copyZ();
+        fe.gif(3, static_cast<const uint8_t*>(g.data()), g.bytes());
+        gt4::gsn::FrameList list;
+        fe.cut(list);
+        std::vector<uint32_t> ids;
+        for (const auto& d : list.draws)
+            if (d.texture.kind == gt4::gsn::TextureSource::Kind::Reinterpreted) ids.push_back(d.texture.id);
+        const auto depthOne = [&](size_t i, bool inverted) {
+            if (i >= ids.size() || ids[i] >= list.reinterpretations.size()) return false;
+            const gt4::gsn::Reinterpretation& r = list.reinterpretations[ids[i]];
+            const bool zbuffer = r.target && r.target <= list.targets.size() && list.targets[r.target - 1].depth;
+            return r.depth && zbuffer && r.targetBp == 0xE00 && r.targetBw == 10 && r.targetPsm == PSMZ24 && r.depthInverted == inverted &&
+                   r.width == 1024 && r.height == 512;
+        };
+        // (the two copies before the pass are one draw: the same state and texture)
+        expect(ids.size() == 2 && depthOne(0, false), "P2c: a Z buffer read as Z24: a depth reinterpretation of the Z buffer");
+        expect(ids.size() == 2 && ids[1] != ids[0] && depthOne(1, true), "P2c: after the Z24 pass: a new one, turned round");
+        expect(fe.stats.depthTextures == 2 && fe.stats.readFallbacks == 0,
+               "P2c: read again unchanged, the same one; counted, and no read from memory");
+    }
+
     // 3. A capture replayed through GsHost (no game: reads stay in memory): one displayed list per VBlank.
     {
         const std::filesystem::path dir = outputDir.empty() ? gt4::test::uniqueTempPath("gt4_gs_host_test") : std::filesystem::path(outputDir);

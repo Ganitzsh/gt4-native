@@ -2090,7 +2090,8 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
     ex.sourceOf = [this](const gsn::Reinterpretation& r) -> GpuTarget* {
         if (!r.target) return nullptr;
         auto it = targets.find(r.target);
-        return it == targets.end() || !it->second.image.valid() || it->second.depth ? nullptr : &it->second;
+        // (a Z buffer only for a Z texture, P2c)
+        return it == targets.end() || !it->second.image.valid() || it->second.depth != r.depth ? nullptr : &it->second;
     };
     ex.paletteOf = [this](const gsn::Reinterpretation& r) -> GpuTarget* {   // a palette drawn into a target (clutWritten)
         if (!r.clutTarget) return nullptr;
@@ -2168,15 +2169,18 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
             struct {
                 uint32_t targetBp, targetBw, targetHeight, scaleX, tbp, tbw, psm, width, height, cpsm, csa, texa;
                 uint32_t clutTargetBp, clutBw, clutHeight, cbp;
-                uint32_t indexStart, scaleY, pad[2];
+                uint32_t indexStart, scaleY, sourceScale, clutScale;
+                uint32_t zmode, pad[3];   // P2c: a Z buffer read as a Z texture: 1 | inverted << 1 | the Z buffer's psm << 8
             } k{r.targetBp, source ? r.targetBw : 0, source ? source->height : 0, builtScale[i].first, r.texture.base,
                 r.texture.width, r.texture.format, r.width, r.height,
                 r.texture.clutFormat, r.texture.clutOffset,
                 r.texAlpha0 | (static_cast<uint32_t>(r.texAlpha1) << 8) | (static_cast<uint32_t>(r.texBlackTransparent) << 16),
                 palette ? r.clutTargetBp : 0, palette ? r.clutTargetBw : 0, palette ? palette->height : 0,
                 r.texture.clutBase, source ? 0 : indexStart[i], builtScale[i].second,
-                {source ? source->scaleX | (source->scaleY << 8) : sx | (sy << 8), palette ? palette->scaleX | (palette->scaleY << 8) : sx | (sy << 8)}};
-            const VkImageView fallback = source ? source->image.view : palette ? palette->image.view : blank.view;
+                source ? source->scaleX | (source->scaleY << 8) : sx | (sy << 8), palette ? palette->scaleX | (palette->scaleY << 8) : sx | (sy << 8),
+                r.depth ? 1u | (r.depthInverted ? 2u : 0u) | (r.targetPsm << 8) : 0u, {}};
+            // (a Z buffer: its depth plane)
+            const VkImageView fallback = source ? (r.depth ? depthView(source->image) : source->image.view) : palette ? palette->image.view : blank.view;
             vk::Descriptors()
                 .sampled(0, fallback, samplers[0])
                 .storage(1, reinterpretImages[i]->view)
@@ -3803,7 +3807,7 @@ void GsnScene::prepare(const SceneFormats& formats) {
         s.reinterpret = vk::createCompute(s.device, shaders::gsn_reinterpret_comp(),
                                           {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
-                                          80, "gsn reinterpret");
+                                          96, "gsn reinterpret");
     if (!s.blank.valid()) {
         vk::ImageDesc b;
         b.format = VK_FORMAT_R8G8B8A8_UNORM;
