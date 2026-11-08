@@ -14,6 +14,14 @@ layout(push_constant) uniform Draw {
     uint lod;            // LCM (0), L (1-2), K (3-14, signed 7.4), MXL (16-18): TEX1
     vec2 jitter;         // the scene stage's sub-pixel offset, in GS pixels (temporal anti-aliasing; else 0)
     vec2 sourceScale;    // a texture from a target: that target's render pixels per GS pixel (else scale's)
+#if defined(GSN_PARITY)
+    // B7's parity path (modern_parity.vert): the item's job in the frame's Jobs, and gsn_models.comp's constants.t
+    // and tPrevious (where between the previous frame's transform and this one's the batches are drawn)
+    uint parityJob;
+    float parityT;
+    float parityTPrevious;
+    uint parityPad;
+#endif
 } draw;
 
 bool atNativeScale() { return draw.scale.x <= 1.0 && draw.scale.y <= 1.0; }

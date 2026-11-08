@@ -93,6 +93,9 @@ public:
     // one present a game frame): the same frames every run. Off: the display's clock, as a live game needs.
     void setFixedClock(bool on);
     void setEffects(const SceneEffects& effects);
+    // B7's parity path (render.scene = parity, docs/modern/PLAN.md B7): the substituted views' 3D items drawn from the mesh
+    // cache with GT4's lighting and depth, in place of gsn_models.comp's output; a check against the GS path, not a mode.
+    void setParity(bool on);
     bool antiAliasesItself() const override;
 
     void prepare(const SceneFormats& formats) override;

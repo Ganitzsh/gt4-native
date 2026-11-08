@@ -198,23 +198,27 @@ int main() {
         check(sceneRecordsWanted(split) && sceneSplitWanted(split), "the night relight wants the records and the split");
         split.night = LightingMode::Original;
         split.scene = SceneRenderer::Parity;
-        check(sceneRecordsWanted(split) && !sceneSplitWanted(split), "parity wants the records, not the split");
+        check(sceneRecordsWanted(split) && sceneSplitWanted(split), "parity wants the records and the split (B7 draws views by B6's ids)");
         split.scene = SceneRenderer::Hybrid;
         check(sceneSplitWanted(split), "hybrid wants the split");
     }
 
-    // render.scene (settings_scene.cpp): only the GS path until the modern renderer draws a view.
+    // render.scene (settings_scene.cpp): the GS path, or B7's parity check, until the modern renderer draws a view.
     {
         Settings r;
         check(r.scene == SceneRenderer::Original && getOption(r, "render.scene") == "original", "render.scene is original by default");
         check(original.scene == SceneRenderer::Original, "the original preset draws scenes on the GS path");
         check(setOption(r, "render.scene", "original").empty(), "render.scene = original is taken");
-        for (const char* later : {"hybrid", "modern", "parity"}) {
+        for (const char* later : {"hybrid", "modern"}) {
             const std::string error = setOption(r, "render.scene", later);
             check(error.find("modern renderer") != std::string::npos && r.scene == SceneRenderer::Original,
-                  "hybrid, modern and parity are refused until the modern renderer lands, with the reason");
+                  "hybrid and modern are refused until the modern renderer lands, with the reason");
         }
-        check(setOption(r, "render.scene", "bogus") == "render.scene: expected original", "a bad value names the one taken");
+        check(setOption(r, "render.scene", "parity").empty() && r.scene == SceneRenderer::Parity, "render.scene = parity is taken (B7)");
+        check(formatSettings(r).find("\nscene = original\n") != std::string::npos && formatSettings(r).find("scene = parity") == std::string::npos,
+              "parity is a session's check: never saved (written as original)");
+        check(setOption(r, "render.scene", "original").empty() && r.scene == SceneRenderer::Original, "and back to original");
+        check(setOption(r, "render.scene", "bogus") == "render.scene: expected original or parity", "a bad value names the ones taken");
         check(formatSettings(r).find("[render]") < formatSettings(r).find("\nscene = original\n") &&
                   formatSettings(r).find("\nscene = original\n") < formatSettings(r).find("[texture]"),
               "render.scene is written in the [render] section");

@@ -261,7 +261,9 @@ std::string formatSettings(const Settings& settings) {
         if (current != section) { section = current; out << "\n[" << section << "]\n"; }
         out << "# " << option.allowed << "\n";
         if (const std::string unused = unusedReason(settings, key); !unused.empty()) out << "# (" << unused << ")\n";
-        out << key.substr(dot + 1) << " = " << option.get(settings) << "\n";
+        std::string value = option.get(settings);
+        if (key == "render.scene" && value == "parity") value = "original";   // (B7's parity: a session's check, never saved)
+        out << key.substr(dot + 1) << " = " << value << "\n";
     }
     return out.str();
 }

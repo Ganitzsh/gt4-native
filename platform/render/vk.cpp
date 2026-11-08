@@ -476,6 +476,12 @@ Pipeline createGraphics(const Device& device, const GraphicsDesc& desc) {
     raster.depthBiasEnable = desc.depthBias ? VK_TRUE : VK_FALSE;
     raster.depthClampEnable = desc.depthClamp ? VK_TRUE : VK_FALSE;
     raster.lineWidth = 1.0f;
+    VkPipelineRasterizationProvokingVertexStateCreateInfoEXT provoking{};
+    if (desc.provokingLast) {
+        provoking.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_PROVOKING_VERTEX_STATE_CREATE_INFO_EXT;
+        provoking.provokingVertexMode = VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT;
+        raster.pNext = &provoking;
+    }
     VkPipelineMultisampleStateCreateInfo multisample{};
     multisample.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
     multisample.rasterizationSamples = desc.samples;

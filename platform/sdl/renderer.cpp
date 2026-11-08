@@ -338,6 +338,36 @@ struct Renderer::Impl {
             extensions.push_back(VK_EXT_SHADER_STENCIL_EXPORT_EXTENSION_NAME);
             device.stencilExport = true;
         }
+        // B7's parity path (render.scene = parity): the strip's last vertex provoking (flat shading's colour, the ADC bit);
+        // without the extension the triangles are rotated to put it first (and their Z may differ from the GS path's).
+        VkPhysicalDeviceProvokingVertexFeaturesEXT provoking{};
+        provoking.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROVOKING_VERTEX_FEATURES_EXT;
+        if (hasExtension(device.physical, VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME)) {
+            VkPhysicalDeviceProvokingVertexFeaturesEXT supportedProvoking{};
+            supportedProvoking.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROVOKING_VERTEX_FEATURES_EXT;
+            VkPhysicalDeviceFeatures2 queryProvoking{};
+            queryProvoking.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            queryProvoking.pNext = &supportedProvoking;
+            vkGetPhysicalDeviceFeatures2(device.physical, &queryProvoking);
+            // (the parity pipelines provoke last while the GS path's provoke first, in one render pass: only where the
+            // mode may differ per pipeline, VUID-vkCmdBindPipeline-pipelineBindPoint-04881)
+            VkPhysicalDeviceProvokingVertexPropertiesEXT provokingProperties{};
+            provokingProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROVOKING_VERTEX_PROPERTIES_EXT;
+            VkPhysicalDeviceProperties2 queryProperties{};
+            queryProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+            queryProperties.pNext = &provokingProperties;
+            vkGetPhysicalDeviceProperties2(device.physical, &queryProperties);
+            if (supportedProvoking.provokingVertexLast && provokingProperties.provokingVertexModePerPipeline) {
+                extensions.push_back(VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME);
+                provoking.provokingVertexLast = VK_TRUE;
+                provoking.pNext = features13.pNext;
+                features13.pNext = &provoking;
+                device.provokingLast = true;
+            }
+        }
+        std::printf("Device: parity path: last provoking vertex %s\n",
+                    device.provokingLast ? "yes (VK_EXT_provoking_vertex, per pipeline)"
+                                         : "no (or not per pipeline: triangles rotated, Z may differ from the GS path's)");
         float priority = 1.0f;
         VkDeviceQueueCreateInfo queue{};
         queue.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
@@ -882,6 +912,7 @@ struct Renderer::Impl {
             // Temporal anti-aliasing in the game's 3D scenes (motion vectors from its 3D renderers): for TAA, and for
             // FSR 2, whose temporal part it takes (the game's frames reach the pipeline whole, HUD included).
             gsnScene->setTemporal(settings.aa == gt4::AntiAliasing::Taa || settings.upscaler == gt4::Upscaler::Fsr2);
+            gsnScene->setParity(settings.scene == gt4::SceneRenderer::Parity);   // B7 (render.scene = parity)
             gsnScene->setFieldMode(settings.fieldMode == gt4::FieldMode::Clean);
             gsnScene->setInterpolation(settings.frameInterpolation);
             gsnScene->setFixedClock(fixedClock);
