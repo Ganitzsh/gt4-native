@@ -1,7 +1,8 @@
-// B7's parity planning (platform/render/modern/parity_view.h): a synthetic list whose view has one instance of two
-// items in one Draw, its mesh decoded by the mesh cache: the spans name the items' vertex ranges and arena places, the
-// arena holds the mesh's raw vertices and triangles in the GS path's order (rotated when the
-// device has no last provoking vertex), and what cannot be drawn falls back by reason.
+// B7's parity planning and B8's mesh blocks (platform/render/modern/parity_view.h): a synthetic list whose view has one
+// instance of two items in one Draw, its mesh decoded by the mesh cache: the spans name the items' vertex ranges and
+// their mesh's place in a block, the staged upload holds the mesh's raw vertices and triangles in the GS path's order
+// (rotated when the device has no last provoking vertex), unused meshes retire, and what cannot be drawn falls back by
+// reason. And the block ranges' allocator.
 #include "parity_view.h"
 
 #include <cstdio>
@@ -67,63 +68,101 @@ int main() {
     };
     gsn::FrameList list = makeList(cache);
 
-    std::vector<scene::MeshRawVertex> vertices(64);
-    std::vector<uint32_t> indices(64);
-    render::ParityView parity;
-    parity.setArena(vertices.data(), 64, indices.data(), 64, false);
+    // One plan: the mesh placed in the first block, its upload staged, the spans pointing at it.
+    const uint64_t vertexBytes = mesh->raw.size() * sizeof(scene::MeshRawVertex);
+    const uint64_t indexAt = (vertexBytes + 15) / 16 * 16;
+    render::ParityView parity(1 << 16, 2, 2, 1);
     std::vector<render::ParitySpan> spans;
-    check(parity.plan(list, spans) && spans.size() == 2, "both items planned");
-    if (spans.size() == 2) {
+    std::vector<uint8_t> staging;
+    std::vector<render::ParityCopy> copies;
+    parity.plan(list, spans, staging, copies);
+    check(spans.size() == 2 && copies.size() == 1 && staging.size() == indexAt + 12 * 4, "both items planned, the mesh staged once");
+    if (spans.size() == 2 && copies.size() == 1) {
         check(spans[0].draw == 1 && spans[0].first == 6 && spans[0].count == 6 && spans[0].job == 1 && spans[0].renderer == 1 &&
-                  spans[0].firstIndex == 0 && spans[0].indexCount == 6 && spans[0].vertexOffset == 0,
-              "the first item: its job's vertices, its triangles at the arena's start");
+                  spans[0].block == 0 && spans[0].vertexOffset == copies[0].to && spans[0].indexOffset == copies[0].to + indexAt &&
+                  spans[0].firstIndex == 0 && spans[0].indexCount == 6,
+              "the first item: its job's vertices, its mesh's offsets in the block, its triangles first");
         check(spans[1].first == 12 && spans[1].job == 2 && spans[1].firstIndex == 6, "the second item after it");
+        check(copies[0].from == 0 && copies[0].bytes == staging.size() && copies[0].block == 0, "one copy: the staged mesh");
     }
+    const uint32_t* indices = reinterpret_cast<const uint32_t*>(staging.data() + indexAt);
     // The GS path's vertex order: the strips' odd triangles turned back.
-    bool order = true;
-    for (size_t k = 0; k < 4; ++k) {
+    bool order = staging.size() >= indexAt + 48;
+    for (size_t k = 0; order && k < 4; ++k) {
         const uint32_t* m = mesh->indices.data() + k * 3;
         const bool turnedBack = mesh->turned[k] != 0;
-        order = order && indices[k * 3] == (turnedBack ? m[1] : m[0]) && indices[k * 3 + 1] == (turnedBack ? m[0] : m[1]) &&
+        order = indices[k * 3] == (turnedBack ? m[1] : m[0]) && indices[k * 3 + 1] == (turnedBack ? m[0] : m[1]) &&
                 indices[k * 3 + 2] == m[2];
     }
     check(mesh->turned.size() == 4 && !mesh->turned[0] && mesh->turned[1] && !mesh->turned[2] && mesh->turned[3],
           "the mesh: each item's second triangle turned");
     check(order, "the triangles in the GS path's order, the turned ones turned back");
-    check(std::memcmp(vertices.data(), mesh->raw.data(), mesh->raw.size() * sizeof(scene::MeshRawVertex)) == 0,
+    check(staging.size() >= vertexBytes && std::memcmp(staging.data(), mesh->raw.data(), vertexBytes) == 0,
           "the raw vertices as the mesh has them");
-    check(parity.plan(list, spans) && parity.stats().meshesPlaced == 1 && parity.stats().drawn == 4 && parity.stats().items == 4,
-          "planned again: the mesh placed once");
+    staging.clear();
+    copies.clear();
+    parity.plan(list, spans, staging, copies);
+    check(spans.size() == 2 && copies.empty() && parity.stats().meshesPlaced == 1 && parity.stats().drawn == 4 &&
+              parity.stats().items == 4,
+          "planned again: the mesh on the GPU already, nothing staged");
+    // Retired after its unused frames (2 here), its range free again one frame in flight later.
+    for (int f = 0; f < 5; ++f) parity.endFrame();
+    check(parity.stats().meshesRetired == 1 && parity.bytesUsed() == 0, "unused: retired, then its range freed");
+    parity.plan(list, spans, staging, copies);
+    check(copies.size() == 1 && parity.stats().meshesPlaced == 2, "drawn again: uploaded again");
 
     // Rotated triangles (no last provoking vertex): the strip's last vertex first, the same winding.
     {
         render::ParityView rotated;
-        rotated.setArena(vertices.data(), 64, indices.data(), 64, true);
-        check(rotated.plan(list, spans), "rotated: planned");
-        check(indices[0] == mesh->indices[2] && indices[1] == mesh->indices[0] && indices[2] == mesh->indices[1] &&
-                  indices[3] == mesh->indices[5] && indices[4] == mesh->indices[4] && indices[5] == mesh->indices[3],
+        rotated.setRotate(true);
+        std::vector<uint8_t> st;
+        std::vector<render::ParityCopy> cp;
+        rotated.plan(list, spans, st, cp);
+        const uint32_t* r = reinterpret_cast<const uint32_t*>(st.data() + indexAt);
+        check(st.size() >= indexAt + 24 && r[0] == mesh->indices[2] && r[1] == mesh->indices[0] && r[2] == mesh->indices[1] &&
+                  r[3] == mesh->indices[5] && r[4] == mesh->indices[4] && r[5] == mesh->indices[3],
               "rotated: (a, b, v) becomes (v, a, b), after a turned one is turned back");
     }
 
     // Fallbacks by reason.
     {
+        std::vector<uint8_t> st;
+        std::vector<render::ParityCopy> cp;
+        render::ParityView tiny(64, 1, 2, 1);   // (a block too small for the mesh)
+        tiny.plan(list, spans, st, cp);
+        check(spans.empty() && cp.empty() && tiny.stats().overBudget == 2, "over the budget: its items on the GS path");
         render::ParityView small;
-        small.setArena(vertices.data(), 2, indices.data(), 64, false);
-        check(!small.plan(list, spans), "an arena too small: the plan says so (the caller empties it)");
-        small.setArena(vertices.data(), 64, indices.data(), 64, false);
         gsn::FrameList none = makeList(cache);
         none.views[0].ids[0].mesh = 0;
-        check(small.plan(none, spans) && spans.empty() && small.stats().meshNone == 2, "mesh 0: its items on the GS path");
+        small.plan(none, spans, st, cp);
+        check(spans.empty() && small.stats().meshNone == 2, "mesh 0: its items on the GS path");
         none.views[0].ids.clear();
         none.views[0].items.clear();
-        check(small.plan(none, spans) && spans.empty() && small.stats().viewsNotSubstituted == 1, "a cut view: wholly on the GS path");
+        small.plan(none, spans, st, cp);
+        check(spans.empty() && small.stats().viewsNotSubstituted == 1, "a cut view: wholly on the GS path");
         gsn::FrameList differ = makeList(cache);
         differ.views[0].items[1].modelVertexCount = 3;
-        check(small.plan(differ, spans) && spans.size() == 1 && small.stats().itemsDiffer == 1, "an item whose runs differ: not drawn here");
+        small.plan(differ, spans, st, cp);
+        check(spans.size() == 1 && small.stats().itemsDiffer == 1, "an item whose runs differ: not drawn here");
         gsn::FrameList gone = makeList(std::make_shared<scene::SceneCache>(1));   // (another cache: the id names nothing there)
         render::ParityView fresh;
-        fresh.setArena(vertices.data(), 64, indices.data(), 64, false);
-        check(fresh.plan(gone, spans) && spans.empty() && fresh.stats().meshGone == 2, "a mesh the cache no longer has");
+        fresh.plan(gone, spans, st, cp);
+        check(spans.empty() && fresh.stats().meshGone == 2, "a mesh the cache no longer has");
+    }
+
+    // The block ranges: first fit, alignment, a block added on demand, neighbours merged on release.
+    {
+        render::BlockRanges ranges(1024, 2);
+        render::BlockRanges::Range a, b, c, d;
+        check(ranges.allocate(100, 16, a) && a.block == 0 && a.offset == 0, "ranges: the first at 0");
+        check(ranges.allocate(100, 16, b) && b.block == 0 && b.offset == 112, "ranges: the next aligned");
+        check(ranges.allocate(900, 16, c) && c.block == 1 && c.offset == 0, "ranges: too big for the rest: a new block");
+        check(!ranges.allocate(1000, 16, d), "ranges: no third block");
+        check(!ranges.allocate(2000, 16, d), "ranges: larger than a block");
+        ranges.release(a);
+        ranges.release(b);
+        check(ranges.allocate(1024, 16, d) && d.block == 0 && d.offset == 0, "ranges: released neighbours merged into the whole block");
+        check(ranges.used() == 1024 + 900, "ranges: the bytes in use");
     }
 
     if (failures) {

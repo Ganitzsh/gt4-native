@@ -195,17 +195,20 @@ struct GsnScene::Impl {
     // N4 (GsnScene::setSkippedBrackets): the marked brackets whose draws are not drawn (bit gsn::kBracketFlare, kBracketGlare)
     uint8_t skippedBrackets = 0;
     // B7's parity path (render.scene = parity, GsnScene::setParity; render/modern/parity_view.h): the substituted views'
-    // items drawn from the mesh cache by modern_parity.vert. The arena holds the meshes' raw vertices and triangles
-    // (host-visible: a check, not a mode); paritySpans the current list's items, by draw, parityAt each draw's first.
+    // items drawn from the mesh cache by modern_parity.vert. The meshes' raw vertices and triangles live in device-local
+    // blocks (parityBlocks, B8 step 1), uploaded through a staging ring before the list's draws; paritySpans the
+    // current list's items, by draw, parityAt each draw's first.
     bool parity = false;
     render::ParityView parityView;
-    vk::Buffer parityVertices, parityIndices;
+    std::vector<vk::Buffer> parityBlocks;            // (index = ParitySpan::block)
+    std::vector<vk::Buffer> parityStagingRing;       // per list and slot (buffer())
+    std::vector<uint8_t> parityStaging;              // this list's uploads, before they are copied
+    std::vector<render::ParityCopy> parityCopies;
     std::vector<render::ParitySpan> paritySpans;
     std::vector<uint32_t> parityAt;   // per draw (FrameList::draws), and one past: [parityAt[d], parityAt[d + 1]) its spans
     std::unordered_map<uint32_t, vk::Pipeline> parityPipelines;
     uint64_t paritySpansOutside = 0;   // spans not inside their draw's vertices (drawn on the GS path; should be 0)
-    bool parityResetDue = false;       // the arena filled: emptied at the next frame's first list (nothing in flight reads it)
-    uint64_t parityListsFull = 0;      // lists left wholly on the GS path because the arena filled
+    bool parityPlanned = false;        // a list planned this frame (endPending ends the view's frame then)
     void planParity();
     vk::Pipeline& parityPipeline(uint32_t blendKey, uint32_t mask, bool depth, bool exports);
     vk::Pipeline nightLumPass;
@@ -587,18 +590,21 @@ struct GsnScene::Impl {
             for (vk::Image& i : h.image) vk::destroy(device, i);
         for (auto& [key, p] : pipelines) vk::destroy(device, p);
         for (auto& [key, p] : parityPipelines) vk::destroy(device, p);
-        vk::destroy(device, parityVertices);
-        vk::destroy(device, parityIndices);
+        for (vk::Buffer& b : parityBlocks) vk::destroy(device, b);
+        for (vk::Buffer& b : parityStagingRing) vk::destroy(device, b);
         if (parity) {   // B7's fallbacks by reason (PLAN B7's acceptance lists them)
             const render::ParityStats& s = parityView.stats();
             std::printf("Parity path: %llu of %llu items drawn from the mesh cache; on the GS path: mesh 0 %llu, mesh evicted %llu, "
-                        "items differ %llu, outside their draw %llu; views not substituted %llu; meshes placed %llu, lists with the "
-                        "arena full %llu%s\n",
+                        "items differ %llu, outside their draw %llu, over the budget %llu; views not substituted %llu; meshes "
+                        "uploaded %llu (%.1f MiB), retired %llu; %u blocks of %llu MiB%s\n",
                         static_cast<unsigned long long>(s.drawn), static_cast<unsigned long long>(s.items),
                         static_cast<unsigned long long>(s.meshNone), static_cast<unsigned long long>(s.meshGone),
                         static_cast<unsigned long long>(s.itemsDiffer), static_cast<unsigned long long>(paritySpansOutside),
-                        static_cast<unsigned long long>(s.viewsNotSubstituted), static_cast<unsigned long long>(s.meshesPlaced),
-                        static_cast<unsigned long long>(parityListsFull), device.provokingLast ? "" : " (triangles rotated: no last provoking vertex)");
+                        static_cast<unsigned long long>(s.overBudget), static_cast<unsigned long long>(s.viewsNotSubstituted),
+                        static_cast<unsigned long long>(s.meshesPlaced), double(s.uploadBytes) / double(1 << 20),
+                        static_cast<unsigned long long>(s.meshesRetired), parityView.blocks(),
+                        static_cast<unsigned long long>(parityView.blockSize() >> 20),
+                        device.provokingLast ? "" : " (triangles rotated: no last provoking vertex)");
         }
         vk::destroy(device, display);
         vk::destroy(device, stencilPrep);
@@ -1245,32 +1251,39 @@ void GsnScene::Impl::segments(const gsn::FrameList& list, std::vector<Segment>& 
     }
 }
 
-// B7's parity path: the list's items the mesh cache draws (paritySpans, parityAt by draw). The arena is host-visible and
-// filled as meshes are first drawn; when full, the rest of the frame stays on the GS path and the arena is emptied before
-// the next frame's first list records anything (after the GPU is idle: earlier frames' draws read it).
-constexpr uint32_t kParityVertices = 1u << 20, kParityIndices = 4u << 20;   // 76 MiB and 16 MiB
-
+// B7's parity path: the list's items the mesh cache draws (paritySpans, parityAt by draw), and the uploads of the meshes
+// it draws for the first time, copied into their device-local blocks here, before any of the list's draws.
 void GsnScene::Impl::planParity() {
     paritySpans.clear();
     parityAt.assign(frame.draws.size() + 1, 0);
     if (!parity || frame.views.empty() || frame.models.empty() || !ex.jobs) return;
-    if (!parityVertices.buffer) {
-        parityVertices = vk::createBuffer(device, VkDeviceSize(kParityVertices) * sizeof(scene::MeshRawVertex),
-                                          VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, true);
-        parityIndices = vk::createBuffer(device, VkDeviceSize(kParityIndices) * 4, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, true);
-        parityView.setArena(static_cast<scene::MeshRawVertex*>(parityVertices.mapped), kParityVertices,
-                            static_cast<uint32_t*>(parityIndices.mapped), kParityIndices, !device.provokingLast);
-    }
-    if (parityResetDue && listIndex == 0) {
-        vkDeviceWaitIdle(device.device);
-        parityView.reset();
-        parityResetDue = false;
-    }
-    if (!parityView.plan(frame, paritySpans)) {
-        paritySpans.clear();
-        parityResetDue = true;
-        ++parityListsFull;
-        return;
+    parityView.setRotate(!device.provokingLast);
+    parityStaging.clear();
+    parityCopies.clear();
+    parityView.plan(frame, paritySpans, parityStaging, parityCopies);
+    parityPlanned = true;
+    if (!parityCopies.empty()) {
+        while (parityBlocks.size() < parityView.blocks())
+            parityBlocks.push_back(vk::createBuffer(device, parityView.blockSize(),
+                                                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
+                                                        VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                                    false));
+        vk::Buffer& staging = buffer(parityStagingRing, ex.slot, parityStaging.size(), VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+        std::memcpy(staging.mapped, parityStaging.data(), parityStaging.size());
+        for (const render::ParityCopy& c : parityCopies) {
+            const VkBufferCopy region{c.from, c.to, c.bytes};
+            vkCmdCopyBuffer(ex.command, staging.buffer, parityBlocks[c.block].buffer, 1, &region);
+        }
+        VkMemoryBarrier2 m{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        m.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+        m.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        m.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT | VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT;
+        m.dstAccessMask = VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_2_INDEX_READ_BIT;
+        VkDependencyInfo d{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        d.memoryBarrierCount = 1;
+        d.pMemoryBarriers = &m;
+        vkCmdPipelineBarrier2(ex.command, &d);
+        tally("parity mesh uploads", parityCopies.size());
     }
     for (const render::ParitySpan& s : paritySpans) ++parityAt[s.draw + 1];
     for (size_t d = 1; d < parityAt.size(); ++d) parityAt[d] += parityAt[d - 1];
@@ -2555,11 +2568,12 @@ void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t
                     vk::Pipeline& pp = parityPipeline(blendKey, ps.mask, hasDepth, stencilMode == 3);
                     if (boundPipeline != pp.pipeline) {
                         vk::bind(command, pp);
-                        const VkDeviceSize zero = 0;
-                        vkCmdBindVertexBuffers(command, 0, 1, &parityVertices.buffer, &zero);
-                        vkCmdBindIndexBuffer(command, parityIndices.buffer, 0, VK_INDEX_TYPE_UINT32);
                         boundPipeline = pp.pipeline;
                     }
+                    // (the item's mesh: its block, at the mesh's offsets)
+                    const VkDeviceSize vertexAt = sp.vertexOffset;
+                    vkCmdBindVertexBuffers(command, 0, 1, &parityBlocks[sp.block].buffer, &vertexAt);
+                    vkCmdBindIndexBuffer(command, parityBlocks[sp.block].buffer, sp.indexOffset, VK_INDEX_TYPE_UINT32);
                     vk::Descriptors()
                         .sampled(0, view, sampler)
                         .storageBuffer(1, ex.jobs->buffer, 0, frame.models.size() * sizeof(gfx::ModelJob))
@@ -2568,7 +2582,7 @@ void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t
                     // (the renderers' cull, hidden test and ADC: modern_parity.vert, per triangle as gsn_models.comp)
                     const ParityConstants pc{pk, sp.job, modelT, modelTPrevious, 0};
                     vk::pushConstants(command, pp, pc);
-                    vkCmdDrawIndexed(command, sp.indexCount, 1, sp.firstIndex, static_cast<int32_t>(sp.vertexOffset), 0);
+                    vkCmdDrawIndexed(command, sp.indexCount, 1, sp.firstIndex, 0, 0);   // (the mesh's own indices, from its offsets)
                     tally("parity draws");
                     cursor = sp.first + sp.count;
                 }
@@ -3554,6 +3568,11 @@ void GsnScene::Impl::pendingListEnd(VkCommandBuffer command) {
 
 // After the last list: histories retired, the lists recycled, the displayed target made sampled.
 void GsnScene::Impl::endPending(VkCommandBuffer command) {
+    // B8 step 1: the parity meshes' frame ends (unused ones retired, ranges no frame in flight reads freed)
+    if (parityPlanned) {
+        parityView.endFrame();
+        parityPlanned = false;
+    }
     // Histories of scenes not seen for 10 seconds go (a scene's target left behind with its screen).
     for (auto it = histories.begin(); it != histories.end();) {
         if (displayedFrames > it->second.used + 600) {

@@ -1,4 +1,4 @@
-// B7's parity path, its planning on the CPU (parity_view.h).
+// B7's parity path and B8's hybrid, their planning on the CPU (parity_view.h).
 #include "parity_view.h"
 
 #include <algorithm>
@@ -6,35 +6,103 @@
 
 namespace gt4::render {
 
-void ParityView::setArena(scene::MeshRawVertex* v, uint32_t vCapacity, uint32_t* i, uint32_t iCapacity, bool rotateTriangles) {
-    vertices = v;
-    vertexCapacity = vCapacity;
-    indices = i;
-    indexCapacity = iCapacity;
-    rotate = rotateTriangles;
-    reset();
+bool BlockRanges::allocate(uint64_t bytes, uint64_t alignment, Range& out) {
+    if (bytes == 0 || bytes > blockBytes) return false;
+    auto fit = [&](uint32_t b) {
+        auto& free = freeLists[b];
+        for (auto it = free.begin(); it != free.end(); ++it) {
+            const uint64_t start = (it->first + alignment - 1) / alignment * alignment;
+            const uint64_t end = it->first + it->second;
+            if (start + bytes > end) continue;
+            // split the free range around [start, start + bytes)
+            const uint64_t before = start - it->first, after = end - (start + bytes);
+            const uint64_t at = it->first;
+            free.erase(it);
+            if (before) free.emplace(at, before);
+            if (after) free.emplace(start + bytes, after);
+            out = {b, start, bytes};
+            usedBytes += bytes;
+            return true;
+        }
+        return false;
+    };
+    for (uint32_t b = 0; b < freeLists.size(); ++b)
+        if (fit(b)) return true;
+    if (freeLists.size() >= maxBlocks) return false;
+    freeLists.emplace_back();
+    freeLists.back().emplace(0, blockBytes);
+    return fit(static_cast<uint32_t>(freeLists.size() - 1));
 }
 
-void ParityView::reset() {
-    placed.clear();
-    vertexUsed = indexUsed = 0;
-    full = false;
+void BlockRanges::release(const Range& range) {
+    if (range.block >= freeLists.size() || !range.bytes) return;
+    auto& free = freeLists[range.block];
+    uint64_t start = range.offset, end = range.offset + range.bytes;
+    // merge with the free neighbours
+    auto next = free.lower_bound(start);
+    if (next != free.end() && next->first == end) {
+        end += next->second;
+        next = free.erase(next);
+    }
+    if (next != free.begin()) {
+        auto prev = std::prev(next);
+        if (prev->first + prev->second == start) {
+            start = prev->first;
+            free.erase(prev);
+        }
+    }
+    free.emplace(start, end - start);
+    usedBytes -= range.bytes;
 }
 
-const ParityView::Placed* ParityView::place(const scene::Mesh& mesh, scene::MeshId id) {
-    if (auto it = placed.find(id); it != placed.end()) return &it->second;
+ParityView::ParityView(uint64_t blockBytes, uint32_t maxBlocks, uint32_t unusedFrames, uint32_t framesInFlight)
+    : ranges(blockBytes, maxBlocks), unusedFrames(unusedFrames), framesInFlight(framesInFlight) {}
+
+bool ParityView::makeRoom(uint64_t bytes) {
+    // the least recently used first, never one drawn within the frames in flight (this frame's included)
+    std::vector<std::pair<uint64_t, scene::MeshId>> byAge;
+    for (const auto& [id, p] : placed)
+        if (p.lastUsed + framesInFlight <= frame) byAge.emplace_back(p.lastUsed, id);
+    std::sort(byAge.begin(), byAge.end());
+    uint64_t freed = 0;
+    for (const auto& [age, id] : byAge) {
+        if (freed >= bytes) break;
+        auto it = placed.find(id);
+        freed += it->second.range.bytes;
+        retired.emplace_back(frame, it->second.range);
+        placed.erase(it);
+        ++counters.meshesRetired;
+    }
+    return freed >= bytes;   // (the ranges come free framesInFlight frames from now: endFrame)
+}
+
+const ParityView::Placed* ParityView::place(const scene::Mesh& mesh, scene::MeshId id, std::vector<uint8_t>& staging,
+                                            std::vector<ParityCopy>& copies) {
+    if (auto it = placed.find(id); it != placed.end()) {
+        it->second.lastUsed = frame;
+        return &it->second;
+    }
     const size_t v = mesh.raw.size(), n = mesh.indices.size();
-    if (v != mesh.vertices.size() || n % 3 || mesh.turned.size() != n / 3) return nullptr;
-    if (!vertices || vertexUsed + v > vertexCapacity || indexUsed + n > indexCapacity) {
-        full = true;
+    if (v != mesh.vertices.size() || n % 3 || mesh.turned.size() != n / 3 || !v) return nullptr;
+    const uint64_t vertexBytes = uint64_t(v) * sizeof(scene::MeshRawVertex);
+    const uint64_t indexAt = (vertexBytes + 15) / 16 * 16;
+    const uint64_t bytes = indexAt + uint64_t(n) * 4;
+    BlockRanges::Range range;
+    if (!ranges.allocate(bytes, 16, range)) {
+        makeRoom(bytes);
+        ++counters.overBudget;   // (this frame on the GS path; the retired ranges come free in a few frames)
         return nullptr;
     }
     Placed p;
-    p.vertexOffset = vertexUsed;
-    p.firstIndex = indexUsed;
+    p.range = range;
+    p.indexOffset = range.offset + indexAt;
     p.items = mesh.items;
-    std::memcpy(vertices + vertexUsed, mesh.raw.data(), v * sizeof(scene::MeshRawVertex));
-    uint32_t* out = indices + indexUsed;
+    p.lastUsed = frame;
+    // the staging stream: the raw vertices, padding, then the triangles in the GS path's order
+    const size_t at = staging.size();
+    staging.resize(at + bytes, 0);
+    std::memcpy(staging.data() + at, mesh.raw.data(), vertexBytes);
+    uint32_t* out = reinterpret_cast<uint32_t*>(staging.data() + at + indexAt);
     for (size_t t = 0; t < n; t += 3) {
         uint32_t a = mesh.indices[t], b = mesh.indices[t + 1];
         const uint32_t c = mesh.indices[t + 2];
@@ -49,45 +117,47 @@ const ParityView::Placed* ParityView::place(const scene::Mesh& mesh, scene::Mesh
             out[t + 2] = c;
         }
     }
-    vertexUsed += static_cast<uint32_t>(v);
-    indexUsed += static_cast<uint32_t>(n);
+    copies.push_back({at, range.offset, bytes, range.block});
     ++counters.meshesPlaced;
+    counters.uploadBytes += bytes;
     return &placed.emplace(id, std::move(p)).first->second;
 }
 
-bool ParityView::plan(const gsn::FrameList& list, std::vector<ParitySpan>& spans) {
+void ParityView::plan(const gsn::FrameList& list, std::vector<ParitySpan>& spans, std::vector<uint8_t>& staging,
+                      std::vector<ParityCopy>& copies) {
     spans.clear();
-    ParityStats seen;   // (counted only when the plan completes: a plan redone after a reset counts once)
     for (const gsn::FrameList::ViewOnList& view : list.views) {
         if (!view.package) continue;
         if (view.ids.empty() || view.items.empty()) {   // cut or not valid: wholly on the GS path (its items unknown)
-            ++seen.viewsNotSubstituted;
+            ++counters.viewsNotSubstituted;
             continue;
         }
         for (const scene::InstanceIds& ids : view.ids) {
-            seen.items += ids.materialCount;
+            counters.items += ids.materialCount;
             if (!ids.mesh) {
-                seen.meshNone += ids.materialCount;
+                counters.meshNone += ids.materialCount;
                 continue;
             }
             const Placed* p = nullptr;
             if (auto it = placed.find(ids.mesh); it != placed.end()) {
+                it->second.lastUsed = frame;
                 p = &it->second;
             } else {
                 const std::shared_ptr<const scene::Mesh> mesh = list.sceneCache ? list.sceneCache->meshes().mesh(ids.mesh) : nullptr;
                 if (!mesh) {
-                    seen.meshGone += ids.materialCount;
+                    counters.meshGone += ids.materialCount;
                     continue;
                 }
-                p = place(*mesh, ids.mesh);
+                const uint64_t before = counters.overBudget;
+                p = place(*mesh, ids.mesh, staging, copies);
                 if (!p) {
-                    if (full) return false;
-                    seen.itemsDiffer += ids.materialCount;
+                    if (counters.overBudget != before) counters.overBudget += ids.materialCount - 1;   // (items, not meshes)
+                    else counters.itemsDiffer += ids.materialCount;
                     continue;
                 }
             }
             if (p->items.size() != ids.materialCount || size_t(ids.firstMaterial) + ids.materialCount > view.items.size()) {
-                seen.itemsDiffer += ids.materialCount;
+                counters.itemsDiffer += ids.materialCount;
                 continue;
             }
             for (uint32_t j = 0; j < ids.materialCount; ++j) {
@@ -95,7 +165,7 @@ bool ParityView::plan(const gsn::FrameList& list, std::vector<ParitySpan>& spans
                 const scene::MeshItem& item = p->items[j];
                 if (item.animated || ref.job >= list.models.size() || ref.draw >= list.draws.size() ||
                     item.indexCount != ref.modelVertexCount) {
-                    ++seen.itemsDiffer;
+                    ++counters.itemsDiffer;
                     continue;
                 }
                 ParitySpan s;
@@ -104,24 +174,41 @@ bool ParityView::plan(const gsn::FrameList& list, std::vector<ParitySpan>& spans
                 s.count = ref.modelVertexCount;
                 s.job = ref.job;
                 s.renderer = item.renderer;
-                s.vertexOffset = p->vertexOffset;
-                s.firstIndex = p->firstIndex + item.firstIndex;
+                s.block = p->range.block;
+                s.vertexOffset = p->range.offset;
+                s.indexOffset = p->indexOffset;
+                s.firstIndex = item.firstIndex;
                 s.indexCount = item.indexCount;
                 spans.push_back(s);
-                ++seen.drawn;
+                ++counters.drawn;
             }
         }
     }
     std::sort(spans.begin(), spans.end(), [](const ParitySpan& a, const ParitySpan& b) {
         return a.draw != b.draw ? a.draw < b.draw : a.first < b.first;
     });
-    counters.items += seen.items;
-    counters.drawn += seen.drawn;
-    counters.viewsNotSubstituted += seen.viewsNotSubstituted;
-    counters.meshNone += seen.meshNone;
-    counters.meshGone += seen.meshGone;
-    counters.itemsDiffer += seen.itemsDiffer;
-    return true;
+}
+
+void ParityView::endFrame() {
+    // retired framesInFlight frames ago: no frame in flight reads them now
+    retired.erase(std::remove_if(retired.begin(), retired.end(),
+                                 [&](const std::pair<uint64_t, BlockRanges::Range>& r) {
+                                     if (r.first + framesInFlight > frame) return false;
+                                     ranges.release(r.second);
+                                     return true;
+                                 }),
+                  retired.end());
+    // meshes not drawn for unusedFrames
+    for (auto it = placed.begin(); it != placed.end();) {
+        if (it->second.lastUsed + unusedFrames < frame) {
+            retired.emplace_back(frame, it->second.range);
+            ++counters.meshesRetired;
+            it = placed.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    ++frame;
 }
 
 }  // namespace gt4::render
