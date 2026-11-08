@@ -83,6 +83,13 @@ an ordered forward pass is needed only where the view's own reverse-Z depth is u
 prototype below moves there. Open before B10: night and the showroom, the destination-alpha passes, and which
 views t5 and t59 are.
 
+**Follow-up: the VU's rounding at near ties** (lane B, the coordinator, 2026-11-08). The shared shaders are precise
+(CONTRACTS b.10), but not the VU's truncating rounding, so where GT4's depth tests are near-equal neither they nor
+the fused code they replaced decide as the PS2 does. Baseline, PE race 2's countdown against PCSX2's software
+renderer: of 109,473 pixels where fused and precise differ, precise is closer on 52,898, fused on 54,532, and
+about two thirds match neither (CAPTURES.md's re-baselines). A transform that rounds as the VU does (truncation
+after each operation) could beat both; it would be its own `ORIG` re-baseline, judged on the same stills.
+
 **Question.** Which of GT4's scene-target draws rely on draw order rather than depth: coplanar layers (road
 markings, kerbs, decals, shadows drawn on the road with equal Z under GEQUAL), alpha-blended surfaces (glass,
 fences, glows, smoke), the car paint's destination-alpha pass (`Cs * Ad` with DATE, NATIVE_RENDERER.md:115-117),
