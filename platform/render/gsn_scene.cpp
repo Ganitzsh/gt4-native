@@ -444,6 +444,9 @@ struct GsnScene::Impl {
         vkDeviceWaitIdle(device.device);
         if (!profile.quiet) printProfile();
         if (framesSkipped) std::printf("Frames skipped behind the game: %llu\n", static_cast<unsigned long long>(framesSkipped));
+        if (stagesOnTransients || stagesOnMembers)
+            std::printf("Scene stages run on the members: %llu (the build's plan was wrong); on the render graph's transients: %llu\n",
+                        static_cast<unsigned long long>(stagesOnMembers), static_cast<unsigned long long>(stagesOnTransients));
         if (readSkips) std::printf("... of them ahead of GS reads: %llu (of %llu reads)\n", static_cast<unsigned long long>(readSkips),
                                    static_cast<unsigned long long>(reads));
         if (profile.pool) vkDestroyQueryPool(device.device, profile.pool, nullptr);
@@ -941,7 +944,13 @@ struct GsnScene::Impl {
         }
     }
     bool beginLight(VkCommandBuffer command, size_t at);   // before the steps; false: no scene stage (no light, GT4_GSN_LIMIT)
+    void stageOnMembers(VkCommandBuffer command, size_t at);
     void runStep(int step, const gsn::FrameList::Lighting& l, size_t at, int part);
+    // Scene stages GsnScene::buildPrepass planned wrong (the targets or the settings at run time not as it saw them),
+    // run on the members instead: a gate that stays 0 (printed with the scene's summary); and those run as planned.
+    uint64_t stagesOnTransients = 0, stagesOnMembers = 0;
+    void planWrong(size_t at, const char* what);
+    void checkOnePass(size_t at);
     // The scene stage at a Light as GsnScene::buildPrepass plans it: whether it has a scene, its area, the colour
     // target's extent, the steps that run (checked when it runs: the targets are made by then).
     struct LightPlan {
@@ -2279,12 +2288,39 @@ void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t
 // whole.
 void GsnScene::Impl::executeLight(VkCommandBuffer command, uint32_t /*slot*/, size_t at) {
     if (!beginLight(command, at)) return;
+    stageOnMembers(command, at);
+}
+
+// The steps after beginLight, each whole, on the members (they size themselves and make their own barriers).
+void GsnScene::Impl::stageOnMembers(VkCommandBuffer command, size_t at) {
     ex.work = WorkImages{&velocityImage, &aoImage, &litImage, &ssrImage, false};
     const gsn::FrameList::Lighting& l = frame.lights[frame.commands[at].index];
     for (int step = 0; step < kSteps; ++step) {
         if (stepRuns(step, l)) runStep(step, l, at, kPartWhole);
         mark(command, kStepMarks[step]);
     }
+}
+
+// A Light's scene stage that does not run as GsnScene::buildPrepass planned it (counted: GsnScene's summary prints it).
+void GsnScene::Impl::planWrong(size_t at, const char* what) {
+    ++stagesOnMembers;
+    static uint64_t reported = 0;
+    if (reported++ < 8)
+        std::printf("gsn: the scene stage at Light %zu (list %u) %s: run on the member images\n", at, listIndex, what);
+}
+
+// The graph's one pass for a Light the build planned no transients for (no scene then, or no step): a scene with a
+// step that runs now is a wrong plan. It runs correctly all the same (executeLight, on the members); only counted.
+void GsnScene::Impl::checkOnePass(size_t at) {
+    if (ex.limited || frame.commands[at].index >= frame.lights.size()) return;
+    const gsn::FrameList::Lighting& l = frame.lights[frame.commands[at].index];
+    SceneImages si;
+    if (!ex.sceneImages(l, si)) return;
+    for (int step = 0; step < kSteps; ++step)
+        if (stepRuns(step, l)) {
+            planWrong(at, "was planned without a scene or a step, and has both");
+            return;
+        }
 }
 
 bool GsnScene::Impl::beginLight(VkCommandBuffer command, size_t at) {
@@ -2321,8 +2357,10 @@ void GsnScene::Impl::executeLightPart(VkCommandBuffer command, size_t at, int st
     if (first) {
         ex.lightSkipped = !beginLight(command, at);
         if (!ex.lightSkipped) {
-            // The plan's guesses, made before the lists' targets were (GsnScene::buildPrepass): its transients' sizes
-            // came from them. Different, the work images are not the sizes the members would have.
+            // The plan's guesses, made before the lists' targets were (GsnScene::buildPrepass): its transients' sizes and
+            // passes came from them. Different (another area, another colour target's size, other steps), the
+            // transients may be too small or missing: the whole stage runs here on the members, as executeLight runs
+            // it, and the Light's planned passes record nothing (their transients are written and read by no command).
             const gsn::FrameList::Lighting& l = frame.lights[frame.commands[at].index];
             SceneImages si;
             const bool scene = ex.sceneImages(l, si);
@@ -2331,14 +2369,16 @@ void GsnScene::Impl::executeLightPart(VkCommandBuffer command, size_t at, int st
                 same = si.area.width == first->area.width && si.area.height == first->area.height &&
                        si.colour->extent.width == first->colour.width && si.colour->extent.height == first->colour.height;
             for (int s = 0; s < kSteps; ++s) same = same && stepRuns(s, l) == first->runs[s];
+            if (same) ++stagesOnTransients;
             if (!same) {
-                static uint64_t reported = 0;
-                if (reported++ < 8)
-                    std::printf("gsn: the scene stage at Light %zu was planned for a scene %ux%u (%s) but has %ux%u (%s), or other steps: "
-                                "its work images are not the members' sizes\n",
-                                at, first->area.width, first->area.height, first->scene ? "lit" : "none", scene ? si.area.width : 0u,
-                                scene ? si.area.height : 0u, scene ? "lit" : "none");
-                assert(!"the scene stage runs as GsnScene::buildPrepass planned it");
+                char what[160];
+                std::snprintf(what, sizeof what, "was planned over %ux%u (colour %ux%u) but has %ux%u (colour %ux%u), or other steps",
+                              first->area.width, first->area.height, first->colour.width, first->colour.height,
+                              scene ? si.area.width : 0u, scene ? si.area.height : 0u, scene ? si.colour->extent.width : 0u,
+                              scene ? si.colour->extent.height : 0u);
+                planWrong(at, what);
+                stageOnMembers(command, at);
+                ex.lightSkipped = true;
             }
         }
     }
@@ -3245,11 +3285,13 @@ bool GsnScene::buildPrepass(rg::Graph& graph, const SceneView& view) {
     // are the stage's own, as before). One pass on the members (executeLight) when no step runs, the Light has no scene
     // (nothing runs then either), or GT4_GSN_LIMIT is set.
     auto sceneStage = [&](const gsn::FrameList& list, size_t at) {
-        auto inOnePass = [&] {
-            graph.pass("gs: scene stage", keep, [&s, view, at](rg::PassContext& c) {
+        // (`check`: the plan saw no scene or no step; a scene with a step at run time is counted as a wrong plan)
+        auto inOnePass = [&](bool check) {
+            graph.pass("gs: scene stage", keep, [&s, view, at, check](rg::PassContext& c) {
                 GT4_STAGE_SCOPE("render: the scene (game lists)");
                 GT4_CPU_SCOPE("render: native renderer's commands");
                 GT4_STAGE_SCOPE("render: the lists' draws");
+                if (check) s.checkOnePass(at);
                 s.executeLight(c.command, view.slot, at);
             });
         };
@@ -3260,11 +3302,18 @@ bool GsnScene::buildPrepass(rg::Graph& graph, const SceneView& view) {
         bool any = false;
         for (int step = 0; step < Impl::kSteps; ++step) any = (plan.runs[step] = s.stepRuns(step, l)) || any;
         if (drawLimit || !plan.scene || !any) {
-            inOnePass();
+            inOnePass(!drawLimit);
             return;
         }
         // The work images grown as the members would be at this Light (Impl::ensureWork's rule): the motion vectors over
         // the colour target, the reflections at half the area, the rest over the area. The transients are made at these.
+        // They grow now, at the build, also for a frame that then never executes (its graph does not compile, or it is
+        // dropped): later work images may then be larger than the old code's. No pixel depends on that: every stage
+        // shader reads its work images with texelFetch at coordinates clamped to the push constants' area (the light
+        // pass's occlusion, the composite's half-resolution reflections, the resolve's and the blur's motion vectors),
+        // none takes an image's own size (no textureSize or imageSize; the blur's and focus's `imageSize` is the colour
+        // target's), and the motion vectors' render area is the colour target and Z buffer's whenever the image covers
+        // them, which a grown extent always does.
         const VkExtent2D area = plan.area, half{(area.width + 1) / 2, (area.height + 1) / 2};
         if (plan.runs[Impl::kStepMotionVectors]) Impl::grow(s.velocityExtent, plan.colour);
         if (plan.runs[Impl::kStepLighting]) {
