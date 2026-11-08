@@ -171,14 +171,19 @@ void object_impulse(std::uint32_t a[8]) {
     random_vectors(20, 23, -1.0f, 1.0f);
 }
 
-// 003E8438 (obj, pos, st, rgba0, rgba2, n): a GS packet of n vertices at obj's cursor (0x58). func_0049E3E0 loads
-// rows 20..23 from the scratchpad (0x70002FA0; its flag byte at 0x70002000 cleared so it does not recompute them).
+// 003E8438 (obj, pos, st, rgba0, rgba2, n): n vertices. The original appends GIF data at obj's cursor (0x58), inside
+// the DIRECT its caller (003E7F08) opened; the native draws them through the graphics library's packet (its cursor
+// at 0x700021F8, pointed at kScratch + 0x1800 here). func_0049E3E0 loads rows 20..23 from the scratchpad
+// (0x70002FA0; its flag byte at 0x70002000 cleared so it does not recompute them). n is 3 or more: below 3 the
+// original's GIF tag names one register more than it writes (NREG 2n + 2 for 2n + 1 values), and no caller passes
+// less (003E8610 and 003E8728 pass 4; 003E8790 a cut quad's parts, 003E8E60's 2 cut points plus 1..3 corners).
 void vertex_packet(std::uint32_t a[8]) {
-    fill(kScratch, 0x1200);
+    fill(kScratch, 0x2000);
     a[0] = kScratch;
     put32(kScratch + 0x58, kScratch + 0x1000);
+    put32(0x700021F8, kScratch + 0x1800);
     a[1] = kScratch + 0x200;
-    a[5] = 1 + rnd() % 6;
+    a[5] = 3 + rnd() % 4;
     fill_floats(a[1], 3 * a[5] + 1, -50.0f, 50.0f);
     a[2] = kScratch + 0x400;
     a[3] = rnd();
@@ -204,6 +209,7 @@ const Register a1_r4(Test{"003E3458", 0x003E3458, "ii", 'v', true, shape_points}
 const Register a1_r5(Test{"003E34E8", 0x003E34E8, "iiiii", 'v', true, ground_push});
 const Register a1_r6(Test{"003E3840", 0x003E3840, "iii", 'i', true, contact_impulse});
 const Register a1_r7(Test{"003E3ED0", 0x003E3ED0, "iiiii", 'f', true, object_impulse});
-const Register a1_r8(Test{"003E8438", 0x003E8438, "iiiiii", 'v', true, vertex_packet});
+const Register a1_r8(appends_gif(Test{"003E8438", 0x003E8438, "iiiiii", 'v', true, vertex_packet}, kScratch + 0x58,
+                                 0x700021F8));
 
 }  // namespace

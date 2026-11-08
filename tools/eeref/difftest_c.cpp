@@ -22,13 +22,13 @@ void put16(std::uint32_t at, std::uint16_t v) { std::memcpy(ram(at), &v, 2); }
 void put8(std::uint32_t at, std::uint8_t v) { ram(at)[0] = v; }
 void putf(std::uint32_t at, float f) { ramf(at)[0] = f; }
 
-// The context the skinning functions take: command word +0x40, packet cursor +0x1F8 (at kScratch + 0x40000, any
-// word alignment), bone table +0xC34 (256 random 64-byte matrices at kScratch + 0x10000; sometimes none, then
-// 0049D970 loads identities).
+// The context the skinning functions take: command word +0x40, packet cursor +0x1F8 (at kScratch + 0x40000, a
+// quadword boundary as DMA tags need: the original counts its tag's quadwords from the cursor), bone table +0xC34
+// (256 random 64-byte matrices at kScratch + 0x10000; sometimes none, then 0049D970 loads identities).
 void skin_context() {
     fill(kScratch, 0x1000);
     fill(kScratch + 0x40000, 0x2000);
-    put32(kScratch + 0x1F8, kScratch + 0x40000 + 4 * (rnd() % 4));
+    put32(kScratch + 0x1F8, kScratch + 0x40000);
     if (rnd() % 6 == 0) {
         put32(kScratch + 0xC34, 0);
     } else {
@@ -38,14 +38,15 @@ void skin_context() {
 }
 
 // A command stream at kScratch + 0x20000: 1..3 groups of a header (count | more), a skipped field, four bone
-// indices and `count` vertices of `size` bytes made by `vertex`; returns the total vertex count.
+// indices and `count` vertices of `size` bytes made by `vertex`; returns the total vertex count, at least 1 (the
+// original's UNPACK takes the total as its count, where 0 means 256: a batch of no vertices is not a packet).
 template <class Header>
 std::uint32_t skin_stream(std::uint32_t size, Header more, void (*vertex)(std::uint32_t at)) {
     std::uint32_t at = kScratch + 0x20000, total = 0;
     fill(at, 0x2000);
     const int groups = 1 + static_cast<int>(rnd() % 3);
     for (int g = 0; g < groups; ++g) {
-        const std::uint32_t count = rnd() % 6;
+        const std::uint32_t count = g == 0 ? 1 + rnd() % 5 : rnd() % 6;
         total += count;
         const Header hdr = static_cast<Header>(count | (g + 1 < groups ? more : 0));
         std::memcpy(ram(at), &hdr, sizeof hdr);
@@ -87,7 +88,7 @@ void skin_float_normal(std::uint32_t a[8]) {
     a[0] = kScratch;
     a[1] = kScratch + 0x20000;
     a[2] = skin_stream<std::uint16_t>(0x28, 0x8000, float_vertex_normal);
-    a[3] = rnd() & 0x3FF;
+    a[3] = rnd() % 0xC0;   // dest: a qword of the batch with room for the normals (at most 15 vertices)
 }
 // 0049DB08 (ctx, cmd, n, scale): 16-bit positions and byte weights, VU0 program 0x460.
 void skin_packed(std::uint32_t a[8]) {
@@ -103,7 +104,7 @@ void skin_packed_normal(std::uint32_t a[8]) {
     a[0] = kScratch;
     a[1] = kScratch + 0x20000;
     a[2] = skin_stream<std::uint8_t>(13, 0x80, packed_vertex);
-    a[3] = rnd() & 0x3FF;
+    a[3] = rnd() % 0xC0;   // dest, as in skin_float_normal
     a[4] = bits(rndf(0.00005f, 0.00015f));
 }
 
@@ -230,10 +231,11 @@ void state_reset(std::uint32_t a[8]) {
 }
 
 const Register c0(Test{"0049D970", 0x0049D970, "ii", 'i', false, bone_load});
-const Register c1(Test{"0049D580", 0x0049D580, "iii", 'v', true, skin_float});
-const Register c2(Test{"0049D728", 0x0049D728, "iiii", 'v', true, skin_float_normal});
-const Register c3(Test{"0049DB08", 0x0049DB08, "iiif", 'v', true, skin_packed});
-const Register c4(Test{"0049DCB0", 0x0049DCB0, "iiiif", 'v', true, skin_packed_normal});
+const Register c1(sends_packet(Test{"0049D580", 0x0049D580, "iii", 'v', true, skin_float}, kScratch + 0x1F8));
+const Register c2(sends_packet(Test{"0049D728", 0x0049D728, "iiii", 'v', true, skin_float_normal}, kScratch + 0x1F8));
+const Register c3(sends_packet(Test{"0049DB08", 0x0049DB08, "iiif", 'v', true, skin_packed}, kScratch + 0x1F8));
+const Register c4(sends_packet(Test{"0049DCB0", 0x0049DCB0, "iiiif", 'v', true, skin_packed_normal},
+                               kScratch + 0x1F8));
 const Register c5(Test{"0049E2D8", 0x0049E2D8, "ii", 'v', true, screen_point});
 const Register c6(Test{"0049E480", 0x0049E480, "i", 'v', true, view_refresh});
 const Register c7(Test{"0049E698", 0x0049E698, "i", 'v', true, lights8});

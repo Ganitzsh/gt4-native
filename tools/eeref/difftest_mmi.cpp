@@ -72,12 +72,13 @@ void blend_frames(std::uint32_t a[8]) {
     a[0] = o;
 }
 
-// 0049F938 (s, tag, mode): a GS packet at s->cursor (+0x1F8) with colour s->colors[mode != 0] (+0xC20)
+// 0049F938 (s, tag, mode): a packet at s->cursor (+0x1F8) filling `tag` qwords of the batch's colour slot (from
+// qword 0x80; 0049C2A8 passes up to 64) with colour s->colors[mode != 0] (+0xC20)
 void colour_packet(std::uint32_t a[8]) {
     fill(kScratch, 0x2000);
     put32(kScratch + 0x1F8, kScratch + 0x1000);
     a[0] = kScratch;
-    a[1] = rnd() & 0x3FF;
+    a[1] = 1 + rnd() % 64;
     a[2] = rnd() % 2;
 }
 
@@ -96,10 +97,14 @@ void difference(std::uint32_t a[8]) {
 }
 
 // 0049C2A8 / 0049C788 (verts, colors, normals, count, first): a triangle-list packet at the graphics library's
-// state in the scratchpad (0x70002000; cursor +0x1F8); the pointers only go into DMA tags
+// state in the scratchpad (0x70002000; cursor +0x1F8); the pointers only go into DMA tags. The renderer's entry
+// (+0x14, adjusted by up to 60) and ITOP (+0x18) go into VIF codes' 16-bit and 10-bit immediates, so they are kept
+// in range (random words there make the original's MSCAL and ITOP codes that do not exist).
 void triangles(std::uint32_t a[8]) {
     const std::uint32_t s = 0x70002000;
     fill(s, 0x1100);
+    put32(s + 0x14, 0x100 + rnd() % 0x1000);
+    put32(s + 0x18, rnd() & 0x3FF);
     ram(s)[0] = 0;                                            // no flush (0049E480)
     ram(s)[3] = rnd() % 2;
     putf(s + 0x20, rnd() % 2 ? 0.0f : rndf(-1.0f, 1.0f));
@@ -119,9 +124,10 @@ const Register r1({"001FDD28", 0x001FDD28, "ii", 'v', false, alpha_expand_a});
 const Register r2({"001FDE68", 0x001FDE68, "ii", 'v', false, alpha_expand_b});
 const Register r3({"00330E88", 0x00330E88, "iiiiiiii", 'v', false, blend_images});
 const Register r4({"00498E48", 0x00498E48, "i", 'v', false, blend_frames});
-const Register r5({"0049F938", 0x0049F938, "iii", 'v', false, colour_packet});
+const Register r5(sends_packet({"0049F938", 0x0049F938, "iii", 'v', false, colour_packet}, kScratch + 0x1F8,
+                               kScratch + 0x40));
 const Register r6({"0056BA50", 0x0056BA50, "iiii", 'v', false, difference});
-const Register r7({"0049C2A8", 0x0049C2A8, "iiiii", 'v', false, triangles});
-const Register r8({"0049C788", 0x0049C788, "iiiii", 'v', false, triangles});
+const Register r7(sends_packet({"0049C2A8", 0x0049C2A8, "iiiii", 'v', false, triangles}, 0x700021F8, 0x70002040));
+const Register r8(sends_packet({"0049C788", 0x0049C788, "iiiii", 'v', false, triangles}, 0x700021F8, 0x70002040));
 
 }  // namespace

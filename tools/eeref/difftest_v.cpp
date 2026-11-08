@@ -43,12 +43,13 @@ void projection_2d() {
         if (rnd() % 3 != 0) std::memcpy(&vec(22)[k], "\xFF\xFF\xFF\x7F", 4);
     }
 }
-// ctx at kScratch: prim +0x4A, packet cursor +0x1F8 (at kScratch + 0x40000), colours +0xC20 / +0xC24; n points at
-// +0x20000, texture coordinates at +0x24000, colours (four floats) at +0x28000; any word alignment.
+// ctx at kScratch: prim +0x4A, packet cursor +0x1F8 (at kScratch + 0x40000, a quadword boundary as DMA tags need),
+// colours +0xC20 / +0xC24; n points at +0x20000, texture coordinates at +0x24000, colours (four floats) at +0x28000,
+// these at any word alignment.
 std::uint32_t draw_2d(std::uint32_t a[8]) {
     fill(kScratch, 0x1000);
     fill(kScratch + 0x40000, 0x2000);
-    put32(kScratch + 0x1F8, kScratch + 0x40000 + 4 * (rnd() % 4));
+    put32(kScratch + 0x1F8, kScratch + 0x40000);
     const std::uint32_t n = 1 + rnd() % 12;
     a[0] = kScratch;
     a[1] = rnd() & 0xFFFF;
@@ -164,14 +165,15 @@ void view_load(std::uint32_t[8]) {
     random_vectors(20, 31, -2.0f, 2.0f);
 }
 
-// 0049E548 (s, reg, scale): the view matrix (24..27, scaled) and four rows to the packet.
+// 0049E548 (s, reg, scale): the view matrix (24..27, scaled) and four rows to the packet, eight qwords into the batch
+// from qword `reg` (the graphics library passes 193; any start that keeps the eight inside the batch)
 void view_packet(std::uint32_t a[8]) {
     fill(kScratch, 0x1000);
     fill(kScratch + 0x40000, 0x200);
     put32(kScratch + 0x1F8, kScratch + 0x40000);
     fill_floats(kScratch + 0xFA0, 16, -2.0f, 2.0f);
     a[0] = kScratch;
-    a[1] = rnd();
+    a[1] = rnd() % 2 ? 0xC1 : rnd() % 248;
     a[2] = bits(rnd() % 4 == 0 ? 0.0f : rndf(0.1f, 4.0f));
     random_vectors(24, 27, -2.0f, 2.0f);
 }
@@ -246,10 +248,11 @@ void body_cross(std::uint32_t a[8]) {
     random_vectors(20, 23, -2.0f, 2.0f);
 }
 
-const Register v0(Test{"0049A200", 0x0049A200, "iiii", 'v', true, draw_2d_pos});
-const Register v1(Test{"0049A360", 0x0049A360, "iiiii", 'v', true, draw_2d_pos});
-const Register v2(Test{"0049A4F8", 0x0049A4F8, "iiiii", 'v', true, draw_2d_pos_colours});
-const Register v3(Test{"0049A6A0", 0x0049A6A0, "iiiiii", 'v', true, draw_2d_pos});
+const Register v0(sends_packet(Test{"0049A200", 0x0049A200, "iiii", 'v', true, draw_2d_pos}, kScratch + 0x1F8));
+const Register v1(sends_packet(Test{"0049A360", 0x0049A360, "iiiii", 'v', true, draw_2d_pos}, kScratch + 0x1F8));
+const Register v2(sends_packet(Test{"0049A4F8", 0x0049A4F8, "iiiii", 'v', true, draw_2d_pos_colours},
+                              kScratch + 0x1F8));
+const Register v3(sends_packet(Test{"0049A6A0", 0x0049A6A0, "iiiiii", 'v', true, draw_2d_pos}, kScratch + 0x1F8));
 const Register v4(Test{"004A7988", 0x004A7988, "f", 'v', true, rotate});
 const Register v5(Test{"004A79B0", 0x004A79B0, "f", 'v', true, rotate});
 const Register v6(Test{"004A79D8", 0x004A79D8, "f", 'v', true, rotate});
@@ -272,7 +275,7 @@ const Register v22(Test{"0048EB10", 0x0048EB10, "iii", 'v', true, mat_vec});
 const Register v23(Test{"00499F18", 0x00499F18, "ii", 'v', true, projection_setup});
 const Register v24(Test{"0049E228", 0x0049E228, "i", 'v', true, matrix_to_spr});
 const Register v25(Test{"0049E430", 0x0049E430, "", 'v', false, view_load});
-const Register v26(Test{"0049E548", 0x0049E548, "iif", 'v', true, view_packet});
+const Register v26(sends_packet(Test{"0049E548", 0x0049E548, "iif", 'v', true, view_packet}, kScratch + 0x1F8));
 const Register v27(Test{"0049EB90", 0x0049EB90, "if", 'v', true, light_packet, 0, 0, 11, 0xC});
 const Register v28(Test{"0049EE00", 0x0049EE00, "i", 'v', true, lights_view});
 const Register v29(Test{"0049F658", 0x0049F658, "fff", 'v', true, eye_roll, 0x0084AFC0, 48});

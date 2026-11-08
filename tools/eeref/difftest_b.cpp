@@ -113,9 +113,10 @@ void project_screen(std::uint32_t a[8]) {
     vec(27)[3] = rndf(100.0f, 200.0f);                  // w well above 0
 }
 
-const Register b0(Test{"0049A150", 0x0049A150, "iiiiiif", 'v', true, draw_vertices});
+const Register b0(sends_packet(Test{"0049A150", 0x0049A150, "iiiiiif", 'v', true, draw_vertices}, kScratch + 0x1F8));
 const Register b1(Test{"0049B2C8", 0x0049B2C8, "uuu", 'i', true, clip_point});
-const Register b2(Test{"0049C140", 0x0049C140, "i", 'v', false, matrix_packet});
+const Register b2(sends_packet(Test{"0049C140", 0x0049C140, "i", 'v', false, matrix_packet}, kScratch + 0x1F8,
+                               kScratch + 0x40));
 const Register b3(Test{"0049CFE8", 0x0049CFE8, "i", 'v', false, matrix_push});
 const Register b4(Test{"004998A8", 0x004998A8, "i", 'v', true, sprite_setup});
 const Register b5(Test{"00496EF0", 0x00496EF0, "iii", 'f', true, project_screen});
