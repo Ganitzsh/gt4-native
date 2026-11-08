@@ -662,9 +662,27 @@ unchanged.
 
 **N4: Warning-light tint suppressed (S-M).** The flare (and, in `modern`, glare) draws R12 identified are skipped
 between their markers (A5b); each light keeps its own bloom (pipeline bloom on linear light, F4). Depends: R12,
-A5b, B4, F4 for `modern`. Acceptance `R5` on the warning capture: blink-synchronous tint amplitude below 0.002 in
-Oklab b and a, outside the lamp discs (the GS path's amplitude for comparison); the lamps still visibly blink and
-bloom; `ORIG` unchanged.
+A5b, B4, F4 for `modern`.
+- **Only the draws onto the picture.** The flare pass also draws its samples into the small target the game reads
+  back (00497EF8 / 00497F48) to set each flare's strength. Skipping those would change the game's own result. So a
+  bracketed draw is skipped only when its colour target is the main view's principal target (A10's binding, known
+  when the flare pass runs, after the main `ViewEnd`) or a screen-sized target by `sceneRead`'s rule (bw x 64 >=
+  512 and height >= 384), which also catches a draw into the display buffer after the post effects (that buffer
+  is only named by the display record, later). The sample target is never screen-sized, so the sample draws stay.
+  Each skip is counted by the rule that caught it. The glare is skipped the same way, in `modern` only.
+- **Where.** The front end marks the draws as it builds the list. It sees each `Marker` in stream order, so a
+  list cut before `FrameEnd` is marked too. A `Draw` gets the bracket it is in (flare, glare); lane F writes it in
+  `gs_frontend.cpp`, lane A reviews. The GS back end skips a marked draw when the setting asks for it (one check
+  in its draw loop; lane B reviews). `GT4_GSN_LIMIT` still counts every draw. A tally of skipped draws per bracket
+  gives the suppression counter.
+- **Setting.** Part of `lighting.night = enhanced` (the night relight replaces GT4's veil), not a key of its own.
+  So it follows F2's rule: `--set` only, in no preset, until N3 lands. `render.scene = modern` adds the glare
+  (B15).
+- Acceptance: `CTEST` (the marking on a synthetic list: markers, draws, targets, a cut list); `ORIG` unchanged;
+  the flare readback's bytes identical with the suppression on and off (`GT4_READ_HASH`), so GT4's own flare
+  strengths don't change; `R5` on the warning capture with the markers (A5b): blink-synchronous tint amplitude
+  below 0.002 in Oklab b and a, outside the lamp discs (the GS path's amplitude for comparison); the lamps still
+  visibly blink and bloom.
 
 **F2: Night relight on the GS path (M).** At a Light command in `hybrid`: lights gathered from the view's `Light`
 records into the light list, clusters over the scene rectangle, view-space positions and normals from GT4's Z,
