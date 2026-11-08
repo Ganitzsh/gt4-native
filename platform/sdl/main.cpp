@@ -851,6 +851,79 @@ int run(const Options& options) {
     // SDL's event times (SDL_GetTicksNS) to the same clock
     const double ticksToQpcUs = qpcUs(SDL_GetPerformanceCounter()) - static_cast<double>(SDL_GetTicksNS()) * 1e-3;
     uint8_t latencySent[18] = {};
+    // The pads to the game, both ports (live games only). onlyChanged: a port's bytes are sent only if they changed
+    // since its last send (the samples taken while the loop waits for the game's frame, below).
+    uint8_t padSent[2][18] = {};
+    const auto sendPads = [&](bool onlyChanged) {
+        // Nothing reaches the game while the menu is open, nor afterwards until every button is up
+        // (the button that closed the menu would act in the game).
+        // the frame's time for the pads' response (its filters and the keys' ramp): a 60 Hz tick under
+        // --fixed-step (replays and sessions: the same pad bytes every run), else the wall clock, a tenth of a
+        // second at most
+        const Uint64 padNow = SDL_GetTicksNS();
+        const float padDt = options.fixedStep ? 1.0f / 60.0f
+                            : padLast ? std::min(static_cast<float>(padNow - padLast) * 1e-9f, 0.1f) : 0.0f;
+        padLast = padNow;
+        gt4::ps2::PadInput input = pads.read(0, settings, padDt);
+        if (menuEnabled) chordGuard.filter(input, SDL_GetTicks());
+        if (padHeldBack) {
+            bool held = std::fabs(input.leftX) > 0.3f || std::fabs(input.leftY) > 0.3f;
+            for (float pressure : input.button) held |= pressure > 0.0f;
+            padHeldBack = held;
+        }
+        if (menu.isOpen() || padHeldBack) input = gt4::ps2::PadInput{};
+        uint8_t pad[18];
+        gt4::ps2::encodePad(input, pad);
+        if (!onlyChanged || std::memcmp(pad, padSent[0], sizeof pad) != 0) {
+            gs->sendPad(0, true, pad);
+            std::memcpy(padSent[0], pad, sizeof pad);
+        }
+        if (traceLatency && std::memcmp(pad, latencySent, sizeof pad) != 0) {
+            std::memcpy(latencySent, pad, sizeof pad);
+            char hex[37];
+            for (int i = 0; i < 18; ++i) std::snprintf(hex + 2 * i, 3, "%02x", pad[i]);
+            std::printf("latency: sent %s at %.0f\n", hex, qpcUs(SDL_GetPerformanceCounter()));
+            std::fflush(stdout);
+        }
+        // a session records each pad's bytes when they change (its tests read what the game was sent)
+        const auto recordPad = [&](int port, const uint8_t* bytes) {
+            if (!session || std::memcmp(bytes, padRecorded[port], 18) == 0) return;
+            std::memcpy(padRecorded[port], bytes, 18);
+            char hex[37];
+            for (int i = 0; i < 18; ++i) std::snprintf(hex + 2 * i, 3, "%02x", bytes[i]);
+            session->record("pad", "\"port\":" + std::to_string(port) + ",\"bytes\":\"" + hex + "\"");
+        };
+        recordPad(0, pad);
+        // Pad 2: the gamepad holding port 2 (no keyboard), held back like pad 1. Without one, port 2 is empty:
+        // the game sees no controller there, as on a PS2 (runtime/iop.cpp scePad2GetState); told once when it
+        // goes. (in a session: its second virtual pad, button2 / axis2)
+        if (pads.connected(1)) {
+            gt4::ps2::PadInput input2 = pads.read(1, settings, padDt);
+            if (menu.isOpen() || padHeldBack) input2 = gt4::ps2::PadInput{};
+            gt4::ps2::encodePad(input2, pad);
+            if (!onlyChanged || std::memcmp(pad, padSent[1], sizeof pad) != 0) {
+                gs->sendPad(1, true, pad);
+                std::memcpy(padSent[1], pad, sizeof pad);
+            }
+            recordPad(1, pad);
+            pad2Sent = true;
+        } else if (pad2Sent) {
+            gt4::ps2::encodePad(gt4::ps2::PadInput{}, pad);
+            gs->sendPad(1, false, pad);
+            pad2Sent = false;
+            if (session) session->record("pad", "\"port\":1,\"connected\":false");
+            std::memset(padRecorded[1], 0, 18);   // (a pad plugged in again is recorded again)
+        }
+    };
+    // PLAN.md D11: while the loop waits for the game's next frame (presenting the game's frames, a live game, not
+    // --fixed-step), the pads are sampled every millisecond and sent when they change, so the game's next pad read (its
+    // VBlank) gets them at most about a millisecond old. Before, they were sampled once a pass, just after the game's
+    // frame came, so most of a frame old when the game read them. GT4_PAD_SAMPLING=frame (measurement): once a pass, as
+    // before.
+    const bool padsWhileWaiting = !options.fixedStep && [] {
+        const char* e = std::getenv("GT4_PAD_SAMPLING");
+        return !(e && std::strcmp(e, "frame") == 0);
+    }();
     while (running) {
         for (; nextScriptedKey < scriptedKeys.size() && scriptedKeys[nextScriptedKey].frame <= frames; ++nextScriptedKey) {
             SDL_Event key{};
@@ -995,7 +1068,20 @@ int run(const Options& options) {
         bool freshFrame;
         {
             GT4_STAGE_SCOPE("main: waiting for the game's frames");
-            freshFrame = !followGame || gs->waitNativeFrames(30);
+            if (!followGame) {
+                freshFrame = true;
+            } else if (!padsWhileWaiting) {
+                freshFrame = gs->waitNativeFrames(30);
+            } else {
+                // (SDL_DelayNS: a high-resolution wait; a 1 ms condition wait sleeps a whole timer tick, 15.6 ms on
+                // Windows, and the pads were then sampled about once a frame again)
+                freshFrame = false;
+                for (int ms = 0; ms < 30 && !(freshFrame = gs->waitNativeFrames(0)); ++ms) {
+                    SDL_PumpEvents();   // (the keyboard's and the gamepads' state; their events stay queued)
+                    sendPads(true);
+                    SDL_DelayNS(1000000);
+                }
+            }
         }
         if (!freshFrame) ++passesWithoutFrame;
         bool servedRead = false;   // a read of drawn pixels answered in this pass
@@ -1054,59 +1140,7 @@ int run(const Options& options) {
                 // kOptionHostMixer: audio.mixer (platform/audio/host_mixer.h, PLAN.md D5)
                 gs->setGameOption(8, settings.audioMixer == gt4::AudioMixer::Host ? 1u : 0u);
                 gs->setGameOption(9, static_cast<uint32_t>(settings.uiEntry));   // kOptionUiEntry (MENU_DESIGN 3.2)
-                // Nothing reaches the game while the menu is open, nor afterwards until every button is up
-                // (the button that closed the menu would act in the game).
-                // the frame's time for the pads' response (its filters and the keys' ramp): a 60 Hz tick under
-                // --fixed-step (replays and sessions: the same pad bytes every run), else the wall clock, a tenth of a
-                // second at most
-                const Uint64 padNow = SDL_GetTicksNS();
-                const float padDt = options.fixedStep ? 1.0f / 60.0f
-                                    : padLast ? std::min(static_cast<float>(padNow - padLast) * 1e-9f, 0.1f) : 0.0f;
-                padLast = padNow;
-                gt4::ps2::PadInput input = pads.read(0, settings, padDt);
-                if (menuEnabled) chordGuard.filter(input, SDL_GetTicks());
-                if (padHeldBack) {
-                    bool held = std::fabs(input.leftX) > 0.3f || std::fabs(input.leftY) > 0.3f;
-                    for (float pressure : input.button) held |= pressure > 0.0f;
-                    padHeldBack = held;
-                }
-                if (menu.isOpen() || padHeldBack) input = gt4::ps2::PadInput{};
-                uint8_t pad[18];
-                gt4::ps2::encodePad(input, pad);
-                gs->sendPad(0, true, pad);
-                if (traceLatency && std::memcmp(pad, latencySent, sizeof pad) != 0) {
-                    std::memcpy(latencySent, pad, sizeof pad);
-                    char hex[37];
-                    for (int i = 0; i < 18; ++i) std::snprintf(hex + 2 * i, 3, "%02x", pad[i]);
-                    std::printf("latency: sent %s at %.0f\n", hex, qpcUs(SDL_GetPerformanceCounter()));
-                    std::fflush(stdout);
-                }
-                // a session records each pad's bytes when they change (its tests read what the game was sent)
-                const auto recordPad = [&](int port, const uint8_t* bytes) {
-                    if (!session || std::memcmp(bytes, padRecorded[port], 18) == 0) return;
-                    std::memcpy(padRecorded[port], bytes, 18);
-                    char hex[37];
-                    for (int i = 0; i < 18; ++i) std::snprintf(hex + 2 * i, 3, "%02x", bytes[i]);
-                    session->record("pad", "\"port\":" + std::to_string(port) + ",\"bytes\":\"" + hex + "\"");
-                };
-                recordPad(0, pad);
-                // Pad 2: the gamepad holding port 2 (no keyboard), held back like pad 1. Without one, port 2 is empty:
-                // the game sees no controller there, as on a PS2 (runtime/iop.cpp scePad2GetState); told once when it
-                // goes. (in a session: its second virtual pad, button2 / axis2)
-                if (pads.connected(1)) {
-                    gt4::ps2::PadInput input2 = pads.read(1, settings, padDt);
-                    if (menu.isOpen() || padHeldBack) input2 = gt4::ps2::PadInput{};
-                    gt4::ps2::encodePad(input2, pad);
-                    gs->sendPad(1, true, pad);
-                    recordPad(1, pad);
-                    pad2Sent = true;
-                } else if (pad2Sent) {
-                    gt4::ps2::encodePad(gt4::ps2::PadInput{}, pad);
-                    gs->sendPad(1, false, pad);
-                    pad2Sent = false;
-                    if (session) session->record("pad", "\"port\":1,\"connected\":false");
-                    std::memset(padRecorded[1], 0, 18);   // (a pad plugged in again is recorded again)
-                }
+                sendPads(false);
                 // The pads' motors and triggers: GT4's own rumble (its Options > Vibration decides whether it sends any;
                 // D2) and, with input.haptics = physics, what the player's car does (D14, platform/input/haptics.h),
                 // from the newest Vehicle record (a quarter of a second old at most; none with the menu open or the pad
