@@ -525,6 +525,17 @@ don't rescale (`kStickDeadZone`, `input_map.cpp:62`), so steering jumps from 0 t
 - **Hot-plug.** `SDL_EVENT_GAMEPAD_ADDED` / `REMOVED`. A device keeps its port across a reconnect (by GUID, then
   by order). A port whose device leaves reads unplugged (`scePad2GetState`, D1), as on the PS2.
 - **Keyboard bindings** are rebindable keys for the PS2 pad's inputs.
+- **Per-device settings** (lane D's design): a device's section of `input_profiles.ini` may override any `input.*`
+  setting under its own name without `input.` (`steer.deadzone = 3`, `haptics.strength = 60`, `response =
+  original`); anything not overridden takes the global value. A port's response and haptics use its gamepad's
+  overrides; pad 1's keyboard takes the keyboard section. The pages reach them through `pad_devices.h` (no SDL in
+  the interface: the devices, get / set / clear an override validated by the option table, bindings with
+  `checkProfile`'s refusals, reset), and through lane M's records as the keys `input.device.<key>.<setting>`. A
+  device key holds no dot (the host splits the key there); clearing an override is a set with an empty value, so
+  lane M's records need no new kind.
+  - **`original` stays the PS2 behaviour:** while a gate is at `original` in the globals (`input.response`,
+    `input.haptics`), every device override under it is ignored. A device may still choose `original` under a
+    `modern` global. `detectPreset` ignores device overrides, as it does `ui.*`.
 - **Remapping** maps a device's inputs to the PS2 pad's. It never moves GT4's functions, so the default stays the
   PS2 places and GT4's controller screen still assigns accelerate, brake and the rest. Refused, since the menus
   need them: a remap that leaves any menu input unbound (Cross, Circle, Triangle (back in the Options screens),
