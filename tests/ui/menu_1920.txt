@@ -1,0 +1,55 @@
+canvas 1920.0 flags 1 items 54
+quad 0.0 0.0 1920.0 1080.0 asset 00000000 color 000000ff op 38/256
+quad 0.0 0.0 1920.0 112.0 asset 00000000 color 000000e0 op 256/256
+text 80.0 22.0 0.0 80.0 asset 00000000 color f4f4f2ff op 256/256 title 64 italic w800 left "Settings"
+nine 80.0 138.0 108.0 96.0 asset 96e195e1 color ffffffff op 256/256
+quad 102.0 146.0 64.0 64.0 asset 08850cb3 color ffffffff op 256/256
+nine 74.0 132.0 120.0 108.0 asset 5820231f color f29a1fff op 256/256
+text 34.0 246.0 200.0 27.5 asset 00000000 color f29a1fff op 256/256 title 22 italic w700 center "Graphics"
+nine 208.0 138.0 108.0 96.0 asset 96e195e1 color ffffffff op 256/256
+quad 230.0 146.0 64.0 64.0 asset 3f18b4d4 color ffffffff op 256/256
+quad 20.0 168.0 40.0 36.0 asset f8bc3605 color ffffffff op 256/256
+quad 336.0 168.0 40.0 36.0 asset 94242a5e color ffffffff op 256/256
+clip 80.0 280.0 1080.0 658.0 asset 00000000 color 00000000 op 256/256
+text 80.0 308.0 1080.0 32.5 asset 00000000 color f29a1fff op 256/256 title 26 italic w700 left "QUALITY"
+quad 80.0 358.0 1080.0 58.0 asset 78bfae20 color ffffffff op 15/256
+text 120.0 368.0 540.0 37.5 asset 00000000 color f4f4f2ff op 256/256 title 30 w500 left "Preset"
+text 620.0 368.0 510.0 37.5 asset 00000000 color b9bcc2ff op 256/256 title 30 w500 right "High"
+quad 80.0 416.0 1080.0 58.0 asset 78bfae20 color ffffffff op 46/256
+quad 88.0 434.0 16.0 22.0 asset e336320f color f29a1fff op 256/256
+text 120.0 426.0 540.0 37.5 asset 00000000 color f29a1fff op 256/256 title 30 w500 left "Resolution scale"
+quad 640.0 442.0 260.0 6.0 asset 00000000 color 55585dff op 256/256
+quad 640.0 442.0 86.5 6.0 asset 00000000 color f29a1fff op 256/256
+quad 720.5 434.0 12.0 22.0 asset ffbcaa8a color f4f4f2ff op 256/256
+text 930.0 426.0 200.0 37.5 asset 00000000 color f29a1fff op 256/256 title 30 w500 right "‹  100 %  ›"
+quad 80.0 474.0 1080.0 58.0 asset 78bfae20 color ffffffff op 15/256
+text 120.0 484.0 540.0 37.5 asset 00000000 color f4f4f2ff op 256/256 title 30 w500 left "Anti-aliasing"
+text 620.0 484.0 510.0 37.5 asset 00000000 color b9bcc2ff op 256/256 title 30 w500 right "TAA"
+text 80.0 540.0 1080.0 32.5 asset 00000000 color f29a1fff op 256/256 title 26 italic w700 left "DETAIL"
+quad 80.0 590.0 1080.0 58.0 asset 78bfae20 color ffffffff op 15/256
+text 120.0 600.0 540.0 37.5 asset 00000000 color f4f4f2ff op 256/256 title 30 w500 left "Race frames"
+quad 641.5 603.0 150.0 32.0 asset 00000000 color e8c21cff op 256/256
+text 641.5 607.0 150.0 25.0 asset 00000000 color 0b0b0cff op 256/256 title 20 w600 center "NEXT RACE"
+text 620.0 600.0 510.0 37.5 asset 00000000 color b9bcc2ff op 256/256 title 30 w500 right "Whole frames"
+quad 80.0 648.0 1080.0 58.0 asset 78bfae20 color ffffffff op 26/256
+text 120.0 658.0 540.0 37.5 asset 00000000 color f4f4f2ff op 115/256 title 30 w500 left "Ambient occlusion"
+text 620.0 658.0 510.0 37.5 asset 00000000 color b9bcc2ff op 115/256 title 30 w500 right "High"
+quad 80.0 706.0 1080.0 58.0 asset 78bfae20 color ffffffff op 15/256
+text 120.0 716.0 540.0 37.5 asset 00000000 color f4f4f2ff op 115/256 title 30 w500 left "HD textures"
+text 620.0 716.0 510.0 37.5 asset 00000000 color b9bcc2ff op 115/256 title 30 w500 right "Off"
+unclip 0.0 0.0 0.0 0.0 asset 00000000 color 00000000 op 256/256
+nine 1220.0 320.0 620.0 620.0 asset b44c6b60 color 2a2c30eb op 256/256
+quad 1220.0 320.0 620.0 4.0 asset 00000000 color f29a1fff op 256/256
+text 1250.0 350.0 560.0 32.5 asset 00000000 color f4f4f2ff op 256/256 title 26 italic w700 left "RESOLUTION SCALE"
+text 1250.0 400.0 560.0 30.0 asset 00000000 color b9bcc2ff op 256/256 body 24 w400 left "Help for Resolution scale."
+text 1250.0 760.0 560.0 30.0 asset 00000000 color b9bcc2ff op 256/256 body 24 w400 left "Applies at once."
+quad 0.0 972.0 1920.0 108.0 asset 00000000 color 000000e0 op 256/256
+text 80.0 1006.0 1056.0 35.0 asset 00000000 color f4f4f2ff op 256/256 body 28 w400 left "Help for Resolution scale."
+text 1788.0 1014.0 52.0 25.0 asset 00000000 color f4f4f2ff op 256/256 title 20 w600 left "Tabs"
+quad 1744.0 1008.0 36.0 36.0 asset 48c40e60 color ffffffff op 256/256
+text 1641.0 1014.0 63.0 25.0 asset 00000000 color f4f4f2ff op 256/256 title 20 w600 left "Reset"
+quad 1597.0 1008.0 36.0 36.0 asset 09dee9a3 color ffffffff op 256/256
+text 1494.0 1014.0 63.0 25.0 asset 00000000 color f4f4f2ff op 256/256 title 20 w600 left "Close"
+quad 1450.0 1008.0 36.0 36.0 asset 9709566f color ffffffff op 256/256
+text 1336.0 1014.0 74.0 25.0 asset 00000000 color f4f4f2ff op 256/256 title 20 w600 left "Change"
+quad 1292.0 1008.0 36.0 36.0 asset 23a13f9c color ffffffff op 256/256

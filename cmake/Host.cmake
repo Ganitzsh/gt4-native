@@ -327,6 +327,17 @@ if(BUILD_TESTING)
   endif()
   add_test(NAME host_settings COMMAND gt4_host_settings_test)
 
+  # The settings menu's page engine and layout (platform/ui, MENU_DESIGN.md M2): golden draw lists in tests/ui.
+  add_executable(gt4_ui_menu_test tests/ui_menu.cpp platform/ui/menu_model.cpp platform/ui/menu_layout.cpp
+                 platform/ui/draw_list.cpp)
+  target_include_directories(gt4_ui_menu_test PRIVATE platform/ui)
+  if(MSVC)
+    target_compile_options(gt4_ui_menu_test PRIVATE /W4)
+  else()
+    target_compile_options(gt4_ui_menu_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  add_test(NAME ui_menu COMMAND gt4_ui_menu_test ${CMAKE_CURRENT_SOURCE_DIR}/tests/ui)
+
   # The pipeline cache's file: Vulkan's header checked against the GPU, the save replacing the old file (no GPU).
   add_executable(gt4_pipeline_cache_file_test tests/pipeline_cache_file.cpp platform/render/pipeline_cache_file.cpp)
   target_include_directories(gt4_pipeline_cache_file_test PRIVATE platform/render third_party)
