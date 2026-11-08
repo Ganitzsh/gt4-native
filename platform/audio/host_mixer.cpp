@@ -93,6 +93,7 @@ void HostMixer::record(uint32_t type, const uint8_t* p, uint32_t size) {
         } else if (kind == GT4_SPU2_RUN && value > 0 && value <= spu::kRate) {
             scratch_.assign(2 * static_cast<size_t>(value), 0);
             spu_.tick();
+            spu_.interpolation = static_cast<spu::Interpolation>(interpolation_.load());
             spu_.mix(scratch_.data(), static_cast<int>(value), dryOnly_);
             pending_.insert(pending_.end(), scratch_.begin(), scratch_.end());
             stats_.samplesMixed += value;

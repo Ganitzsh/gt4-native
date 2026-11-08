@@ -73,6 +73,9 @@ public:
     void setHdTextures(bool on);
     // A gameplay option of the game (runtime.h GameOption): sent when it differs from the last value sent.
     void setGameOption(uint32_t id, uint32_t value);
+    // audio.interpolation for the host's SPU2 mixer (platform/audio/host_mixer.h): 0 original, 1 cubic, 2 sinc;
+    // any time.
+    void setAudioInterpolation(uint32_t mode);
     // The front end's scene split (A10; sceneSplitWanted in the settings, or GT4_GSN_SCENE_SPLIT=1): from the next VSync.
     // Live and in replays alike.
     void setSceneSplit(bool on);

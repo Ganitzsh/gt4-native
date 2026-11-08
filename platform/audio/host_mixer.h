@@ -10,6 +10,7 @@
 // one run compared: D5's -60 dB check). Not thread-safe: one thread feeds it (the GS thread's record dispatch).
 #include "spu/spu2.h"
 
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <deque>
@@ -37,6 +38,9 @@ public:
         uint64_t unsynced = 0;    // SPU2 records before a state: not mixed (a capture started mid-run)
         uint64_t unmatched = 0;   // stream 1 values (L or R) without an SPU2 value to add them to (sent alone)
     };
+    // audio.interpolation (any thread; the next frame mixed uses it). kLinear, the original, unless set.
+    void setInterpolation(spu::Interpolation mode) { interpolation_.store(static_cast<uint8_t>(mode)); }
+
     const Stats& stats() const { return stats_; }
     bool mixing() const { return synced_; }
 
@@ -50,6 +54,7 @@ private:
     std::vector<int32_t> scratch_;
     std::vector<int16_t> out_;
     bool dryOnly_ = false;
+    std::atomic<uint8_t> interpolation_{static_cast<uint8_t>(spu::Interpolation::kLinear)};
     std::FILE* wav_ = nullptr;
     uint32_t wavBytes_ = 0;
     Stats stats_;

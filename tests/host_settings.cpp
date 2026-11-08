@@ -58,6 +58,14 @@ int main() {
     check(setOption(s, "render.aa", "SMAA_T2X").empty() && s.aa == AntiAliasing::SmaaT2x, "enum option ignores case");
     check(!setOption(s, "render.aa", "dlss").empty(), "unknown enum value is rejected");
     check(!setOption(s, "render.msaa", "3").empty(), "msaa accepts only 1, 2, 4, 8");
+    {   // audio.interpolation is the host mixer's: unused while the game mixes (audio.mixer = game, the default)
+        Settings a;
+        check(!unusedReason(a, "audio.interpolation").empty(), "audio.interpolation unused with audio.mixer = game");
+        check(setOption(a, "audio.mixer", "host").empty() && unusedReason(a, "audio.interpolation").empty(),
+              "audio.interpolation used with audio.mixer = host");
+        check(setOption(a, "audio.interpolation", "sinc").empty() && a.audioInterpolation == AudioInterpolation::Sinc,
+              "audio.interpolation parses");
+    }
     check(setOption(s, "render.msaa", "8").empty() && s.msaa == 8, "msaa 8");
     check(!setOption(s, "render.scale", "300").empty(), "render scale is limited to 200 %");
     check(!setOption(s, "render.sharpness", "nan").empty(), "NaN is rejected");

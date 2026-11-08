@@ -24,6 +24,15 @@ void decodeBlock(const uint8_t* block, int32_t& s1, int32_t& s2, int16_t out[28]
 
 enum Phase { kOff, kAttack, kDecay, kSustain, kRelease };
 
+// How a voice's samples are interpolated between SPU RAM samples (audio.interpolation, the host's mixer only; the game
+// always mixes with kLinear). kLinear: between the two newest samples, as this project always did (original). kCubic:
+// a 4-point Catmull-Rom spline, one sample later. kSinc: an 8-point Blackman-windowed sinc, four samples later. The
+// later ones are a fixed delay of 1 or 4 SPU RAM samples (under 0.1 ms at pitch 0x1000). None of them changes a
+// voice's timing, so the status and the game's voices are the same whatever is chosen.
+enum class Interpolation : uint8_t { kLinear, kCubic, kSinc };
+// One interpolated sample from a voice's last 8 samples (hist, the newest last) at the 12-bit fraction `frac`.
+int32_t interpolate(Interpolation mode, const int16_t hist[8], uint32_t frac);
+
 struct Voice {
     uint16_t pitch = 0, voll = 0, volr = 0, adsr1 = 0, adsr2 = 0;   // registers
     uint32_t ssa = 0;
@@ -38,6 +47,7 @@ struct Voice {
     int16_t samples[28] = {};
     int32_t s1 = 0, s2 = 0;
     int16_t last = 0, cur = 0;
+    int16_t hist[8] = {};   // the last 8 decoded samples, the newest (cur) last: the finer interpolations' taps
 };
 
 // The reverb unit (psx-spx "SPU Reverb Formula"): the PS1's, at half the output rate, on a work area of its own. GT4
@@ -85,6 +95,8 @@ public:
     // `n` output samples mixed and added to `stereo` (2n values); the same timing as advance. `dryOnly`: the effect
     // sends come back dry at the effect return volume instead of through the reverb.
     void mix(int32_t* stereo, int n, bool dryOnly);
+    // mix()'s interpolation (the host's audio.interpolation); kLinear unless set.
+    Interpolation interpolation = Interpolation::kLinear;
     // The next frame (the frame clock's): the key-on gaps below count frames.
     void tick() { ++counters.frame; }
 

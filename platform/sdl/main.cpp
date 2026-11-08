@@ -1140,6 +1140,7 @@ int run(const Options& options) {
                 // kOptionHostMixer: audio.mixer (platform/audio/host_mixer.h, PLAN.md D5)
                 gs->setGameOption(8, settings.audioMixer == gt4::AudioMixer::Host ? 1u : 0u);
                 gs->setGameOption(9, static_cast<uint32_t>(settings.uiEntry));   // kOptionUiEntry (MENU_DESIGN 3.2)
+                gs->setAudioInterpolation(static_cast<uint32_t>(settings.audioInterpolation));   // (the host's mixer)
                 sendPads(false);
                 // The pads' motors and triggers: GT4's own rumble (its Options > Vibration decides whether it sends any;
                 // D2) and, with input.haptics = physics, what the player's car does (D14, platform/input/haptics.h),

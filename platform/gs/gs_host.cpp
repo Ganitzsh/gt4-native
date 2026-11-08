@@ -1136,6 +1136,10 @@ void GsHost::sendRequests() {
     impl->link->write(GT4_REC_HOST_CMD, &command, sizeof command);
 }
 
+void GsHost::setAudioInterpolation(uint32_t mode) {
+    if (impl->mixer && mode <= 2) impl->mixer->setInterpolation(static_cast<spu::Interpolation>(mode));
+}
+
 void GsHost::setGameOption(uint32_t id, uint32_t value) {
     if (!impl->link || !impl->link->running() || id >= GT4_GAME_OPTION_COUNT || impl->gameOptions[id] == value)
         return;

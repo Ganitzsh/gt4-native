@@ -2,6 +2,8 @@
 #include "spu2.h"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <type_traits>
@@ -89,6 +91,63 @@ void decodeBlock(const uint8_t* b, int32_t& s1, int32_t& s2, int16_t out[28]) {
         s1 = s;
         out[i] = static_cast<int16_t>(s);
     }
+}
+
+// ---- interpolation (audio.interpolation)
+
+namespace {
+
+// The 8-point sinc's taps for 256 fractions: sinc(x) times a Blackman window over the 8 points, each row summing to 1
+// (unity gain at DC).
+struct SincTable {
+    std::array<std::array<float, 8>, 257> taps{};
+    SincTable() {
+        const double pi = 3.14159265358979323846;
+        for (int p = 0; p <= 256; ++p) {
+            const double f = p / 256.0;
+            double sum = 0;
+            double w[8];
+            for (int k = 0; k < 8; ++k) {
+                const double x = (k - 3) - f;   // tap k is hist[k]; the point is between hist[3] and hist[4]
+                const double sinc = x == 0 ? 1.0 : std::sin(pi * x) / (pi * x);
+                const double t = (x + 4.0) / 8.0;   // 0..1 across the window
+                const double win = 0.42 - 0.5 * std::cos(2 * pi * t) + 0.08 * std::cos(4 * pi * t);
+                w[k] = sinc * win;
+                sum += w[k];
+            }
+            for (int k = 0; k < 8; ++k) taps[p][k] = static_cast<float>(w[k] / sum);
+        }
+    }
+};
+
+const SincTable& sincTable() {
+    static const SincTable table;
+    return table;
+}
+
+}  // namespace
+
+int32_t interpolate(Interpolation mode, const int16_t h[8], uint32_t frac) {
+    const float f = static_cast<float>(frac & 0xFFF) / 4096.0f;
+    float y = 0;
+    switch (mode) {
+    case Interpolation::kLinear:
+        return h[6] + (((h[7] - h[6]) * static_cast<int32_t>(frac & 0xFFF)) >> 12);
+    case Interpolation::kCubic: {   // Catmull-Rom between h[5] and h[6]
+        const float p0 = h[4], p1 = h[5], p2 = h[6], p3 = h[7];
+        y = p1 + 0.5f * f * (p2 - p0 + f * (2 * p0 - 5 * p1 + 4 * p2 - p3 + f * (3 * (p1 - p2) + p3 - p0)));
+        break;
+    }
+    case Interpolation::kSinc: {   // between h[3] and h[4]: the table's row for the fraction, linear between rows
+        const auto& t = sincTable().taps;
+        const float pos = f * 256.0f;
+        const int r = static_cast<int>(pos);
+        const float a = pos - static_cast<float>(r);
+        for (int k = 0; k < 8; ++k) y += h[k] * (t[r][k] + a * (t[r + 1][k] - t[r][k]));
+        break;
+    }
+    }
+    return std::clamp(static_cast<int32_t>(std::lround(y)), -32768, 32767);
 }
 
 // ---- reverb
@@ -233,6 +292,8 @@ void Spu2::keyOn(Voice& v) {
     v.last = v.cur = 0;
     loadBlock(v);
     v.cur = v.samples[0];
+    std::fill(std::begin(v.hist), std::end(v.hist), int16_t{0});
+    v.hist[7] = v.cur;
 }
 
 // One output sample of a voice (before volumes; not computed when not mixing), advancing it by its pitch.
@@ -240,7 +301,8 @@ template <bool kMix> int32_t Spu2::voiceSample(Core& c, int n, Voice& v) {
     int32_t s = 0;
     if constexpr (kMix) {
         const int32_t frac = v.counter & 0xFFF;
-        s = v.last + (((v.cur - v.last) * frac) >> 12);
+        s = interpolation == Interpolation::kLinear ? v.last + (((v.cur - v.last) * frac) >> 12)
+                                                    : interpolate(interpolation, v.hist, static_cast<uint32_t>(frac));
     }
     v.counter += std::min<uint32_t>(v.pitch, 0x3FFF);
     while (v.counter >= 0x1000) {
@@ -263,6 +325,8 @@ template <bool kMix> int32_t Spu2::voiceSample(Core& c, int n, Voice& v) {
         }
         v.last = v.cur;
         v.cur = v.samples[v.index];
+        std::memmove(v.hist, v.hist + 1, sizeof v.hist - sizeof v.hist[0]);
+        v.hist[7] = v.cur;
     }
     return s;
 }
@@ -384,7 +448,7 @@ namespace {
 
 static_assert(std::is_trivially_copyable_v<Voice>);
 constexpr uint32_t kStateMagic = 0x32555053;   // "SPU2"
-constexpr uint32_t kStateVersion = 1;
+constexpr uint32_t kStateVersion = 2;   // 2: Voice::hist
 
 struct Writer {
     std::vector<uint8_t>& out;

@@ -43,6 +43,8 @@ enum class AiCatchUp : uint8_t { Original, Reduced, Off };
 enum class TriggerTravel : uint8_t { Game, Full };
 // Who mixes the SPU2's voices (audio.mixer, settings_audio.cpp; PLAN.md D5).
 enum class AudioMixer : uint8_t { Game, Host };
+// The host mixer's interpolation between a voice's samples (audio.interpolation; platform/audio/spu Interpolation).
+enum class AudioInterpolation : uint8_t { Original, Cubic, Sinc };
 // The sticks' and pedals' response (input.response, platform/input/response.h; PLAN.md D12).
 enum class InputResponse : uint8_t { Original, Modern };
 // Gamepad haptics (input.haptics, platform/input/haptics.h; PLAN.md D14): original = GT4's own rumble only (D2).
@@ -134,6 +136,7 @@ struct Settings {
 
     // [audio] (settings_audio.cpp; not part of the graphics presets)
     AudioMixer audioMixer = AudioMixer::Game;   // sent to the game (kOptionHostMixer)
+    AudioInterpolation audioInterpolation = AudioInterpolation::Original;   // the host mixer's (audio.mixer = host)
 
     // [ui] (settings_ui.cpp, lane M; set by every preset, but not part of what makes one: MENU_DESIGN 3.8)
     UiEntry uiEntry = UiEntry::Hotkey;   // sent to the game (kOptionUiEntry); integrated in low to ultra from M9

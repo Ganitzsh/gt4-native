@@ -3,6 +3,7 @@
 // on: an SPU2 that only advances its voices answers the same status, frame by frame, as one that mixes them.
 #include "spu/spu2.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -190,6 +191,66 @@ int main() {
         expect(same, "mixing and advancing: the same voices (timing, samples) and status at every frame");
         expect(frames == 600 && heard, "600 frames, sound mixed");
         expect(mixed.counters.konTotal == timed.counters.konTotal && mixed.counters.konTotal > 8, "key-ons counted");
+    }
+
+    // the interpolations (audio.interpolation): on a sine of 0.1 and of 0.3 cycles a sample, each later one's error
+    // is smaller (each at its own delay: linear between h[6] and h[7], cubic h[5] and h[6], sinc h[3] and h[4])
+    {
+        auto error = [](Interpolation mode, double cycles) {
+            const double pi = 3.14159265358979323846;
+            const int delay = mode == Interpolation::kLinear ? 1 : mode == Interpolation::kCubic ? 2 : 4;
+            double worst = 0;
+            for (int start = 0; start < 40; ++start)
+                for (uint32_t frac = 0; frac < 4096; frac += 64) {
+                    int16_t h[8];
+                    for (int k = 0; k < 8; ++k)
+                        h[k] = static_cast<int16_t>(std::lround(20000 * std::sin(2 * pi * cycles * (start + k))));
+                    const double at = start + 7 - delay + frac / 4096.0;   // the point the output stands for
+                    const double exact = 20000 * std::sin(2 * pi * cycles * at);
+                    const double e = std::abs(interpolate(mode, h, frac) - exact);
+                    if (e > worst) worst = e;
+                }
+            return worst;
+        };
+        for (double cycles : {0.1, 0.3}) {
+            const double l = error(Interpolation::kLinear, cycles), c = error(Interpolation::kCubic, cycles),
+                         s = error(Interpolation::kSinc, cycles);
+            std::printf("  sine of %.1f cycles a sample, worst error: linear %.0f, cubic %.0f, sinc %.0f\n", cycles, l,
+                        c, s);
+            expect(c < l && s < c, "sinc closer than cubic, cubic closer than linear");
+        }
+        int16_t flat[8];
+        std::fill(std::begin(flat), std::end(flat), int16_t{1234});
+        expect(interpolate(Interpolation::kCubic, flat, 1000) == 1234 &&
+                   interpolate(Interpolation::kSinc, flat, 3000) == 1234,
+               "a constant stays the constant (unity gain)");
+    }
+    // the interpolation never changes the voices' timing: the status is the same, frame by frame, whatever is chosen
+    {
+        Spu2 lin(ram.data()), sinc(ram.data());
+        sinc.interpolation = Interpolation::kSinc;
+        std::vector<int32_t> out(2 * 800);
+        bool same = true, differs = false;
+        for (int f = 0; f < 200 && same; ++f) {
+            Image im;
+            if (f % 25 == 0)
+                for (int n = 0; n < 4; ++n) {
+                    im.voice(0, n, static_cast<uint16_t>(0x0C00 + 0x0500 * n), n % 2 ? 0x5000 : 0x6000, 0x0A0F, 0x1FC4);
+                    im.keyOn(0, n);
+                }
+            lin.apply(im.bytes);
+            sinc.apply(im.bytes);
+            std::fill(out.begin(), out.end(), 0);
+            lin.mix(out.data(), 800, false);
+            std::vector<int32_t> other(2 * 800, 0);
+            sinc.mix(other.data(), 800, false);
+            differs = differs || out != other;
+            uint8_t a[kStatusBytes], b[kStatusBytes];
+            lin.status(a);
+            sinc.status(b);
+            same = std::memcmp(a, b, sizeof a) == 0;
+        }
+        expect(same && differs, "linear and sinc: the same status every frame, a different sound");
     }
 
     // the state handed over mid-run (the mixer setting switched): the side that loads it mixes exactly what the side
