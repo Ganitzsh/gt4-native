@@ -378,6 +378,14 @@ public:
         uint64_t droppedDraws = 0;   // past the target limit (targetFor)
         uint64_t targetsReused = 0;  // slots given to a new buffer at the limit
         uint64_t reads = 0, readsFromTargets = 0;   // LOCAL -> HOST transfers; those with drawn pages
+        // reads of drawn pages served from the memory model (not the GPU's pixels), by (target psm, read psm): the
+        // first kReadMismatchKinds pairs seen, the rest under the last entry's count
+        static constexpr uint32_t kReadMismatchKinds = 6;
+        struct ReadMismatch {
+            uint8_t targetPsm = 0, readPsm = 0;
+            uint64_t count = 0;
+        } readMismatches[kReadMismatchKinds];
+        uint32_t readMismatchKindsSeen = 0;
         // scene records (CONTRACTS.md a.7, a.8): frames put on a list, the draws the split added, views split across
         // targets or unbound, cuts inside a frame (of them for asynchronous reads), views cut
         uint64_t sceneFrames = 0, sceneSplitDraws = 0, viewSplitTargets = 0, viewsUnbound = 0, cuts = 0, cutsAsync = 0, viewsCut = 0;

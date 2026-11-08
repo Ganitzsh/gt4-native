@@ -241,6 +241,29 @@ int main(int argc, char** argv) {
         fe.setReadData(pixels);
         fe.readTransfer(words, 2);
         expect(words[0] == 0xABABABABu && words[7] == 0xABABABABu, "the GPU's pixels are what the read returns");
+
+        // Photo Travel reads its tiles as CT24 from its CT32 frame buffer: the same layout, so from the GPU, packed
+        // 3 bytes a pixel (4 x 4: 48 bytes, 3 qwords).
+        Gif r24 = setup();
+        r24.ad({{BITBLTBUF, bitbltbuf(0, 0, 0, 0, 10, PSMCT24)}, {TRXPOS, trxpos(0, 0, 100, 100)}, {TRXREG, trxreg(4, 4)}, {TRXDIR, 1}});
+        fe.gif(3, static_cast<const uint8_t*>(r24.data()), r24.bytes());
+        expect(fe.readFromTarget() && fe.takeGpuRead(request) && request.psm == PSMCT24 && request.width == 4 && request.height == 4,
+               "a CT24 read of a CT32 target is asked of the GPU in CT24");
+        fe.cut(partial);
+        fe.setReadData(std::vector<uint8_t>(4 * 4 * 3, 0xCD));
+        uint32_t words24[12] = {};
+        fe.readTransfer(words24, 3);
+        expect(words24[0] == 0xCDCDCDCDu && words24[11] == 0xCDCDCDCDu, "its 3-byte pixels are what the read returns");
+
+        // Another layout (CT16 of the CT32 target) stays the memory model's, counted by its two formats.
+        Gif r16 = setup();
+        r16.ad({{BITBLTBUF, bitbltbuf(0, 0, 0, 0, 10, PSMCT16)}, {TRXPOS, trxpos(0, 0, 100, 100)}, {TRXREG, trxreg(4, 2)}, {TRXDIR, 1}});
+        fe.gif(3, static_cast<const uint8_t*>(r16.data()), r16.bytes());
+        expect(fe.readFromTarget() && !fe.takeGpuRead(request), "a CT16 read of a CT32 target is not asked of the GPU");
+        fe.readTransfer(words, 1);
+        expect(fe.stats.readMismatchKindsSeen == 1 && fe.stats.readMismatches[0].targetPsm == PSMCT32 &&
+                   fe.stats.readMismatches[0].readPsm == PSMCT16 && fe.stats.readMismatches[0].count == 1,
+               "and counted as (CT32, CT16)");
     }
 
     // 2b. Scene views (CONTRACTS.md a.5 7, a.8; A10's front-end half): two tagged 3D batches of two views, the same

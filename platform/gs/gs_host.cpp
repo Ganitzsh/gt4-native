@@ -1259,6 +1259,13 @@ std::string GsHost::summary() const {
     }
     if (h.target && (h.target->gpuReads || h.target->staleReads))
         out << "; " << h.target->gpuReads << " reads of drawn pixels from the GPU, " << h.target->staleReads << " from GS memory";
+    if (h.target && h.target->frontend().stats.readMismatchKindsSeen) {   // reads of drawn pages the GPU can't answer
+        const auto& s = h.target->frontend().stats;
+        out << "; reads of drawn pixels left to the memory model (target psm > read psm):";
+        for (uint32_t k = 0; k < s.readMismatchKindsSeen; ++k)
+            out << (k ? ", " : " ") << std::hex << unsigned(s.readMismatches[k].targetPsm) << " > " << unsigned(s.readMismatches[k].readPsm)
+                << std::dec << " " << s.readMismatches[k].count;
+    }
     if (h.target && h.target->frontend().stats.sceneFrames) {   // the front end's scene linkage (CONTRACTS.md a.7, a.8; A10)
         const auto& s = h.target->frontend().stats;
         out << "; scene front end: " << s.sceneFrames << " frames on lists, split " << (h.target->frontend().sceneSplitOn() ? "on" : "off")

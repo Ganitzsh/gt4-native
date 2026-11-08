@@ -486,22 +486,35 @@ void GsFrontend::readStarted(const GsMemory::Transfer& t) {
         ++stats.reads;
         if (readTarget) {
             ++stats.readsFromTargets;
-            // GT4's reads (the car thumbnails it renders into 16-bit targets and keeps in EE memory) are of
-            // one target in its own layout: those pixels come from the GPU. Anything else stays the memory
-            // model's (stale where drawn).
+            // GT4's reads (the car thumbnails it renders into 16-bit targets and keeps in EE memory, Photo Travel's
+            // tiles it reads as CT24 from its CT32 frame buffer) are of one target in its own layout: those pixels
+            // come from the GPU, packed in the read's format (CT24 and CT32 share a layout: the read leaves out
+            // alpha). Anything else stays the memory model's (stale where drawn), counted by its two formats.
             markExact(owner);   // the game keeps these pixels: from now on drawn at the PS2's resolution
             Target& o = targets[owner - 1];
-            if (oneOwner && !o.depth && o.bp == t.sbp && o.bw == t.sbw && o.psm == t.spsm &&
-                (t.spsm == PSMCT32 || t.spsm == PSMCT24 || t.spsm == PSMCT16 || t.spsm == PSMCT16S)) {
+            const bool colour = t.spsm == PSMCT32 || t.spsm == PSMCT24 || t.spsm == PSMCT16 || t.spsm == PSMCT16S;
+            const bool layout = o.psm == t.spsm || (o.psm == PSMCT32 && t.spsm == PSMCT24);
+            if (oneOwner && !o.depth && o.bp == t.sbp && o.bw == t.sbw && colour && layout) {
                 gpuRead = {owner, t.ssax, t.ssay, t.rrw, t.rrh, t.spsm, readAsync};
                 gpuReadPending = true;
             } else {
-                static bool warned = false;
-                if (!warned) {
-                    warned = true;
-                    std::fprintf(stderr, "gsn: a GS -> host read of drawn pixels in another layout (src %X/%u psm %X, target bp %X/%u "
-                                 "psm %X) is served from the memory model, without what was drawn\n", t.sbp, t.sbw, t.spsm, o.bp, o.bw, o.psm);
+                auto& kinds = stats.readMismatches;
+                constexpr uint32_t kMax = Stats::kReadMismatchKinds;
+                uint32_t k = 0;
+                while (k < stats.readMismatchKindsSeen && !(kinds[k].targetPsm == o.psm && kinds[k].readPsm == t.spsm)) ++k;
+                if (k == stats.readMismatchKindsSeen) {
+                    if (k < kMax) {   // a new pair: logged once
+                        std::fprintf(stderr, "gsn: a GS -> host read of drawn pixels (src %X/%u psm %X, target bp %X/%u psm %X%s) is "
+                                     "served from the memory model, without what was drawn\n", t.sbp, t.sbw, t.spsm, o.bp, o.bw,
+                                     o.psm, oneOwner ? "" : ", more than one target");
+                        kinds[k].targetPsm = static_cast<uint8_t>(o.psm);
+                        kinds[k].readPsm = static_cast<uint8_t>(t.spsm);
+                        ++stats.readMismatchKindsSeen;
+                    } else {
+                        k = kMax - 1;   // past the table: counted with its last pair
+                    }
                 }
+                ++kinds[k].count;
             }
         }
     }
