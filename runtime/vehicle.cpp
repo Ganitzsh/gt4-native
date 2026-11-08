@@ -69,7 +69,7 @@ void vehicle_log(const uint8_t pad[18]) {
     static std::FILE *log = [] {
         std::FILE *f = vehicle_log_on() ? std::fopen(std::getenv("GT4_VEHICLE_LOG"), "w") : nullptr;
         if (f) std::fprintf(f, "vblank,car,speed_kmh,yaw_rate,load0,load1,load2,load3,slipratio0,slipratio1,slipratio2,"
-                               "slipratio3,slipangle0,slipangle1,slipangle2,slipangle3,pad_steer,steer_rad\n");
+                               "slipratio3,slipangle0,slipangle1,slipangle2,slipangle3,pad_steer,steer_rad,cmd454,cmd456\n");
         return f;
     }();
     if (!log) return;
@@ -85,7 +85,10 @@ void vehicle_log(const uint8_t pad[18]) {
         // pad 1's left stick X as this read gives it; the steering angle at the wheels (D + 0x468, radians; R14: 0.698
         // at full lock at a standstill)
         const uint32_t a = cond + kCarsOffset + v.entrant * kCarStride;
-        std::fprintf(log, ",%u,%.4f\n", pad[4], guest_ref<float>(a + kDynamics + 0x468));
+        // D + 0x454 / 0x456: two 16-bit values func_00349418 copies to 0x458 / 0x45A each tick (the steer command and
+        // another input, it seems: where GT4's steering band sits, before the command or after it; D12)
+        std::fprintf(log, ",%u,%.4f,%d,%d\n", pad[4], guest_ref<float>(a + kDynamics + 0x468),
+                     guest_ref<int16_t>(a + kDynamics + 0x454), guest_ref<int16_t>(a + kDynamics + 0x456));
     }
     std::fflush(log);
 }
