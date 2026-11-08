@@ -834,6 +834,41 @@ int main(int argc, char** argv) {
         expect(after.views.size() == 1 && after.views[0].ids.empty(), "B6: a view a VSync cut gets no ids");
     }
 
+    // 2h. F2b: a texture's summary is made once when it is decoded and found by its identity (GsFrontend::textureSummary):
+    // a 16 x 16 texture, bright and opaque (alpha 0x80) in its centre, dim and faint at the rim, drawn by a model batch.
+    {
+        gt4::gsn::GsFrontend fe;
+        Gif g = setup();
+        uint32_t texels[16 * 16];
+        for (uint32_t y = 0; y < 16; ++y)
+            for (uint32_t x = 0; x < 16; ++x) texels[y * 16 + x] = (x >= 6 && x < 10 && y >= 6 && y < 10) ? 0x80FFFFFFu : 0x10101010u;
+        g.upload(8192, 1, PSMCT32, 16, 16, texels, sizeof texels);
+        fe.gif(3, static_cast<const uint8_t*>(g.data()), g.bytes());
+        Gif s2;
+        s2.ad({{FRAME_1, frame(0, 10, PSMCT32)}, {ZBUF_1, zbuf(0x70, PSMZ24, true)}, {TEST_1, test(true, 1)},
+               {TEX0_1, tex0(8192, 1, PSMCT32, 4, 4, true, 0)}});
+        fe.gif(3, static_cast<const uint8_t*>(s2.data()), s2.bytes());
+        std::vector<uint32_t> words(gt4::gfx::kModelWords, 0);
+        words[64 * 4 + 3] = 1;
+        words[65 * 4 + 3] = 3 * 3;
+        gt4::gfx::ModelJob job{};
+        job.count = 5;
+        job.prim = 4 | (1 << 4);   // textured
+        fe.model(job, words.data());
+        fe.model(job, words.data());   // (drawn again: no second summary)
+        gt4::gsn::FrameList list;
+        fe.cut(list);
+        const bool memory = !list.draws.empty() && list.draws[0].texture.kind == gt4::gsn::TextureSource::Kind::Memory;
+        expect(memory, "F2b: the batch samples a texture from memory");
+        gt4::scene::TextureSummary summary;
+        const uint64_t identity = memory ? fe.textureIdentity(list.draws[0].texture.id) : 0;
+        expect(identity && fe.textureSummary(identity, summary) && summary.width == 16 && summary.height == 16,
+               "F2b: its summary, by its identity");
+        expect(summary.centreToRim > 3.0f && summary.alphaCore > 0, "F2b: the summary sees the bright, opaque centre");
+        expect(fe.stats.textureSummaries == 1, "F2b: one summary for the texture, however often it is drawn");
+        expect(!fe.textureSummary(identity ^ 1, summary), "F2b: no summary for an identity never decoded");
+    }
+
     // 3. A capture replayed through GsHost (no game: reads stay in memory): one displayed list per VBlank.
     {
         const std::filesystem::path dir = outputDir.empty() ? gt4::test::uniqueTempPath("gt4_gs_host_test") : std::filesystem::path(outputDir);

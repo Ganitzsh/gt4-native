@@ -10,6 +10,7 @@
 #include "gs_host.h"
 #include "cpu_profile.h"
 
+#include "glow_classifier.h"   // (F2b: the scene cache's material classifier)
 #include "gs_frontend.h"
 
 #include "link_host.h"
@@ -67,7 +68,15 @@ public:
         // either way). Also on when the settings want it (GsHost::setSceneSplit: sceneSplitWanted), from the next VSync.
         if (const char* split = std::getenv("GT4_GSN_SCENE_SPLIT"); split && split[0] == '1') splitFromEnv = true;
         native->setSceneSplit(splitFromEnv);
+        // F2b: the glow class of B6's materials (the night relight's course lamps), judged once per texture from its
+        // summary at decode; each verdict on a texture with the street-lamp draw's state is logged once.
+        glow->setLog(stdout);
+        native->setSceneClassifier([fe = native.get(), g = glow](const scene::ItemSource& item) {
+            scene::TextureSummary s;
+            return g->classify(item, fe->textureSummary(item.texture, s) ? &s : nullptr);
+        });
     }
+    const render::GlowClassifier& glowClassifier() const { return *glow; }
     std::atomic<bool> splitWanted{false};   // GsHost::setSceneSplit (any thread); applied at the next vsync
     void setEventSink(gsn::GsFrontend::EventSink sink) { native->setEventSink(std::move(sink)); }
     // A live game's asynchronous reads (gfx::kReadAsync): the list cut at the read goes to the render thread with the
@@ -349,6 +358,7 @@ private:
     gsn::FrameList list;
     bool stats = false;
     bool splitFromEnv = false;   // GT4_GSN_SCENE_SPLIT=1
+    std::shared_ptr<render::GlowClassifier> glow = std::make_shared<render::GlowClassifier>();   // (F2b; the front end's thread)
 };
 
 }  // namespace
@@ -1248,6 +1258,12 @@ std::string GsHost::summary() const {
                 << m.evicted << " evicted, " << (m.bytes >> 20) << " MiB held; materials " << t.created << " made, " << t.held
                 << " held; objects " << o.objects << ", sightings with the same ids " << o.objectsSame << ", another mesh "
                 << o.objectsMeshChanged << ", other materials " << o.objectsMaterialsChanged;
+            // F2b: the glow class (materials judged, of them with the street-lamp draw's state, glows, without a texture
+            // summary; textures judged) and the summaries' time at decode
+            const auto g = h.target->glowClassifier().stats();
+            out << "; glow class: " << g.judged << " materials judged, " << g.signature << " with the lamp state, " << g.glows
+                << " glows, " << g.noSummary << " without a summary, " << g.textures << " textures; texture summaries "
+                << s.textureSummaries << " in " << static_cast<uint64_t>(s.textureSummaryMicroseconds) << " us";
         }
         byRole("unbound", s.unboundByRole);
         byRole("cut", s.cutByRole);

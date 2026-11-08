@@ -7,6 +7,7 @@
 // (Vulkan) only executes the list. See docs/NATIVE_RENDERER.md.
 #include "scene_frame.h"
 #include "scene_cache.h"   // (B6: GsFrontend::sceneView gives each instance its ids)
+#include "texture_summary.h"   // (F2b: GsFrontend::textureSummary)
 #include "gs_memory.h"
 #include "texture_pack.h"
 #include "gt4/gfx.h"
@@ -208,6 +209,9 @@ struct FrameList {
     // The scene frame whose FrameEnd arrived while this list was built (CONTRACTS.md a.8): its views bound to targets by
     // the front end, its cuts counted; null without scene records, and on a partial list cut before its FrameEnd.
     std::unique_ptr<scene::SceneFrame> scene;
+    // B6's caches beside it (F2b's lamp pass, B7): read-only for the render thread (meshes by id, materials' classes),
+    // kept alive by the lists that carry it; dropped at clear().
+    std::shared_ptr<const scene::SceneCache> sceneCache;
     // The views whose ViewEnd arrived while this list was built (CONTRACTS.md a.8): a partial list may substitute
     // those that are valid. Each with the front end's binding beside it (the package is the decoder's, made before any
     // draw was bound): its colour and depth targets, and whether its tagged draws went to two colour targets. The
@@ -381,9 +385,26 @@ public:
         uint64_t meshesNew = 0, meshesPending = 0, materialsNew = 0, meshesSkinned = 0, meshesPerFrame = 0;   // totals
         double sceneCacheMicroseconds = 0.0;
         double sceneCacheCpuMicroseconds = 0.0;   // the same span in the thread's CPU time (scene::threadCpuMicroseconds)
+        // F2b: texture summaries made at decode (textureSummary), and their time on the front end
+        uint64_t textureSummaries = 0;
+        double textureSummaryMicroseconds = 0.0;
     } stats;
     // B6's caches (null until the split is first on): their own counters, for the host's summary.
     scene::SceneCache* sceneCache() { return sceneCache_.get(); }
+    // F2b: the material classifier B6's cache calls for a new material key (SceneCache::setClassifier), kept and applied
+    // when the cache is made; on the front-end thread.
+    void setSceneClassifier(std::function<uint32_t(const scene::ItemSource&)> classify) {
+        sceneClassifier = std::move(classify);
+        if (sceneCache_) sceneCache_->setClassifier(sceneClassifier);
+    }
+    // F2b: a decoded texture's summary (computed once from level 0 at decode: scene/texture_summary.h) by its identity;
+    // false when it has none (not decoded, retired, or a texture pack's image, whose game texture is not decoded).
+    bool textureSummary(uint64_t identity, scene::TextureSummary& out) const {
+        auto it = textureSummaries.find(identity);
+        if (it == textureSummaries.end()) return false;
+        out = it->second;
+        return true;
+    }
 
     // The state groups of include/gt4/gfx.h: a state record from the game (the shared groups, then the
     // context groups of both contexts in bit order, from one source context).
@@ -621,7 +642,14 @@ private:
     std::vector<SceneJob> sceneJobs;
     std::vector<uint32_t> sceneJobFirst, sceneJobLast;
     void clearSceneJobs();
-    std::unique_ptr<scene::SceneCache> sceneCache_;
+    std::shared_ptr<scene::SceneCache> sceneCache_;   // (shared with the lists that carry it: FrameList::sceneCache)
+    std::function<uint32_t(const scene::ItemSource&)> sceneClassifier;   // setSceneClassifier
+    // F2b: each decoded texture's summary by its identity (textureIdentity), retired with it (textureSummary)
+    std::unordered_map<uint64_t, scene::TextureSummary> textureSummaries;
+    void summarize(uint64_t identity, const TextureImage& image);
+    void setTextureIdentity(uint32_t id, uint64_t identity);
+    void retireTextureIdentity(uint32_t id);   // the id's identity, and its summary with the identity's last id
+    std::unordered_map<uint64_t, uint32_t> identityUses;   // live ids per identity
     scene::SceneCounters sceneCacheCounters;   // the open frame's (into its SceneFrame at sceneFrame())
     std::vector<scene::ItemSource> sceneItems;   // (sceneView's, kept)
     size_t sceneViewsFrom = 0;   // the open scene frame's first view on the list (frame.views): its own packages only

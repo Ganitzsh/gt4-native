@@ -75,6 +75,7 @@ void FrameList::clear() {
     dump = false;
     readbacks.clear();
     scene.reset();
+    sceneCache.reset();
     for (ViewOnList& v : views) {
         scene::sceneViewToPool(v.package);
         if (v.ids.capacity()) {   // (B6: kept for this list's next views)
@@ -1378,7 +1379,7 @@ bool GsFrontend::setTexture(const DrawState& s, TextureSource& src) {
         loadSetContent(hash, sc);
         if (indexed) loadPalette();
         d.id = nextTexture++;
-        textureIdentities[d.id] = key;   // (B6: a material keys on it)
+        setTextureIdentity(d.id, key);   // (B6: a material keys on it)
         d.texels = 0;
         TextureImage image;
         image.id = d.id;
@@ -1399,6 +1400,7 @@ bool GsFrontend::setTexture(const DrawState& s, TextureSource& src) {
         }
         d.texels = texels;
         cachedTexels += texels;
+        summarize(key, image);   // (F2b: the glow classifier's input; before the pixels go)
         frame.textures.push_back(std::move(image));
         ++stats.setDecodes;
     }
@@ -1732,7 +1734,7 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
         c.streak = consecutive ? c.streak + 1 : 1;
         c.decodedFrame = frameCount;
         d.id = c.id = id ? id : nextTexture++;
-        if (!id) textureIdentities[d.id] = contentKey;   // (B6; a stream's reused id keeps its first content's: one material)
+        if (!id) setTextureIdentity(d.id, contentKey);   // (B6; a stream's reused id keeps its first content's: one material)
         d.texels = 0;
         for (uint32_t i = 0; i < levelCount; ++i) d.texels += uint64_t(levels[i].w) * levels[i].h;
         cachedTexels += d.texels;
@@ -1790,6 +1792,7 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
                 std::fclose(f);
             }
         }
+        summarize(textureIdentity(c.id), image);   // (F2b; a stream's later contents keep the first's, as its identity does)
         frame.textures.push_back(std::move(image));
         ++stats.decoded;
     }
@@ -2251,7 +2254,7 @@ uint32_t GsFrontend::replacementTexture(const TextureName& name, const Replaceme
     }
     TextureImage upload;
     upload.id = nextTexture++;
-    textureIdentities[upload.id] = TextureNameHash{}(name) ^ 0x7E3A9C0000000000ull;   // (B6: a pack image, by its name)
+    setTextureIdentity(upload.id, TextureNameHash{}(name) ^ 0x7E3A9C0000000000ull);   // (B6: a pack image, by its name)
     upload.version = 1;
     upload.width = image.width;
     upload.height = image.height;
@@ -2263,6 +2266,39 @@ uint32_t GsFrontend::replacementTexture(const TextureName& name, const Replaceme
     cachedTexels += texels;
     ++stats.replaced;
     return upload.id;
+}
+
+// F2b: a texture's summary by its identity, once (scene/texture_summary.h: at most 128 x 128 samples of level 0), timed
+// into the front end's stats. Not for a pack's image: the verdict follows the game's texture, never the pack.
+void GsFrontend::summarize(uint64_t identity, const TextureImage& image) {
+    if (!identity || image.replaced || textureSummaries.count(identity)) return;
+    const auto started = std::chrono::steady_clock::now();
+    textureSummaries.emplace(identity, scene::summarizeTexture(image.pixels.data(), image.width, image.height));
+    ++stats.textureSummaries;
+    stats.textureSummaryMicroseconds += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - started).count();
+}
+
+// A texture id's identity (B6), counted per identity: two live ids can share one (the same set loaded into two slots).
+void GsFrontend::setTextureIdentity(uint32_t id, uint64_t identity) {
+    auto [it, fresh] = textureIdentities.try_emplace(id, identity);
+    if (!fresh) {
+        if (it->second == identity) return;
+        retireTextureIdentity(id);
+        it = textureIdentities.emplace(id, identity).first;
+    }
+    ++identityUses[identity];
+}
+
+// A texture id retired: its identity goes, and the identity's summary (F2b) with the last id that has it.
+void GsFrontend::retireTextureIdentity(uint32_t id) {
+    auto it = textureIdentities.find(id);
+    if (it == textureIdentities.end()) return;
+    auto uses = identityUses.find(it->second);
+    if (uses == identityUses.end() || --uses->second == 0) {
+        if (uses != identityUses.end()) identityUses.erase(uses);
+        textureSummaries.erase(it->second);
+    }
+    textureIdentities.erase(it);
 }
 
 uint64_t GsFrontend::textureIdentity(uint32_t id) const {
@@ -2278,6 +2314,8 @@ void GsFrontend::resetTextures() {
     textureCache.clear();
     decoded.clear();
     textureIdentities.clear();
+    identityUses.clear();
+    textureSummaries.clear();
     cachedTexels = 0;
     frame.textures.clear();
     frame.resetTextures = true;
@@ -2551,7 +2589,8 @@ void GsFrontend::sceneView(std::shared_ptr<const scene::SceneView> view) {
         const auto started = std::chrono::steady_clock::now();
         const double cpuStarted = scene::threadCpuMicroseconds();
         if (!sceneCache_) {
-            sceneCache_ = std::make_unique<scene::SceneCache>();
+            sceneCache_ = std::make_shared<scene::SceneCache>();
+            if (sceneClassifier) sceneCache_->setClassifier(sceneClassifier);   // (F2b's glow class)
             static const bool cacheLog = [] { const char* e = std::getenv("GT4_SCENE_CACHE_LOG"); return e && *e == '1'; }();
             sceneCache_->setTrackObjects(cacheLog);   // (the "same ids" check: B6's acceptance reads it with the log)
         }
@@ -2604,6 +2643,7 @@ void GsFrontend::sceneView(std::shared_ptr<const scene::SceneView> view) {
         }
         stats.sceneCacheMicroseconds += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - started).count();
         stats.sceneCacheCpuMicroseconds += scene::threadCpuMicroseconds() - cpuStarted;
+        frame.sceneCache = sceneCache_;   // (a list cut before its FrameEnd carries views with ids: their cache with them)
     }
     v.package = std::move(view);
     frame.views.push_back(std::move(v));
@@ -2819,6 +2859,7 @@ void GsFrontend::sceneFrame(std::unique_ptr<scene::SceneFrame> f) {
     if (sceneCache_) sceneCache_->endFrame();
     clearSceneJobs();   // (the next frame's instances count from 1 again)
     frame.scene = std::move(f);   // (two in one list: the newer stands; the stream counts that case)
+    frame.sceneCache = sceneCache_;   // (F2b: the render thread reads the frame's ids through it; null before the split)
     sceneOpen = false;
     viewBindings.clear();
     sceneCuts = sceneCutsAsync = 0;
@@ -2853,7 +2894,7 @@ void GsFrontend::vsync(uint64_t vblank, FrameList& out) {
         for (auto it = replacementTextures.begin(); it != replacementTextures.end();) {
             if (it->second.lastUsed + 120 < frameCount) {   // (a texture pack's images: large, and outside the budget)
                 frame.retiredTextures.push_back(it->second.id);
-                textureIdentities.erase(it->second.id);
+                retireTextureIdentity(it->second.id);
                 cachedTexels -= it->second.texels;
                 it = replacementTextures.erase(it);
             } else {
@@ -2866,7 +2907,7 @@ void GsFrontend::vsync(uint64_t vblank, FrameList& out) {
         for (auto it = decoded.begin(); it != decoded.end();) {
             if (it->second.lastUsed + kUnused < frameCount) {
                 frame.retiredTextures.push_back(it->second.id);
-                textureIdentities.erase(it->second.id);
+                retireTextureIdentity(it->second.id);
                 cachedTexels -= it->second.texels;
                 it = decoded.erase(it);
             } else {
@@ -2881,7 +2922,7 @@ void GsFrontend::vsync(uint64_t vblank, FrameList& out) {
                 if (cachedTexels <= kBudget / 2 || used + 1 >= frameCount) break;
                 auto it = decoded.find(key);
                 frame.retiredTextures.push_back(it->second.id);
-                textureIdentities.erase(it->second.id);
+                retireTextureIdentity(it->second.id);
                 cachedTexels -= it->second.texels;
                 decoded.erase(it);
             }

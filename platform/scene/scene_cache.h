@@ -51,6 +51,11 @@ public:
 
     MeshCache& meshes() { return meshCache; }
     MaterialTable& materials() { return materialTable; }
+    // The render thread's read-only view (FrameList::sceneCache): MeshCache::mesh and MaterialTable::classes / key (and
+    // both caches' stats()) take their locks; SceneCache::stats() below reads unlocked front-end state: the front end's
+    // only.
+    const MeshCache& meshes() const { return meshCache; }
+    const MaterialTable& materials() const { return materialTable; }
 
     // The acceptance's check (PLAN B6): the same object (InstanceData::object) keeps its mesh and material ids from one
     // sighting to the next in the same view. Counted for instances with a mesh: same ids, another mesh, other materials.
