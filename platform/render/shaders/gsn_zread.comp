@@ -1,0 +1,30 @@
+#version 460
+// P2c: a GS -> host read of a Z buffer (Photo Travel's focus probe reads 8 x 4 of its Z24 buffer as Z32): each GS
+// pixel of the rectangle, at its first render sample, as the GS's Z, floor(depth x 2^32) at most the Z buffer's
+// largest (the draws write float(Z) x 2^-32), turned round (max - Z) while the game has the buffer inverted; one
+// uint a pixel into a host-visible buffer, packed in the read's format on the CPU (GsnScene::Impl::pack). A compute
+// read of the depth plane, not a copy: Z buffers keep TRANSFER_SRC off (their depth compression).
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D depth;
+layout(set = 0, binding = 1, std430) writeonly buffer Result { uint z[]; } result;
+layout(push_constant) uniform ZRead {
+    uint x, y, width, height;   // the rectangle, GS pixels
+    uint scaleX, scaleY;        // render pixels per GS pixel
+    uint most, inverted;        // the Z buffer's largest Z; turned round
+} p;
+
+void main() {
+    const uvec2 g = gl_GlobalInvocationID.xy;
+    if (g.x >= p.width || g.y >= p.height) return;
+    const ivec2 at = ivec2((p.x + g.x) * p.scaleX, (p.y + g.y) * p.scaleY);
+    const ivec2 size = textureSize(depth, 0);
+    uint z = 0u;
+    if (at.x < size.x && at.y < size.y) {
+        // (Z32: the largest float below 2^32, float(0xFFFFFFFF) rounds up past a uint)
+        const float limit = p.most == 0xFFFFFFFFu ? 4294967040.0 : float(p.most);
+        z = uint(min(floor(max(texelFetch(depth, at, 0).r, 0.0) * 4294967296.0), limit));
+        if (p.inverted != 0u) z = p.most - z;
+    }
+    result.z[g.y * p.width + g.x] = z;
+}

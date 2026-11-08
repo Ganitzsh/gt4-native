@@ -1269,7 +1269,8 @@ std::string GsHost::summary() const {
         out << "; GS memory a frame: " << s.setPagesWritten / f << " set pages (texture " << s.setPagesByCause[0] / f << ", draw "
             << s.setPagesByCause[1] / f << ", write " << s.setPagesByCause[2] / f << ", read " << s.setPagesByCause[3] / f << ", other "
             << s.setPagesByCause[4] / f << "), " << s.uploadBytes / 1024.0 / f << " KiB sent, " << s.copyBytes / 1024.0 / f << " KiB copied, "
-            << s.clutLoads / f << " CLUT loads; " << s.depthTextures << " Z buffers read as Z textures (GPU), " << s.readFallbacks
+            << s.clutLoads / f << " CLUT loads; " << s.depthTextures << " Z buffers read as Z textures (GPU), " << s.depthReads
+            << " GS reads of a Z buffer (GPU), " << s.readFallbacks
             << " reads of a target from memory (fallbacks)";
     }
     if (h.target && (h.target->gpuReads || h.target->staleReads))
