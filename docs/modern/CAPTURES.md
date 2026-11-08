@@ -32,7 +32,13 @@ Take them with `tools/slot.py` (`py -I tools/slot.py --slot heavy --what TEXT --
 lane the same: it waits for the memory and the slots, runs the commands, and gives the slots back. Its `owner.txt`
 names the holder's process (`pid=N start=T`): a waiter that finds the holder gone (killed, or its PID reused) logs the
 slot and removes it, so a stopped run no longer keeps a slot. On Windows the holder's commands die with it (a job
-object), so a slot freed that way has no work left running.
+object), so a slot freed that way has no work left running. Waiters are served in the order they came: each leaves a
+ticket in `C:/Users/julie/locks/queue` and takes nothing while an older live ticket waits for one of the same slots,
+the memory floor included, so a job started later never passes one that is waiting (a ticket whose waiter is gone is
+removed). Only runners from main since the queue take tickets: run `tools/slot.py` from an up-to-date checkout.
+Two waits that are meant, not bugs. While a `heavy-both` waiter waits for the second heavy slot, the free one stays
+idle: the younger `heavy` waiters behind it don't take it, so the two-slot job is never starved. And the oldest
+waiter, held at its memory floor, holds back the younger ones for the same slots, even those with lower floors.
 
 | Slot | For | Limits |
 |---|---|---|

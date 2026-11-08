@@ -10,9 +10,15 @@ docs/modern/CAPTURES.md lists them. A slot is a folder under GT4_LOCKS (default:
 owner.txt in it says who holds it, its first line for people, its second "pid=N start=T" (the holder and its start
 time) for the waiters.
 
-Waits until N GB are available (default 8) and every slot asked for is free, takes them together (a partial hold is
-given back, never kept while waiting), runs each command in turn (stops at the first failure), and removes the slots
-on exit.
+Waits for its turn, until N GB are available (default 8) and every slot asked for is free, takes them together (a
+partial hold is given back, never kept while waiting), runs each command in turn (stops at the first failure), and
+removes the slots on exit.
+
+Turns: a waiter puts a ticket in GT4_LOCKS/queue (named by its arrival time; its lines the people's line, the holder
+line, and the slots it waits for) and takes nothing while an older live ticket waits for one of the same slots. So
+waiters are served in the order they came, the memory included: the oldest waits for the floor, and a job started
+later doesn't pass it. A ticket goes when its slots are taken, and a stale one (its waiter gone) is removed, as a
+stale slot is. A runner older than the queue takes no ticket and is not held back by one.
 
 Self-healing: a waiter finding a slot whose holder is gone (its PID dead, or reused by a process started at another
 time) logs it and removes it, under a lock the OS frees with its holder (Windows: a named mutex; elsewhere flock), so
@@ -221,13 +227,113 @@ def try_take(kinds, what):
     return held
 
 
-def take(kinds, what, min_gb=8.0, poll=30.0):
-    while True:
-        if available_gb() >= min_gb:
-            held = try_take(kinds, what)
-            if held:
-                return held
-        time.sleep(poll)
+# ---- the queue: waiters served in the order they came
+
+def queue_dir():
+    return os.path.join(locks_dir(), "queue")
+
+
+def slot_names(kinds):
+    """Every slot folder the kinds may take (heavy: heavy-1 and heavy-2)."""
+    return sorted({n for kind in kinds for names in SLOTS[kind] for n in names})
+
+
+def enqueue(kinds, what):
+    """A ticket in the queue: named by the time it was made (so they sort in arrival order) and this process; its
+    lines are the people's line, the holder line, and the slots it waits for. Returns its path."""
+    os.makedirs(queue_dir(), exist_ok=True)
+    lane = os.path.basename(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    when = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+    path = os.path.join(queue_dir(), f"{time.time_ns():020d}-{os.getpid()}.txt")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(f"{lane} {what} {when}\n{holder_line()}\nslots={'+'.join(slot_names(kinds))}\n")
+    return path
+
+
+def read_ticket(path):
+    """(pid, start, first line, slot names) of a ticket; pid None when it cannot be read."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return None, None, "", set()
+    pid = start = None
+    names = set()
+    for line in lines[1:]:
+        fields = dict(w.split("=", 1) for w in line.split() if "=" in w)
+        try:
+            if "pid" in fields:
+                pid = int(fields["pid"])
+                start = None if fields.get("start", "None") == "None" else int(fields["start"])
+        except ValueError:
+            pid = None
+        if "slots" in fields:
+            names = set(fields["slots"].split("+"))
+    return pid, start, lines[0] if lines else "", names
+
+
+def ticket_stale(path):
+    """Why a ticket's waiter is gone, or None while it may still wait (as stale() for a slot's holder)."""
+    pid, start, _, _ = read_ticket(path)
+    if pid is None:
+        return None if os.path.exists(path) else "it is gone"
+    now = process_start(pid)
+    if now == UNKNOWN:
+        return None
+    if now is None:
+        return f"its waiter (pid {pid}) is not running"
+    if start is not None and now != start:
+        return f"its waiter's pid {pid} now belongs to another process"
+    return None
+
+
+def ahead_of(ticket):
+    """The first live ticket older than `ticket` that waits for one of its slots (its first line), or None. Stale
+    tickets on the way are removed, under the reaping lock as stale slots are."""
+    mine = read_ticket(ticket)[3]
+    try:
+        names = sorted(n for n in os.listdir(queue_dir()) if n.endswith(".txt"))
+    except OSError:
+        return None
+    for n in names:
+        path = os.path.join(queue_dir(), n)
+        if os.path.normcase(path) == os.path.normcase(ticket) or n > os.path.basename(ticket):
+            return None
+        _, _, first, theirs = read_ticket(path)
+        if not (mine & theirs):
+            continue
+        if ticket_stale(path):
+            with reap_lock():
+                why = ticket_stale(path)
+                if why:
+                    with contextlib.suppress(OSError):
+                        os.remove(path)
+                    log_line(f"removed the stale ticket {n}: {why} ({first.strip()})")
+                    continue
+        return first.strip() or n
+    return None
+
+
+def take(kinds, what, min_gb=8.0, poll=5.0):
+    """Wait for this waiter's turn (no older live ticket for any of the same slots), the memory and the slots, then
+    take them: the paths held. The ticket goes when the slots are taken, or with this process if it is stopped."""
+    ticket = enqueue(kinds, what)
+    said = None
+    try:
+        while True:
+            first = ahead_of(ticket)
+            if first is None and available_gb() >= min_gb:
+                held = try_take(kinds, what)
+                if held:
+                    return held
+            news = f"waiting behind: {first}" if first else f"waiting for the slots and {min_gb:g} GB available"
+            if news != said:
+                log_line(news)
+                said = news
+            time.sleep(poll)
+    finally:
+        with contextlib.suppress(OSError):
+            os.remove(ticket)
 
 
 def kill_with_me():
@@ -346,6 +452,34 @@ def self_test():
         got = try_take(["heavy"], "self-test")
         expect(bool(got) and os.path.basename(got[0]) == "heavy-2", "a take heals a stale slot and gets it")
         expect(try_take(["heavy"], "self-test") is None, "with both held by live holders, nothing is taken")
+        for n in ("heavy-1", "heavy-2"):
+            shutil.rmtree(os.path.join(locks_dir(), n))
+
+        # the queue: an older live waiter for the same slots goes first; other slots' and gone waiters' don't count
+        os.makedirs(queue_dir(), exist_ok=True)
+        waiter = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        try:
+            def ticket(age, pid, start, slots):
+                path = os.path.join(queue_dir(), f"{time.time_ns() - age:020d}-{pid}.txt")
+                with open(path, "w") as f:
+                    f.write(f"test ticket {age}\npid={pid} start={start}\nslots={slots}\n")
+                return path
+            mine = enqueue(["heavy"], "self-test")
+            other = ticket(10**9, waiter.pid, process_start(waiter.pid), "live-game")
+            expect(ahead_of(mine) is None, "an older waiter for other slots doesn't hold a waiter back")
+            gone = ticket(2 * 10**9, child.pid, 1, "heavy-1+heavy-2")
+            expect(ahead_of(mine) is None and not os.path.exists(gone),
+                   "an older ticket whose waiter is gone is removed")
+            older = ticket(3 * 10**9, waiter.pid, process_start(waiter.pid), "heavy-1+heavy-2")
+            expect(ahead_of(mine) == "test ticket 3000000000", "an older live waiter for the same slots goes first")
+            expect(ahead_of(older) is None, "and that waiter has no one ahead of it")
+            for p in (mine, other, older):
+                os.remove(p)
+            got = take(["heavy"], "self-test", min_gb=0)
+            expect(bool(got) and not os.listdir(queue_dir()), "a take with no one ahead gets a slot; its ticket goes")
+        finally:
+            waiter.kill()
+            waiter.wait()
     finally:
         shutil.rmtree(locks_dir(), ignore_errors=True)
     print(f"{len(failures)} failed")
