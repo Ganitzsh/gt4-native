@@ -248,8 +248,9 @@ target_compile_features(gt4_saves PUBLIC cxx_std_20)
 
 # The game's pads from the keyboard and gamepads through an action map and the sticks' response (platform/input; no SDL
 # calls, its headers).
-add_library(gt4_input STATIC platform/input/input_map.cpp platform/input/response.cpp platform/input/devices.cpp)
-target_include_directories(gt4_input PUBLIC platform/input platform/gs)
+add_library(gt4_input STATIC platform/input/input_map.cpp platform/input/response.cpp platform/input/devices.cpp
+    platform/input/haptics.cpp)
+target_include_directories(gt4_input PUBLIC platform/input platform/gs include)
 target_link_libraries(gt4_input PUBLIC SDL3::Headers)
 target_compile_features(gt4_input PUBLIC cxx_std_20)
 if(MSVC)
@@ -424,6 +425,11 @@ if(BUILD_TESTING)
   add_executable(gt4_input_devices_test tests/input_devices.cpp)
   target_link_libraries(gt4_input_devices_test PRIVATE gt4_input)
   add_test(NAME input_devices COMMAND gt4_input_devices_test)
+
+  # Gamepad haptics from the physics (PLAN.md D14): a car's Vehicle record to motors and triggers, frame by frame.
+  add_executable(gt4_input_haptics_test tests/input_haptics.cpp)
+  target_link_libraries(gt4_input_haptics_test PRIVATE gt4_input)
+  add_test(NAME input_haptics COMMAND gt4_input_haptics_test)
 
   # The cards behind the game's libmc calls (runtime/save_folder.cpp, built here on its own): cut writes,
   # hidden copies and backups, backup rotation, the second slot. Works in the build folder.
