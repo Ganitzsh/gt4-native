@@ -370,6 +370,51 @@ struct GsnScene::Impl {
         if (profile.on) profile.counts[what] += n;
     }
     int markSlot = -1;   // the slot of the frame being profiled (-1: none, e.g. a read's own submission)
+    // SPIKE R3 (local, never pushed): GT4_R3=1, for each draw with a GEQUAL Z test, an occlusion query of a probe with
+    // GREATER and no writes, then of the draw itself: the difference is the pixels that pass only at equal Z.
+    struct R3 {
+        bool on = false;
+        VkQueryPool pool = VK_NULL_HANDLE;
+        static constexpr uint32_t kPerSlot = 8192;
+        std::vector<std::string> labels[kSlots];
+        int slot = -1;
+        std::map<std::string, std::array<uint64_t, 3>> totals;   // label -> draws, strict pixels, all pixels
+        uint64_t frames = 0;
+    } r3;
+    void r3Frame(VkCommandBuffer command, uint32_t slot) {
+        if (!r3.on) return;
+        slot %= kSlots;
+        auto& l = r3.labels[slot];
+        if (!l.empty()) {
+            std::vector<uint64_t> v(l.size() * 2);
+            if (vkGetQueryPoolResults(device.device, r3.pool, slot * R3::kPerSlot, uint32_t(v.size()), v.size() * 8, v.data(), 8,
+                                      VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
+                for (size_t k = 0; k < l.size(); ++k) {
+                    auto& tot = r3.totals[l[k]];
+                    ++tot[0];
+                    tot[1] += v[2 * k];
+                    tot[2] += v[2 * k + 1];
+                }
+                ++r3.frames;
+            }
+            l.clear();
+            if (r3.frames && r3.frames % 300 == 0) {
+                std::printf("R3: %llu frames: draws, pixels passing GREATER, all pixels (GEQUAL), the share at equal Z\n",
+                            static_cast<unsigned long long>(r3.frames));
+                std::vector<std::pair<uint64_t, std::string>> rows;
+                for (const auto& [label, tot] : r3.totals) rows.emplace_back(tot[2], label);
+                std::sort(rows.rbegin(), rows.rend());
+                for (const auto& [all, label] : rows) {
+                    const auto& tot = r3.totals[label];
+                    std::printf("R3   %-44s draws %9llu strict %12llu all %12llu equal %5.1f %%\n", label.c_str(),
+                                static_cast<unsigned long long>(tot[0]), static_cast<unsigned long long>(tot[1]),
+                                static_cast<unsigned long long>(tot[2]), tot[2] ? 100.0 * double(tot[2] - std::min(tot[1], tot[2])) / double(tot[2]) : 0.0);
+                }
+            }
+        }
+        vkCmdResetQueryPool(command, r3.pool, slot * R3::kPerSlot, R3::kPerSlot);
+        r3.slot = static_cast<int>(slot);
+    }
     void mark(VkCommandBuffer command, const char* label) {
         if (!profile.on || markSlot < 0) return;
         auto& l = profile.labels[markSlot];
@@ -438,6 +483,13 @@ struct GsnScene::Impl {
     bool warnedBlend = false;
 
     Impl(const vk::Device& d, VkCommandPool p) : device(d), pool(p) {
+        if (std::getenv("GT4_R3")) {   // SPIKE R3
+            VkQueryPoolCreateInfo q{};
+            q.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+            q.queryType = VK_QUERY_TYPE_OCCLUSION;
+            q.queryCount = R3::kPerSlot * kSlots;
+            r3.on = vkCreateQueryPool(device.device, &q, nullptr, &r3.pool) == VK_SUCCESS;
+        }
         if (const char* e = std::getenv("GT4_GPU_PROFILE"); e && *e && *e != '0') {
             profile.on = startProfile();
             profile.level = std::atoi(e);
@@ -2401,6 +2453,40 @@ void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t
                 recorded.pushed = true;
                 tally("constant pushes");
             }
+            // SPIKE R3: a GEQUAL draw's first pass, probed with GREATER and nothing written, then itself, each counted.
+            const bool probe = r3.slot >= 0 && pass == 0 && zte && ztst == 2 && hasDepth && d.depth &&
+                               r3.labels[r3.slot].size() < R3::kPerSlot / 2;
+            uint32_t query = 0;
+            if (probe) {
+                query = uint32_t(r3.slot) * R3::kPerSlot + uint32_t(r3.labels[r3.slot].size()) * 2;
+                vk::Pipeline& pp = pipeline(0, 0, hasDepth, d.topology, false);
+                vk::bind(command, pp);
+                const VkDeviceSize zero = 0;
+                vkCmdBindVertexBuffers(command, 0, 1, &vertices.buffer, &zero);
+                vk::Descriptors().sampled(0, view, sampler).push(command, pp);
+                vk::pushConstants(command, pp, pk);
+                vkCmdSetDepthWriteEnable(command, VK_FALSE);
+                vkCmdSetDepthCompareOp(command, (d.depthInverted ? invertedZops : zops)[3]);
+                vkCmdBeginQuery(command, r3.pool, query, 0);
+                vkCmdDraw(command, d.count, 1, d.modeled ? modelBase + d.first : d.first, 0);
+                vkCmdEndQuery(command, r3.pool, query);
+                vkCmdSetDepthCompareOp(command, (d.depthInverted ? invertedZops : zops)[ztst]);
+                vkCmdBeginQuery(command, r3.pool, query + 1, 0);   // (GEQUAL, nothing written either: no self-occlusion)
+                vkCmdDraw(command, d.count, 1, d.modeled ? modelBase + d.first : d.first, 0);
+                vkCmdEndQuery(command, r3.pool, query + 1);
+                vkCmdSetDepthWriteEnable(command, ps.zwrite ? VK_TRUE : VK_FALSE);
+                vk::bind(command, p);
+                vkCmdBindVertexBuffers(command, 0, 1, &vertices.buffer, &zero);
+                vk::Descriptors().sampled(0, view, sampler).push(command, p);
+                vk::pushConstants(command, p, pk);
+                boundPipeline = p.pipeline;
+                char label[96];
+                const uint32_t type = s.prim & 7;
+                std::snprintf(label, sizeof label, "%s z%u b%u%u%u%u%u a%u d%u %s t%u", d.modeled ? (d.view ? "M" : "m") : type == 6 ? "S" : "T",
+                              ps.zwrite ? 1u : 0u, (k.flags & kBlend) ? 1u : 0u, c.blendA, c.blendB, c.blendC, c.blendD, c.alphaTest ? 1u : 0u,
+                              date ? 1u : 0u, (k.flags & kTextured) ? "tex" : "-", d.target);
+                r3.labels[r3.slot].push_back(label);
+            }
             vkCmdDraw(command, d.count, 1, d.modeled ? modelBase + d.first : d.first, 0);
             tally("draws");
         }
@@ -3198,6 +3284,8 @@ void GsnScene::Impl::beginPending(VkCommandBuffer command, uint32_t slot, VkExte
     sweepGraveyard();
     markSlot = profiled && profile.on ? static_cast<int>(slot % kSlots) : -1;
     if (markSlot >= 0) profileFrame(command, slot);
+    r3.slot = -1;
+    if (profiled) r3Frame(command, slot);   // SPIKE R3
     if (!scaled) decideScale(extent);
     writeDump();   // a dump recorded in an earlier submission is complete now
     // Only the list shown now moves with the display's clock (interpolation); every other one is drawn as the game drew
@@ -3319,6 +3407,7 @@ void GsnScene::Impl::pendingListEnd(VkCommandBuffer command) {
 
 // After the last list: histories retired, the lists recycled, the displayed target made sampled.
 void GsnScene::Impl::endPending(VkCommandBuffer command) {
+    r3.slot = -1;   // SPIKE R3: a frame drawn again (recordPrepass) is not probed: its queries were not reset
     // Histories of scenes not seen for 10 seconds go (a scene's target left behind with its screen).
     for (auto it = histories.begin(); it != histories.end();) {
         if (displayedFrames > it->second.used + 600) {
