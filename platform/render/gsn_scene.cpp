@@ -1008,9 +1008,13 @@ struct GsnScene::Impl {
     static constexpr const char* kStepMarks[kSteps] = {"motion vectors", "lighting", "reflections", "fog", "temporal resolve",
                                                        "motion blur", "depth of field"};
     enum Part : int { kPartWhole = -1, kPartFirst = 0, kPartMain = 1, kPartCopy = 2 };
+    // Whether a list's scene records have views (`records` below): a vehicles-only frame (scene records mode 2, D14) has a
+    // scene frame but no views, so nothing for the night relight to light. The same test at build and at run time.
+    static bool viewRecords(const gsn::FrameList& list) { return list.scene && !list.scene->views.empty(); }
     // Whether a step runs at Light `l` of a list, from the settings (known when the graph is built) and whether that list
-    // has scene records (`records`: the list's own scene frame, the one being planned or run, not `frame`'s). The temporal
-    // resolve and the motion blur also need the motion vectors drawn (ex.moving: the Light has a scene).
+    // has scene records with views (`records`: viewRecords of the list's own scene frame, the one being planned or run,
+    // not `frame`'s). The temporal resolve and the motion blur also need the motion vectors drawn (ex.moving: the Light
+    // has a scene).
     bool stepRuns(int step, const gsn::FrameList::Lighting& l, bool records) const {
         switch (step) {
             case kStepMotionVectors: return temporal || effects.shutter > 0.0f;
@@ -2422,7 +2426,7 @@ void GsnScene::Impl::stageOnMembers(VkCommandBuffer command, size_t at) {
     ex.work = WorkImages{&velocityImage, &aoImage, &litImage, &ssrImage, false};
     const gsn::FrameList::Lighting& l = frame.lights[frame.commands[at].index];
     for (int step = 0; step < kSteps; ++step) {
-        if (stepRuns(step, l, frame.scene != nullptr)) runStep(step, l, at, kPartWhole);
+        if (stepRuns(step, l, viewRecords(frame))) runStep(step, l, at, kPartWhole);
         mark(command, kStepMarks[step]);
     }
 }
@@ -2443,7 +2447,7 @@ void GsnScene::Impl::checkOnePass(size_t at) {
     SceneImages si;
     if (!ex.sceneImages(l, si)) return;
     for (int step = 0; step < kSteps; ++step)
-        if (stepRuns(step, l, frame.scene != nullptr)) {
+        if (stepRuns(step, l, viewRecords(frame))) {
             planWrong(at, "was planned without a scene or a step, and has both");
             return;
         }
@@ -2494,7 +2498,7 @@ void GsnScene::Impl::executeLightPart(VkCommandBuffer command, size_t at, int st
             if (same && scene)
                 same = si.area.width == first->area.width && si.area.height == first->area.height &&
                        si.colour->extent.width == first->colour.width && si.colour->extent.height == first->colour.height;
-            for (int s = 0; s < kSteps; ++s) same = same && stepRuns(s, l, frame.scene != nullptr) == first->runs[s];
+            for (int s = 0; s < kSteps; ++s) same = same && stepRuns(s, l, viewRecords(frame)) == first->runs[s];
             // GT4_WRONG_PLAN_TEST=1 (testing): every plan taken as wrong, so the fallback runs on every Light; the
             // frames must not change (lane A's suggestion, B4 step 3).
             static const bool wrongTest = [] { const char* e = std::getenv("GT4_WRONG_PLAN_TEST"); return e && *e && *e != '0'; }();
@@ -3648,7 +3652,7 @@ void GsnScene::Impl::buildPending(rg::Graph& graph, uint32_t slot, VkExtent2D ex
         plan.scene = Impl::sceneArea(shape(l.target), shape(l.depth), l, plan.area);
         plan.colour = shape(l.target).extent;
         bool any = false;
-        for (int step = 0; step < Impl::kSteps; ++step) any = (plan.runs[step] = s.stepRuns(step, l, list.scene != nullptr)) || any;
+        for (int step = 0; step < Impl::kSteps; ++step) any = (plan.runs[step] = s.stepRuns(step, l, Impl::viewRecords(list))) || any;
         if (drawLimit || !plan.scene || !any) {
             inOnePass(!drawLimit);
             return;
