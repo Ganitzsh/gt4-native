@@ -1031,7 +1031,7 @@ subtraction, `gt4WindowPoint`) and the lighting chains (`gt4_transform.glsl`, `g
   differently, and B7's vertex stage couldn't give the compute stage's Z by sharing source alone.
 - It matches the VU's structure (no fused multiply-add) and the CPU renderers' (`renderers3d.cpp`), though not the
   VU's truncating rounding.
-- Adopting it moved `ORIG` once (PLAN section 2: the one-time re-baseline).
+- Adopting it moves `ORIG`: a re-baseline under PLAN section 2's rule, listed in CAPTURES.md.
 
 ---
 

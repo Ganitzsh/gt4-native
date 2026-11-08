@@ -35,7 +35,7 @@ Every ticket's acceptance uses these names.
 | Name | What runs | Pass |
 |---|---|---|
 | `CTEST` | full ctest, Release | all pass (77 = skipped is a pass only where the ticket says) |
-| `ORIG` | `tools/frame_diff.py --baseline OLD NEW --preset original` on the REF captures, every frame; plus `host_replay` | identical frames. One re-baseline, agreed by the coordinator (2026-11-08): the commit that makes the shared transform and lighting shaders precise (CONTRACTS b.10, B7) moves `ORIG` once, after its changed near-tie pixels are compared with PCSX2's software renderer on `race7` and its `PERF` is checked. Its new reference (captures and hashes) is recorded and announced to every lane; `ORIG` gates compare against it from that commit on |
+| `ORIG` | `tools/frame_diff.py --baseline OLD NEW --preset original` on the REF captures, every frame; plus `host_replay` | identical frames. **Re-baselines** (a standing rule, the coordinator, 2026-11-08): `original` means matching the PS2, so a commit that fixes a correctness bug in the GS path may move `ORIG`, on these conditions: it is its own commit; the frames it changes are compared with PCSX2's software renderer and shown closer or equal; its `PERF` is checked; the new reference (captures and hashes) is recorded and announced to every lane with the commit's hash; and it is listed in CAPTURES.md's re-baselines, so a comparison never crosses one by mistake. `ORIG` gates compare against the latest reference from that commit on. Refactors and performance changes never move `ORIG`. The first: the commit that makes the shared transform and lighting shaders precise (CONTRACTS b.10, B7), its near-tie pixels compared on PE race 2's countdown (`race_grid43.cap` against PCSX2 software stills; PCSX2 can't replay a capture) |
 | `PRESETS` | the same at `original`, `low`, `medium`, `high`, `ultra`, and the test scene's `tests/scenarios/features.json` captures | identical frames |
 | `PARITY` | `render.scene=parity` against the GS path at 1x on the REF captures, per frame | >= 97.5 % of pixels identical, >= 99.97 % within 4 per channel (the GPU-models step's bar, docs/NATIVE_V2.md:90) |
 | `VAL` | REF captures with `VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation`, synchronization validation on | zero messages |
@@ -443,8 +443,8 @@ The scene target's other draws between the view's passes (R5's clears, Z-only dr
     mirror falls back unless it binds and validates as the main view does.
   - Not in B7: B8's substitution, jitter and TAA (parity is 1x).
 - **Order of work:** B6's `items` (inert without the parity path); the shader split together with "precise"
-  arithmetic (CONTRACTS b.10), which moves `ORIG` once: the one re-baseline of section 2, after the PCSX2
-  near-tie comparison and `PERF`; then the parity path; then the acceptance. The split alone is not a pure
+  arithmetic (CONTRACTS b.10), which moves `ORIG`: a re-baseline under section 2's rule, after the PCSX2 near-tie
+  comparison and `PERF`; then the parity path; then the acceptance. The split alone is not a pure
   refactor: moving identical expressions changed 15 of 30 `race7` frames through the driver's fusion.
 Depends: A2, A3, A10, B4, B5, B6, R3, R5.
 Acceptance: `PARITY` on the race, flyover and event captures at 1x; Z equal to the GS path wherever both draw (a
@@ -1217,6 +1217,17 @@ commits).** What is left of docs/NATIVE_V2.md (step 1's textures are done):
   so set pages stop being materialised for CLUT loads.
 - **P2c: reinterpretations as explicit copies** from the named source target, on the GPU (as `gsn_scene`'s
   reinterpret pass already is). The fallback (004A9470, never seen) stays, and is counted.
+  - **First, depth targets read as textures** (lane B, found with P2a, 2026-11-08). The race's Z buffer is sampled
+    as a PSMZ24 texture at its own address and width (bp 0 and 0x8C0, width 10, about 1.7 a frame in a race;
+    over the captures race7 1,000, race_boot 16,754, menus_boot 34,175, before and after P2a). The direct path
+    takes only colour targets, so these reads decode `gs_memory`, which never holds the drawn depths: a picture
+    bug of the GS path, `original` included. Fix: a Z-format texture whose surface is a depth target reads that
+    target (the depth image, by P2a's key), its depths converted to the GS's Z24 texel: the host keeps float depth
+    (`VK_FORMAT_D32_SFLOAT_S8_UINT`, `gsn_scene.cpp` `kDepth`), so each texel becomes the 24-bit Z the GS would
+    hold, laid out as a PSMZ24 texel (R, G, B the Z bytes, alpha from TEXA as for CT24), then goes through the
+    usual texture path; not a plain bind. It changes pictures, so it is its own commit: the draws that sample it
+    named (game function, from `GT4_GSN_DRAWS` on `race7`), what the picture shows wrong, and an `ORIG`
+    re-baseline under section 2's rule.
 - A GS view of memory stays for every reader until R9 decides it: P2 needs only R9's list of readers, not its
   decisions.
 - Files: P2 owns the target, page and palette parts of `gs_frontend.*` and `gs_memory.*`, lane A reviewing
@@ -1228,7 +1239,8 @@ commits).** What is left of docs/NATIVE_V2.md (step 1's textures are done):
   - a new metric in `GT4_GSN=stats`: pages materialised and bytes written into `gs_memory` per frame (uploads,
     CLUT loads, transfers), with the baseline measured at the parent commit on `race7.cap` and `race_boot.cap`
     (NATIVE_V2 has about 130 pages a frame). It must come out lower;
-  - reinterpretation fallbacks counted: 0 on `race7`, `race_boot` and `menus_boot.cap` (the menus);
+  - reinterpretation fallbacks counted by kind (`GT4_GSN_FALLBACKS=N` logs them): for P2a and P2b, no new kind and
+    no more than at the parent commit; after P2c, 0 on `race7`, `race_boot` and `menus_boot.cap` (the menus);
   - the R9 readers' bytes unchanged (`GT4_READ_HASH` on a live session to a race: CarIconMaker, the luminance
     probe).
 

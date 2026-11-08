@@ -58,6 +58,18 @@ A fresh clone also needs the static 32-bit FFmpeg the game links for its movies,
 
 ## Reference captures (REF)
 
+### `ORIG` re-baselines
+
+A commit that fixes a correctness bug in the GS path may move `ORIG` (PLAN section 2's rule). Each one is listed
+here, with its commit, the captures re-recorded or re-hashed, and the PCSX2 comparison, so a comparison never
+crosses one by mistake: compare a build against the reference of the latest re-baseline at or before it. The
+reference hashes column names each capture's frame-hash list, so that choice can be checked mechanically.
+
+| Commit | What it fixes | References renewed | Reference hashes | PCSX2 comparison |
+|---|---|---|---|---|
+| (planned) B7's b.10 commit | shared transform and lighting shaders precise (no fused multiply-add) | to be listed | the frame-hash list per capture, to be listed | PE race 2's countdown (`race_grid43.cap` against PCSX2 software stills), near-tie pixels |
+| (planned) P2c's first item | depth targets read as textures from the drawn depths | to be listed | to be listed | the frames of the draws that sample it |
+
 Kept in each clone's `build/caps/` (never committed), listed in `build/caps/REF.txt`. Every comparison on them
 says how many of its frames show a picture: a capture that replays black proves nothing.
 
