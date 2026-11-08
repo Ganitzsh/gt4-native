@@ -536,6 +536,18 @@ void gt4_scene_view_end(uint32_t context) {
     g_scene.openView = 0;
 }
 
+// A marker (CONTRACTS.md a.4, a.5 5): around render_post_effect and the panels' render_panel, in the open frame; `view` the
+// view open at it (0 none).
+void gt4_scene_marker(uint32_t context, int kind) {
+    namespace scene = gfx::scene;
+    if (!gt4_scene_on() || !g_scene.inFrame) return;
+    scene::Marker r{};
+    r.prefix = {scene::kMarker, scene::kVersion};
+    r.marker = static_cast<uint16_t>(kind);
+    r.view = g_scene.openView;
+    sceneAppend(context, &r, sizeof r);
+}
+
 // One Cmd 0049D328 draws, after 0049E480 / 0049E548 and before its items (CONTRACTS.md a.4): its object-to-view (set 0
 // as 0049E480 picks it), the scales, its items, and the Projection of set 1 with the viewport the batch holds.
 void gt4_scene_cmd(uint32_t context, uint32_t cmd) {
