@@ -3,6 +3,7 @@
 // calls (reboot, module loads: all succeed), libcdvd's init, the pad (libpad2/libvib/libdbc) and the
 // memory card (libmc), and the SDK's DelayThread / GetTimerSystemTime / iWakeupThread.
 #include "audio.h"
+#include "audio_tags.h"
 #include "gt4/link/protocol.h"
 #include "pad_pedals.h"
 #include "pad_steer.h"
@@ -222,6 +223,11 @@ void strp(uint32_t fno, uint8_t *send, uint32_t, uint8_t *recv, uint32_t rsize) 
             // the write at once, between two frames (spu_ram_write, PLAN.md D5)
             std::vector<uint8_t> data(len);
             iso_read(g_streams[h].pos, data.data(), len);
+            // (GT4_TRACE_D9: D9's car sound banks are the SPU RAM regions loaded here; the disc offset names the file)
+            static const bool trace_d9 = getenv("GT4_TRACE_D9") != nullptr;
+            if (trace_d9)
+                log_info("d9: spu load %06x + %x from disc %llx (frame %u)", spu, len,
+                         static_cast<unsigned long long>(g_streams[h].pos), kernel_frame_count());
             spu_ram_write(spu, data.data(), len);
             g_streams[h].pos += n;
         }
@@ -284,7 +290,10 @@ void mpg(uint32_t, uint8_t *, uint32_t, uint8_t *recv, uint32_t rsize) {
 // reply is ENDX + ENVX per core
 
 void spup(uint32_t fno, uint8_t *send, uint32_t, uint8_t *recv, uint32_t rsize) {
-    if (fno == 4 && send) spu_apply(send);  // send and receive may share the buffer: read first
+    if (fno == 4 && send) {  // send and receive may share the buffer: read first
+        voice_tags_trace(send);   // (GT4_TRACE_D9, debugging: D9 step 1's measurements)
+        spu_apply(send);
+    }
     if (recv && rsize) std::memset(recv, 0, rsize);
     if (fno == 0 && recv) {
         wr32(recv, 0x112);

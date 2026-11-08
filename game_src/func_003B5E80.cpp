@@ -35,6 +35,7 @@ extern "C" void func_00372080(char *, s32);                 /* extern */
 extern "C" void func_00391C28(void *, f32);                  /* extern */
 extern "C" void func_003924D0(char *);                         /* extern */
 extern "C" void func_00392640(char *, char *);                 /* extern */
+extern "C" void gt4_car_sound_frame(u32);                        /* runtime/audio_tags.h (D9) */
 extern "C" void func_00392FC8(char *, int);                /* extern */
 extern "C" s32 func_003B6B78(char *, int);                 /* extern */
 extern "C" f32 func_003F3A68(s32, int);           /* extern */
@@ -424,4 +425,7 @@ extern "C" void func_003B5E80(char *arg0, char *arg1, s32 arg2) {
         var_fp += 0x80;
     } while (var_s7 < 4);
     func_00392640(sp2FC, (char *)&packet);
+    /* Not the original's: the car's sound objects registered for D9's voice tags (runtime/audio_tags.h), after the
+       groups' positions were set. Reads only. */
+    gt4_car_sound_frame((u32)arg0);
 }

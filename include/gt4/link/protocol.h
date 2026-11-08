@@ -92,12 +92,15 @@ enum Gt4LinkRecordType {
  *                     platform/audio/spu Spu2::saveState) once at the switch, after the whole SPU RAM (one RAM write
  *                     at 0); GT4_SPU2_IMAGE (value 0, then SPUP fno 4's 2 x 0x1D0 bytes); GT4_SPU2_RUN (value: the
  *                     samples at 48 kHz the SPU2 runs, once a frame). Stream 1 of GT4_REC_AUDIO then carries the
- *                     frame's BGM and movie sound, the same count of samples, for the host to add to its mix. */
+ *                     frame's BGM and movie sound, the same count of samples, for the host to add to its mix.
+ *                     GT4_SPU2_TAGS (value 48, then 48 x 16 bytes: runtime/audio_tags.h VoiceTag per hardware voice,
+ *                     D9) after each image: the car each voice belongs to and its sound group's direction. An older
+ *                     host ignores the kind (no link version change). */
 
 /* The gameplay options GT4_REC_HOST_CMD 4 carries (runtime/runtime.h GameOption): ids below GT4_GAME_OPTION_COUNT. */
 #define GT4_GAME_OPTION_COUNT 11u
 
-enum Gt4Spu2Kind { GT4_SPU2_STATE = 0, GT4_SPU2_IMAGE = 1, GT4_SPU2_RUN = 2 };   /* GT4_REC_SPU2_REGS's kinds */
+enum Gt4Spu2Kind { GT4_SPU2_STATE = 0, GT4_SPU2_IMAGE = 1, GT4_SPU2_RUN = 2, GT4_SPU2_TAGS = 3 };   /* SPU2_REGS' kinds */
 
 typedef struct Gt4LinkRecord {
     uint32_t type;

@@ -1,6 +1,7 @@
 // The game's sound (audio.h). The SPU2 is platform/audio/spu (one source with the host's mixer, PLAN.md D5);
 // GT4_REVERB=off mixes the effect sends in dry at the effect return volume instead.
 #include "audio.h"
+#include "audio_tags.h"
 
 #include "gt4/link/protocol.h"
 #include "link.h"
@@ -234,6 +235,11 @@ void spu_apply(const uint8_t *image) {
     if (g_host) {
         const uint32_t head[2] = {GT4_SPU2_IMAGE, 0};
         link_send(GT4_REC_SPU2_REGS, head, sizeof head, image, spu::kImageBytes);
+        // D9: each voice's car and sound group's direction, as of this image (runtime/audio_tags.h)
+        VoiceTag tags[48];
+        voice_tags(tags);
+        const uint32_t tagHead[2] = {GT4_SPU2_TAGS, 48};
+        link_send(GT4_REC_SPU2_REGS, tagHead, sizeof tagHead, tags, sizeof tags);
     }
 }
 
