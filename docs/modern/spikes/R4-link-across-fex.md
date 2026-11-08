@@ -77,3 +77,27 @@ Everything else is plain memory plus polling, which crosses as it is, if the mem
   with the ring's indices started just below 2^32 so the low word wraps during the run (the case the 8-byte fix is
   about; a million records alone never wraps it).
   Then the aarch64 host `--replay` on race7 (ORIG against x64), then the live game.
+
+## On the Odin (2026-11-08, run by the coordinator)
+
+- **Device:** Armada Linux, aarch64, glibc 2.43 (so building for 2.35 is fine). There is no plain `wine`: x86 Windows
+  programs run through Proton's ARM64 build, `<proton>/files/bin-arm64/wine` (Steam's Proton 11.0 (ARM64), or
+  proton-cachyos 11.0 arm64 in `/usr/share/steam/compatibilitytools.d`), with that `bin-arm64` folder on `PATH` and
+  `WINESERVER=<proton>/files/bin-arm64/wineserver`, or it stops with "could not exec wineserver". So the host's
+  `GT4_GAME_LAUNCHER` is that `wine`, in that environment.
+- **The probe passed both ways** (the first version, indices stepping by 64): with FEX's default TSO emulation and
+  with `FEX_TSOENABLED=0` (whether that variable took effect is unconfirmed, but the host side ran 6 times faster),
+  1,000,000 of 1,000,000 records intact each way, 0 bad, the low word wrapped. So a `/dev/shm` file maps shared between
+  the native host and the game under Proton's Wine on FEX, and the link's 8-byte indices and barriers hold. That probe
+  could not have shown a torn index (one crossing a run); the probe now steps its indices by 2^32 + 64 so every update
+  changes both words, and its control build with split 32-bit accesses fails even on x86.
+- **The probe that can fail, run at 03:16** (indices stepping by 2^32 + 64; the coordinator checked the binaries'
+  hashes against the ones served): with `FEX_TSOENABLED=1` and `=0`, the fixed build PASSED both times, 1,000,000 of
+  1,000,000 records intact each way, 0 bad, 0 impossible indices (host side 1.7-1.8 s, game side 176-193 ms). The
+  control (`-DPROBE_TORN`, the game's index accesses before the 8-byte fix) FAILED both times, as it should: with
+  TSO on 1,643 impossible indices on the game side and 1,962 on the host side, with TSO off 1,723 and 5,918 (the
+  records themselves stayed intact: a torn index is caught before its data is read). So the probe sees the failure
+  on the device, and the link's fixed path is clean across the native host and the i686 game under Proton on FEX.
+- **Shutdown:** a `SIGTERM` to the launcher ends it (it becomes `start.exe`), but the Windows processes it started keep
+  running. The host now runs `wineserver -k` (the same `WINESERVER` and `WINEPREFIX`) after the `SIGTERM`, then
+  `SIGKILL`s the launcher if needed.
