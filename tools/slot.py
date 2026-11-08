@@ -45,6 +45,23 @@ WINDOWS = os.name == "nt"
 SLOTS = {"game": [["gt4-decomp-release"]], "heavy": [["heavy-1"], ["heavy-2"]], "heavy-both": [["heavy-1", "heavy-2"]],
          "live-game": [["live-game"]]}
 
+# Low memory (the coordinator, 2026-11-08): the machine's available memory sits under 7 GB, a kernel leak only the
+# owner's reboot clears, and an unattended reboot could leave every lane stopped. Until that reboot the floors are
+# capped per kind and the heavy jobs run one at a time, never beside a game build: heavy takes only heavy-1, and
+# game, heavy and heavy-both all take the low-memory slot too. The caps: the largest heavy job's own peak measured
+# (a clean host build, 1.27 GB; a game link 1.10, a replay 1.21) plus 1 GB is under the 4.5 GB minimum, so heavy
+# 4.5; game and live-game 5.5 (fa02594); heavy-both keeps 7, above the memory there is, so it is refused (take():
+# its ticket would hold back every heavy job and game build). A job's floor is min(--min-gb, the largest cap among
+# its kinds), live-game counting only alone. False after the reboot.
+LOW_MEMORY = True
+FLOOR_CAPS = {"game": 5.5, "live-game": 5.5, "heavy": 4.5, "heavy-both": 7.0}
+LOW_MEMORY_SLOTS = {"game": [["gt4-decomp-release", "low-memory"]], "heavy": [["heavy-1", "low-memory"]],
+                    "heavy-both": [["heavy-1", "heavy-2", "low-memory"]], "live-game": [["live-game"]]}
+
+
+def slots_table():
+    return LOW_MEMORY_SLOTS if LOW_MEMORY else SLOTS
+
 
 def locks_dir():
     return os.environ.get("GT4_LOCKS") or os.path.join(os.path.expanduser("~"), "locks")
@@ -205,7 +222,7 @@ def try_take(kinds, what):
     held = []
     for kind in kinds:
         got = None
-        for names in SLOTS[kind]:
+        for names in slots_table()[kind]:
             for n in names:
                 reap(n)
             paths = []
@@ -235,7 +252,7 @@ def queue_dir():
 
 def slot_names(kinds):
     """Every slot folder the kinds may take (heavy: heavy-1 and heavy-2)."""
-    return sorted({n for kind in kinds for names in SLOTS[kind] for n in names})
+    return sorted({n for kind in kinds for names in slots_table()[kind] for n in names})
 
 
 def enqueue(kinds, what):
@@ -314,26 +331,25 @@ def ahead_of(ticket):
     return None
 
 
-# The memory floor's ceiling for jobs that take no heavy slot (the coordinator, 2026-11-08: the machine's available
-# memory sits under 7 GB, a kernel leak only the owner's reboot clears). A game build (one at a time: the slot) waits
-# for at most this, whatever --min-gb asks; a job with heavy or heavy-both keeps its own. None after the reboot.
-LIGHT_FLOOR_GB = 5.5
-LIGHT_KINDS = {"game", "live-game"}
-
-
 def floor_for(kinds, min_gb):
-    """The available memory to wait for: min_gb, lowered to LIGHT_FLOOR_GB when every kind is a light one."""
-    if LIGHT_FLOOR_GB is not None and set(kinds) <= LIGHT_KINDS:
-        return min(min_gb, LIGHT_FLOOR_GB)
-    return min_gb
+    """The available memory to wait for: min_gb, capped while LOW_MEMORY (FLOOR_CAPS, live-game counting only alone).
+    Never raised."""
+    if not LOW_MEMORY:
+        return min_gb
+    counted = [k for k in kinds if k != "live-game"] or list(kinds)
+    return min(min_gb, max(FLOOR_CAPS[k] for k in counted))
 
 
 def take(kinds, what, min_gb=8.0, poll=5.0):
     """Wait for this waiter's turn (no older live ticket for any of the same slots), the memory and the slots, then
     take them: the paths held. The ticket goes when the slots are taken, or with this process if it is stopped."""
+    if LOW_MEMORY and "heavy-both" in kinds:
+        # (its 7 GB is above the available memory: its ticket would hold back every heavy job and game build)
+        raise SystemExit("slot: heavy-both is refused while LOW_MEMORY (until the owner's reboot): it needs 7 GB, "
+                         "and its ticket would hold back every heavy job and game build")
     floor = floor_for(kinds, min_gb)
     if floor != min_gb:
-        log_line(f"memory floor {floor:g} GB for {'+'.join(kinds)}, not {min_gb:g} (LIGHT_FLOOR_GB)")
+        log_line(f"memory floor {floor:g} GB for {'+'.join(kinds)}, not {min_gb:g} (LOW_MEMORY)")
         min_gb = floor
     ticket = enqueue(kinds, what)
     said = None
@@ -435,8 +451,10 @@ def run(args):
 def self_test():
     """The stale checks on a temporary lock folder: a live holder kept, a dead one and a reused PID removed, a slot
     without a holder line kept, and a take that heals."""
+    global LOW_MEMORY
     os.environ["GT4_LOCKS"] = tempfile.mkdtemp(prefix="gt4-slot-test-")
     failures = []
+    low_memory, LOW_MEMORY = LOW_MEMORY, False   # (the checks below first as without it; then with it)
 
     def expect(ok, text):
         print(("ok   " if ok else "FAIL ") + text)
@@ -493,15 +511,38 @@ def self_test():
             expect(ahead_of(older) is None, "and that waiter has no one ahead of it")
             for p in (mine, other, older):
                 os.remove(p)
-            expect(floor_for(["game"], 7) == min(7, LIGHT_FLOOR_GB or 7) and floor_for(["heavy"], 7) == 7 and
-                   floor_for(["heavy", "live-game"], 7) == 7 and floor_for(["game"], 4) == 4,
-                   "the light floor lowers only jobs without a heavy slot, and never raises one")
             got = take(["heavy"], "self-test", min_gb=0)
             expect(bool(got) and not os.listdir(queue_dir()), "a take with no one ahead gets a slot; its ticket goes")
+            for p in got:
+                shutil.rmtree(p)
         finally:
             waiter.kill()
             waiter.wait()
+
+        # low memory: the floors capped per kind, one heavy job at a time and never beside a game build
+        expect(floor_for(["heavy"], 7) == 7 and floor_for(["game"], 7) == 7, "without LOW_MEMORY the floors stand")
+        LOW_MEMORY = True
+        expect(floor_for(["game"], 7) == 5.5 and floor_for(["live-game"], 7) == 5.5 and floor_for(["heavy"], 7) == 4.5
+               and floor_for(["heavy", "live-game"], 7) == 4.5 and floor_for(["heavy-both"], 7) == 7,
+               "LOW_MEMORY caps: game and live-game 5.5, heavy 4.5 (live-game beside it too), heavy-both 7")
+        expect(floor_for(["game"], 4) == 4 and floor_for(["heavy"], 3) == 3, "and never raises a lower --min-gb")
+        try:
+            take(["heavy-both"], "self-test", min_gb=0)
+            refused = False
+        except SystemExit:
+            refused = True
+        expect(refused and not os.listdir(queue_dir()),
+               "heavy-both is refused, with no ticket left to block the queue")
+        game = try_take(["game"], "self-test")
+        expect(bool(game) and try_take(["heavy"], "self-test") is None, "a heavy job waits while a game build runs")
+        for p in game:
+            shutil.rmtree(p)
+        heavy = try_take(["heavy"], "self-test")
+        expect(bool(heavy) and sorted(os.path.basename(p) for p in heavy) == ["heavy-1", "low-memory"] and
+               try_take(["heavy"], "self-test") is None and try_take(["game"], "self-test") is None,
+               "one heavy job at a time (heavy-1 only), and no game build beside it")
     finally:
+        LOW_MEMORY = low_memory
         shutil.rmtree(locks_dir(), ignore_errors=True)
     print(f"{len(failures)} failed")
     return 1 if failures else 0
