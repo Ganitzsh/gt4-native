@@ -198,7 +198,7 @@ Four mechanisms, each with a test in PLAN.md:
 
 ## 7. Settings
 
-New keys (owned by lane E's table, options in per-module files after E1):
+New keys (the settings table is lane C's, options in per-module files after E1):
 
 | Key | Values | `original` preset | low / medium / high / ultra |
 |---|---|---|---|
@@ -211,7 +211,8 @@ New keys (owned by lane E's table, options in per-module files after E1):
 | `effects.wet` | `original`, `enhanced` | `original` | medium up `enhanced` |
 | `effects.ray_tracing` | `off`, `reflections`, `all` | `off` | ultra `reflections` where the device has ray query |
 | `render.upscaler` (exists) | adds `fsr3`, `dlss`, `xess` | `bilinear` | as today, plus the new ones where available |
-| `input.*`, `audio.*`, `saves.*`, `ui.*` | lane D and E | PS2 behaviour | per lane |
+| `input.*`, `audio.*`, `saves.*` | lane D | PS2 behaviour | per lane |
+| `ui.*` | lane M (MENU_DESIGN.md section 3.8) | `ui.entry = hotkey`, `ui.pause = gt4` | `integrated`, `native` |
 
 Each option states which renderer uses it; the settings menu greys out the ones the current `render.scene` does
 not use (extends `1b495a6`).
