@@ -1441,19 +1441,22 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
     uint32_t owner = 0;
     uint64_t newest = 0, generation = 0, content = 0;
     const uint32_t rows = (h + ph - 1) / ph, columns = std::min<uint32_t>(perRow, (w + pw - 1) / pw);
-    for (uint32_t py = 0; py < rows; ++py)
-        for (uint32_t px = 0; px < std::max<uint32_t>(columns, 1); ++px)
-            for (uint32_t extra = 0; extra < 2; ++extra) {
-                if (extra && !(t.tbp % 32)) break;
-                const uint32_t page = (t.tbp / 32 + py * perRow + px + extra) & 511;
-                materializePage(page, kForTexture);   // (read from memory by address)
+    const auto eachPage = [&](auto&& f) {
+        for (uint32_t py = 0; py < rows; ++py)
+            for (uint32_t px = 0; px < std::max<uint32_t>(columns, 1); ++px)
+                for (uint32_t extra = 0; extra < 2; ++extra) {
+                    if (extra && !(t.tbp % 32)) break;
+                    f((t.tbp / 32 + py * perRow + px + extra) & 511);
+                }
+    };
+    eachPage([&](uint32_t page) {
                 generation += pageGeneration[page] * (page + 1);
                 content = mix(content, page);
                 if (pages[page].target && pages[page].serial > newest) {
                     newest = pages[page].serial;
                     owner = pages[page].target;
                 }
-            }
+    });
     // The same overrun the other way: an image uploaded at the texture's base page after the newest target
     // write in its extent is what the texture reads, and the declared size runs past it into an older target
     // (the dealers' backdrop: a 640 x 448 T8 picture declared 1024 x 512, sent every frame into the memory the
@@ -1535,6 +1538,9 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
         src.reinterpreted = true;
         ++stats.reinterpreted;
     }
+    // From here the texture is read from memory by address: the set pages it covers go into memory now (P2a: a
+    // target's pixels and its reinterpretations, above, are the GPU's and never needed them).
+    eachPage([&](uint32_t page) { materializePage(page, kForTexture); });
     const bool indexed = t.psm == PSMT8 || t.psm == PSMT4 || t.psm == PSMT8H || t.psm == PSMT4HL || t.psm == PSMT4HH;
     // Indices in memory, palette drawn on the GPU (GT4 writes its colour-graded pixels back this way).
     if (indexed && clutSource.target && samePalette(clutSource.texture, s.c.texture)) {
