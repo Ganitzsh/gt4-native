@@ -75,9 +75,9 @@ Mockups (our own drawings, no game imagery): `docs/modern/menu/mock_*.svg`.
 
 | Place | Where | How we detect it | Status |
 |---|---|---|---|
-| Mode select at game start | a menu project run by sequence 1 | `startProject(name)`; name [U] ("boot" or "arcade", M0 logs it) | matched |
-| GT mode map | project `"gtmode"` (`D_0068CE08`) | `startProject("gtmode")` until it returns; page via `MGame.major_menu_page` [I] | matched; Start's behaviour on the map is script [U] |
-| Pre-race menu | projects `"quick-event"`, `"quick-arcade"`, `"quick-tt"` in `func_0010FE40`'s loop | the quick menu's command 22 `COMMAND_OPTION` runs `func_0010FE40("option")` (GT mode `func_00113B48:217`, arcade `func_00111498:155`, time trial `func_00112620:271`) | matched |
+| Mode select at game start | a page of project `"boot"` (M0) | `startProject("boot")`, then the page (M0 open point 1) | matched |
+| GT mode map | a page of project `"gtmode"` (`D_0068CE08`), with Home and the event maps | `startProject("gtmode")` until it returns, then the page (M0 open point 1) | matched; Start and Select do nothing there (M0) |
+| Pre-race menu | projects `"quick-event"`, `"quick-championship"` (M0), `"quick-arcade"`, `"quick-tt"` in `func_0010FE40`'s loop | the quick menu's command 22 `COMMAND_OPTION` runs `func_0010FE40("option")` (GT mode `func_00113B48:217`, arcade `func_00111498:155`, time trial `func_00112620:271`) | matched |
 | Race pause | `RaceBasic::updatePlayCheckPause` 0038B0E0 -> `pauseStart` 0038B428 -> `RaceBase::setPause` (`+0xCD8 = 1`) | `RaceBase + 0xCD8 != 0`; the pause object at `RaceBasic + 0xE418` | matched; its menu is a strobe movie, `pause.strb`, and `RacePause::callFunction` 003C3260 is 0 % matched |
 
 `RaceBasic::updatePause` acts on the pause object's return code: 3 continue (`pauseEnd` 0038B4B8), 4 exit, 5
@@ -484,7 +484,8 @@ contrast stored as GT4's pause stores them; `ui.pause = gt4` loads `pause.strb` 
 
 **M8: Start on the GT mode map (S).** The map detection and the button from M0. Depends: M5, M0. Acceptance:
 session test: Start on the map opens the hub, other pages of `"gtmode"` are unaffected, the map's state after close
-is unchanged.
+is unchanged. The hub takes Start only on the page detection says is the map (M0 open point 1), never in Home: GT4's
+help line promises Start in Home for car settings, so Start in Home is checked unchanged even where it does nothing.
 
 **M9: Host wiring; the old menu deleted (S-M).** `platform/sdl/main.cpp` (C's order; D13's `pad_devices` already
 moved the pad reads out of it, so the diff is small), `settings_menu.*` and the overlay menu drawing removed;
