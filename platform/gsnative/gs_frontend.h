@@ -321,6 +321,10 @@ public:
         uint64_t splitByReason[6] = {};   // views split, by a.5.7's reason (1..5; a view counts once per reason)
         uint64_t splitSummaryFull = 0;    // views split because their binding summary was full (not a.5.7 rule 5)
         uint64_t viewsPastLimit = 0;      // tagged draws naming a view id past kViews (a bad record: never bound)
+        // A5a: frames with a Light command whose post and HUD markers came after it in order (PostBegin < PostEnd <
+        // HudBegin < HudEnd, by command index), those where they did not, those not checked (a cut inside the frame)
+        uint64_t markersInOrder = 0, markersOutOfOrder = 0, markersNotChecked = 0, markersAbsent = 0;
+        uint64_t lightBeforePost = 0, lightInsidePost = 0;   // of those in order: the Light before PostBegin, or after it
     } stats;
 
     // The state groups of include/gt4/gfx.h: a state record from the game (the shared groups, then the
@@ -547,6 +551,8 @@ private:
     uint16_t lastModelView = 0;   // the last 3D batch's view (the split's draws counted either way)
     std::vector<ViewBinding> viewBindings;
     uint32_t sceneCuts = 0, sceneCutsAsync = 0;
+    std::vector<uint32_t> sceneMarkerCommands;   // the command index each marker of the open frame arrived at
+    bool sceneVsyncInFrame = false;               // a VSync came while the scene frame was open (its markers: unchecked)
     uint64_t paletteHash(const GsMemory::Tex0& t);
     struct PaletteMemo {
         uint64_t loads = ~0ull;   // clutLoads when computed

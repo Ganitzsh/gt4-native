@@ -1127,6 +1127,11 @@ std::string GsHost::summary() const {
         if (!reasons.empty()) out << "; split by reason " << reasons;
         if (s.splitSummaryFull) out << "; split with a full binding summary " << s.splitSummaryFull;
         if (s.viewsPastLimit) out << "; " << s.viewsPastLimit << " tagged draws naming a view past the limit";
+        if (s.markersInOrder || s.markersOutOfOrder || s.markersNotChecked || s.markersAbsent)
+            out << "; frames with a Light: post and HUD markers after it in order " << s.markersInOrder << ", not " << s.markersOutOfOrder
+                << ", without the post or the HUD " << s.markersAbsent << " (the Light before PostBegin " << s.lightBeforePost
+                << ", inside the post " << s.lightInsidePost << "); scene frames not checked for markers (a cut or VSync inside) "
+                << s.markersNotChecked;
         byRole("unbound", s.unboundByRole);
         byRole("cut", s.cutByRole);
     }
