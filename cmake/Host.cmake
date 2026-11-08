@@ -525,15 +525,10 @@ if(BUILD_TESTING)
   endif()
   add_test(NAME light_list COMMAND gt4_light_list_test)
   set_tests_properties(light_list PROPERTIES SKIP_RETURN_CODE 77)
-  # The cluster build (ticket F1), standalone until the render graph: GPU result against the CPU reference.
-  # Its shader is compiled for the test only until a host pass uses it. Needs a Vulkan 1.3 GPU; skipped (77) without.
-  add_custom_command(OUTPUT ${GT4_SHADER_OUT}/spv_lights_cluster.h
-      COMMAND ${GT4_GLSLANG} -V --target-env vulkan1.3 -S comp -I${GT4_SHADER_SOURCE}
-              --vn spv_lights_cluster -o ${GT4_SHADER_OUT}/spv_lights_cluster.h ${GT4_SHADER_SOURCE}/lights_cluster.comp
-      DEPENDS ${GT4_SHADER_SOURCE}/lights_cluster.comp ${GT4_SHADER_SOURCE}/light_list.glsl
-      COMMENT "Compiling shader lights_cluster")
+  # The cluster build (ticket F1): GPU result against the CPU reference, with the host's shader (gt4_shader
+  # lights_cluster_comp, as F2's night lighting runs it). Needs a Vulkan 1.3 GPU; skipped (77) without.
   add_executable(gt4_lights_cluster_test tests/lights_cluster.cpp platform/render/modern/lights_cluster.cpp
-      platform/render/vk.cpp platform/render/pipeline_cache_file.cpp ${GT4_SHADER_OUT}/spv_lights_cluster.h)
+      platform/render/vk.cpp platform/render/pipeline_cache_file.cpp ${GT4_SHADER_OUT}/spv_lights_cluster_comp.h)
   target_include_directories(gt4_lights_cluster_test PRIVATE ${GT4_SHADER_OUT} ${CMAKE_CURRENT_SOURCE_DIR}/include
       platform/render platform/render/modern third_party)
   target_compile_definitions(gt4_lights_cluster_test PRIVATE VK_NO_PROTOTYPES GT4_LIGHTS_CLUSTER_GPU=1)

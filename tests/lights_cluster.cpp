@@ -17,7 +17,7 @@
 #include <string>
 #include <vector>
 
-#include "spv_lights_cluster.h"
+#include "spv_lights_cluster_comp.h"   // the host's build of lights_cluster.comp (gt4_shader in cmake/Host.cmake)
 
 using namespace gt4;
 using namespace gt4::render;
@@ -431,7 +431,7 @@ int main() {
             return failures ? 1 : kSkip;
         }
         LightClusters clusters;
-        clusters.create(g.device, {spv_lights_cluster, sizeof(spv_lights_cluster)});
+        clusters.create(g.device, {spv_lights_cluster_comp, sizeof(spv_lights_cluster_comp)});
         const ClusterProjection projection = testProjection();
         std::mt19937 rng(11);
         struct Set { const char* name; uint32_t count, directional; bool crowded; };
