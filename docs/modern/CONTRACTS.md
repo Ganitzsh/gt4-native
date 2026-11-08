@@ -207,11 +207,12 @@ static_assert(sizeof(Instance) == 120);
 // --- Lights ---------------------------------------------------------------------------------------------
 enum LightKind : uint8_t { kLightPoint = 1, kLightSpot = 2, kLightDirectional = 3 };
 enum LightSource : uint8_t {
-    kSrcCourseGlow = 1,      // 003B88C8's entries2[], sources whose blink is 0 (the course's lamps; A7 step 1)
+    kSrcCourseGlow = 1,      // the course's lamps: the street lamps the host finds in the course meshes (F2b, not
+                             //   a record), and the rare entries2[] sources whose blink is 0 (A7 step 1a)
     kSrcHeadlight = 2, kSrcTailLight = 3, kSrcBrakeLight = 4,
     kSrcCarLightReflection = 5,   // 0x00341A30: not sent as lights (reflections; N3 handles their sprites)
     kSrcSun = 6,
-    kSrcWarning = 7,         // 003B88C8's entries2[], a source with blink > 0 (warning lamps; A7 step 1)
+    kSrcWarning = 7,         // 003B88C8's entries2[], a source with blink > 0 (warning lamps; A7 step 1a)
     kSrcOther = 15,
 };
 struct Light {
@@ -316,7 +317,7 @@ Where each record is sent (tickets in PLAN.md):
 | `Projection` | `game_src/func_0049D328.cpp`, before the `Instance`, when set 1 (as 0049E480 picks it) or the viewport / clamp the batch holds (the runtime's copy of the last qwords 197..199 written by 0049E548) differ from the last `Projection` sent this frame (a 64 + 48-byte compare); also for each view's camera load, before its `ViewBegin` | A2, A3 |
 | `Instance` | `game_src/func_0049D328.cpp`, after 0049E480 / 0049E548, before the item loop; A and B read as 0049E480 picks them (by `s->current`) even when it does not run (R1: it recomposed for 16 % of the Cmds) | A2 |
 | object identity | 00455708 (draft) sets a runtime-global "model context" that A2 reads | A4 |
-| `Light` | step 1: 003B88C8's `entries2[]` (course lamps, warning lamps), sent in 0033EAB8 right after 003B7B70 fills it in method 0x3F0, tagged with the main view's id (a.5 rule 4); step 2: car lamps from `entries[]` (003B8530, `RaceCarModel` virtual 35) or 003B8EA0 (draft, virtual 36), with A6 | A7 |
+| `Light` | step 1a: 003B88C8's `entries2[]` (warning lamps) and `entries[]` (car lamps), sent in 0033EAB8 right after its method 0x3F0, tagged with the main view's id (a.5 rule 4); step 2: headlight spots from the car body (A9). The street lamps are not records: the host finds them in the course meshes (PLAN F2b) | A7 |
 | `Emitter` | 0x003E7A58, 0x003C1430, 0x003C2780 | A8 |
 | `Marker` | `kMarkPost*` at the start and end of render_post_effect (`game_src/func_0033F890.cpp`, virtual 105); `kMarkHud*` at the start and end of RaceBasic::render_panel (`game_src/func_0038B5A0.cpp`, which RaceSolitaire's calls and RaceSplitBattleBase's reaches per player). Both are reached through the race's vtable after `render_world`, so they are inside the kick's frame (a.5.1) | A5 |
 | `Vehicle` | the kick (`send_frame_end`, `runtime/frame.cpp`), in `FrameEnd`'s own `GT4_REC_GFX` block, before `FrameEnd`: one per running car, in entrant order, each padded to whole qwords; fields from the car state D6 found (R14) | A9 (D6 emits, lane A reviews) |
@@ -969,7 +970,7 @@ struct ClusterCell { uint32_t offset, count; };   // into the index list: uint32
 
 | Buffer | Writer | Readers |
 |---|---|---|
-| `LightListHeader` + `GpuLight[]`, per view per slot | `LightGather` pass (F lane): `SceneFrame::lights` of the view, converted to metres and the view's space; plus the sun from the batches' light matrices (B lane, B10) | everyone below |
+| `LightListHeader` + `GpuLight[]`, per view per slot | `LightGather` pass (F lane): `SceneFrame::lights` of the view, converted to metres and the view's space; the course lamps the host finds in the course meshes (F2b, without `kFromGame`); plus the sun from the batches' light matrices (B lane, B10) | everyone below |
 | `ClusterCell[kClusterX * kClusterY * kClusterZ]` + index list | `LightClusters` compute pass (F1), the only writer | deferred lighting, clustered forward, froxel fog, the GS-path night relight |
 
 Published on the blackboard as `struct LightList { rg::Buffer header, lights, cells, indices; }`.

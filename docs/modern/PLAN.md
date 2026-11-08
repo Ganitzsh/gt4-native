@@ -150,32 +150,40 @@ env face's views bound to the 128 x 256 env target; `runsAfterInstance == 0` in 
 
 **A7: Light records (M).** Sources, corrected by lane A from the code (2026-11-08, a scan of the ELF for every
 store to the lists' counts). The light-glow pass 003B88C8 draws from two per-frame lists in its object:
-- **Step 1, course lamps and warning lamps: `entries2[100]`** at `+0x184C` (count at `+0x1848`; 24-byte hits:
-  view-space x, y, z, distance, a visibility flag, the source pointer, which gives the params index). Its only
-  writer is 003B7B70 (matched source, `src/race/unit_003B7470`, so R2 does not block it), reached from
-  `RacePS2Base` virtual 126 (method 0x3F0) -> 00397288 -> 00397AE8 -> 00397BA0. Each source has `params[index]`
-  with a blink value: above 0 it is a warning lamp (`kSrcWarning`, its smooth blink factor 0..1 in `intensity`),
-  otherwise a lamp (`kSrcCourseGlow`). One `Light` per hit: point, range 0, colour = the light's rgb x the
-  pass's rgb / 255, intensity without the view-dependent term (fields as agreed with lane F).
+- **The street lamps are in neither list** (lane A, Route 5 Normal at night, 2026-11-08): `entries2[]` was empty in
+  every frame, and they are not `BillboardSet__render` billboards either (one type, vegetation-like, 56 in the run).
+  Their glows are most likely course geometry. So the street lamps come host-side, from the mesh cache: F2b, not
+  this ticket.
+- **Step 1a, warning lamps and car lamps, now.**
+  - `entries2[100]` at `+0x184C` (count at `+0x1848`; 24-byte hits: view-space x, y, z, distance, a visibility flag,
+    the source pointer, which gives the params index). Its only writer is 003B7B70 (matched source,
+    `src/race/unit_003B7470`), reached from `RacePS2Base` virtual 126 (method 0x3F0) -> 00397288 -> 00397AE8 ->
+    00397BA0. A source whose `params[index]` blink is above 0 is a warning lamp (`kSrcWarning`, its smooth blink
+    factor 0..1 in `intensity`); the rare others are `kSrcCourseGlow`.
+  - `entries[100]` at `+0xA38` (count at `+0xA34`; view-space x, y, z with -z as depth, a `Light*` with width
+    `+0x40`, height `+0x44`, rgb `+0x54`, a flag, dx / dy): the car lamps. Its only writer is 003B8530, called only
+    from `RaceCarModel` virtual 35 (003911D0); 003B8EA0 (virtual 36) draws the same lamps' glows. The entries don't
+    keep the lamp group, and the element's flags say only "on with the lights" (bit 0) and "hide when not Y"
+    (bit 1). So step 1a sends every car lamp as a point `kSrcOther`, with no direction, and F2 decides how far
+    such lights reach. Reading the list runs no new code: whatever fills it is what the game's own glows use.
+  - One `Light` per entry: point, range 0, colour = the light's rgb x the pass's rgb / 255, intensity without the
+    view-dependent term (fields as agreed with lane F).
   - When: 0033EAB8 empties both lists (003B80E8, which also saves the current matrix at `+0x21B0`) after the main
-    `ViewEnd` and the mirror view, then 003B7B70 fills `entries2[]` in method 0x3F0, with this frame's camera
-    (positions through the matrix current at fill time, vf28-31), before the flare read 003B8848 and the glow draws
-    (003B88C8 from 0033F2E8). The `Light`s are sent right after the fill, tagged with the main view's id: a `Light`
-    may follow its view's `ViewEnd` within the frame (CONTRACTS a.5 rule 4). F2 reads them from the frame's
-    `SceneFrame` by view id, wherever the Light command falls.
-  - Checked on a night capture before relying on it: the counts per frame, that the positions are in the main
-    camera's space, and where the Light command falls against the fill.
-- **Step 2, car lamps** (headlights, tail and brake lamps): `entries[100]` at `+0xA38` (count at `+0xA34`; view-space
-  x, y, z with -z as depth, a `Light*` with width `+0x40`, height `+0x44`, rgb `+0x54`, a flag, dx / dy). Its only
-  writer is 003B8530, called only from `RaceCarModel` virtual 35 (003911D0); 003B8EA0, from virtual 36 (00391470),
-  draws the same lamps' glows. The step reads the lamps from `entries[]` (if 003B8530 is not a draft; it is not in
-  the decomp's `src/`, lane A checks) or from 003B8EA0 (a draft: R2's verdict). It also needs A6 / D6 for the car.
+    `ViewEnd` and the mirror view; both are full after its method 0x3F0, with this frame's camera, before the flare
+    read 003B8848 and the glow draws (003B88C8 from 0033F2E8). The `Light`s are sent right after, tagged with the
+    main view's id (CONTRACTS a.5 rule 4). F2 reads them from the frame's `SceneFrame` by view id.
+- **Step 2, headlight spots:** each headlight's direction and cone from the car body (A9's record, D6), so the
+  headlights light the road ahead and not around the car. R2's verdict on 003B8EA0 only if its terms are needed.
   The car lights' reflections (0x00341A30) are not sent as lights: they would light the scene twice, and N3 handles
   their sprites.
-Depends: A3; step 2 also A6, D6, and R2 on 003B8EA0 or 003B8530. Acceptance: `REL`; `ORIG`; on a night capture,
-each glow quad the GS path draws has a `Light` whose position projected through the view's projection and viewport
-lands inside that quad (count of misses = 0); step 1 with the course and warning glows, step 2 with the car
-lamps; `SCENE`: `lightViewUnknown == 0`, `lightsAfterViewEnd` reported.
+Depends: A3; step 2 also A6, A9, D6. Acceptance:
+- step 1a's code lands with the checks it can have now: `REL`; `ORIG`; `PRESETS`; `SCENE`: `lightViewUnknown == 0`,
+  `lightsAfterViewEnd` reported, lights per frame by source, every light in front of the camera and on screen
+  through the main view's projection;
+- right after A5b (its flare bracket around 003B88C8, with N4's marking of the draws onto the picture): on a night
+  capture, each warning-lamp and car-lamp glow quad the GS path draws has a `Light` whose position projected
+  through the view's projection and viewport lands inside that quad (count of misses = 0);
+- step 2: the headlight cones point along the car.
 
 **A8: Emitter records (M).** `RaceSmoke::update` 0x003E7A58, `SparkParticle::Update` 0x003C1430,
 `ParticleManager::Update` 0x003C2780 (drafts). Depends: A3, R2. Acceptance: `REL`; `ORIG`; on a race capture with
@@ -659,16 +667,16 @@ N2a (blending grading and fog parameters) is dropped and N2 is not designed.
   `ORIG` unchanged (the step stays in `original`).
 
 **N3: Lamp bands suppressed (S-M).** The draws R11 identified are skipped in `hybrid` and `modern` between
-`kMarkLampBands*` (A5b), and the lamps light the road through their `Light` records and the clustered lights (F2 in
-`hybrid`, F3 in `modern`). R10 and R11 found two things on the road (`spikes/R10.md`, `spikes/R11.md`; draw
-numbers are those of replay 2514, and the draws are found by their source, as R11 does):
+`kMarkLampBands*` (A5b), and the lamps light the road through the clustered lights (F2 in `hybrid`, F3 in
+`modern`), the street lamps from F2b. R10 and R11 found two things on the road (`spikes/R10.md`, `spikes/R11.md`;
+draw numbers are those of replay 2514, and the draws are found by their source, as R11 does):
 - **the lit-road layer** (draws 305-308): world-fixed and without a lighting chain (measured), so probably the lamps'
   light baked into the course (PCSX2 to confirm). It is skipped exactly when the renderer draws the lamps' own
   light on the road (F2 in `hybrid`, F3 in `modern`), so the road gets the lamps' light once: never twice, and
   never dark. With F2 off (a `hybrid` preset without the night relight), the layer stays. `original` keeps it.
 - **the light-image glow** (draws 325-326: a blurred image of the lights in target 71, from target 37, spread as 60
   sprites weighted by the scene's alpha): R11's first band candidate, skipped with the bands if R11 confirms it.
-Depends: R11, A5b, A7, B4, F2. Acceptance `R5` on the lamps capture: band ratio at most 1.3 in every frame (the
+Depends: R11, A5b, A7, B4, F2, F2b. Acceptance `R5` on the lamps capture: band ratio at most 1.3 in every frame (the
 GS path's value for comparison); suppression counter > 0 on the frames where the GS path draws them; `ORIG`
 unchanged.
 
@@ -707,10 +715,37 @@ skips the lit-road layer (draws 305-308), so the lamps' light reaches the road o
 other lanes' files change, each reviewed by its lane: `gsn_light.comp` (lane B's scene-stage shader) takes the
 added light; `sceneRecordsWanted` (`settings_scene.cpp`, lane C) is also true with `lighting.night = enhanced`,
 since the game sends no lights without records; and `cmake/Host.cmake` (lane C) links the light sources and
-compiles `lights_cluster.comp` for the host. Depends: A7, F1, B4.
+compiles `lights_cluster.comp` for the host. Depends: A7 step 1a, F1, B4; the street lamps F2b.
 Acceptance: `ORIG`; `VAL`; `PERF(<= 1 ms)` at 1440 x 1080; on a night capture lamps light the road and cars near
 them (review against PCSX2 stills: the scene otherwise unchanged); on the lamps capture with the car moving, N1
 shows no new step above 4 % (N2's bar) from the added light.
+
+**F2b: Course lamps from the mesh cache (M, lane F; lane B reviews the mesh-cache use).** The street lamps are not in
+any game list (A7). Their glows are most likely course geometry: lamp-head quads with a glow texture or an additive
+blend, drawn through the course's Cmds. The host finds them once per course mesh and synthesises their lights. No
+new game hook is needed, it is done once per mesh, and it works for other emissive props too.
+- **Step 0 (half a day):** on a Route 5 night capture, find how the lamp-head glows are drawn: the course meshes'
+  draw states (texture, blend; B6's `MaterialKey`) of the draws on the lamp heads. Also R11's open point, target
+  37's producer: if the light image is drawn from the lamp heads themselves, the same geometry names them.
+  If the lamp heads aren't separate geometry (the glow baked into the post's texture, or only in the lit-road
+  layer), step 0 reports back to the architect before any extraction is written.
+- **Extraction:** for each course mesh (B5) with glow geometry, the centre and size of each lamp-head quad cluster,
+  cached with the mesh. Course instances draw with `objectToView` equal to the view's `worldToView` (A3's camera
+  check, real since A11a), so mesh positions are world positions.
+- **Lights:** each frame, for the course instances drawn in a view, their lamps go into that view's light list as
+  `kSrcCourseGlow`, synthesised by the host (`GpuLight` without `kFromGame`). Colour comes from the glow texture's
+  mean times the vertex colour. Range and intensity are set per class in `light_sources.cpp`, tuned against
+  references under `lighting.night`. Only drawn sections get lights, as GT4 culls them.
+- Depends: B5, B6, A2, A11a, F0, F1. Acceptance:
+  - `CTEST`: extraction on a synthetic mesh with glow quads gives the expected centres;
+  - on the Route 5 night capture, every lamp-head glow drawn has a light whose projection lands inside its quad
+    (misses = 0 over the run) and no light sits where no glow is drawn. "Drawn" means the glow's draw was
+    submitted that frame, not that pixels survived: a lamp head behind a building is still lit, correctly. The
+    lamps' count per course section is reported;
+  - the gather's dropped count (`GatherStats::dropped`, lights over the list's cap) is 0 on the capture: a dropped
+    lamp would show as a dark patch that the miss check, which only asks that the light exists, can't see;
+  - the per-frame cost reported (0 extraction after a mesh's first sight);
+  - `ORIG` unchanged; with scene records off nothing runs.
 
 **F3: Clustered lighting in the deferred and forward passes (M).** Depends: F1, B10, B22. Acceptance: `VAL`;
 `PERF`; the same lights as F2 in `modern`, with G-buffer normals.
@@ -872,7 +907,7 @@ No two day-one tickets edit the same file except `main.cpp` / `renderer.cpp` (B2
 |---|---|---|
 | 0. Foundations (weeks 1-3) | A0, A1, A10, A2, A3; B2, B1, B5, B3; C1-C4, C10; E1-E4; F0, F1, N0, N1; spikes R1-R7, R9-R12 | `SCENE` gates on race and event captures; B3 `PRESETS` |
 | 1. Parity (weeks 3-8) | B4, B6, B7, A4, A5a, A6, A11a, P1, P2a (after B4, before B8's imports), P3a, P4, P5; D-track (D12, D13 first; P6 after D5) | `PARITY` on REF |
-| 2. Hybrid ships (weeks 8-10) | A7 step 1, B8, B9, F2, N3, N4 (hybrid parts) | `render.scene = hybrid` in presets low-ultra; `R5` gates in hybrid |
+| 2. Hybrid ships (weeks 8-10) | A7 step 1a, B8, B9, F2, F2b, N3, N4 (hybrid parts) | `render.scene = hybrid` in presets low-ultra; `R5` gates in hybrid |
 | 3. Modern lighting (weeks 10-18) | B10-B15, F3, F4, A7 step 2, A8 (N2b/c and A11b only if N2 reopens) | `R5` gates in modern; owner review |
 | 4. Resolution and effects | B16-B22, F5, E6-E9, P2b, P2c, P3b | per ticket |
 | 5. Optional | B23, C6 on devices, research track | per ticket |
