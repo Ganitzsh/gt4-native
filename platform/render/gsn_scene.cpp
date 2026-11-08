@@ -922,7 +922,7 @@ struct GsnScene::Impl {
     void executeLight(VkCommandBuffer command, uint32_t slot, size_t at);   // the scene stage at Light command `at`
     // The scene stage's steps, in a modern renderer's order (executeLight runs them in turn on the members; the render
     // graph builds a pass or more for each that runs, on its transients). Each is followed by its profile mark.
-    enum Step : int { kMotionVectors, kLighting, kReflections, kFog, kTemporalResolve, kMotionBlur, kFocus, kSteps };
+    enum Step : int { kStepMotionVectors, kStepLighting, kStepReflections, kStepFog, kStepTemporalResolve, kStepMotionBlur, kStepFocus, kSteps };
     static constexpr const char* kStepMarks[kSteps] = {"motion vectors", "lighting", "reflections", "fog", "temporal resolve",
                                                        "motion blur", "depth of field"};
     enum Part : int { kPartWhole = -1, kPartFirst = 0, kPartMain = 1, kPartCopy = 2 };
@@ -930,13 +930,13 @@ struct GsnScene::Impl {
     // motion blur also need the motion vectors drawn (ex.moving: the Light has a scene).
     bool stepRuns(int step, const gsn::FrameList::Lighting& l) const {
         switch (step) {
-            case kMotionVectors: return temporal || effects.shutter > 0.0f;
-            case kLighting: return lighting.occlusion > 0.0f || lighting.grade > 0.0f;
-            case kReflections: return effects.reflections > 0.0f;
-            case kFog: return effects.fogDensity > 0.0f && l.fogged;   // (haze does nothing for a Light without fog)
-            case kTemporalResolve: return temporal;
-            case kMotionBlur: return effects.shutter > 0.0f;
-            case kFocus: return effects.aperture > 0.0f;
+            case kStepMotionVectors: return temporal || effects.shutter > 0.0f;
+            case kStepLighting: return lighting.occlusion > 0.0f || lighting.grade > 0.0f;
+            case kStepReflections: return effects.reflections > 0.0f;
+            case kStepFog: return effects.fogDensity > 0.0f && l.fogged;   // (haze does nothing for a Light without fog)
+            case kStepTemporalResolve: return temporal;
+            case kStepMotionBlur: return effects.shutter > 0.0f;
+            case kStepFocus: return effects.aperture > 0.0f;
             default: return false;
         }
     }
@@ -2303,13 +2303,13 @@ bool GsnScene::Impl::beginLight(VkCommandBuffer command, size_t at) {
 
 void GsnScene::Impl::runStep(int step, const gsn::FrameList::Lighting& l, size_t at, int part) {
     switch (step) {
-        case kMotionVectors: ex.moving = ex.drawVelocity(l, at); break;
-        case kLighting: ex.relight(l, part); break;
-        case kReflections: ex.reflect(l, part); break;
-        case kFog: ex.haze(l, part); break;
-        case kTemporalResolve: if (ex.moving) ex.antialias(l); break;
-        case kMotionBlur: if (ex.moving) ex.blur(l, part); break;
-        case kFocus: ex.focus(l, part); break;
+        case kStepMotionVectors: ex.moving = ex.drawVelocity(l, at); break;
+        case kStepLighting: ex.relight(l, part); break;
+        case kStepReflections: ex.reflect(l, part); break;
+        case kStepFog: ex.haze(l, part); break;
+        case kStepTemporalResolve: if (ex.moving) ex.antialias(l); break;
+        case kStepMotionBlur: if (ex.moving) ex.blur(l, part); break;
+        case kStepFocus: ex.focus(l, part); break;
         default: break;
     }
 }
@@ -3266,16 +3266,16 @@ bool GsnScene::buildPrepass(rg::Graph& graph, const SceneView& view) {
         // The work images grown as the members would be at this Light (Impl::ensureWork's rule): the motion vectors over
         // the colour target, the reflections at half the area, the rest over the area. The transients are made at these.
         const VkExtent2D area = plan.area, half{(area.width + 1) / 2, (area.height + 1) / 2};
-        if (plan.runs[Impl::kMotionVectors]) Impl::grow(s.velocityExtent, plan.colour);
-        if (plan.runs[Impl::kLighting]) {
+        if (plan.runs[Impl::kStepMotionVectors]) Impl::grow(s.velocityExtent, plan.colour);
+        if (plan.runs[Impl::kStepLighting]) {
             Impl::grow(s.aoExtent, area);
             Impl::grow(s.litExtent, area);
         }
-        if (plan.runs[Impl::kReflections]) {
+        if (plan.runs[Impl::kStepReflections]) {
             Impl::grow(s.ssrExtent, half);
             Impl::grow(s.litExtent, area);
         }
-        for (int step : {Impl::kFog, Impl::kMotionBlur, Impl::kFocus})
+        for (int step : {Impl::kStepFog, Impl::kStepMotionBlur, Impl::kStepFocus})
             if (plan.runs[step]) Impl::grow(s.litExtent, area);
         auto desc = [](VkFormat format, VkExtent2D extent, const char* name) {
             rg::TextureDesc d;
@@ -3303,27 +3303,27 @@ bool GsnScene::buildPrepass(rg::Graph& graph, const SceneView& view) {
                 continue;
             }
             switch (step) {
-                case Impl::kMotionVectors: passes.push_back({"scene: motion vectors", step, Impl::kPartWhole}); break;
-                case Impl::kLighting:
+                case Impl::kStepMotionVectors: passes.push_back({"scene: motion vectors", step, Impl::kPartWhole}); break;
+                case Impl::kStepLighting:
                     passes.push_back({"scene: lighting (occlusion)", step, Impl::kPartFirst});
                     passes.push_back({"scene: lighting", step, Impl::kPartMain});
                     passes.push_back({"scene: lighting (copy back)", step, Impl::kPartCopy});
                     break;
-                case Impl::kReflections:
+                case Impl::kStepReflections:
                     passes.push_back({"scene: reflections (trace)", step, Impl::kPartFirst});
                     passes.push_back({"scene: reflections", step, Impl::kPartMain});
                     passes.push_back({"scene: reflections (copy back)", step, Impl::kPartCopy});
                     break;
-                case Impl::kFog:
+                case Impl::kStepFog:
                     passes.push_back({"scene: fog", step, Impl::kPartMain});
                     passes.push_back({"scene: fog (copy back)", step, Impl::kPartCopy});
                     break;
-                case Impl::kTemporalResolve: passes.push_back({"scene: temporal resolve", step, Impl::kPartWhole}); break;
-                case Impl::kMotionBlur:
+                case Impl::kStepTemporalResolve: passes.push_back({"scene: temporal resolve", step, Impl::kPartWhole}); break;
+                case Impl::kStepMotionBlur:
                     passes.push_back({"scene: motion blur", step, Impl::kPartMain});
                     passes.push_back({"scene: motion blur (copy back)", step, Impl::kPartCopy});
                     break;
-                case Impl::kFocus:
+                case Impl::kStepFocus:
                     passes.push_back({"scene: focus", step, Impl::kPartMain});
                     passes.push_back({"scene: focus (copy back)", step, Impl::kPartCopy});
                     break;
@@ -3349,25 +3349,25 @@ bool GsnScene::buildPrepass(rg::Graph& graph, const SceneView& view) {
                         return;
                     }
                     switch (sp.step) {
-                        case Impl::kMotionVectors:
+                        case Impl::kStepMotionVectors:
                             used->velocity = velocity = b.use(b.create(velocityDesc), rg::Use::ColorWrite, vk::kColorOut);   // (cleared)
                             return;
-                        case Impl::kTemporalResolve: used->velocity = b.use(velocity, rg::Use::Sampled, vk::kCompute); return;
-                        case Impl::kLighting:
+                        case Impl::kStepTemporalResolve: used->velocity = b.use(velocity, rg::Use::Sampled, vk::kCompute); return;
+                        case Impl::kStepLighting:
                             if (sp.part == Impl::kPartFirst) {
                                 used->ao = ao = b.use(b.create(aoDesc), rg::Use::StorageWrite, vk::kCompute);
                                 return;
                             }
                             used->ao = b.use(ao, rg::Use::Sampled, vk::kCompute);
                             break;
-                        case Impl::kReflections:
+                        case Impl::kStepReflections:
                             if (sp.part == Impl::kPartFirst) {
                                 used->ssr = ssr = b.use(b.create(ssrDesc), rg::Use::StorageWrite, vk::kCompute);
                                 return;
                             }
                             used->ssr = b.use(ssr, rg::Use::Sampled, vk::kCompute);
                             break;
-                        case Impl::kMotionBlur: used->velocity = b.use(velocity, rg::Use::Sampled, vk::kCompute); break;
+                        case Impl::kStepMotionBlur: used->velocity = b.use(velocity, rg::Use::Sampled, vk::kCompute); break;
                         default: break;   // (fog, focus: the scene and its Z only)
                     }
                     used->lit = lit = b.use(b.create(litDesc), rg::Use::StorageWrite, vk::kCompute);
