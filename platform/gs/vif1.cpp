@@ -30,7 +30,6 @@ void Vif1::reset() {
     base = ofst = tops = itops = 0;
     dbf = false;
     mark = 0;
-    path3Masked = false;
     pending.clear();
     pos = 0;
     stats = {};
@@ -49,13 +48,14 @@ bool Vif1::gt4Program() {
     return programIsGt4;
 }
 
+// A model packet's words (batchModel; the byte count rounded down to whole words), decoded command by command.
 void Vif1::feed(const uint8_t* bytes, size_t size) {
     const size_t words = size / 4;
     const size_t old = pending.size();
     pending.resize(old + words);
     std::memcpy(pending.data() + old, bytes, words * 4);
     while (pos < pending.size() && step()) {}
-    // Drop what was consumed (keep an incomplete command for the next call).
+    // Drop what was consumed (keep an incomplete command: batchModel reports it).
     if (pos) {
         pending.erase(pending.begin(), pending.begin() + static_cast<std::ptrdiff_t>(pos));
         pos = 0;
@@ -77,7 +77,6 @@ bool Vif1::step() {
     auto need = [&](size_t words) { return available >= 1 + words; };
     size_t consumed = 1;
     ++stats.codes;
-    if (!inModel) ++stats.streamCodes[cmd];
     if (cmd >= 0x60) {   // UNPACK
         const uint32_t words = unpackWords(code, cl, wl);
         if (!need(words)) { --stats.codes; return false; }
@@ -92,14 +91,6 @@ bool Vif1::step() {
         case 0x03: base = imm & 0x3FF; break;                                // BASE
         case 0x04: itops = imm & 0x3FF; break;                               // ITOP
         case 0x05: mode = imm & 3; break;                                    // STMOD
-        case 0x06: {                                                         // MSKPATH3
-            cacheable = false;
-            const bool masked = (imm >> 15) & 1;
-            const bool changed = masked != path3Masked;
-            path3Masked = masked;
-            if (changed && onPath3Mask) onPath3Mask(masked);
-            break;
-        }
         case 0x07: mark = imm; break;                                        // MARK
         case 0x10: case 0x11: case 0x13: break;                              // FLUSHE FLUSH FLUSHA
         case 0x14: case 0x15: cacheable = false; start(imm); break;          // MSCAL MSCALF
@@ -114,44 +105,16 @@ bool Vif1::step() {
             std::memcpy(cmd == 0x30 ? row : col, next, 16);
             consumed += 4;
             break;
-        case 0x4A: {                                                         // MPG
-            cacheable = false;
-            uint32_t num = (code >> 16) & 0xFF;
-            if (!num) num = 256;
-            if (!need(num * 2)) { --stats.codes; return false; }
-            for (uint32_t k = 0; k < num; ++k)
-                std::memcpy(program.data() + ((imm + k) & 0x7FF) * 8, next + 2 * k, 8);
-#if GT4_VU1_INTERPRETER
-            if (observer) observer->mpg(imm, next, num);
-#endif
-            programKnown = false;
-            stats.mpgInstructions += num;
-            consumed += num * 2;
-            break;
-        }
-        case 0x50: case 0x51: {                                              // DIRECT DIRECTHL
-            cacheable = false;
-            const uint32_t qwc = imm ? imm : 65536;
-            if (!need(size_t(qwc) * 4)) { --stats.codes; return false; }
-            if (gifSink) gifSink->gif(2, reinterpret_cast<const uint8_t*>(next), size_t(qwc) * 16);
-            stats.directQwords += qwc;
-            consumed += size_t(qwc) * 4;
-            break;
-        }
-        case 0x08: {                                                         // native records (include/gt4/gfx.h)
-            cacheable = false;
-            const uint32_t qwc = imm;
-            if (!need(size_t(qwc) * 4)) { --stats.codes; return false; }
-            if (onRecords) onRecords(reinterpret_cast<const uint8_t*>(next), size_t(qwc) * 16);
-            stats.recordQwords += qwc;
-            consumed += size_t(qwc) * 4;
-            break;
-        }
         default: {
             ++stats.unknownCodes;
             lastWarning = "unknown VIF1 code " + std::to_string(cmd);
             static int logged = 0;
             if (logged++ < 6) std::fprintf(stderr, "vif1: unknown code %08X (%s, %zu words left)\n", code, inModel ? "model packet" : "stream", available);
+            // (MPG, DIRECT and the like are no longer decoded: their data read as codes would scatter UNPACKs into the
+            // batch buffers. The rest of the packet is dropped, and the packet never memoized: a bad one costs its own
+            // batch at worst, said by the stream's line. Lane B's review of P1)
+            cacheable = false;
+            consumed = available;
             break;
         }
         }

@@ -23,12 +23,8 @@ struct GraphicsStream::Reference {
 #endif
 
 GraphicsStream::GraphicsStream(GsTarget& target) : gs(target) {
-    sink.owner = this;
     rendererSink.owner = this;
-    vif1.setGifSink(&sink);
-    vif1.onPath3Mask = [this](bool masked) { if (!masked) releasePath3(); };
     vif1.onBatch = [this](const Batch3d& batch) { runBatch(batch); };
-    vif1.onRecords = [this](const uint8_t* data, size_t bytes) { records(data, bytes); };
 #if GT4_VU1_INTERPRETER
     if (Vu1Reference::wanted()) reference = std::make_unique<Reference>(vif1);
 #endif
@@ -46,23 +42,6 @@ GraphicsStream::GraphicsStream(GsTarget& target) : gs(target) {
 }
 
 GraphicsStream::~GraphicsStream() = default;
-
-void GraphicsStream::logDirect(const uint8_t* data, size_t bytes) {
-    static long left = std::getenv("GT4_DIRECT_LOG") ? std::strtol(std::getenv("GT4_DIRECT_LOG"), nullptr, 10) : 0;
-    if (left <= 0 || bytes < 16) return;
-    --left;
-    uint64_t tag[2], first[2] = {};
-    std::memcpy(tag, data, 16);
-    if (bytes >= 32) std::memcpy(first, data + 16, 16);
-    std::printf("[direct] vblank %u: %zu bytes, tag %016llX regs %016llX, then %016llX %016llX\n", lastVblank, bytes,
-                static_cast<unsigned long long>(tag[0]), static_cast<unsigned long long>(tag[1]),
-                static_cast<unsigned long long>(first[0]), static_cast<unsigned long long>(first[1]));
-    for (size_t q = 2; q < std::min<size_t>(bytes / 16, 12); ++q) {
-        uint64_t w[2];
-        std::memcpy(w, data + q * 16, 16);
-        std::printf("[direct]   %016llX %016llX\n", static_cast<unsigned long long>(w[0]), static_cast<unsigned long long>(w[1]));
-    }
-}
 
 // Native records (include/gt4/gfx.h): headers and payloads, each padded to 16 bytes.
 void GraphicsStream::records(const uint8_t* data, size_t bytes) {
@@ -504,7 +483,7 @@ std::vector<uint8_t> GraphicsStream::saveState(const uint8_t* vram) const {
     w.bytes(&renderers.constants, sizeof renderers.constants);
     w.u32(vif1.continueAt);
     for (uint32_t v : {vif1.cl, vif1.wl, vif1.mode, vif1.mask, vif1.base, vif1.ofst, vif1.tops, vif1.itops, vif1.mark,
-                       static_cast<uint32_t>(vif1.dbf), static_cast<uint32_t>(vif1.path3Masked)})
+                       static_cast<uint32_t>(vif1.dbf), 0u /* MSKPATH3's place (the stream path is gone: P1) */})
         w.u32(v);
     w.bytes(vif1.row, sizeof vif1.row);
     w.bytes(vif1.col, sizeof vif1.col);
@@ -574,7 +553,7 @@ void GraphicsStream::restoreState(const uint8_t* payload, size_t size) {
 #endif
     }
     vif1.dbf = r.u32() != 0;
-    vif1.path3Masked = r.u32() != 0;
+    (void)r.u32();   // MSKPATH3's place (the stream path is gone: P1)
     r.bytes(vif1.row, sizeof vif1.row);
     r.bytes(vif1.col, sizeof vif1.col);
     // the display: a record (version 4), or the privileged registers (PMODE .. BGCOLOR by offset / 16, and IMR)
@@ -644,39 +623,22 @@ void GraphicsStream::applyNative(const gfx::StateRecord& r) {
     gs.state(r);
 }
 
-void GraphicsStream::releasePath3() {
-    if (heldPath3.empty()) return;
-    std::vector<uint8_t> data;
-    data.swap(heldPath3);
-    sendGif(3, data.data(), data.size());
-}
-
 void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload) {
     ++counters.records;
     const uint32_t size = header.size;
     switch (header.type) {
-    case GT4_REC_GIF: {
-        if (size < 4) break;
-        uint32_t path = 0;
-        std::memcpy(&path, payload, 4);
-        const size_t bytes = (size - 4) & ~size_t(15);
-        if (path < 1 || path > 3) path = 3;
-        ++counters.gifPackets[path];
-        counters.gifBytes += bytes;
-        if (path == 3 && vif1.path3Masked) {
-            heldPath3.insert(heldPath3.end(), payload + 4, payload + 4 + bytes);
-            ++counters.path3Held;
-            break;
+    case GT4_REC_GIF:
+    case GT4_REC_VIF1:
+    case GT4_REC_VIF0:
+    case GT4_REC_GS_PRIV_RETIRED:
+        // The record kinds of the game before its records went native (PLAN.md P1): the stream path that drew them is
+        // gone. A capture holding them is of that old format: nothing of it is drawn (gs_host stops its replay).
+        if (!counters.retiredRecords++) {
+            counters.retiredKind = header.type;
+            std::fprintf(stderr, "Replay: this capture holds GIF / VIF records (kind %u), a format the host no longer reads "
+                                 "(PLAN.md P1): record it again\n", header.type);
         }
-        sendGif(path, payload + 4, bytes);
         break;
-    }
-    case GT4_REC_VIF1: {
-        GT4_CPU_SCOPE("GS: VIF1 stream");
-        counters.vif1Bytes += size;
-        vif1.feed(payload, size);
-        break;
-    }
     case GT4_REC_GFX: {
         GT4_CPU_SCOPE("GS: native records");
         records(payload, size);
@@ -714,9 +676,6 @@ void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload)
         recordData.push_back(std::move(d));
         break;
     }
-    case GT4_REC_VIF0:
-        ++counters.vif0Records;   // VU0 micro mode: not used by the renderer (logged in the statistics)
-        break;
     case GT4_REC_DISPLAY: {
         if (size < sizeof(gfx::DisplayRecord)) break;
         std::memcpy(&displayState, payload, sizeof displayState);
@@ -741,10 +700,6 @@ void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload)
             const uint64_t frames = sceneDecoder_.totals().frames - sceneDecoder_.totals().framesUnclosed;   // (ended ones only)
             if (frames > sceneFramesAtVsync_ + 1) ++sceneListsWithFrames_;     // two kicks' frames in one FrameList
             sceneFramesAtVsync_ = frames;
-        }
-        if (!heldPath3.empty()) {   // still masked at the end of the frame: do not lose the data
-            ++counters.path3ForcedAtVsync;
-            releasePath3();
         }
         if (frameIndex == dumpFrame && dumpAtEnd) dumpVram("end");
         renderers.endFrame();
@@ -813,27 +768,19 @@ void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload)
 
 std::string GraphicsStream::describe() const {
     std::ostringstream out;
-    if (std::getenv("GT4_VIF_CODES")) {   // (debugging) the VIF codes game code still wrote, by command
-        out << "VIF codes in the stream:";
-        for (int c = 0; c < 128; ++c)
-            if (vif1.stats.streamCodes[c]) out << " " << std::hex << c << std::dec << ":" << vif1.stats.streamCodes[c];
-        out << "; ";
-    }
     const auto& v = vif1.stats;
     const auto& r = renderers.stats;
-    out << counters.records << " records, " << counters.vsyncs << " vsyncs, GIF packets P1/P2/P3 "
-        << counters.gifPackets[1] << "/" << counters.gifPackets[2] << "/" << counters.gifPackets[3] << " ("
-        << (counters.gifBytes + 1023) / 1024 << " KiB PATH3), VIF1 " << counters.vif1Bytes / 1024 << " KiB: " << v.unpacks
+    if (counters.retiredRecords)
+        out << counters.retiredRecords << " records of a retired kind (the first: " << counters.retiredKind << "), not drawn; ";
+    out << counters.records << " records, " << counters.vsyncs << " vsyncs, renderer packets " << counters.rendererPackets << ": " << v.unpacks
         << " unpacks, " << v.microprograms << " 3D batches (" << r.batches << " drawn, " << counters.primitiveRuns << " primitive runs, "
         << counters.primitiveVertices << " vertices, " << r.clipped << " clipped triangles, " << r.skipped + counters.unknownPrograms
         << " without a renderer, " << r.unexpectedTags << " unexpected tags, " << r.countMismatch << " count mismatches, "
         << r.oversized << " oversized, " << v.outsideBatch << " qwords outside the batch buffers; " << r.setups << " objects, "
-        << r.matched << " seen the frame before), " << v.directQwords
-        << " DIRECT qwords, " << v.mpgInstructions << " MPG instructions, " << v.unknownCodes << " unknown codes; "
+        << r.matched << " seen the frame before), " << v.unknownCodes << " unknown codes; "
         << counters.gfxRecords << " native records (" << counters.uploads << " uploads, " << counters.uploadsWithoutData
          << " without data, " << counters.draws << " draws, " << counters.sceneRecords << " scene, " << counters.badRecords << " bad); " << counters.displays << " displays, " << counters.reads
-        << " GS reads, " << counters.path3Held << " PATH3 records held by MSKPATH3 (" << counters.path3ForcedAtVsync
-        << " released at VSYNC); model packets: " << vif1.modelStats.decoded << " decoded, " << vif1.modelStats.replayed << " replayed, "
+        << " GS reads; model packets: " << vif1.modelStats.decoded << " decoded, " << vif1.modelStats.replayed << " replayed, "
         << vif1.modelStats.uncacheable << " not kept; 3D batches on the GPU: " << counters.modelBatches;
     if (sceneDecoder_.seen()) {   // the scene records' counters (CONTRACTS.md a.7), totals of the finished frames
         const scene::SceneCounters& s = sceneDecoder_.totals();

@@ -96,14 +96,16 @@ public:
 
     // Statistics for the log.
     struct Stats {
-        uint64_t records = 0, gifPackets[4] = {}, gifBytes = 0, vif1Bytes = 0, vif0Records = 0, displays = 0;
+        uint64_t records = 0, rendererPackets = 0, displays = 0;   // rendererPackets: the game's packets the 3D renderers pass on
         uint64_t vsyncs = 0, reads = 0, logs = 0, audio = 0, unknown = 0;
         uint64_t ui = 0;   // the settings pages' records (GT4_REC_UI, GT4_REC_SETTINGS_SET)
         uint64_t primitiveRuns = 0, primitiveVertices = 0;   // from the 3D renderers
         uint64_t texSets = 0;   // native texture set records (docs/NATIVE_V2.md)
         uint64_t modelBatches = 0;   // 3D batches drawn on the GPU (docs/NATIVE_V2.md, step 2)
         uint64_t unknownPrograms = 0;   // batches started in a program image that is not GT4's (nothing drawn)
-        uint64_t path3Held = 0, path3ForcedAtVsync = 0;   // PATH3 records held by MSKPATH3
+        // records of a kind retired by PLAN.md P1 (GIF, VIF1, VIF0, the old GS_PRIV): an old capture, refused
+        uint64_t retiredRecords = 0;
+        uint32_t retiredKind = 0;
         uint64_t gfxRecords = 0, badRecords = 0;   // native records in the VIF1 stream (include/gt4/gfx.h)
         uint64_t sceneRecords = 0;   // of them gfx::kScene (0 while the game's kOptionSceneRecords is off)
         uint64_t uploads = 0, uploadsWithoutData = 0, draws = 0;
@@ -118,6 +120,9 @@ public:
     uint64_t sceneListsWithFrames() const { return sceneListsWithFrames_; }
     void finishScene() { sceneDecoder_.finish(); }   // the stream ended (before the summary): framesTruncated
     const Vif1::Stats& vifStats() const { return vif1.stats; }
+    // A capture of the old format (GIF, VIF1 or VIF0 records, the game's before its records went native; PLAN.md P1):
+    // nothing of it is drawn, and the replay stops with a message (gs_host).
+    bool retired() const { return counters.retiredRecords != 0; }
     const Renderers3d::Stats& rendererStats() const { return renderers.stats; }
     std::string describe() const;
     Vif1& vif() { return vif1; }
@@ -131,20 +136,11 @@ public:
     void restoreState(const uint8_t* payload, size_t size);
 
 private:
-    // PATH2 (DIRECT) packets go to the GS through this, which counts them.
-    struct CountingSink final : GifSink {
-        GraphicsStream* owner = nullptr;
-        void gif(uint32_t path, const uint8_t* data, size_t bytes) override {
-            ++owner->counters.gifPackets[path & 3];
-            owner->logDirect(data, bytes);
-            owner->sendGif(path, data, bytes);
-        }
-    };
     // The 3D renderers' output: the game's packets they pass on (as PATH1, VU1's path) and primitives.
     struct RendererSink final : PrimitiveSink {
         GraphicsStream* owner = nullptr;
         void packet(const uint8_t* gif, size_t bytes) override {
-            ++owner->counters.gifPackets[1];
+            ++owner->counters.rendererPackets;
             owner->sendGif(1, gif, bytes);
         }
         void primitives(const GsPrimitives& p) override { owner->sendPrimitives(p); }
@@ -161,9 +157,6 @@ private:
         }
     };
     void runBatch(const Batch3d& batch);
-    // GT4_DIRECT_LOG=N (debugging): the first N GIF packets that still come through VIF1 DIRECT, with the VBlank
-    // and the packet's first tag and registers (what game code still writes as GS packets).
-    void logDirect(const uint8_t* data, size_t bytes);
     uint32_t lastVblank = 0;
     void records(const uint8_t* data, size_t bytes);
     // The native drawing state, as state records and GIF packets set it (for saveState).
@@ -252,7 +245,6 @@ private:
     bool dumpAtEnd = false;
     void dumpVram(const char* tag);
     GsTarget& gs;
-    CountingSink sink;
     RendererSink rendererSink;
     Vif1 vif1;
     Renderers3d renderers;
@@ -272,10 +264,6 @@ private:
     // received more than one frame's end (two kicks in one); the decoder's frame total at the last VSync
     uint64_t sceneVsyncsInFrame_ = 0, sceneListsWithFrames_ = 0, sceneFramesAtVsync_ = 0;
     std::vector<uint8_t> scratch;
-    // PATH3 data that arrived while VIF1 had PATH3 masked (MSKPATH3): sent when it is unmasked, as the
-    // GIF arbiter would, or at the next VSYNC if the mask is never lifted.
-    std::vector<uint8_t> heldPath3;
-    void releasePath3();
     // The GS registers last written, for saveState: general registers by address (as the GIF packets set
     // them); the display last set.
     static constexpr uint32_t kGsRegs = 0x64;

@@ -251,7 +251,7 @@ void testVifUnpack() {
     s.add(STCOL()).add(col, 16).add(STMASK()).add(0u | (1u << 2) | (2u << 4) | (3u << 6));   // x data, y row, z col, w protect
     std::memset(v.buffers[0].words[6], 0xEE, 16);
     s.add(UNPACK(3, 0, 1, 6, true)).add(v4b, 16);
-    v.feed(s.bytes(), s.size());
+    v.batchModel(s.bytes(), s.size(), v.mask);
     auto word = [&](uint32_t qw, uint32_t c) { return bufferWord(v, 0, qw, c); };
     expect(word(0, 0) == 1 && word(0, 3) == 4, "UNPACK V4-32");
     expect(word(1, 0) == 5 && word(1, 2) == 7, "UNPACK V3-32");
@@ -268,7 +268,7 @@ void testVifUnpack() {
     const uint32_t two[8] = {1, 1, 1, 1, 2, 2, 2, 2};
     k.add(STCYCL(2, 1)).add(UNPACK(3, 0, 2, 0)).add(two, 32);
     k.add(STCYCL(1, 2)).add(UNPACK(3, 0, 4, 10)).add(two, 32);
-    skip.feed(k.bytes(), k.size());
+    skip.batchModel(k.bytes(), k.size(), skip.mask);
     expect(bufferWord(skip, 0, 0, 0) == 1 && bufferWord(skip, 0, 1, 0) == 0 && bufferWord(skip, 0, 2, 0) == 2, "skipping write");
     expect(bufferWord(skip, 0, 10, 0) == 1 && bufferWord(skip, 0, 12, 0) == 2, "filling write consumes one element per cycle block");
 
@@ -280,18 +280,11 @@ void testVifUnpack() {
     d.add(BASE(100)).add(OFFSET(50));
     d.add(UNPACK(3, 0, 1, 0, false, false, true)).add(v4, 16).add(MSCAL(0));
     d.add(UNPACK(3, 0, 1, 0, false, false, true)).add(v4b, 16).add(MSCAL(0));
-    db.feed(d.bytes(), d.size());
+    db.batchModel(d.bytes(), d.size(), db.mask);
     expect(bufferWord(db, 0, 0, 0) == 1 && bufferWord(db, 1, 0, 0) == 1 && bufferWord(db, 1, 0, 1) == 1 &&
            bufferWord(db, 0, 0, 3) == 4, "UNPACK FLG writes the current batch buffer, flipped by MSCAL");
     expect(tops.size() == 2 && tops[0] == 100 && tops[1] == 150, "each MSCAL starts the batch of its buffer");
 
-    // A command split across two feeds.
-    gt4::ps2::Vif1 split;
-    Stream sp;
-    sp.add(UNPACK(3, 0, 1, 3)).add(v4, 16);
-    split.feed(sp.bytes(), 8);
-    split.feed(sp.bytes() + 8, sp.size() - 8);
-    expect(bufferWord(split, 0, 3, 0) == 1 && bufferWord(split, 0, 3, 3) == 4, "UNPACK split across records");
 }
 
 // A model packet replayed from its recorded effect (Vif1::batchModel, the second time) leaves the batch buffers as
@@ -395,27 +388,6 @@ void testRenderers3d() {
     expect(continueAt == 0x2058 / 8, "MSCNT would go on after the strip renderer");
 }
 
-void testTransformMicroprogram() {
-    // MPG + UNPACK + MSCAL: the VU1 program transforms three vertices and XGKICKs a triangle.
-    Recorder gs;
-    gt4::ps2::GraphicsStream stream(gs);
-    const float xy[3][2] = {{100, 50}, {300, 50}, {100, 250}};
-    const vif::Stream s = transformStream(xy, 255, 0, 255);
-    Gt4LinkRecord header{GT4_REC_VIF1, static_cast<uint32_t>(s.size()), 1};
-    stream.record(header, s.bytes());
-    expect(gs.packets.size() == 1 && gs.packets[0].path == 1, "the microprogram kicks one PATH1 packet");
-    if (gs.packets.empty()) return;
-    const auto& b = gs.packets[0].bytes;
-    expect(b.size() == 7 * 16, "GIFtag + 3 x (RGBAQ, XYZ2)");
-    if (b.size() < 7 * 16) return;
-    uint32_t w[28];
-    std::memcpy(w, b.data(), sizeof(w));
-    expect(w[4] == 255 && w[5] == 0 && w[6] == 255 && w[7] == 0x80, "RGBAQ from the colour qword");
-    expect(w[8] == (100 + 2048) * 16 && w[9] == (50 + 2048) * 16 && w[11] == 0, "vertex 0 transformed to 12.4 with the 2048 offset");
-    expect(w[16] == (300 + 2048) * 16 && w[25] == (250 + 2048) * 16, "vertices 1 and 2");
-    expect(stream.vifStats().microprograms == 1, "one microprogram");
-}
-
 void testDirectAndRecords() {
     Recorder gs;
     gt4::ps2::GraphicsStream stream(gs);
@@ -424,19 +396,15 @@ void testDirectAndRecords() {
         const auto* p = static_cast<const uint8_t*>(payload);
         hostRecords.emplace_back(type, std::vector<uint8_t>(p, p + size));
     });
-    // VIF1 DIRECT -> PATH2.
-    vif::Stream s;
-    const uint64_t packet[4] = {1ull | (1ull << 15) | (1ull << 60), 0xE, 42, 0x61};
-    s.alignForData().add(vif::DIRECT(2)).add(packet, sizeof(packet));
-    stream.record({GT4_REC_VIF1, static_cast<uint32_t>(s.size()), 1}, s.bytes());
-    expect(gs.packets.size() == 1 && gs.packets[0].path == 2 && gs.packets[0].bytes.size() == 32, "DIRECT goes to PATH2");
-    // GIF PATH3 record: u32 path then qwords (unaligned after the path word).
+    // A record of a retired kind (GIF, VIF1, VIF0: PLAN.md P1): refused, nothing drawn.
     std::vector<uint8_t> gif(4 + 32);
     const uint32_t three = 3;
     std::memcpy(gif.data(), &three, 4);
-    std::memcpy(gif.data() + 4, packet, 32);
+    expect(!stream.retired(), "no retired record yet");
     stream.record({GT4_REC_GIF, static_cast<uint32_t>(gif.size()), 2}, gif.data());
-    expect(gs.packets.size() == 2 && gs.packets[1].path == 3 && std::memcmp(gs.packets[1].bytes.data(), packet, 32) == 0, "GIF PATH3 record");
+    stream.record({GT4_REC_VIF1, 16, 2}, gif.data());
+    expect(stream.retired() && stream.stats().retiredRecords == 2 && stream.stats().retiredKind == GT4_REC_GIF && gs.packets.empty(),
+           "GIF and VIF1 records refused, nothing drawn");
     // Display, VSYNC, GS read.
     gt4::gfx::DisplayRecord shown;
     shown.circuit[1].enabled = 1;
@@ -458,44 +426,18 @@ void testDirectAndRecords() {
     }
 }
 
-// MSKPATH3: PATH3 data that arrives while VIF1 masks PATH3 waits for the unmask (or the VBlank).
-void testPath3Mask() {
-    Recorder gs;
-    gt4::ps2::GraphicsStream stream(gs);
-    auto vifRecord = [&](uint32_t code) {
-        const uint32_t words[4] = {0, 0, 0, code};
-        stream.record({GT4_REC_VIF1, 16, 1}, reinterpret_cast<const uint8_t*>(words));
-    };
-    std::vector<uint8_t> gif(4 + 16);
-    const uint32_t three = 3;
-    const uint64_t tag[2] = {1ull << 15, 0};
-    std::memcpy(gif.data(), &three, 4);
-    std::memcpy(gif.data() + 4, tag, 16);
-    vifRecord(vif::code(0x06, 0, 0x8000));   // mask
-    stream.record({GT4_REC_GIF, static_cast<uint32_t>(gif.size()), 2}, gif.data());
-    expect(gs.packets.empty(), "PATH3 held while MSKPATH3 masks it");
-    vifRecord(vif::code(0x06, 0, 0));        // unmask
-    expect(gs.packets.size() == 1 && gs.packets[0].path == 3, "PATH3 released at the unmask");
-    vifRecord(vif::code(0x06, 0, 0x8000));
-    stream.record({GT4_REC_GIF, static_cast<uint32_t>(gif.size()), 3}, gif.data());
-    const uint32_t vs[2] = {0, 1};
-    stream.record({GT4_REC_VSYNC, 8, 4}, reinterpret_cast<const uint8_t*>(vs));
-    expect(gs.packets.size() == 2 && stream.stats().path3ForcedAtVsync == 1, "PATH3 still masked is released at the VBlank");
-}
-
 void testReplay() {
     const std::string path = gt4::test::uniqueTempPath("gt4_ps2gfx_test", ".cap").string();
     {
         gt4::ps2::CaptureWriter writer(path);
         expect(writer.ok(), "capture file opens");
-        const uint32_t three = 3;
-        const uint64_t packet[2] = {(1ull << 15), 0};
+        const char text[] = "replay";
         for (uint32_t frame = 0; frame < 3; ++frame) {
-            writer.write(GT4_REC_GIF, &three, 4, packet, 16);
+            writer.write(GT4_REC_LOG, text, sizeof text);
             const uint32_t vs[2] = {frame & 1, frame};
             writer.write(GT4_REC_VSYNC, vs, 8);
         }
-        writer.write(GT4_REC_GIF, &three, 4, packet, 16);   // trailing records without a VBlank
+        writer.write(GT4_REC_LOG, text, sizeof text);   // trailing records without a VBlank
     }
     std::string error;
     auto replay = gt4::ps2::ReplaySource::open(path, error);
@@ -506,7 +448,7 @@ void testReplay() {
         gt4::ps2::GraphicsStream stream(gs);
         int frames = 0;
         while (replay->nextFrame([&](const Gt4LinkRecord& h, const uint8_t* p) { stream.record(h, p); })) ++frames;
-        expect(frames == 3 && gs.vsyncs.size() == 3 && gs.packets.size() == 4, "replay delivers every record, one VBlank at a time");
+        expect(frames == 3 && gs.vsyncs.size() == 3 && stream.stats().logs == 4, "replay delivers every record, one VBlank at a time (the trailing one too)");
     }
     std::filesystem::remove(path);
 }
@@ -557,11 +499,7 @@ int main() {
     testVifUnpack();
     testModelReplay();
     testRenderers3d();
-#if GT4_VU1_INTERPRETER
-    testTransformMicroprogram();   // a toy program: the interpreter runs it
-#endif
     testDirectAndRecords();
-    testPath3Mask();
     testReplay();
     testPad();
     if (failures) {

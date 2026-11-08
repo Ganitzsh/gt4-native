@@ -1,13 +1,13 @@
 #pragma once
-// VIF1: decodes the VIF1 stream of the game's DMA chains into what it carries: GIF packets for PATH2 (DIRECT,
-// DIRECTHL) and GT4's 3D batches, the data the game unpacks for one of its 3D renderers followed by the
-// start of that renderer (MSCAL), which renderers3d.cpp runs natively. Written for this project from the
-// public VIF documentation; the details of UNPACK filling writes, V2/V3 field order and MODE 3 follow PCSX2
-// (GPL-3.0-or-later), consulted as a reference.
+// VIF1: GT4's 3D batches. The game sends them as native batch records (include/gt4/gfx.h: kBatchFrame, kBatchWrite,
+// kBatchModel, kBatchRun); a model packet (kBatchModel) is the model file's own VIF codes, decoded here into the
+// batch buffers, and a batch's start runs one of GT4's 3D renderers (renderers3d.cpp, natively). Written for this
+// project from the public VIF documentation; the details of UNPACK filling writes, V2/V3 field order and MODE 3
+// follow PCSX2 (GPL-3.0-or-later), consulted as a reference.
 //
-// The stream is a sequence of 32-bit words. A command and its data may be split across calls; the
-// remainder is kept until the rest arrives. A batch's renderer runs when its MSCAL is decoded, so
-// FLUSH/FLUSHE/FLUSHA have nothing to wait for.
+// The VIF1 stream itself (GT4_REC_VIF1: DIRECT packets for PATH2, MPG, MSKPATH3, records inside the stream) is gone
+// with its record kind (PLAN.md P1): the game has not sent it since its records went native. A model packet holds
+// only UNPACK and state codes; anything else in one is counted as unknown. FLUSH/FLUSHE/FLUSHA have nothing to wait for.
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -60,15 +60,8 @@ struct Batch3d {
 class Vif1 {
 public:
     Vif1();
-    void setGifSink(GifSink* sink) { gifSink = sink; }
     // A batch is complete: run its renderer (GraphicsStream).
     std::function<void(const Batch3d& batch)> onBatch;
-    // Called when MSKPATH3 changes the PATH3 mask (the stream holds PATH3 packets while it is set).
-    std::function<void(bool masked)> onPath3Mask;
-    // Native records the game placed in the stream (include/gt4/gfx.h kStreamCode): whole qwords of them.
-    std::function<void(const uint8_t* records, size_t bytes)> onRecords;
-    // Feeds stream words (the byte count is rounded down to whole words).
-    void feed(const uint8_t* bytes, size_t size);
     // Native batch records (include/gt4/gfx.h): a frame starts (the layout GT4's frame head sets: buffers at 0 and
     // 435, cycle 4/4, no row mode, mask C0C0C0C0, the first buffer next); qwords into the batch being filled (the
     // lanes in `lanes`); a model packet decoded into it with `mask`; the batch run.
@@ -78,8 +71,9 @@ public:
     void batchRun(uint32_t entry, uint32_t itop);
     void reset();
 
-    // Whether the micro program image the game uploaded (MPG) is GT4's (NTSC-U v1.01). The image is kept
-    // only for this check: the renderers are native code (renderers3d.cpp) and an unknown image draws nothing.
+    // Whether the micro program image is GT4's (NTSC-U v1.01) or none. It comes only from a saved state now (the
+    // game sends no MPG); kept for this check: the renderers are native code (renderers3d.cpp) and an unknown image
+    // draws nothing.
     bool gt4Program();
     static constexpr uint32_t kProgramBytes = 16384;
     std::vector<uint8_t> program = std::vector<uint8_t>(kProgramBytes);
@@ -93,24 +87,22 @@ public:
     uint32_t base = 0, ofst = 0, tops = 0, itops = 0;
     bool dbf = false;
     uint32_t mark = 0;
-    bool path3Masked = false;         // MSKPATH3
     // The two batch buffers: [0] at BASE, [1] at BASE + OFFSET.
     BatchBuffer buffers[2];
     uint32_t continueAt = 0;          // where MSCNT goes on: the end of the last renderer (set by the caller)
 
     struct Stats {
-        uint64_t codes = 0, unpacks = 0, microprograms = 0, directQwords = 0, mpgInstructions = 0, recordQwords = 0;
+        uint64_t codes = 0, unpacks = 0, microprograms = 0;
         uint64_t unknownCodes = 0;
         uint64_t outsideBatch = 0;      // unpacked qwords outside both batch buffers (dropped)
         uint64_t absoluteUnpacks = 0;   // UNPACK without FLG (placed by address in a buffer)
-        uint64_t streamCodes[128] = {};  // codes by command in the stream itself (not in model packets)
     } stats;
     std::string lastWarning;
     uint32_t lastProgram = 0;   // byte address of the last renderer started (statistics)
 
 #if GT4_VU1_INTERPRETER
     // The reference tools (tools/vu1ref) keep a VU1 memory model beside the batches: every qword an UNPACK
-    // writes (its VU address, the lanes written), every MPG.
+    // writes (its VU address, the lanes written). (mpg: no longer called, the stream that carried MPG is gone.)
     struct Observer {
         virtual ~Observer() = default;
         virtual void unpacked(uint32_t address, const uint32_t value[4], unsigned lanes) = 0;
@@ -150,8 +142,7 @@ public:
     } modelStats;
 
 private:
-    GifSink* gifSink = nullptr;
-    std::vector<uint32_t> pending;    // words not yet consumed
+    std::vector<uint32_t> pending;    // the model packet's words being decoded (batchModel)
     std::unordered_map<uint64_t, ModelEffect> modelEffects;
     ModelEffect* recording = nullptr;   // the effect being recorded (batchModel)
     bool cacheable = true;              // ... nothing in the packet but UNPACK and state codes
@@ -159,6 +150,8 @@ private:
     bool programKnown = false, programIsGt4 = false;
     bool inModel = false;   // decoding a model packet (batchModel)
 
+    // A model packet's words, decoded (batchModel).
+    void feed(const uint8_t* bytes, size_t size);
     // Returns false when the command at `pos` needs more words than are available.
     bool step();
     void start(uint32_t address);
