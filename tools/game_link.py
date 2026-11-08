@@ -108,11 +108,14 @@ def compile_runtime(out):
         obj = os.path.join(objdir, os.path.splitext(name)[0] + (".s.o" if name.endswith(".s") else ".o"))
         if name.endswith(".cpp"):
             # -mstackrealign: game code (gcc 2.9) calls into the runtime with a 4-byte aligned stack
+            # -Werror=return-type: a function that can flow off its end without a return is undefined behaviour, which GCC
+            # turns into unreachable code (lane D's D14 crash, 2026-11-08: a lost "return true" ran into the next function)
             cmd = [tool("g++"), "-c", "-std=c++20", "-O2", "-g", "-msse2", "-mfpmath=sse", "-mstackrealign", "-Wall",
-                   "-Wextra"] + prefix_map + ["-I", rt, "-I", os.path.join(ROOT, "include"), "-I",
+                   "-Wextra", "-Werror=return-type"] + prefix_map + ["-I", rt, "-I", os.path.join(ROOT, "include"), "-I",
                                               os.path.join(FFMPEG, "include"), src, "-o", obj]
         elif name.endswith(".c"):
-            cmd = [tool("gcc"), "-c", "-std=gnu11", "-O2", "-g", "-msse2", "-mfpmath=sse", "-Wall"] + prefix_map + [
+            cmd = [tool("gcc"), "-c", "-std=gnu11", "-O2", "-g", "-msse2", "-mfpmath=sse", "-Wall", "-Werror=return-type",
+                   "-Werror=implicit-function-declaration"] + prefix_map + [
                    "-I", rt, "-I", os.path.join(ROOT, "include"), src, "-o", obj]
         elif name.endswith(".s"):
             cmd = [tool("as"), "--32", src, "-o", obj]
