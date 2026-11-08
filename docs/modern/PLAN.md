@@ -156,7 +156,8 @@ race and B9 waits on them.
   face by rule 4. The face's `ViewEnd` moves before the copy, and the copy gets its own `kViewEnvCopy` view
   (CONTRACTS a.5.7). Acceptance below: each face bound to its target, unsplit.
 - **The road reflection** split the main view by rule 1 (0.56 a frame): two `Instance`s of the main view (3 and 7
-  items, about 7 draws a frame) into a 64 x 32 colour target with its own Z (PSMZ24), tested and written; that fits
+  items, about 7 draws a frame) into a 64 x 32 colour target with its own Z (PSMZ24), tested and written, and in
+  part straight into the main view's own target (lane A: two targets a frame); that fits
   `render_reflection` (003411D0, buffer from +0xC24 / +0xC28, through the course renderers 00397130 / 00397098).
   It is drawn in the middle of the main view, with about 330 principal draws after it, and on Route 5 night its
   output is read 11 times in 1,200 frames, all by untagged draws in the same frame (lane A, 2026-11-08). The

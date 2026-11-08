@@ -205,9 +205,10 @@ enum InstanceFlags : uint16_t {
                                //   course lamps near the car, drawn into the car's reflection texture, not the
                                //   view's target; objectToView = set 0 as the pass set it (the car's camera,
                                //   orthographic); entrant = the car. Out of the binding (a.5.7)
-    kInstReflection = 1024,    // drawn by the road reflection pass (render_reflection 003411D0) into its 64 x 32
-                               //   target with its own Z, inside the main view; set by the pass's context, never
-                               //   from the target. Out of the binding (a.5.7)
+    kInstReflection = 1024,    // drawn by the road reflection pass (render_reflection 003411D0), inside the main
+                               //   view: into its 64 x 32 target with its own Z, and in part straight into the
+                               //   main view's own target; set by the pass's context, never from the target. Out
+                               //   of the binding (a.5.7)
 };
 struct Instance {
     Prefix prefix;
@@ -492,7 +493,9 @@ Where each record is sent (tickets in PLAN.md):
      no auxiliary target, and a read of their target is not an auxiliary read. The binding treats them as untagged
      draws, and counts them (`viewLightMapDraws`, `viewReflectionDraws`). They are render-to-texture built every
      frame on the GS path, which the substitution never replaces (B8 draws in place, so nothing drops their
-     producer), and their readers sample the result as an ordinary texture. The tag is there for accounting
+     producer), and their readers sample the result as an ordinary texture. The road reflection writes two targets
+     (lane A, 2026-11-08): its 64 x 32 target, and the main view's own target, where part of the pass draws
+     straight into the picture; those draws too stay on the GS path, drawn in place. The tag is there for accounting
      (a.5.3) and for B9.
      - The road reflection is a second scene drawn in the middle of the main view (lane A, 2026-11-08: its first
        draw at about draw 364 of the frame, about 330 principal draws after it), so as tagged draws it split the
