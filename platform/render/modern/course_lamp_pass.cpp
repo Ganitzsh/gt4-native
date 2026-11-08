@@ -15,7 +15,7 @@ void CourseLampPass::lights(const scene::SceneFrame& frame, uint16_t view, const
     // content. Cleared past their bounds (refilled from the tables and the meshes at the next sight).
     if (materials.size() > 100000) materials.clear();
     if (keys.size() > 100000) keys.clear();
-    if (lampsByItem.size() > 4096) lampsByItem.clear();
+    if (lampsByItem.size() > 4096) lampsByItem.clear(), s.cacheClears = 1;
     if (!view || view > frame.views.size()) {
         if (stats) *stats = s;
         return;

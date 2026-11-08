@@ -32,6 +32,7 @@ public:
         uint32_t meshMissing = 0;        // glow items whose mesh was not there (dropped, pending): no lamps this frame
         uint32_t extracted = 0, cacheHits = 0;   // (mesh key, item) extractions this frame, and reuses
         uint32_t largestItemQuads = 0, skewQuads = 0, degenerate = 0;   // of this frame's extractions
+        uint32_t cacheClears = 0;        // the (mesh key, item) cache went past its bound and was cleared this call
     };
     // Appends the lamps of view `view` of `frame` to `out`, as Light records in that view's space.
     void lights(const scene::SceneFrame& frame, uint16_t view, const LampSources& sources, std::vector<gfx::scene::Light>& out,

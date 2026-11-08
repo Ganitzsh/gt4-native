@@ -8,6 +8,7 @@
 #include "../scene/scene_frame.h"
 #include "lights_cluster.h"
 #include "lights_gather.h"
+#include "course_lamp_pass.h"   // (F2b)
 
 #include <algorithm>
 #include <cassert>
@@ -192,8 +193,17 @@ struct GsnScene::Impl {
     std::vector<std::vector<vk::Buffer>> nightHeaders, nightLists, nightGrids;
     uint32_t nightOrdinal = 0;                 // Light commands of the current list relit so far
     std::vector<gfx::scene::Light> nightRecords;
+    size_t nightHostFrom = SIZE_MAX;           // nightRecords from here on are the host's (F2b's course lamps, test lamps)
     std::vector<render::GpuLight> nightLights;
     render::GatherStats nightStatsLast;
+    // F2b: the course's street lamps from B6's meshes (course_lamp_pass.h), and its totals (printed at exit)
+    render::CourseLampPass lampPass;
+    struct LampTotals {
+        uint64_t frames = 0, lamps = 0, glowItems = 0, extracted = 0, cacheHits = 0, meshMissing = 0, cacheClears = 0,
+                 skewQuads = 0, degenerate = 0;
+        uint32_t largestItemQuads = 0;
+        double microseconds = 0.0;   // the pass's time on the render thread
+    } lampTotals;
     // gsn_light.comp's push constants from `night` on (offset 40): mirrored field for field.
     struct NightPush {
         float night = 0.0f, pad0 = 0.0f;
@@ -486,6 +496,19 @@ struct GsnScene::Impl {
         vkDeviceWaitIdle(device.device);
         printProfile();
         if (framesSkipped) std::printf("Frames skipped behind the game: %llu\n", static_cast<unsigned long long>(framesSkipped));
+        if (lampTotals.frames) {   // F2b's course lamps (per execution: an interpolated present runs a list again)
+            const LampTotals& t = lampTotals;
+            std::printf("F2b course lamps: %llu night executions, %llu lamps (%.1f an execution) from %llu glow items, %.1f us "
+                        "an execution; extracted %llu, reused %llu, mesh missing %llu, cache clears %llu; largest item %u quads, "
+                        "skew quads %llu, degenerate %llu\n",
+                        static_cast<unsigned long long>(t.frames), static_cast<unsigned long long>(t.lamps),
+                        double(t.lamps) / double(t.frames), static_cast<unsigned long long>(t.glowItems),
+                        t.microseconds / double(t.frames),
+                        static_cast<unsigned long long>(t.extracted), static_cast<unsigned long long>(t.cacheHits),
+                        static_cast<unsigned long long>(t.meshMissing), static_cast<unsigned long long>(t.cacheClears),
+                        t.largestItemQuads, static_cast<unsigned long long>(t.skewQuads),
+                        static_cast<unsigned long long>(t.degenerate));
+        }
         if (counters.flareDrawsSkipped || counters.glareDrawsSkipped)
             std::printf("N4 draws skipped onto the picture: flare %llu, glare %llu\n",
                         static_cast<unsigned long long>(counters.flareDrawsSkipped), static_cast<unsigned long long>(counters.glareDrawsSkipped));
@@ -2584,6 +2607,29 @@ bool GsnScene::Impl::nightPrepare(const gsn::FrameList::Lighting& l, const Scene
     if (!(std::fabs(k.focal[0]) > 0.0f && std::fabs(k.focal[1]) > 0.0f && k.distanceA != 0.0f)) return false;
     // The lamps: the view's records, and the test lamps.
     nightRecords.assign(sf.lights.begin(), sf.lights.end());
+    nightHostFrom = nightRecords.size();   // (the course lamps and the test lamps follow the game's: no kFromGame)
+    // F2b: the main view's street lamps, from the course meshes B6 named (the list's scene cache, shared with the front
+    // end: meshes by id, the materials' glow class and colour)
+    if (const std::shared_ptr<const scene::SceneCache> cache = frame.sceneCache) {
+        render::LampSources sources;
+        sources.mesh = [&cache](scene::MeshId id) { return cache->meshes().mesh(id); };
+        sources.classes = [&cache](scene::MaterialId id) { return cache->materials().classes(id); };
+        render::CourseLampPass::Stats ls;
+        const auto started = std::chrono::steady_clock::now();
+        lampPass.lights(sf, view->id, sources, nightRecords, &ls);
+        LampTotals& t = lampTotals;
+        t.microseconds += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - started).count();
+        ++t.frames;
+        t.lamps += ls.lamps;
+        t.glowItems += ls.glowItems;
+        t.extracted += ls.extracted;
+        t.cacheHits += ls.cacheHits;
+        t.meshMissing += ls.meshMissing;
+        t.cacheClears += ls.cacheClears;
+        t.skewQuads += ls.skewQuads;
+        t.degenerate += ls.degenerate;
+        t.largestItemQuads = std::max(t.largestItemQuads, ls.largestItemQuads);
+    }
     if (const uint32_t n = render::testLightCount()) {
         const std::vector<gfx::scene::Light> test = render::testLights(view->id, n);
         nightRecords.insert(nightRecords.end(), test.begin(), test.end());
@@ -2600,7 +2646,8 @@ bool GsnScene::Impl::nightFinish(const gsn::FrameList::Lighting& l, const SceneI
         k.inset[3] = float(l.inset[3] + 1) * sy - 1.0f;
     }
     const render::LightListHeader header = render::gatherLights(nightRecords.data(), nightRecords.size(), viewId, 0.5f,
-                                                                std::max(k.maxDistance, 1.0f), night, nightLights, nightStatsLast);
+                                                                std::max(k.maxDistance, 1.0f), night, nightLights, nightStatsLast,
+                                                                nightHostFrom);
     if (header.count == 0) return false;
     // The buffers of this Light command: per ordinal in the list (nightOrdinal, reset by executeBegin), and within an
     // ordinal's ring per (list, slot) (Impl::buffer keys by listIndex too), so every list of a submission has its own.
