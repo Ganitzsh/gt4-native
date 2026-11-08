@@ -10,6 +10,9 @@
 // 8..31, the matrix stack's top, the random state) with the return (floats within 1e-5, or 1e-3 counted as drift,
 // when `floats`). The native call is not guarded: a test that crashes ends the process before the tests after it
 // report (and the order of tests from different files is not fixed), so run a suspect alone (GT4_DIFFTEST=NAME).
+// Set GT4_ORIG_KINDS=build/eeref/kinds.txt (tools/eeref/kinds.py): without it the bridge calls every native function
+// from the original code with eight integers and takes a 32-bit result, so a double through a native soft-float
+// routine loses its high half and the original side computes garbage (005570E0: 200 of 200 differ; with it, 0).
 #include <cstdint>
 
 namespace difftest {
