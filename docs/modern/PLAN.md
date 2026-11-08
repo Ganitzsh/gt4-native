@@ -155,10 +155,16 @@ race and B9 waits on them.
   its 128 x 256 target; 0044E660 then copied it into the shared env map inside the face's view, which split every
   face by rule 4. The face's `ViewEnd` moves before the copy, and the copy gets its own `kViewEnvCopy` view
   (CONTRACTS a.5.7). Acceptance below: each face bound to its target, unsplit.
-- **The road reflection** splits the main view by rule 1 (0.56 a frame): 10 draws into a 64 x 32 colour target with
-  its own Z, tested and written, through one of the main view's virtuals in 0033EAB8 (`render_reflection`
-  003411D0, being confirmed). How it becomes a `kViewReflection` view (a sibling of the main view like the mirror,
-  or nested) waits on where it falls in the main view's order.
+- **The road reflection** split the main view by rule 1 (0.56 a frame): two `Instance`s of the main view (3 and 7
+  items, about 7 draws a frame) into a 64 x 32 colour target with its own Z (PSMZ24), tested and written; that fits
+  `render_reflection` (003411D0, buffer from +0xC24 / +0xC28, through the course renderers 00397130 / 00397098).
+  It is drawn in the middle of the main view, with about 330 principal draws after it, and on Route 5 night its
+  output is read 11 times in 1,200 frames, all by untagged draws in the same frame (lane A, 2026-11-08). The
+  architect's call: its instances are flagged `kInstReflection` and kept out of the binding, as the light maps
+  are (CONTRACTS a.5.7); no nesting, no split of the main view. The flag is set by a context around the pass (a
+  `game_src` copy of its caller, which also proves the caller), never from the target. `kViewReflection` stays
+  reserved: B9 decides whether it needs the reflection as a view, from a wet course's capture (C10's), where its
+  readers are measured first.
 - **The paths that run after a Cmd** (CONTRACTS a.5.3: 00497838's pre-built shapes, 0049FAC8's Cmd-like models) are
   situational. With the light maps tagged, `runsAfterInstance` is 0 on Route 5 B-spec night (lane A, 2026-11-08,
   7,600 frames; 43,686 with step 1b alone). Their callers in the decomp: the race's sparks (ThickLine2,
@@ -185,8 +191,9 @@ race and B9 waits on them.
   billboards, only if F2 finds lamps missing; lane F says).
 Depends: A3, R6. Acceptance: `REL`; `ORIG`; `SCENE` on the showroom and photo captures; each env face's views bound
 to the 128 x 256 env target; `runsAfterInstance == 0` in race frames without contact (met on Route 5 night) and with
-the round meter on a lap race; on Route 5
-night, `viewSplitTargets` and `viewAuxiliaryDraws` unchanged by the light maps and `viewLightMapDraws` reported.
+the round meter on a lap race; on Route 5 night, `viewSplitTargets` and `viewAuxiliaryDraws` unchanged by the
+light maps, `viewSplitTargets == 0` for the main view with the reflection flagged, `viewLightMapDraws` and
+`viewReflectionDraws` reported.
 
 **A7: Light records (M).** Sources, corrected by lane A from the code (2026-11-08, a scan of the ELF for every
 store to the lists' counts). The light-glow pass 003B88C8 draws from two per-frame lists in its object:
@@ -492,8 +499,10 @@ Depends: B7, E1; R9's table for step 4's entries (the switch itself doesn't wait
 at 1x within `PARITY`; differences confined to the scene rectangle; `VAL`; `PERF` against `original` (GPU and the
 front end); the Odin's device run (the provoking vertex, logged).
 
-**B9: Mirror, env-map, reflection, showroom and photo views (M).** Depends: A6, B8. Acceptance: `PARITY` per view
-role on its captures.
+**B9: Mirror, env-map, reflection, showroom and photo views (M).** The road reflection is no view today
+(`kInstReflection`, out of the binding, A6): B9 first measures its readers on a wet course and makes it a
+`kViewReflection` view only if a substituted view needs it redrawn (a.5 then allows that one nesting, or the main
+view splits around it). Depends: A6, B8. Acceptance: `PARITY` per view role on its captures.
 
 **B10: G-buffer, deferred lighting, sun, material classes (L).** `platform/render/modern/gbuffer.*`,
 `lighting.*`; sun from the batches' light matrices (qwords 201..216) through `objectToWorld`; classes from lighting

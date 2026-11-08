@@ -134,7 +134,7 @@ enum ViewRole : uint8_t {
     kViewMain = 1,         // render_world's main view (0033DEA8)
     kViewMirror = 2,       // render_back_mirror (00341E50)
     kViewEnvFace = 3,      // the car's environment map passes (0044E660 / 0044EB10); `pass` = face
-    kViewReflection = 4,   // the road reflection buffer (render_reflection 003411D0)
+    kViewReflection = 4,   // reserved: the road reflection, if B9 ever draws it as a view (today kInstReflection)
     kViewShowroom = 5,     // showroom and event-screen car; `pass` = jitter pass 0..3
     kViewPhoto = 6,        // Photo Travel / photo mode
     kViewHud = 7,          // 3D drawn by the HUD outside render_world (RaceRoundMeterBase 003BE3C8); never substituted
@@ -205,6 +205,9 @@ enum InstanceFlags : uint16_t {
                                //   course lamps near the car, drawn into the car's reflection texture, not the
                                //   view's target; objectToView = set 0 as the pass set it (the car's camera,
                                //   orthographic); entrant = the car. Out of the binding (a.5.7)
+    kInstReflection = 1024,    // drawn by the road reflection pass (render_reflection 003411D0) into its 64 x 32
+                               //   target with its own Z, inside the main view; set by the pass's context, never
+                               //   from the target. Out of the binding (a.5.7)
 };
 struct Instance {
     Prefix prefix;
@@ -484,12 +487,19 @@ Where each record is sent (tickets in PLAN.md):
      target written earlier in the view (the main view sampling the sky's pass) reads it. That is counted
      (`viewAuxiliaryReads`) and named in the binding (a.8 `ViewOnList::auxReads`), so a consumer (B7) treats that
      auxiliary target as an input to the substituted view and never drops its producer.
-   - **Light-map draws.** The draws of `kInstLightMap` instances take no part in the binding: they never set or
-     replace the principal, are not auxiliary, count towards no split reason and no auxiliary target, and a read
-     of their target is not an auxiliary read. The binding treats them as untagged draws, and counts them
-     (`viewLightMapDraws`). They are render-to-texture built every frame on the GS path, which the substitution
-     never replaces (B8 draws in place, so nothing drops their producer), and the car's paint samples the result
-     as an ordinary texture. The tag is there for accounting (a.5.3) and for B9.
+   - **Light-map and reflection draws.** The draws of `kInstLightMap` and `kInstReflection` instances take no part
+     in the binding: they never set or replace the principal, are not auxiliary, count towards no split reason and
+     no auxiliary target, and a read of their target is not an auxiliary read. The binding treats them as untagged
+     draws, and counts them (`viewLightMapDraws`, `viewReflectionDraws`). They are render-to-texture built every
+     frame on the GS path, which the substitution never replaces (B8 draws in place, so nothing drops their
+     producer), and their readers sample the result as an ordinary texture. The tag is there for accounting
+     (a.5.3) and for B9.
+     - The road reflection is a second scene drawn in the middle of the main view (lane A, 2026-11-08: its first
+       draw at about draw 364 of the frame, about 330 principal draws after it), so as tagged draws it split the
+       main view by rule 1. A view of its own would need views to nest or the main view split around it; neither
+       is worth it while its output is hardly read: on Route 5 night 11 reads in 1,200 frames, all by untagged
+       draws in the same frame, none by the main view. B9 decides whether it needs a `kViewReflection` view, from
+       a wet course's capture.
    - **Split.** A view is split (`viewSplitTargets`, by reason) and never substituted when any tagged draw of it:
      (1) builds a second scene: the view's tagged draws into a second target both test and write its depth
      buffer (one of its own; some draw tests it and some writes it, not necessarily the same one). A pass that
@@ -559,6 +569,7 @@ Where each record is sent (tickets in PLAN.md):
 | `viewSplitTargets` (by reason, a.5.7), `viewsUnbound` | binding | 0 for main views |
 | `viewAuxiliaryDraws`, `viewAuxiliaryReads` | tagged draws into a view's auxiliary targets; principal draws sampling one (a.5.7), by view role | reported |
 | `viewLightMapDraws` | draws of `kInstLightMap` instances, out of the binding (a.5.7), by view, with the targets they write | reported |
+| `viewReflectionDraws` | draws of `kInstReflection` instances, out of the binding (a.5.7), by view, with the targets they write; and the draws that sample those targets, by view (none, untagged) | reported |
 | `cuts`, `viewsCut` | partial `FrameList`s drawn at a read (synchronous or asynchronous) inside the frame's list, by kind; views still open at a cut, not substituted in that frame (a.8) | reported (main views: 0 in race frames, unless R9 names a reader inside the main view) |
 | `viewsSubstitutedFrameInvalid` | views substituted in a partial list (validated at their `ViewEnd`) whose frame then failed a frame-level check (a.8) | 0 |
 | `viewFallbacks` (by reason: not bound, mesh pending, pipeline pending, validation, read pending) | modern views drawn by the GS path | reported; 0 after warm-up for `mesh pending` and `pipeline pending` |
