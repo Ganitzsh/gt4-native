@@ -491,6 +491,12 @@ if(BUILD_TESTING)
   endif()
   add_test(NAME lights_cluster COMMAND gt4_lights_cluster_test)
   set_tests_properties(lights_cluster PROPERTIES SKIP_RETURN_CODE 77)
+  # The light gather (ticket F2): Light records into the light list, CPU only.
+  add_executable(gt4_lights_gather_test tests/lights_gather.cpp platform/render/modern/lights_gather.cpp
+      platform/render/modern/light_sources.cpp)
+  target_include_directories(gt4_lights_gather_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include platform/render/modern)
+  target_compile_definitions(gt4_lights_gather_test PRIVATE $<$<BOOL:${WIN32}>:_CRT_SECURE_NO_WARNINGS>)
+  add_test(NAME lights_gather COMMAND gt4_lights_gather_test)
   # The night artefact metrics (tools/frame_metrics.py, ticket N1) on synthetic frames; skipped (77) without
   # Python 3 and numpy.
   find_package(Python3 COMPONENTS Interpreter QUIET)
@@ -511,7 +517,7 @@ if(BUILD_TESTING)
   # The game runtime's whole-range test for game memory (runtime/guest.h).
   add_executable(gt4_guest_ram_test tests/guest_ram.cpp)
   add_test(NAME guest_ram COMMAND gt4_guest_ram_test)
-  foreach(test_target IN ITEMS gt4_ps2gfx_test gt4_gs_host_test gt4_gs_memory_test gt4_guest_ram_test gt4_light_list_test gt4_lights_cluster_test ${gt4_vu1_tests} ${gt4_gs_reference_tests})
+  foreach(test_target IN ITEMS gt4_ps2gfx_test gt4_gs_host_test gt4_gs_memory_test gt4_guest_ram_test gt4_light_list_test gt4_lights_cluster_test gt4_lights_gather_test ${gt4_vu1_tests} ${gt4_gs_reference_tests})
     if(MSVC)
       target_compile_options(${test_target} PRIVATE /UNDEBUG /W4)
     else()
