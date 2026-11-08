@@ -24,11 +24,12 @@ Mockups (our own drawings, no game imagery): `docs/modern/menu/mock_*.svg`.
    (`settings_table.h` and the per-module files), no copy in the game.
 4. **One page engine, built twice.** `platform/ui/` (plain C++17, no SDL, no Vulkan) is compiled into the game's
    runtime (x86-32) and into the host. In the game it runs GT4's flow; in the host it serves the modes without a
-   game (replay, test scene). The host overlay menu (`settings_menu.*`, its drawing in `overlay.cpp`, the
-   Select + Start chord) is deleted.
+   game (replay, test scene). The host overlay menu (`settings_menu.*` and its drawing in `overlay.cpp`) is
+   deleted; the pad chord and its guard (`chord_guard.h`) stay as a way in.
 5. **Entry points**: GT4's own Options items (the top menu's and the quick menus' `COMMAND_OPTION`), Start on the GT
-   mode map, and the race pause (a native pause page with a Settings item). The Guide button and Esc open it at the
-   next safe point anywhere. In the `original` preset GT4's screens are unchanged and only Guide / Esc open ours.
+   mode map, and the race pause (a native pause page with a Settings item). The Guide button, Esc and the pad
+   chord open it at the next safe point anywhere. In the `original` preset GT4's screens are unchanged and only
+   those three open ours.
 6. **Look**: GT4's design language (section 5), drawn with our own generated assets (Codex), prompts committed
    next to each asset, reviewed against GT4's screens for consistency, never copied.
 
@@ -45,7 +46,8 @@ Mockups (our own drawings, no game imagery): `docs/modern/menu/mock_*.svg`.
   pads, and holds them back until every button is up (`padHeldBack`). Drawn by `Renderer::setMenu` with the
   bitmap font of `overlay.cpp`.
 - Its problems: it freezes the whole game (GT4's menus stop animating, its music stalls), it looks like a debug
-  overlay, the Select + Start chord fights GT4's own Start, and it lives outside GT4's flow.
+  overlay, and it lives outside GT4's flow. Its pad chord works (`ChordGuard`: the chord's buttons never reach
+  GT4, a short Start alone still does; `tests/host_settings.cpp:29-45`) and is kept.
 
 ### 1.2 GT4's menu system [C unless marked]
 
@@ -142,7 +144,7 @@ The game decides what is on screen and when; the host decides how it looks at th
 | UI renderer | `platform/ui/ui_renderer.{h,cpp}` on `platform/render/modern/layer2d.*` | M on E's layer | New | Draws a `DrawList`: textured quads, nine-slices, gradients, SDF text (E5), at output resolution, HDR at paper white. |
 | Assets | `assets/ui/` (PNG sources, `manifest.json`, `prompts/`), `tools/ui_assets.py` | M | New | Section 5.4. Packed into an atlas at build time; installed beside the host. |
 | Host wiring | `platform/sdl/main.cpp` | C's order | Changed | Old menu removed; Guide / Esc sends "open"; UI list to the renderer; no-game modes run the engine on the host. |
-| Old menu | `platform/sdl/settings_menu.*`, menu drawing in `overlay.cpp`, `chord_guard.h` | E | **Deleted** | After M9 replaces every use. |
+| Old menu | `platform/sdl/settings_menu.*`, menu drawing in `overlay.cpp` | E | **Deleted** | After M9 replaces every use. `chord_guard.h` and its test stay (the chord is a way in). |
 
 ### 3.2 Entry points
 
@@ -158,7 +160,10 @@ Each hook is a `game_src` copy of a matched function with one added call, guarde
    leaves].
 2. **Start on the GT mode map.** While project `"gtmode"` is on its map page, Start opens the hub. The pad hook
    (section 3.3) sees Start's edge before GT4's `MenuControl` does and swallows it. What Start does there today is
-   [U]: if GT4 uses it, M0 picks Select instead and the owner decides.
+   [U]. Decision (coordinator for the owner, 2026-11-08): if Start already opens something there, Settings becomes
+   an item of it; Select is used only if Start opens nothing. If what Start opens is a scripted page, the item is
+   ours, drawn beside GT4's list and reached with a button its prompt shows, since GT4's scripted lists are not
+   edited (M8 says which case M0 found).
 3. **The mode select at game start.** Its Options item as in 1. If it has none [U], Start there as in 2.
 4. **The race pause.** `ui.pause = native` (presets low to ultra): the hook in `pauseStart` keeps GT4's pause
    (the race frozen by `RaceBase + 0xCD8`, the course clock stopped) but opens our **pause page** instead of
@@ -166,12 +171,21 @@ Each hook is a `game_src` copy of a matched function with one added call, guarde
    written to `race_color_correction` as the strobe does), Exit (with GT4's confirmation). `updatePause` returns
    GT4's own codes (3, 5, 4), so the race code after it is unchanged. While Settings is open the pause object is
    not updated, so its time limit does not run. `ui.pause = gt4` keeps `pause.strb` and adds no item.
-5. **Anywhere: Guide, Esc.** The host sends `GT4_REC_HOST_CMD` 6 (open settings). The game opens the hub at the
-   next safe point: at once in a menu project; in a race it first enters GT4's pause through the race's own
-   `pauseStart`, then opens Settings over the pause page; during loading, movies and saves it waits and the host
-   shows "Settings open when loading ends". Without a game (replay, test scene) the host runs the engine itself.
+5. **Anywhere: Guide, Esc, the pad chord.** Guide is often taken on the target devices (Steam's button on a Deck,
+   Home under gamescope on the Odin), so a pad-only player needs the chord: Select + Start as today, or L3 + R3 if
+   M0 finds GT4 uses Select + Start. `ChordGuard`'s rule stays: the chord's buttons never reach GT4, a short Start
+   alone still does. Each of the three makes the host send `GT4_REC_HOST_CMD` 6 (open settings). The game opens
+   the hub at the next safe point: at once in a menu project; in a race it first enters GT4's pause through the
+   race's own `pauseStart`, then opens Settings over the pause page; during loading, movies and saves it waits and
+   the host shows "Settings open when loading ends". Without a game (replay, test scene) the host runs the engine
+   itself.
 
 No hook touches `RacePause::callFunction` (0 % matched) or the corrected draft 0022BC20.
+
+**Threads.** `menu_host` ticks and calls `link_send` only on the guest thread that runs GT4's menu or pause update,
+inside the hooked flow. It never runs on the frame clock's thread, which runs `on_frame` under `g_lock` and defers
+ticks during a walk (CONTRACTS a.5.1). Command 6 is read where `link_poll` already delivers host records, and only
+sets a flag; the hub opens at the next hooked update that sees it.
 
 ### 3.3 Input focus
 
@@ -191,8 +205,9 @@ No hook touches `RacePause::callFunction` (0 % matched) or the corrected draft 0
 - **Menus.** GT4's page under ours keeps running and drawing (its background animates, its music plays), it only
   gets no input. If M0 finds it must also be held (a page with a timer), the hook sets `MRenderContext + 0x6E0`
   for the duration, as `func_0022F6A0` does around a sync.
-- **Races.** GT4's own pause holds the simulation. The host's bus-clock pause (`HOST_CMD` 2) is no longer used for
-  the menu: GT4 keeps running its frame, its menu sounds and our page.
+- **Races.** GT4's own pause holds the simulation. The host's bus-clock pause (`HOST_CMD` 2 and 3) is no longer
+  used for the menu: GT4 keeps running its frame, its menu sounds and our page. M9 retires commands 2 and 3 (their
+  numbers stay reserved) unless something else is found using them.
 - **Checks** (M5's acceptance): GT4's menu cursor, page and project unchanged after close; race time, lap, positions
   and the car's state identical before and after a pause with the settings opened (the vehicle record, A9, or
   D6's fields).
@@ -208,8 +223,12 @@ No hook touches `RacePause::callFunction` (0 % matched) or the corrected draft 0
 
 ### 3.6 Link records
 
-`GT4_LINK_VERSION` goes up by one (after the protocol changes in flight: A1 and D2 order first; lanes A and D
-review).
+`GT4_LINK_VERSION` goes up by one; lanes A and D review. A1, D2, A10 and D1 have landed. P1 (retiring the GIF and
+VIF kinds, which keeps 1-3 reserved) and P3a also edit `protocol.h` and bump the version: whichever of M1 and P1
+lands first takes the next version, the other rebases and takes the one after, one version per landing.
+Record 16 and 17 (game to host), 68 (host to game) and host commands 6 and 7 are free. Command 5 is already used
+and undocumented (`runtime/link.cpp:393`, `frame_forget_sent_contents`, sent by `gs_host` when it lost a texture
+content): M1 lists it in `protocol.h`'s comment beside 6 and 7.
 
 | Record | Direction | Payload |
 |---|---|---|
@@ -218,9 +237,18 @@ review).
 | `GT4_REC_SETTINGS = 68` | host -> game | at open: the schema (pages, rows) and values; after each set: the new values of every row whose value or availability changed, the request's result and its apply class. |
 | `GT4_REC_HOST_CMD` 6, 7 | host -> game | 6: open settings at the next safe point; 7: close (the host is shutting down). |
 
-`include/gt4/ui.h` holds the structs (no 8-byte members, as CONTRACTS a.2). The host draws a `UI` list over the
-game frame with the same vblank, so the page and GT4's frame below never drift apart. Captures record the UI
-records; `original` replays never carry any unless a page was opened.
+`include/gt4/ui.h` holds the structs (no 8-byte members, as CONTRACTS a.2).
+
+- **Frame pairing.** Frame lists close at `GT4_REC_VSYNC`, and a UI record may arrive before or after it. So
+  `GT4_REC_UI` carries its vblank, and the host draws a UI list with the `FrameList` of that vblank. It keeps
+  drawing the last list on interpolated presentations until the next one arrives; the empty list at close clears
+  it. The page and GT4's frame below never drift apart.
+- **Size.** One list a frame. A text-heavy page is a few kilobytes, against the 96 MiB game-to-host ring; M1 caps a
+  list (64 KiB) and counts the ones it drops.
+- **Captures** record UI records only while a page is open; `original` replays never carry any unless a page was
+  opened.
+- **One way to the game.** A gameplay option changed in the menu reaches the game as `HOST_CMD` 4, the existing
+  path, like every other setting the game reads.
 
 ### 3.7 Settings bridge and apply classes
 
@@ -228,10 +256,13 @@ Each row has one apply class, shown on the row:
 
 | Class | Examples | Behaviour |
 |---|---|---|
-| **live** | upscaler, sharpening, AA, effects, post, HUD scale, volumes, input response | applied on the next frame, while the page is open; the game frame behind shows it (dimmed less on Graphics pages: section 4.3) |
-| **confirm** | window mode, resolution, refresh rate, monitor, HDR | applied, then "Keep these settings? 15 s" with automatic revert, as modern PC games do |
+| **live** | upscaler, sharpening, AA, effects, post, HUD scale, volumes, input response; `render.scene` and `lighting.night` (they switch the game's scene records on live: `kOptionSceneRecords` is resent every frame) | applied on the next frame, while the page is open; the game frame behind shows it (dimmed less on Graphics pages: section 4.3) |
+| **confirm** | window mode, resolution, refresh rate, monitor, HDR, `display.gpu` (the host rebuilds its renderer) | applied, then "Keep these settings? 15 s" with automatic revert, as modern PC games do |
 | **next race** | race frames (`display.race_frames`), model detail, mirror detail | stored; a badge says it applies from the next race (`nextRacePending` today) |
-| **restart** | aspect ratio, menu layout (`aspect.hud`) | stored; a badge and a prompt at close |
+| **restart** | aspect ratio (read at the **game's** start, its `--aspect` argument), menu layout (`aspect.hud`) | stored; a badge and a prompt at close that the game must restart |
+
+Only the menu's own sets go through confirm's revert. A setting set by a session (its `set` command) or by `--set`
+never does, so sessions stay repeatable (C1).
 
 Values the current renderer does not use are greyed with `unusedReason` as the reason (ARCHITECTURE section 7).
 GT4's own values (Option struct) are shown read-only on the Game tab with a link into GT4's screen, except the race
@@ -242,13 +273,18 @@ pause's brightness and contrast, which our pause page writes the way GT4's pause
 
 | Key | Values | `original` preset | low / medium / high / ultra |
 |---|---|---|---|
-| `ui.entry` | `hotkey` (Guide / Esc only), `integrated` (GT4's Options items, Start on the map) | `hotkey` | `integrated` |
+| `ui.entry` | `hotkey` (Guide, Esc, the pad chord), `integrated` (also GT4's Options items, Start on the map) | `hotkey` | `integrated` |
 | `ui.pause` | `gt4` (GT4's `pause.strb`), `native` (our pause page) | `gt4` | `native` |
 | `ui.scale` | 80-150 % | 100 % | 100 % |
 | `ui.reduce_motion`, `ui.high_contrast` | `off`, `on` | `off` | `off` |
 
+`applyPreset` sets the `ui.*` keys (as `input.response` already is in every preset), but `detectPreset` ignores
+them, so a player who sets `ui.pause = gt4` on High still reads "Preset: High", not "Custom", for a choice that is
+not a graphics one.
+
 In `original`, GT4's screens are untouched: no hook acts, the pad path is unchanged and no UI record is sent until
-the player presses Guide or Esc. The menu is always reachable, so a player can leave `original` from it. Checks:
+the player presses Guide, Esc or the pad chord. The menu is always reachable, so a player can leave `original` from
+it, pad-only too. Checks:
 `ORIG` and `STREAM` with the page never opened (no UI record, the same link stream); a session that opens GT4's
 Options in `original` sees GT4's `"option"` project start and `pause.strb` load.
 
@@ -273,9 +309,9 @@ Mockup: `menu/mock_settings.svg`.
 |---|---|---|
 | **Game** | GT4 options (opens GT4's screen); Gameplay: AI catch-up (`gameplay.ai_catchup`) and the QoL options the owner picks (section 6); Saves: backups and export (D3) | GT4's sound and controller values shown, read-only |
 | **Graphics** | Preset (with a card listing what it sets), Renderer (`render.gs`), Scene renderer (`render.scene`, when hybrid ships), Resolution scale, Upscaler, Sharpening, Anti-aliasing, HD textures; **Advanced** (a fold): textures (filter, anisotropy, LOD bias), lighting (`effects.lighting`, `lighting.night`), effects (AO, shadows, reflections, bloom, DOF, motion blur, particles, sky and fog, heat haze), detail (mirror, models), race frames | A change to any advanced row shows "Preset: Custom" |
-| **Display** | Window mode, Monitor, Resolution, Refresh rate, V-sync, Frame-rate limit, Frame interpolation, HDR (on, paper white, peak, with a calibration page), Aspect ratio, Menu layout, Safe area (with a frame to align) | confirm and restart classes |
+| **Display** | Window mode, Monitor, Graphics card (`display.gpu`), Resolution, Refresh rate, V-sync, Frame-rate limit, Frame interpolation, HDR (on, paper white, peak, with a calibration page), Aspect ratio, Menu layout, Safe area (with a frame to align) | confirm and restart classes |
 | **Image** | Tone mapping, Exposure, Auto exposure, Bloom intensity, Film grain, Vignette, Chromatic aberration, Dither | live, with the game frame visible |
-| **Controls** | Devices (D13) -> per device: Bindings, Steering and pedal response (D12, with a live plot of stick against output), Haptics (D14), Trigger effects, Wheel (D15), Gyro (D16); Trigger travel; "Button functions: set in GT4's options" | E8a's content, as native pages; each page appears when its ticket has landed |
+| **Controls** | Devices (D13) -> per device: Bindings, Steering and pedal response (`input.response`, `input.steer.*`, `input.pedal.*`: D12, with a live plot of stick against output), Haptics (D14), Trigger effects, Wheel (D15), Gyro (D16); Trigger travel; "Button functions: set in GT4's options" | E8a's content, as native pages; each page appears when its ticket has landed |
 | **Audio** | GT4's volumes (read-only, link to GT4's screen); host output device and master volume; later the host mixer's options (D5, E8b) | |
 | **HUD** | HUD scale, safe area, HUD on / off (E9); per-element toggles and gauge choice if the owner takes them (section 6) | |
 | **Accessibility** | UI scale, high-contrast menu, reduce motion, hold-to-repeat speed, colour-vision filter (a post pass, lane B, later), button prompts style | |
@@ -334,7 +370,7 @@ Mockup: `menu/mock_settings.svg`.
 | Controls pages | `mock_controls.svg` | device icons (gamepad, keyboard, wheel), generic pad diagram (our own drawing of a two-stick pad, no brand), response plot frame, haptics meter |
 | Display calibration | none yet | safe-area frame corners, HDR test card (our own pattern: grey steps and a sun disc) |
 | Dialogs and toasts | in the mockups | dialog frame, toast band, countdown ring |
-| Button prompts | in the mockups | per device type: Xbox letters, keyboard keys, generic labels for PlayStation pads (owner question 3) |
+| Button prompts | in the mockups | per device type, our own drawings: Xbox letters, keyboard keys, PlayStation face shapes, shoulders, sticks, D-pad |
 
 Output sizes: masters at 4K layout scale (the 1920 x 1080 canvas x 2), PNG with alpha, sRGB; the build packs
 them into atlases with mipmaps, and nine-slice insets in `manifest.json`. The renderer picks the mip for the
@@ -345,7 +381,9 @@ rules, gradients) are not images: the renderer draws them.
 
 - Original art only, in GT4's style, never a copy: no traced, scanned or reproduced GT4 imagery, no Sony,
   Polyphony or Gran Turismo names, logos or marks, no car manufacturer or tuner logos, no PlayStation button
-  shapes unless the owner decides otherwise (question 3).
+  shapes copied from anywhere.
+- Button prompts match the connected controller (D13 knows its type): Xbox letters, keyboard keys, and for
+  PlayStation pads the four face shapes, all our own drawings (decision for the owner, section 9).
 - Every generated asset is committed with the prompt that made it, so its origin is clear.
 
 ### 5.4 Generation with Codex
@@ -410,9 +448,10 @@ menu's Options path, the effect of `MRenderContext + 0x6E0`, the pause's `SETVAL
 and what `"option"` leaves in G on exit. Output `docs/modern/spikes/M0-menu-flow.md`. Depends: none.
 
 **M1: UI and settings records (S).** `include/gt4/ui.h`, `include/gt4/link/protocol.h` (records 16, 17, 68, host
-commands 6, 7; version bump after A1 and D2), `runtime/link.cpp` (lane C's file, lane A reviews) and
-`platform/gs/stream.cpp` routing (A10's order). Depends: A1, D2 landed. Acceptance: `CTEST` (`ui_records`:
-layouts and a round trip); `STREAM` unchanged with no page open.
+commands 6, 7, and command 5 documented; the version per section 3.6's order with P1), `runtime/link.cpp` (lane
+C's file, lane A reviews) and `platform/gs/stream.cpp` routing. Depends: none left (A1, D2, A10 landed).
+Acceptance: `CTEST` (`ui_records`: layouts, a round trip, the 64 KiB cap counted); `STREAM` unchanged with no page
+open; a capture taken with no page open carries no UI record.
 
 **M2: Page engine (M).** `platform/ui/menu_model.*`, `menu_layout.*`, `draw_list.h`, `tests/ui_menu.cpp`.
 Depends: none. Acceptance: `CTEST`: navigation, repeat, tab memory, apply classes, confirm-revert timer, layout at
@@ -425,7 +464,8 @@ goldens); HDR measured at paper white.
 
 **M4: Settings bridge (S-M).** `platform/ui/settings_schema.*` and the page layout table of section 4; host side
 of `SETTINGS` / `SETTINGS_SET`. Depends: M1, M2, E1. Acceptance: `CTEST`: every option in `describe()` is on a page
-or listed as hidden; a set through the bridge equals `setOption`; the four apply classes.
+or listed as hidden, from day one; a set through the bridge equals `setOption`; the four apply classes; a session
+`set` and `--set` never start confirm's revert; `detectPreset` ignores `ui.*`.
 
 **M5: Game-side page host (M).** `runtime/menu/menu_host.*`, the pad focus in `runtime/iop.cpp` (lane D reviews),
 sounds through `func_0023F8C8`. Depends: M0, M1, M2. Acceptance: session test (`tools/host_session.py`): with a
@@ -446,10 +486,15 @@ contrast stored as GT4's pause stores them; `ui.pause = gt4` loads `pause.strb` 
 session test: Start on the map opens the hub, other pages of `"gtmode"` are unaffected, the map's state after close
 is unchanged.
 
-**M9: Host wiring; the old menu deleted (S-M).** `platform/sdl/main.cpp` (C's order), `settings_menu.*`,
-`chord_guard.h` and the overlay menu removed; Guide / Esc send command 6; the engine on the host for replay and
-the test scene. Depends: M3, M4, M5. Acceptance: `CTEST`; `ORIG`; Guide in a race pauses through GT4 and opens
-Settings; the replay and test scene open the host-run hub.
+**M9: Host wiring; the old menu deleted (S-M).** `platform/sdl/main.cpp` (C's order; D13's `pad_devices` already
+moved the pad reads out of it, so the diff is small), `settings_menu.*` and the overlay menu drawing removed;
+`chord_guard.h` kept; Guide, Esc and the pad chord send command 6; host commands 2 and 3 retired; the engine on
+the host for replay and the test scene. The tests that go with the old menu move: `host_settings` links
+`settings_menu.cpp` and drives the chord (`cmake/Host.cmake:313`): its chord cases (`tests/host_settings.cpp:29-45`)
+stay, its menu cases are replaced by M2's golden draw lists; `GT4_HOST_KEYS` (docs/RENDERING.md:70, `scriptedKeys`),
+how menu checks run unattended today, sends command 6 and the page's keys, and a session command `open_settings`
+does the same. Depends: M3, M4, M5. Acceptance: `CTEST`; `ORIG`; Guide and the chord in a race pause through GT4
+and open Settings, a short Start alone still pauses GT4; the replay and test scene open the host-run hub.
 
 **M10: Style guide and the first asset set (M).** `docs/modern/menu/STYLE.md` (section 5.1, extended), the prompts
 and assets of the hub and pause screens, the review of section 5.4. Depends: M3 (to see them drawn). Acceptance:
@@ -463,17 +508,23 @@ pad alone, a profile set in the menu matches the file, keyboard only works; E9's
 **M12: Pointer input and accessibility options (S-M).** `UiPointer` record, `ui.scale`, `ui.high_contrast`,
 `ui.reduce_motion`. Depends: M9. Acceptance: `CTEST` hit testing; the hub usable with the mouse alone.
 
-**Q1-Q6: QoL options (owner picks from section 6).** Each its own ticket with a spike for its hook, a setting off
-in `original`, and a session test.
+**Q1-Q8: QoL options, after M1-M9** (the coordinator's choice for the owner, 2026-11-08). Each its own ticket with
+a spike for its hook, a setting off in `original`, and a session test: Q1 HUD element toggles and Q2 the gauge
+choice (`hud.*`), Q3 chase camera options and Q4 cameras in the view cycle (`camera.*`), Q5 the hidden options
+row, Q6 the GT mode map shortcuts L2 / R2, Q7 shift on the right stick (D13), Q8 the laps multiplier and the
+assists override (`gameplay.laps`, `gameplay.assists_override`). Arcade unlocks are left out: the owner decides
+about progression later.
 
 ### 7.2 Order and lanes
 
 - Lane M owns `platform/ui/`, `runtime/menu/`, `assets/ui/`, `tools/ui_assets.py`, the menu-flow `game_src`
   copies (00109D00, 0010FE40, 0038B428, 0038B2B0) and `include/gt4/ui.h`.
-- Shared files, in this order: `protocol.h` after A1 and D2 (A, D review); `runtime/link.cpp` (C's, A reviews);
-  `runtime/iop.cpp` (D reviews); `stream.cpp` after A10; `main.cpp` after D1 (C's order); `settings*` and
-  `layer2d` are lane E's (E reviews), and E5 comes before M3. `settings_menu.*` is deleted by M9 with lane E.
-- PLAN.md's E8a and E8b become M11's pages (their content unchanged); E5 and E6 stay lane E's and M depends on them.
+- Shared files: `protocol.h` serialised with P1 and P3a (section 3.6; A, D review); `runtime/link.cpp` (C's, A
+  reviews); `runtime/iop.cpp` (D reviews; M5's pad focus sits after D13's mapping); `stream.cpp`; `main.cpp` (C's
+  order); `settings*` and `layer2d` (lane E's; who reviews them while no lane E session runs is the coordinator's
+  call). E5 comes before M3. `settings_menu.*` is deleted by M9.
+- PLAN.md's E8a and E8b become M11's pages (their content unchanged). E9 keeps its HUD work; M11 only draws its rows.
+  E5 and E6 stay lane E's and M depends on them.
 
 ### 7.3 Cost
 
@@ -499,10 +550,11 @@ in `original`, and a session test.
 | `original` drift | all | `ui.entry = hotkey`, `ui.pause = gt4`; `ORIG` and `STREAM` with no page opened |
 | Generated art too close to GT4's or to a real mark | M10 | the review in 5.4; the owner's sign-off per screen |
 
-## 9. Questions for the owner
+## 9. Decisions (the coordinator for the owner, 2026-11-08)
 
-1. Start on the GT mode map: if GT4 already uses Start there (M0), take Select instead?
-2. `ui.pause = native` in presets low to ultra (our pause page replaces GT4's pause movie), or keep GT4's pause and
-   open Settings from it with a button prompt?
-3. Button prompts for PlayStation pads: generic labels (our default, no Sony shapes), or the face-button shapes?
-4. Which QoL rows of section 6 to schedule, and whether progression-changing ones (arcade unlocks) are wanted.
+1. Start on the GT mode map, as the owner asked. If GT4 already uses Start there, Settings becomes an item of what
+   Start opens (section 3.2, point 2); Select only if Start opens nothing.
+2. `ui.pause = native` in presets low to ultra: our pause page replaces GT4's. Continue, Retry, Screen and Exit
+   behave exactly as GT4's.
+3. Button prompts match the connected controller, our own drawings, with the four face shapes for PlayStation pads.
+4. QoL Q1-Q8 (section 7.1) after M1-M9; arcade unlocks left out for now.
