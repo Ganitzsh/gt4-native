@@ -1,0 +1,57 @@
+vwait 600
+vwait 300
+vwait 300
+vwait 300
+button start 1
+vwait 6
+button start 0
+vwait 240
+button start 1
+vwait 6
+button start 0
+vwait 300
+capture home0
+button a 1
+vwait 6
+button a 0
+vwait 300
+capture home1
+button b 1
+vwait 6
+button b 0
+vwait 240
+button dpup 1
+vwait 6
+button dpup 0
+vwait 120
+button dpleft 1
+vwait 6
+button dpleft 0
+vwait 120
+button dpup 1
+vwait 6
+button dpup 0
+vwait 120
+button a 1
+vwait 6
+button a 0
+vwait 120
+button b 1
+vwait 6
+button b 0
+vwait 300
+capture prerace
+button a 1
+vwait 6
+button a 0
+vwait 600
+vwait 580
+capture bumper
+vwait 120
+button back 1
+vwait 6
+button back 0
+vwait 120
+capture chase
+vwait 60
+quit
