@@ -154,7 +154,12 @@ bool link_open(const char *name) {
             return false;
         }
         h = CreateFileMappingA(f, nullptr, PAGE_READWRITE, 0, GT4_LINK_SIZE, nullptr);
-        CloseHandle(f);   // (the mapping keeps the file open)
+        const DWORD e = GetLastError();   // (before CloseHandle, which may change it)
+        CloseHandle(f);                   // (the mapping keeps the file open)
+        if (!h) {
+            log_error("link: cannot map the file %s (Windows error %lu)", name, e);
+            return false;
+        }
     } else {
         h = OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE, name);
     }
@@ -172,6 +177,16 @@ bool link_open(const char *name) {
     g_hdr = static_cast<Gt4LinkHeader *>(view);
     if (g_hdr->magic != GT4_LINK_MAGIC || g_hdr->version != GT4_LINK_VERSION) {
         log_error("link: %s is not a version %u link", name, GT4_LINK_VERSION);
+        g_hdr = nullptr;
+        return false;
+    }
+    // The rings within the mapped size (a host and a game built from different protocol sizes would otherwise
+    // read and write past the section; a file the host made is grown silently by a larger mapping).
+    const uint64_t g2h_end = uint64_t(g_hdr->g2h_offset) + g_hdr->g2h_size, h2g_end = uint64_t(g_hdr->h2g_offset) + g_hdr->h2g_size;
+    if (g2h_end > GT4_LINK_SIZE || h2g_end > GT4_LINK_SIZE || g_hdr->g2h_offset < sizeof(Gt4LinkHeader) ||
+        g_hdr->h2g_offset < sizeof(Gt4LinkHeader)) {
+        log_error("link: %s has rings outside its %u bytes (g2h %u+%u, h2g %u+%u)", name, GT4_LINK_SIZE,
+                  g_hdr->g2h_offset, g_hdr->g2h_size, g_hdr->h2g_offset, g_hdr->h2g_size);
         g_hdr = nullptr;
         return false;
     }
