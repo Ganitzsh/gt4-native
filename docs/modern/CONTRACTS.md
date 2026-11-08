@@ -225,6 +225,7 @@ enum LightSource : uint8_t {
     kSrcCarLightReflection = 5,   // 0x00341A30: not sent as lights (reflections; N3 handles their sprites)
     kSrcSun = 6,
     kSrcWarning = 7,         // 003B88C8's entries2[], a source with blink > 0 (warning lamps; A7 step 1a)
+    kSrcCarLamp = 8,         // a car lamp whose group is not known (entries[], A7 step 1a): point, no direction
     kSrcOther = 15,
 };
 struct Light {

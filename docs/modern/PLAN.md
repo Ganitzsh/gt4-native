@@ -164,8 +164,10 @@ store to the lists' counts). The light-glow pass 003B88C8 draws from two per-fra
     `+0x40`, height `+0x44`, rgb `+0x54`, a flag, dx / dy): the car lamps. Its only writer is 003B8530, called only
     from `RaceCarModel` virtual 35 (003911D0); 003B8EA0 (virtual 36) draws the same lamps' glows. The entries don't
     keep the lamp group, and the element's flags say only "on with the lights" (bit 0) and "hide when not Y"
-    (bit 1). So step 1a sends every car lamp as a point `kSrcOther`, with no direction, and F2 decides how far
-    such lights reach. Reading the list runs no new code: whatever fills it is what the game's own glows use.
+    (bit 1). So step 1a sends every car lamp as a point `kSrcCarLamp` (a source of its own, so its small, dim
+    values in `light_sources.cpp` don't shrink anything else sent as `kSrcOther`), with no direction, and F2
+    decides how far such lights reach. Step 2 sends `kSrcHeadlight`, `kSrcTailLight` and `kSrcBrakeLight` where
+    the lamp group is known. Reading the list runs no new code: whatever fills it is what the game's own glows use.
   - One `Light` per entry: point, range 0, colour = the light's rgb x the pass's rgb / 255, intensity without the
     view-dependent term (fields as agreed with lane F).
   - When: 0033EAB8 empties both lists (003B80E8, which also saves the current matrix at `+0x21B0`) after the main
