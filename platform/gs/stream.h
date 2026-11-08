@@ -74,6 +74,10 @@ public:
     ~GraphicsStream();
     void setHostWriter(HostRecordWriter writer) { hostWriter = std::move(writer); }
     void setAudioWriter(AudioWriter writer) { audioWriter = std::move(writer); }
+    // GT4_REC_RUMBLE: a pad's motors changed (port, small 0 / 1, large 0-255), on the stream's thread.
+    void setRumbleWriter(std::function<void(uint32_t port, uint32_t small, uint32_t large)> writer) {
+        rumbleWriter = std::move(writer);
+    }
 
     // One whole record (header + payload).
     void record(const Gt4LinkRecord& header, const uint8_t* payload);
@@ -247,6 +251,7 @@ private:
     HostRecordWriter hostWriter;
     std::deque<bool> readsAsync;   // the read records not yet asked for by GT4_REC_GS_READ: gfx::kReadAsync each
     AudioWriter audioWriter;
+    std::function<void(uint32_t, uint32_t, uint32_t)> rumbleWriter;
     Stats counters;
     scene::SceneDecoder sceneDecoder_;   // the kScene records (docs/modern/CONTRACTS.md a.5, a.7; ticket A10)
     // a.5.1's checks: VSyncs that came while a scene frame was open (a list split across FrameLists), FrameLists that

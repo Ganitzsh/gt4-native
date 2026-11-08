@@ -22,6 +22,7 @@
 #include "test_scene.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <charconv>
 #include <chrono>
@@ -454,6 +455,10 @@ std::string gamepadCommand(gt4::Settings& s, SDL_GamepadButton button) {
     }
 }
 
+// The game's pad motors (GT4_REC_RUMBLE, from the stream's thread) for the main loop, per port: bit 31 set once the
+// game has sent any, bit 8 the small motor, bits 0-7 the large one.
+std::atomic<uint32_t> g_rumble[2];
+
 // The keyboard and the SDL gamepad now (standard layout), for the pad map (platform/input/input_map.h).
 gt4::input::Snapshot readInput(SDL_Gamepad* gamepad) {
     gt4::input::Snapshot s;
@@ -638,6 +643,9 @@ int run(const Options& options) {
             // under their text (the status page, Home).
             gsOptions.gameArgs.push_back(settings.hud == gt4::HudLayout::Centered ? "centered" : "stretched");
         }
+        gsOptions.rumble = [](uint32_t port, uint32_t small, uint32_t large) {
+            if (port < 2) g_rumble[port] = 0x80000000u | (small ? 0x100u : 0u) | (large & 0xFFu);
+        };
         gsOptions.replayPath = options.replay;
         gsOptions.lockstep = lockstep;
         gsOptions.loop = options.replayLoop;
@@ -699,6 +707,8 @@ int run(const Options& options) {
     SDL_Gamepad* gamepad = nullptr;
     SDL_Gamepad* gamepad2 = nullptr;   // pad 2: a second gamepad (SDL_EVENT_GAMEPAD_ADDED)
     bool pad2Sent = false;             // pad 2 sent as connected, so its removal is told to the game
+    uint32_t rumbleApplied[2] = {};    // g_rumble as last given to the gamepads (and a session's events)
+    Uint64 rumbleSentAt[2] = {};
     auto save = [&] {
         if (interactive && !settingsPath.empty()) {
             try { gt4::saveSettings(settings, settingsPath); }
@@ -981,6 +991,23 @@ int run(const Options& options) {
                     gt4::ps2::encodePad(gt4::ps2::PadInput{}, pad);
                     gs->sendPad(1, false, pad);
                     pad2Sent = false;
+                }
+                // The game's pad motors (GT4's own Options > Vibration decides whether it sends any) on the gamepads:
+                // the DUALSHOCK 2's large motor as the low-frequency rumble, its small one (on / off) as the high one.
+                // Re-sent every second while running (SDL's rumble lasts as long as asked); a session records them.
+                for (int p = 0; p < 2; ++p) {
+                    const uint32_t v = g_rumble[p].load();
+                    const Uint64 now = SDL_GetTicks();
+                    const bool motorOn = (v & 0x1FFu) != 0;
+                    if (v == rumbleApplied[p] && !(motorOn && now - rumbleSentAt[p] >= 1000)) continue;
+                    if (v != rumbleApplied[p] && session)
+                        session->record("rumble", "\"port\":" + std::to_string(p) + ",\"small\":" + std::to_string((v >> 8) & 1) +
+                                                      ",\"large\":" + std::to_string(v & 0xFF));
+                    rumbleApplied[p] = v;
+                    rumbleSentAt[p] = now;
+                    if (SDL_Gamepad* target = session ? nullptr : (p == 0 ? gamepad : gamepad2))
+                        SDL_RumbleGamepad(target, static_cast<Uint16>((v & 0xFF) * 257), (v & 0x100) ? 0xFFFF : 0,
+                                          motorOn ? 2000 : 0);
                 }
             }
             renderer->setStatus(gs->status());

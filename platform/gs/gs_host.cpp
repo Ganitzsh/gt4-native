@@ -861,6 +861,7 @@ std::unique_ptr<GsHost> GsHost::create(const Options& options, std::string& erro
         h.stream->setAudioWriter([sink = options.audio](uint32_t stream, uint32_t rate, const int16_t* frames, size_t count) {
             if (stream == 0) sink(rate, frames, count);  // stream 0: the game's final mix
         });
+    if (options.rumble) h.stream->setRumbleWriter(options.rumble);
     if (!options.gamePath.empty()) {
         ps2::GameLink::Options linkOptions;
         linkOptions.gamePath = options.gamePath;

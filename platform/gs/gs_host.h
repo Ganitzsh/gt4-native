@@ -27,6 +27,8 @@ public:
                                              // sessions, the same frames every run; a live game keeps it off)
         // The game's sound (stereo s16 frames at `rate` Hz), called on the worker thread as it arrives.
         std::function<void(uint32_t rate, const int16_t* frames, size_t count)> audio;
+        // The game's pad motors (GT4_REC_RUMBLE): port, small (0 / 1), large (0-255); called on the stream's thread.
+        std::function<void(uint32_t port, uint32_t small, uint32_t large)> rumble;
     };
     // Starts the game or opens the replay.
     static std::unique_ptr<GsHost> create(const Options& options, std::string& error);
