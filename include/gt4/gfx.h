@@ -902,6 +902,7 @@ enum LightSource : uint8_t {
     kSrcCarLightReflection = 5,   // render_reflection_car_lights 0x00341A30
     kSrcSun = 6,
     kSrcWarning = 7,              // blinking warning lamps
+    kSrcCarLamp = 8,              // a car lamp whose group is not known (003B88C8's entries[], A7 step 1a): point, no direction
     kSrcOther = 15,
 };
 struct Light {

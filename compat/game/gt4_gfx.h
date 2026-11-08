@@ -88,6 +88,10 @@ void gt4_scene_view_end(void *context);
 void gt4_scene_cmd(void *context, const void *cmd);
 /* A marker (include/gt4/gfx.h MarkerKind: 1/2 around render_post_effect, 3/4 around the panels' render_panel). */
 void gt4_scene_marker(void *context, int kind);
+/* A7 step 1a: the light-glow object `glow`'s two lists as Lights of the main view `view` (gt4_scene_view_begin's number):
+ * the car lamps and the course's light sources (warning lamps), as 0033EAB8 has them for the glow pass after the main
+ * view (a.5 rule 4). */
+void gt4_scene_glow_lights(void *context, unsigned int view, const void *glow);
 #ifdef __cplusplus
 }
 #endif

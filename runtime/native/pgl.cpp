@@ -18,6 +18,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -546,6 +547,75 @@ void gt4_scene_marker(uint32_t context, int kind) {
     r.marker = static_cast<uint16_t>(kind);
     r.view = g_scene.openView;
     sceneAppend(context, &r, sizeof r);
+}
+
+// A7 step 1a (CONTRACTS.md a.5 rule 4, PLAN A7): the light-glow object's two lists as Lights naming the main view (`view`),
+// read only (the flare read 003B8848 and the glows 003B88C8 see them unchanged), after 0033EAB8's method 0x3F0: the lists
+// are emptied by 003B80E8 after the main view and the mirror and filled since, with this frame's camera. In `glow`
+// (RacePS2Base +0xDA0):
+// - entries[] at +0xA38, count at +0xA34 (36 bytes): the car lamps, from RaceCarModel's virtual 35 (003B8530): the lamp
+//   element's +0x30 point in view space, the element at +0xC, the visibility flag at +0x10. The element has the lamp's
+//   size (+0x40, +0x44) and rgb (+0x54). Sent as kSrcCarLamp: its flags don't say which lamp it is (the group does,
+//   which the entry doesn't keep), and intensity 1 (the entry's +0x14 is the game's level times a view-dependent term).
+//   Sent whatever the entry's visibility flag: a lamp lights its surroundings even when its glow is hidden, so its
+//   width and height are its size, not 0 (unlike a course source's below, whose 0 means 'glow not drawn').
+// - entries2[] at +0x184C, count at +0x1848 (24 bytes): the course's light sources, from 003B7B70: view-space x, y, z,
+//   a distance term, the visibility flag, the source, whose first word indexes the parameters at +0x222C (60 bytes: rgb,
+//   the lit glow's scale at +0xC, the blink and its phase at +0x30 / +0x34); its own phase at +0x1C. A blink above 0 is
+//   a warning lamp (kSrcWarning) with the game's smooth factor sin((phase + the source's) x 2 pi) x 0.5 + 0.5 in
+//   intensity; else kSrcCourseGlow (none seen on S.S. Route 5: the street lamps are not here). width = height = the lit
+//   glow's scale when it is drawn, else 0.
+// Colours as 003B88C8 draws them: the element's rgb times the pass's (+0x21F0) for a car lamp, the parameters' rgb for a
+// course source. Their product is already 0..1 (measured: car lamps up to 0.77 on S.S. Route 5 Reverse at night), so no
+// further scale. The distance attenuation is left out (view-dependent; the host's range).
+void gt4_scene_glow_lights(uint32_t context, uint32_t view, uint32_t glow) {
+    namespace scene = gfx::scene;
+    if (!gt4_scene_on() || !g_scene.inFrame || !view || !glow) return;
+    auto light = [&](uint8_t source, uint32_t id) {
+        scene::Light r{};
+        r.prefix = {scene::kLight, scene::kVersion};
+        r.view = static_cast<uint16_t>(view);
+        r.kind = scene::kLightPoint;
+        r.source = source;
+        r.id = id;
+        r.entrant = 0xFFFFFFFFu;
+        r.intensity = 1.0f;
+        return r;
+    };
+    const int32_t cars = guest_ref<int32_t>(glow + 0xA34);
+    for (int32_t k = 0; k < cars && k < 100; ++k) {
+        const uint32_t entry = glow + 0xA38 + 0x24u * static_cast<uint32_t>(k);
+        const uint32_t element = guest_ref<uint32_t>(entry + 0xC);
+        if (!element) continue;
+        scene::Light r = light(scene::kSrcCarLamp, element);
+        for (int i = 0; i < 3; ++i) {
+            r.position[i] = guest_ref<float>(entry + 4u * i);
+            r.colour[i] = guest_ref<float>(element + 0x54 + 4u * i) * guest_ref<float>(glow + 0x21F0 + 4u * i);
+        }
+        r.width = guest_ref<float>(element + 0x40);
+        r.height = guest_ref<float>(element + 0x44);
+        sceneAppend(context, &r, sizeof r);
+    }
+    const int32_t sources = guest_ref<int32_t>(glow + 0x1848);
+    for (int32_t k = 0; k < sources && k < 100; ++k) {
+        const uint32_t entry = glow + 0x184C + 0x18u * static_cast<uint32_t>(k);
+        const uint32_t source = guest_ref<uint32_t>(entry + 0x14);
+        if (!source) continue;
+        const int32_t index = guest_ref<int32_t>(source);
+        if (index < 0 || index >= 256) continue;   // (the table's length isn't known; a bad index reads its neighbours)
+        const uint32_t params = glow + 0x222C + 0x3Cu * static_cast<uint32_t>(index);
+        const float blink = guest_ref<float>(params + 0x30);
+        scene::Light r = light(blink > 0.0f ? scene::kSrcWarning : scene::kSrcCourseGlow, source);
+        for (int i = 0; i < 3; ++i) {
+            r.position[i] = guest_ref<float>(entry + 4u * i);
+            r.colour[i] = guest_ref<float>(params + 4u * i);
+        }
+        const bool visible = guest_ref<int32_t>(entry + 0x10) != 0;
+        r.width = r.height = visible ? guest_ref<float>(params + 0xC) : 0.0f;   // (a glow not drawn: 0)
+        if (blink > 0.0f)
+            r.intensity = std::sin((guest_ref<float>(params + 0x34) + guest_ref<float>(source + 0x1C)) * 6.2831855f) * 0.5f + 0.5f;
+        sceneAppend(context, &r, sizeof r);
+    }
 }
 
 // One Cmd 0049D328 draws, after 0049E480 / 0049E548 and before its items (CONTRACTS.md a.4): its object-to-view (set 0
