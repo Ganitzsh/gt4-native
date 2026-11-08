@@ -197,6 +197,7 @@ std::vector<std::string> describeGpus(VkInstance instance, SDL_Window* window) {
 }
 
 struct Renderer::Impl {
+    std::function<void()> waitCallback;   // setWaitCallback: called in the frame fence's and the acquire's waits
     SDL_Window* window = nullptr;
     VkInstance instance = VK_NULL_HANDLE;
     VkSurfaceKHR surface = VK_NULL_HANDLE;
@@ -818,7 +819,16 @@ struct Renderer::Impl {
         Frame& frame = frames[slot];
         {
             GT4_STAGE_SCOPE("render: waiting for the GPU (frame slot)");
-            check(vkWaitForFences(device.device, 1, &frame.fence, VK_TRUE, UINT64_MAX), "vkWaitForFences");
+            if (!waitCallback) {
+                check(vkWaitForFences(device.device, 1, &frame.fence, VK_TRUE, UINT64_MAX), "vkWaitForFences");
+            } else {   // (in 1 ms slices, the callback between them)
+                VkResult waited;
+                while ((waited = vkWaitForFences(device.device, 1, &frame.fence, VK_TRUE, 1000000)) == VK_TIMEOUT) {
+                    GT4_STAGE_SCOPE("render: the wait callback (fence)");
+                    waitCallback();
+                }
+                check(waited, "vkWaitForFences");
+            }
         }
         readTimestamps(frame, slot);
         if (pipeline && passTimingWanted) {   // (its fence has signalled)
@@ -833,7 +843,22 @@ struct Renderer::Impl {
         bool suboptimal = false;
         if (!headless) {
             GT4_STAGE_SCOPE("render: acquiring a swapchain image");
-            VkResult result = vkAcquireNextImageKHR(device.device, swapchain, 100000000, frame.acquired, VK_NULL_HANDLE, &index);
+            VkResult result;
+            if (!waitCallback) {
+                result = vkAcquireNextImageKHR(device.device, swapchain, 100000000, frame.acquired, VK_NULL_HANDLE,
+                                               &index);
+            } else {   // (in 1 ms slices, the callback between them; 100 ms in all, as the single call)
+                const Uint64 giveUp = SDL_GetTicksNS() + 100000000ull;
+                const auto acquire = [&] {
+                    return vkAcquireNextImageKHR(device.device, swapchain, 1000000, frame.acquired, VK_NULL_HANDLE,
+                                                 &index);
+                };
+                while ((result = acquire()) == VK_TIMEOUT || result == VK_NOT_READY) {
+                    if (SDL_GetTicksNS() >= giveUp) break;
+                    GT4_STAGE_SCOPE("render: the wait callback (acquire)");
+                    waitCallback();
+                }
+            }
             if (result == VK_TIMEOUT || result == VK_NOT_READY) return false;
             if (result == VK_ERROR_OUT_OF_DATE_KHR) { resized = true; return false; }
             if (result == VK_ERROR_SURFACE_LOST_KHR) { recreateSurface(); resized = true; return false; }
@@ -1029,6 +1054,7 @@ void Renderer::capture(const std::string& path) {
     if (std::find(paths.begin(), paths.end(), path) == paths.end()) paths.push_back(path);
 }
 void Renderer::setStatus(const std::string& text) { impl->status = text; }
+void Renderer::setWaitCallback(std::function<void()> callback) { impl->waitCallback = std::move(callback); }
 void Renderer::setMenu(const gt4::MenuView* view) {
     if (view) impl->menu = *view;
     else impl->menu.reset();

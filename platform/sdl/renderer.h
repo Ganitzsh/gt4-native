@@ -9,6 +9,7 @@
 
 #include <volk.h>
 
+#include <functional>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -46,6 +47,10 @@ public:
     // Renders and presents one frame. Returns false when nothing was presented (minimized, out of date).
     // Throws PresentationLost when the window's display cannot be presented to by this GPU any more.
     bool draw(float deltaSeconds);
+    // Called while draw waits, about every millisecond (PLAN.md D11: main.cpp samples the pads there): only in the
+    // wait for the frame slot's fence and for a swapchain image, before the frame is recorded, never between a submit
+    // and its present. It may not call the renderer. Empty (the default): the waits are single calls, as before.
+    void setWaitCallback(std::function<void()> callback);
     VkExtent2D drawableExtent() const;
     void setControls(float horizontal, bool action);
     void capture(const std::string& path);

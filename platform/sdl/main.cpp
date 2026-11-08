@@ -924,6 +924,15 @@ int run(const Options& options) {
         const char* e = std::getenv("GT4_PAD_SAMPLING");
         return !(e && std::strcmp(e, "frame") == 0);
     }();
+    // ...and while Renderer::draw waits for the frame slot or a swapchain image (vsync without a frame-rate cap: the
+    // pass waits there, not above), through its wait callback.
+    const auto padsInDraw = [&] {
+        if (gs && gs->live()) {
+            SDL_PumpEvents();   // (the keyboard's and the gamepads' state; their events stay queued)
+            sendPads(true);
+        }
+    };
+    if (padsWhileWaiting) renderer->setWaitCallback(padsInDraw);
     while (running) {
         for (; nextScriptedKey < scriptedKeys.size() && scriptedKeys[nextScriptedKey].frame <= frames; ++nextScriptedKey) {
             SDL_Event key{};
@@ -1058,6 +1067,7 @@ int run(const Options& options) {
             renderer = makeRenderer(settings.gpu);
             activeGpu = settings.gpu;
             if (gs) renderer->useGameFrame(true);
+            if (padsWhileWaiting) renderer->setWaitCallback(padsInDraw);
         }
         // Presenting only the game's frames (no frame interpolation, no frame-rate cap, the menu closed): the loop
         // waits for the next one rather than presenting the same picture again at the display's refresh rate (on a
