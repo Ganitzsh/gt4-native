@@ -666,6 +666,10 @@ read, then the one that receives `FrameEnd`. (Race route: 38 reads in about 4900
     arrived before its `ViewEnd`; A8 sends them before the main view's `ViewEnd` where it can. Vehicles come at
     the kick, after every view, so a package never holds them (`SceneView::vehicles` stays empty): consumers read
     them from `FrameList::scene`, and a substitution in a list cut before `FrameEnd` has none.
+  - The same holds for lights in practice. The lamp lists are filled after the main view (A7, a.5 rule 4): on a
+    Route 5 night run all 3,413 `Light`s came after their view's `ViewEnd`, so packages carry almost none.
+    Consumers that need lamps (F2, B7) read `SceneFrame` / `FrameList::scene`, and a substitution in a list cut
+    before `FrameEnd` doesn't see them. F2b's lamps are the host's own and don't depend on the records.
 - A partial list is drawn before its frame's `FrameEnd` has arrived. So a view in a partial list is validated on
   its own, at its `ViewEnd`, not at `FrameEnd`.
   - **A view whose `ViewEnd` arrived before the cut** can be substituted in the partial list, at its Light
