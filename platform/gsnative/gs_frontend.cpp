@@ -494,9 +494,16 @@ void GsFrontend::readStarted(const GsMemory::Transfer& t) {
             Target& o = targets[owner - 1];
             const bool colour = t.spsm == PSMCT32 || t.spsm == PSMCT24 || t.spsm == PSMCT16 || t.spsm == PSMCT16S;
             const bool layout = o.psm == t.spsm || (o.psm == PSMCT32 && t.spsm == PSMCT24);
+            // P2c: a Z buffer read in a Z format of its layout (Photo Travel's focus probe: Z32 reads of its Z24 buffer)
+            const bool z = t.spsm == PSMZ32 || t.spsm == PSMZ24 || t.spsm == PSMZ16 || t.spsm == PSMZ16S;
+            const bool zLayout = (t.spsm == PSMZ32 || t.spsm == PSMZ24) ? (o.psm == PSMZ32 || o.psm == PSMZ24) : o.psm == t.spsm;
             if (oneOwner && !o.depth && o.bp == t.sbp && o.bw == t.sbw && colour && layout) {
                 gpuRead = {owner, t.ssax, t.ssay, t.rrw, t.rrh, t.spsm, readAsync};
                 gpuReadPending = true;
+            } else if (oneOwner && o.depth && o.bp == t.sbp && o.bw == t.sbw && z && zLayout) {
+                gpuRead = {owner, t.ssax, t.ssay, t.rrw, t.rrh, t.spsm, readAsync, true, o.inverted, o.psm};
+                gpuReadPending = true;
+                ++stats.depthReads;
             } else {
                 auto& kinds = stats.readMismatches;
                 constexpr uint32_t kMax = Stats::kReadMismatchKinds;

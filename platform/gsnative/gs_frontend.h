@@ -164,11 +164,14 @@ struct Display {
     uint32_t target1 = 0, target2 = 0;   // the targets read circuits 1 and 2 show (0: memory, not drawn this way)
 };
 
-// A GS -> host read of pixels a draw made: the rectangle of a colour target in GS pixels, wanted packed in
-// `psm` (the target's own format and layout), from the GPU.
+// A GS -> host read of pixels a draw made: the rectangle of a target in GS pixels, wanted packed in `psm` (the
+// target's own format and layout), from the GPU. A Z buffer's (P2c: Photo Travel's focus probe) is read as the GS's
+// Z, floor(depth x 2^32) at most its format's largest, turned round (max - Z) while the game has it inverted.
 struct ReadRequest {
     uint32_t target = 0, x = 0, y = 0, width = 0, height = 0, psm = 0;
     bool async = false;   // the game does not wait for it (gfx::kReadAsync)
+    bool depth = false, inverted = false;   // a Z buffer (Target::inverted at the read)
+    uint32_t targetPsm = 0;                 // a Z buffer's own format (its largest Z)
 };
 
 // One frame: commands in the game's order.
@@ -379,6 +382,7 @@ public:
         // PLAN P2's reinterpretation fallbacks: 0 expected on the captures)
         uint64_t readFallbacks = 0;
         uint64_t depthTextures = 0;   // of `reinterpreted`, Z buffers read as Z textures, built on the GPU (P2c)
+        uint64_t depthReads = 0;      // GS -> host reads of a Z buffer in its layout, from the GPU's depths (P2c)
         uint64_t byAddress = 0;   // textures still named by graphics-memory address (lookups)
         uint64_t droppedDraws = 0;   // past the target limit (targetFor)
         uint64_t targetsReused = 0;  // slots given to a new buffer at the limit
