@@ -117,3 +117,29 @@ session from a copy of `odin-saves-pe-race2`: the map, a dialog on it, Home, bac
 - **The map's D-pad** moves between icons (with that repeat); GT4's pointer glides only with the stick.
 - **The major menu page** was never set in this run (map, dialogs, Home and back): it is not the page detection
   M8 needs. Open point 1 stays open for M8.
+
+## 8. The race pause, measured for M7 (2026-11-08)
+
+**Method.** Release games of M7's code (`game_src/func_003C3820.cpp`, the copy of `RacePause::update`), with
+`GT4_TRACE_MENU=1` logging the pause's items and the brightness and contrast as either pause leaves them, and
+`GT4_VEHICLE_LOG` for the player's car. Headless live sessions from copies of `odin-saves-pe-race2` (GT mode, Pan
+Euro race 2, lane A's route) and `r5_saves` (Arcade, licenses), with `--set ui.pause=native` or without.
+
+- **Which pause object.** Start (RaceInput bit 0x40) calls `pauseStart` with `RaceBasic + 0xE400`, a pointer to the
+  mode's `RacePause`; bit 0x80 calls it with `+ 0xE404`, the `SimplePause` the `RaceSolitaire` family and
+  `RaceSinglePlayer` build, only before the start. Select is not 0x80: in a license test it changes the camera.
+  No run reached the `SimplePause`; it is GT4's by construction: entry 4 of its vtable at 00681B60 (8-byte entries,
+  the function at + 0x24; entry 0 is the type_info header), the `vt[4]` both `updatePause`s call, holds 003C3A90
+  (`SimplePause::update`, not copied), where entry 4 of `RacePause`'s, 00681B28, holds 003C3820 (read from the ELF).
+- **Items per mode** (the pause object's `+0x28` retry, `+0x2C` confirm exit, `+0x30` screen): GT mode
+  championship: confirm exit and screen. Arcade time trial (`RaceFreeRun`, `func_00112620`) and single race
+  (`RaceArcade`): screen only. B license test (`RaceLicense`, its constructor sets `+0x28`): retry and screen.
+- **GT4's order** (GT mode): Continue, Exit, Screen Settings. Exit asks first when `+0x2C` is set.
+- **Screen Settings**: brightness and contrast are steps from **-5 to 5** (both stop there), stored at
+  `D_00622F4C + 0x39E34` (normal; `+ 0x39E44` when `+0x34`): the save's 4 and -2 read back there.
+- **The car while paused**: with GT4's pause and with the native page alike, every logged field of the player's car
+  stays the same while paused (442 and 2,298 VBlanks, at 105 km/h) and the next tick goes on from it.
+- **The native page** (`ui.pause = native`): `pause.strb` never starts, the race clock stops while it is open;
+  Continue and Triangle go on (3), Exit leaves through each mode's own switch (4: the GT mode result, the time
+  trial's and the single race's menus), Retry restarts the license test (5). Settings shows disabled: the host does
+  not answer the page's schema request before M4.

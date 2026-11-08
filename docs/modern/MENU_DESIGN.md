@@ -523,8 +523,8 @@ switch) and in a mode with Retry, whose answer 5 must reach its switch; in GT mo
 time, lap and car state identical to a pause with no page (D6's fields or A9); Retry and Exit give GT4's results;
 brightness and contrast stored as GT4's pause stores them. Settings shows disabled until M4's bridge sends the
 schema, and never enabled without one (the Settings-in-a-race check and the time limit on a Settings tab are M4's).
-A `SimplePause` mode (`RaceSolitaire` or `RaceSinglePlayer`) under `native` shows GT4's own pause, unchanged.
-`ui.pause = gt4` loads `pause.strb` as before.
+`SimplePause` is GT4's by construction (its vtable's update slot holds 003C3A90, which isn't copied), and no M7 code
+path references it. `ui.pause = gt4` loads `pause.strb` as before.
 
 **M8: Start on the GT mode map (S).** The map detection and the button from M0. Depends: M5, M0. Acceptance:
 session test: Start on the map opens the hub, other pages of `"gtmode"` are unaffected, the map's state after close
@@ -595,7 +595,7 @@ about progression later.
 | Unknown script behaviour around our hooks (what `"option"` leaves, Start on the map) | M6, M8 | M0 first; hooks restore exactly the state M0 logs; session tests compare G before and after |
 | Adhoc VM coverage | none added | we run no new script; the VM only runs GT4's own scripts as today |
 | Drafts on the path | `RacePause::callFunction` (0 % matched), 0022BC20 (corrected draft) | not hooked; our hooks are on matched code only |
-| Vtable reachability of the pause | M7 | one copy of `RacePause::update`, which no class overrides and both `updatePause`s reach through the pause's vtable (3.2, point 4); M7 runs a pause in GT mode, in free run and in a mode with Retry, and checks a `SimplePause` mode is GT4's |
+| Vtable reachability of the pause | M7 | one copy of `RacePause::update`, which no class overrides and both `updatePause`s reach through the pause's vtable (3.2, point 4); M7 runs a pause in GT mode, in free run and in a mode with Retry; `SimplePause` is GT4's by construction (its vtable's update slot holds 003C3A90) |
 | The pad bits GT4 maps to Start (`0x40`, `0x80`) come from its controller config | M5, M8 | the page reads the pad record and GT4's mapping (M0), never a fixed bit |
 | A page left open when GT4 changes sequence (a race ends, a timer) | M5 | the page host closes on any sequence or project change and logs it |
 | `original` drift | all | `ui.entry = hotkey`, `ui.pause = gt4`; `ORIG` and `STREAM` with no page opened |
