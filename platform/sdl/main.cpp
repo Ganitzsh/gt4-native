@@ -87,6 +87,8 @@ const char* kUsage =
     "  --replay-loop        start the replay again at its end\n"
     "  --import-save PATH   copy Gran Turismo 4's saves from a PS2 memory card image (PCSX2 .ps2, a raw dump),\n"
     "                       a folder memory card or a .psu export into the save folder, then exit\n"
+    "  --export-save FILE   write the save folder's saves out, then exit: FILE.ps2 a new PCSX2 memory card with all\n"
+    "                       of Gran Turismo 4's saves, FILE.psu one save (--export-name NAME, default BASCUS-97328GAMEDATA)\n"
     "  --saves DIR          the save folder (default %LOCALAPPDATA%\\gt4-native\\saves); passed to the game\n"
     "Interactive runs read and save the settings file in the user's preference directory; scripted runs\n"
     "(--frames, --smoke-test, --session-dir, --headless) start from the defaults unless --settings is given.\n"
@@ -152,7 +154,7 @@ struct Options {
     std::string captureDir;
     std::string profileJson;    // --profile-json: one line of timings per presented frame
     VkExtent2D size{0, 0};   // headless output; 0 = the window size setting
-    std::string gpu, settingsPath, sessionDirectory, capture, importSave, saves;
+    std::string gpu, settingsPath, sessionDirectory, capture, importSave, exportSave, exportName, saves;
     std::vector<std::pair<std::string, std::string>> sets;
 };
 
@@ -228,6 +230,8 @@ Options parse(int argc, char** argv) {
         else if (a == "--replay") o.replay = value(i);
         else if (a == "--replay-loop") o.replayLoop = true;
         else if (a == "--import-save") o.importSave = value(i);
+        else if (a == "--export-save") o.exportSave = value(i);
+        else if (a == "--export-name") o.exportName = value(i);
         else if (a == "--saves") o.saves = value(i);
         else if (a == "--preset") o.sets.emplace_back("graphics.preset", value(i));
         else if (a == "--set") {
@@ -509,6 +513,19 @@ std::string jsonQuote(const std::string& text) {
 }
 
 int run(const Options& options) {
+    if (!options.exportSave.empty()) {   // the native saves out, for PCSX2 or a PS2 (docs/SAVES.md)
+        const std::filesystem::path folder =
+            options.saves.empty() ? gt4::saves::defaultSaveFolder() : std::filesystem::u8path(options.saves);
+        const std::filesystem::path out = std::filesystem::u8path(options.exportSave);
+        std::string ext = out.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        gt4::saves::ExportResult r;
+        if (ext == ".ps2") r = gt4::saves::exportCard(folder, out);
+        else if (ext == ".psu") r = gt4::saves::exportSave(folder, options.exportName.empty() ? "BASCUS-97328GAMEDATA" : options.exportName, out);
+        else r.message = "--export-save: the file must end in .psu (one save) or .ps2 (a PCSX2 memory card)";
+        std::printf("Saves: %s\n", r.message.c_str());
+        return r.ok ? 0 : 1;
+    }
     if (!options.importSave.empty()) {   // a save from a PS2, into the native save folder (docs/SAVES.md)
         const std::filesystem::path folder =
             options.saves.empty() ? gt4::saves::defaultSaveFolder() : std::filesystem::u8path(options.saves);
@@ -1436,7 +1453,7 @@ void usePackagedGame(Options& o) {
     const fs::path game = base / "gt4_game.exe", elf = base / "game" / "CORE.GT4.elf";
     std::error_code error;
     if (!fs::is_regular_file(game, error)) return;
-    if (!o.importSave.empty()) {   // in a package, a PS2 save goes into the package's own save folder
+    if (!o.importSave.empty() || !o.exportSave.empty()) {   // in a package, the package's own save folder
         if (o.saves.empty()) o.saves = utf8(base / "saves");
         return;
     }

@@ -135,7 +135,26 @@ the same name is kept beside the new one, renamed `NAME.before-import-<date>`.
 
 On Linux, run the import on a Windows PC, or copy the save folders by hand: a PCSX2 folder memory card already holds
 them as folders (`BASCUS-97328GAMEDATA`), so copy those into `saves/`. To back your progress up, copy `saves/`.
-More detail: [docs/SAVES.md](docs/SAVES.md).
+
+## Taking your saves to PCSX2 or a PS2
+
+```sh
+gt4_host.exe --export-save "path/to/GT4.ps2"
+```
+
+writes a new 8 MB memory card image holding every Gran Turismo 4 save in `saves/`. In PCSX2, put it in the memory
+card folder and choose it for slot 1 (Settings > Memory Cards); GT4 then finds the save as it would on a PS2.
+
+```sh
+gt4_host.exe --export-save "path/to/GT4.psu"
+```
+
+writes one save as a `.psu` (by default `BASCUS-97328GAMEDATA`, the career and garage; another with
+`--export-name NAME`). PCSX2's memory card editor and uLaunchELF on a PS2 import it onto a card.
+
+Copying a save folder from `saves/` into a PCSX2 *folder* memory card does not work: GT4 finds no data there. A folder
+card also needs the files PCSX2 writes when it formats one or saves into it (`_pcsx2_superblock` and per-folder
+metadata), which a plain copy lacks. Use `--export-save` instead. More detail: [docs/SAVES.md](docs/SAVES.md).
 
 ## HD texture packs
 

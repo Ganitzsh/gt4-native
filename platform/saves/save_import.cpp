@@ -4,6 +4,7 @@
 #include "save_import.h"
 
 #include <algorithm>
+#include <bit>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -342,6 +343,63 @@ ImportResult importSave(const fs::path& source, const fs::path& saveFolder) {
     return r;
 }
 
+namespace {
+
+// One native save folder's files, the game's own only (no "." names), sorted; empty with `error` set when it can't be
+// read or a name is too long for a card (31 bytes).
+std::vector<std::pair<std::string, std::vector<unsigned char>>> saveFiles(const fs::path& dir, std::string& error) {
+    std::vector<std::pair<std::string, std::vector<unsigned char>>> files;
+    std::error_code ec;
+    for (const auto& f : fs::directory_iterator(dir, ec)) {
+        const std::string name = text(f.path().filename());
+        if (!f.is_regular_file(ec) || name.empty() || name[0] == '.') continue;   // the game's own files only
+        if (name.size() > 31) {
+            error = "a file name too long for a card: " + name;
+            return {};
+        }
+        std::vector<unsigned char> bytes;
+        if (!readFile(f.path(), bytes)) {
+            error = "cannot read " + text(f.path());
+            return {};
+        }
+        files.emplace_back(name, std::move(bytes));
+    }
+    std::sort(files.begin(), files.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    return files;
+}
+
+// Now on the PS2's clock, which keeps JST.
+std::tm nowJst() {
+    const std::time_t now = std::time(nullptr) + 9 * 3600;
+    std::tm jst{};
+#ifdef _WIN32
+    gmtime_s(&jst, &now);
+#else
+    gmtime_r(&now, &jst);
+#endif
+    return jst;
+}
+
+// `bytes` written to `out` whole or not at all: beside it, then renamed over.
+bool writeWhole(const fs::path& out, const std::vector<unsigned char>& bytes) {
+    std::error_code ec;
+    const fs::path temp = out.parent_path() / fs::u8path("." + text(out.filename()) + ".tmp");
+    {
+        std::ofstream f(temp, std::ios::binary);
+        f.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        f.close();
+        if (!f) {
+            fs::remove(temp, ec);
+            return false;
+        }
+    }
+    fs::rename(temp, out, ec);
+    if (ec) fs::remove(temp, ec);
+    return !ec;
+}
+
+}  // namespace
+
 ExportResult exportSave(const fs::path& saveFolder, const std::string& save, const fs::path& out) {
     ExportResult r;
     const fs::path dir = saveFolder / fs::u8path(save);
@@ -350,29 +408,13 @@ ExportResult exportSave(const fs::path& saveFolder, const std::string& save, con
         r.message = "no save " + save + " in " + text(saveFolder);
         return r;
     }
-    std::vector<std::pair<std::string, std::vector<unsigned char>>> files;
-    for (const auto& f : fs::directory_iterator(dir, ec)) {
-        const std::string name = text(f.path().filename());
-        if (!f.is_regular_file(ec) || name.empty() || name[0] == '.') continue;   // the game's own files only
-        if (name.size() > 31) {
-            r.message = "a file name too long for a card: " + name;
-            return r;
-        }
-        std::vector<unsigned char> bytes;
-        if (!readFile(f.path(), bytes)) {
-            r.message = "cannot read " + text(f.path());
-            return r;
-        }
-        files.emplace_back(name, std::move(bytes));
+    std::string error;
+    const auto files = saveFiles(dir, error);
+    if (!error.empty()) {
+        r.message = error;
+        return r;
     }
-    std::sort(files.begin(), files.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-    const std::time_t now = std::time(nullptr) + 9 * 3600;   // the PS2's clock keeps JST
-    std::tm jst{};
-#ifdef _WIN32
-    gmtime_s(&jst, &now);
-#else
-    gmtime_r(&now, &jst);
-#endif
+    const std::tm jst = nowJst();
     // the folder (its length: the entries in it, "." and ".." included), ".", "..", then each file and its data
     // in 1024-byte units, as uLaunchELF and PCSX2's memory card editor write it
     std::vector<unsigned char> psu;
@@ -384,21 +426,7 @@ ExportResult exportSave(const fs::path& saveFolder, const std::string& save, con
         psu.insert(psu.end(), bytes.begin(), bytes.end());
         psu.resize(psu.size() + (1024 - bytes.size() % 1024) % 1024, 0);
     }
-    // whole or not at all: written beside, then renamed over
-    const fs::path temp = out.parent_path() / fs::u8path("." + text(out.filename()) + ".tmp");
-    {
-        std::ofstream f(temp, std::ios::binary);
-        f.write(reinterpret_cast<const char*>(psu.data()), static_cast<std::streamsize>(psu.size()));
-        f.close();
-        if (!f) {
-            fs::remove(temp, ec);
-            r.message = "cannot write " + text(out);
-            return r;
-        }
-    }
-    fs::rename(temp, out, ec);
-    if (ec) {
-        fs::remove(temp, ec);
+    if (!writeWhole(out, psu)) {
         r.message = "cannot write " + text(out);
         return r;
     }
@@ -407,4 +435,168 @@ ExportResult exportSave(const fs::path& saveFolder, const std::string& save, con
     return r;
 }
 
+namespace {
+
+// The PS2 memory card's ECC: three bytes for each 128-byte quarter of a page (a column parity and two line parities,
+// the Hamming code the card's controller keeps), as the public descriptions of the card give it.
+void ecc128(const unsigned char* d, unsigned char out[3]) {
+    static const unsigned char masks[7] = {0x55, 0x33, 0x0F, 0x00, 0xAA, 0xCC, 0xF0};
+    unsigned char column = 0x77, line0 = 0x7F, line1 = 0x7F;
+    for (int i = 0; i < 128; ++i) {
+        const unsigned char b = d[i];
+        unsigned char c = 0;
+        for (int k = 0; k < 7; ++k) c |= static_cast<unsigned char>((std::popcount(static_cast<unsigned>(b & masks[k])) & 1) << k);
+        column ^= c;
+        if (std::popcount(static_cast<unsigned>(b)) & 1) {
+            line0 ^= static_cast<unsigned char>(~i);
+            line1 ^= static_cast<unsigned char>(i);
+        }
+    }
+    out[0] = column;
+    out[1] = line0 & 0x7F;
+    out[2] = line1 & 0x7F;
+}
+
+}  // namespace
+
+ExportResult exportCard(const fs::path& saveFolder, const fs::path& out) {
+    ExportResult r;
+    // GT4's saves in the folder (BASCUS-97328...), each with its files
+    std::vector<SaveEntry> saves;
+    std::error_code ec;
+    for (const auto& sub : fs::directory_iterator(saveFolder, ec)) {
+        const std::string name = text(sub.path().filename());
+        if (!sub.is_directory(ec) || !ours(name)) continue;
+        std::string error;
+        SaveEntry s;
+        s.folder = name;
+        s.files = saveFiles(sub.path(), error);
+        if (!error.empty()) {
+            r.message = error;
+            return r;
+        }
+        saves.push_back(std::move(s));
+    }
+    if (saves.empty()) {
+        r.message = "no Gran Turismo 4 save (" + std::string(kProduct) + "...) in " + text(saveFolder);
+        return r;
+    }
+    std::sort(saves.begin(), saves.end(), [](const SaveEntry& a, const SaveEntry& b) { return a.folder < b.folder; });
+
+    // An 8 MiB card in the standard layout (what the PS2 and PCSX2 format): 512-byte pages, two to a cluster, 8192
+    // clusters; the superblock in cluster 0, the indirect FAT cluster at 8, the FAT in 9-40, files from 41 (cluster
+    // numbers in the FAT and the directories count from there), 8135 of them; the last two erase blocks are the
+    // backups. Pages not used are written as zeros (nothing reads them: the FAT says which clusters are free).
+    constexpr uint32_t kPage = 512, kPerCluster = 2, kCluster = kPage * kPerCluster, kClusters = 8192;
+    constexpr uint32_t kIndirect = 8, kFatFirst = 9, kFatClusters = 32, kAllocOffset = 41, kAllocEnd = 8135;
+    std::vector<unsigned char> card(static_cast<size_t>(kClusters) * kCluster, 0);
+    const auto at = [&](uint32_t cluster) { return static_cast<size_t>(cluster) * kCluster; };
+    // the FAT: free (0x7FFFFFFF) for every allocatable cluster, then chains as files are laid down
+    std::vector<uint32_t> fat(kFatClusters * (kCluster / 4), 0xFFFFFFFFu);
+    for (uint32_t k = 0; k < kAllocEnd; ++k) fat[k] = 0x7FFFFFFFu;
+    uint32_t next = 0;   // the next free allocatable cluster
+    const auto chain = [&](size_t bytes) -> int64_t {   // the first cluster of a chain for `bytes`, or -1: full
+        const uint32_t n = static_cast<uint32_t>(std::max<size_t>(1, (bytes + kCluster - 1) / kCluster));
+        if (next + n > kAllocEnd) return -1;
+        const uint32_t first = next;
+        for (uint32_t k = 0; k < n; ++k) fat[first + k] = k + 1 < n ? 0x80000000u | (first + k + 1) : 0xFFFFFFFFu;
+        next += n;
+        return first;
+    };
+    const auto writeChain = [&](uint32_t first, const std::vector<unsigned char>& bytes) {
+        std::memcpy(card.data() + at(kAllocOffset + first), bytes.data(), bytes.size());   // (a chain is contiguous here)
+    };
+    const std::tm jst = nowJst();
+    // the root: ".", "..", then each save's folder; each folder: ".", "..", then its files
+    std::vector<unsigned char> root;
+    const int64_t rootCluster = chain(static_cast<size_t>(saves.size() + 2) * 512);
+    std::vector<std::vector<unsigned char>> dirs;
+    std::vector<int64_t> dirClusters;
+    for (const SaveEntry& s : saves) dirClusters.push_back(chain((s.files.size() + 2) * 512));
+    putEntry(root, 0x8427, static_cast<uint32_t>(saves.size() + 2), jst, ".");
+    putEntry(root, 0xA426, 0, jst, "..");
+    for (size_t i = 0; i < saves.size(); ++i) {
+        const SaveEntry& s = saves[i];
+        std::vector<unsigned char> dir;
+        // "." points back at where the folder sits in its parent: the parent's first cluster (the root's) and the
+        // folder's entry there. The card's server follows it to update the folder's entry (length, time) when a
+        // file in it is written, so it must not point at the folder itself (lane U's mymcplus check).
+        putEntry(dir, 0x8427, 0, jst, ".");
+        put32(dir, 0x10, static_cast<uint32_t>(rootCluster));
+        put32(dir, 0x14, static_cast<uint32_t>(i + 2));   // its entry in the root
+        putEntry(dir, 0x8427, 0, jst, "..");
+        for (const auto& [name, bytes] : s.files) {
+            const int64_t c = chain(bytes.size());
+            if (c < 0) {
+                r.message = "the saves do not fit on an 8 MiB card";
+                return r;
+            }
+            putEntry(dir, 0x8497, static_cast<uint32_t>(bytes.size()), jst, name);
+            put32(dir, dir.size() - 512 + 0x10, static_cast<uint32_t>(c));
+            writeChain(static_cast<uint32_t>(c), bytes);
+        }
+        if (dirClusters[i] < 0) {
+            r.message = "the saves do not fit on an 8 MiB card";
+            return r;
+        }
+        writeChain(static_cast<uint32_t>(dirClusters[i]), dir);
+        putEntry(root, 0x8427, static_cast<uint32_t>(s.files.size() + 2), jst, s.folder);
+        put32(root, root.size() - 512 + 0x10, static_cast<uint32_t>(dirClusters[i]));
+    }
+    writeChain(static_cast<uint32_t>(rootCluster), root);
+    // the FAT clusters and the indirect cluster listing them
+    for (uint32_t k = 0; k < kFatClusters; ++k)
+        for (uint32_t e = 0; e < kCluster / 4; ++e) {
+            std::vector<unsigned char> word(4);
+            put32(word, 0, fat[k * (kCluster / 4) + e]);
+            std::memcpy(card.data() + at(kFatFirst + k) + 4 * e, word.data(), 4);
+        }
+    {
+        std::vector<unsigned char> ind(kCluster, 0);
+        for (uint32_t k = 0; k < kFatClusters; ++k) put32(ind, 4 * k, kFatFirst + k);
+        std::memcpy(card.data() + at(kIndirect), ind.data(), kCluster);
+    }
+    // the superblock
+    {
+        std::vector<unsigned char> s(0x154, 0);
+        std::memcpy(s.data(), "Sony PS2 Memory Card Format 1.2.0.0", 35);
+        put16(s, 0x28, kPage);
+        put16(s, 0x2A, kPerCluster);
+        put16(s, 0x2C, 16);       // pages per erase block
+        put16(s, 0x2E, 0xFF00);
+        put32(s, 0x30, kClusters);
+        put32(s, 0x34, kAllocOffset);
+        put32(s, 0x38, kAllocEnd);
+        put32(s, 0x3C, static_cast<uint32_t>(rootCluster));
+        put32(s, 0x40, 1023);     // the backup erase blocks
+        put32(s, 0x44, 1022);
+        put32(s, 0x50, kIndirect);   // the indirect FAT clusters: one
+        for (uint32_t k = 1; k < 32; ++k) put32(s, 0x50 + 4 * k, 0);
+        for (uint32_t k = 0; k < 32; ++k) put32(s, 0xD0 + 4 * k, 0xFFFFFFFFu);   // no bad erase block
+        s[0x150] = 2;      // a PS2 card
+        // the card's flags as mymcplus formats a card (0x01 the card server keeps ECC, 0x08 a bad-block list): PCSX2 then
+        // rewrites a page with its ECC. With 0x52 (no 0x01) a page PCSX2 wrote after a save had no valid ECC (lane U's run)
+        s[0x151] = 0x2B;
+        std::memcpy(card.data(), s.data(), s.size());
+    }
+    // PCSX2's .ps2: each 512-byte page followed by its 16 bytes of ECC (12, then 4 zero bytes)
+    std::vector<unsigned char> image;
+    image.reserve(card.size() / kPage * (kPage + 16));
+    for (size_t p = 0; p < card.size(); p += kPage) {
+        image.insert(image.end(), card.begin() + static_cast<std::ptrdiff_t>(p), card.begin() + static_cast<std::ptrdiff_t>(p + kPage));
+        unsigned char spare[16] = {};
+        for (int q = 0; q < 4; ++q) ecc128(card.data() + p + 128 * q, spare + 3 * q);
+        image.insert(image.end(), spare, spare + 16);
+    }
+    if (!writeWhole(out, image)) {
+        r.message = "cannot write " + text(out);
+        return r;
+    }
+    r.ok = true;
+    size_t files = 0;
+    for (const SaveEntry& s : saves) files += s.files.size();
+    r.message = "wrote an 8 MiB PCSX2 memory card with " + std::to_string(saves.size()) + " save(s) (" +
+                std::to_string(files) + " files) to " + text(out);
+    return r;
+}
 }  // namespace gt4::saves

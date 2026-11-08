@@ -45,4 +45,9 @@ struct ExportResult {
 };
 ExportResult exportSave(const std::filesystem::path& saveFolder, const std::string& save, const std::filesystem::path& out);
 
+// Every GT4 save of the folder (BASCUS-97328...) on a new 8 MiB memory card image in PCSX2's .ps2 format (512-byte
+// pages, each with its 16 bytes of ECC), as the PS2 formats a card: PCSX2 mounts it as a card file, and its browser and
+// GT4 see the saves. `out` is written whole or not at all.
+ExportResult exportCard(const std::filesystem::path& saveFolder, const std::filesystem::path& out);
+
 }  // namespace gt4::saves

@@ -170,6 +170,71 @@ int main() {
         expect(!gt4::saves::exportSave(saves, ".backup", dir / "hidden.psu").ok, "no export of a hidden folder");
     }
 
+    // an export as a PCSX2 .ps2 card: 8 MiB of 512-byte pages with 16 bytes of ECC each, formatted, every GT4 save on
+    // it and nothing else, read back by the card reader file for file (sizes like the game's: the garage spans
+    // over a thousand clusters)
+    {
+        const fs::path saves = dir / "saves_card";
+        for (const char* d : {"BASCUS-97328GAMEDATA", "BASCUS-97328REPLAY", "BASLUS-00000OTHER"}) fs::create_directories(saves / d);
+        const std::vector<unsigned char> data = payload(237760, 11), garage = payload(1280064, 12);
+        writeFile(saves / "BASCUS-97328GAMEDATA" / "BASCUS-97328GAMEDATA", data);
+        writeFile(saves / "BASCUS-97328GAMEDATA" / "garage", garage);
+        writeFile(saves / "BASCUS-97328GAMEDATA" / "icon.sys", payload(964, 13));
+        writeFile(saves / "BASCUS-97328GAMEDATA" / "icon0.ico", payload(9796, 14));
+        writeFile(saves / "BASCUS-97328GAMEDATA" / ".garage.1.tmp", payload(5, 5));   // not the game's
+        writeFile(saves / "BASCUS-97328REPLAY" / "replay", payload(3000, 15));
+        writeFile(saves / "BASLUS-00000OTHER" / "x", payload(10, 16));                // another game's
+        const gt4::saves::ExportResult e = gt4::saves::exportCard(saves, dir / "out.ps2");
+        expect(e.ok, "export a card");
+        if (!e.ok) std::fprintf(stderr, "  %s\n", e.message.c_str());
+        const std::vector<unsigned char> image = readFile(dir / "out.ps2");
+        expect(image.size() == 8650752, "8 MiB with ECC: 16384 pages of 528 bytes");
+        expect(image.size() > 40 && std::memcmp(image.data(), "Sony PS2 Memory Card Format 1.2.0.0", 35) == 0,
+               "the superblock");
+        // an empty page's ECC: each 128-byte quarter of zeros gives 77 7F 7F, then four zero bytes
+        if (image.size() == 8650752) {
+            const unsigned char* spare = image.data() + 16383 * 528 + 512;
+            bool zeros = true;
+            for (int q = 0; q < 4; ++q)
+                zeros &= spare[3 * q] == 0x77 && spare[3 * q + 1] == 0x7F && spare[3 * q + 2] == 0x7F;
+            zeros &= spare[12] == 0 && spare[13] == 0 && spare[14] == 0 && spare[15] == 0;
+            expect(zeros, "an empty page's ECC");
+        }
+        // a save folder's "." points back at the folder's place in its parent (the root's first cluster, its entry
+        // there), as the card's server follows it when a file is written: not at the folder itself
+        if (image.size() == 8650752) {
+            const auto page = [&](uint32_t cluster, uint32_t half) { return image.data() + (cluster * 2 + half) * 528; };
+            const auto u32at = [](const unsigned char* p) { return uint32_t(p[0] | p[1] << 8 | p[2] << 16) | uint32_t(p[3]) << 24; };
+            const uint32_t alloc = u32at(image.data() + 0x34), root = u32at(image.data() + 0x3C);
+            // the root's third entry: two entries a cluster, so the first page of the root's second cluster (the writer
+            // lays a chain down contiguously)
+            const unsigned char* folderEntry = page(alloc + root + 1, 0);
+            const uint32_t folderCluster = u32at(folderEntry + 0x10);
+            const unsigned char* dot = page(alloc + folderCluster, 0);
+            expect(std::string(reinterpret_cast<const char*>(folderEntry + 0x40)) == "BASCUS-97328GAMEDATA" &&
+                       std::string(reinterpret_cast<const char*>(dot + 0x40)) == "." && u32at(dot + 0x10) == root &&
+                       u32at(dot + 0x14) == 2,
+                   "a folder's . points at its place in the root");
+        }
+        std::string error;
+        const std::vector<gt4::saves::SaveEntry> back = gt4::saves::readSaves(dir / "out.ps2", error);
+        expect(error.empty() && back.size() == 2 && back[0].folder == "BASCUS-97328GAMEDATA" &&
+                   back[1].folder == "BASCUS-97328REPLAY",
+               "the card holds GT4's two saves only");
+        if (back.size() == 2 && back[0].files.size() == 4) {
+            expect(back[0].files[0].first == "BASCUS-97328GAMEDATA" && back[0].files[0].second == data, "the game data's bytes");
+            expect(back[0].files[1].first == "garage" && back[0].files[1].second == garage, "the garage's bytes");
+            expect(back[0].files[3].first == "icon0.ico" && back[0].files[3].second == payload(9796, 14), "the icon's bytes");
+        } else {
+            expect(false, "the game data's four files");
+        }
+        const gt4::saves::ImportResult again = gt4::saves::importSave(dir / "out.ps2", dir / "saves_card_back");
+        expect(again.ok && readFile(dir / "saves_card_back" / "BASCUS-97328GAMEDATA" / "garage") == garage,
+               "the card imports back");
+        expect(!gt4::saves::exportCard(dir / "saves_folder_none", dir / "none.ps2").ok && !fs::exists(dir / "none.ps2"),
+               "no card without a GT4 save");
+    }
+
     // a folder card
     {
         const fs::path folder = dir / "foldercard" / "BASCUS-97328GAMEDATA";
