@@ -3,6 +3,16 @@ project(gt4_native VERSION 0.1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+if(MSVC)
+  # The same sources give the same programs, byte for byte, wherever they are built (tools/release.py: two release
+  # runs, two equal Windows hosts): no timestamps or random ids (/experimental:deterministic, /Brepro), the source
+  # and build folders under fixed names in the objects (/pathmap), and only the PDB's file name in the exe.
+  # (C and C++ only: rc.exe or MASM, if they ever come in, would refuse these)
+  add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:/experimental:deterministic>"
+                      "$<$<COMPILE_LANGUAGE:C,CXX>:/pathmap:${CMAKE_SOURCE_DIR}=gt4-native>"
+                      "$<$<COMPILE_LANGUAGE:C,CXX>:/pathmap:${CMAKE_BINARY_DIR}=gt4-native-build>")
+  add_link_options(/Brepro /PDBALTPATH:%_PDB%)
+endif()
 option(GT4_STRICT_WARNINGS "Enable additional compiler diagnostics" OFF)
 option(GT4_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 add_library(gt4_guest_abi INTERFACE)
