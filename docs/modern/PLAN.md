@@ -530,16 +530,41 @@ front end); the Odin's device run (the provoking vertex, logged).
 `kViewReflection` view only if a substituted view needs it redrawn (a.5 then allows that one nesting, or the main
 view splits around it). Depends: A6, B8. Acceptance: `PARITY` per view role on its captures.
 
-**B10: G-buffer, deferred lighting, sun, material classes (L).** `platform/render/modern/gbuffer.*`,
-`lighting.*`; sun from the batches' light matrices (qwords 201..216) through `objectToWorld`; classes from lighting
-bodies (`lighting.materials = pbr`); prelit course colour as baked lighting (through N2b's section normalisation
-only if N2 reopens). Its G-buffer is B8's side channels: B10 adds the lighting at the scene stage and the hybrid
-fragment stage's material classes, not a separate geometry pass. R3's measurements decide which items write the
-side channels (opaque Z-writing ones) and how blended and equal-Z items are lit (B22). Open: how a pixel veiled by
-an untagged blended draw (B8 step 2) is lit: relight the surface under it, accepting that the veil's colour is
-already mixed in, or skip it above a coverage. Depends: B8, R8, R3 (night,
-showroom and the destination-alpha passes measured). Acceptance: `VAL`; no NaN or Inf (debug pass counts them); `PERF`
-budget 4 ms GPU at 1440 x 1080 on the RX 7900 XTX; the owner's review against PCSX2 stills of the REF scenes.
+**B10: G-buffer, deferred lighting, material classes (L, lane B).** Modern lighting at the scene stage from B8's
+side channels, behind `lighting.materials = pbr`: in no preset until its acceptance and the owner's review;
+`original` keeps today's path, and hybrid with `original` materials is identical to today. Its G-buffer is B8's side
+channels, not a separate geometry pass; R3's measurements decide which items write them (opaque, Z-writing) and how
+blended and equal-Z items are lit (B22).
+- **Channels:** B8's (normal, material, view depth, veiled) plus one, RGBA16F in hybrid only: GT4's interpolated
+  lit vertex colour, before texture and fog. The GS modulates per pixel after interpolation, and an N.L body's
+  vertex colour is its lighting (`gt4_lighting.glsl`), so GT4's pixel divided by this channel is the texture, to
+  rounding. Kept as GT4's colour, each counted: saturated pixels, fog (undone first or skipped), veiled pixels and
+  untagged equal-Z draws over items, colours under a floor, TFX other than modulate.
+- **Classes** (RISKS R8): prelit (body 0, 0x0B0, 0x1508, 0x16F8) is never relit, only shadowed and occluded, so the
+  course only darkens; car paint (0x10A8, 0x12C8); glossy (0xCA8, 0xEA0); diffuse N.L with roughness from the
+  squarings; projected (0x1608) kept as drawn; unknown bodies keep GT4's colour.
+- **Lights:** by day, lanes 0 and 2 of the N.L bodies, fixed directionals (0.00 degrees across a view's batches),
+  plus the ambient (204), with per-object colours; the directions from the batches, no game record (`kSrcSun`
+  reserved). The lane colours fold in each material's colour: B10 splits them into a per-instance material colour
+  and per-view light colours by a stated rule (first candidate: lane colour over the view's brightest lane colour),
+  and gets them to the scene stage through the side pass or the instance table. At night there is no sun; the lamps
+  stay F2's.
+- **Step 1, the closure test:** relight per vertex in the parity vertex stage with GT4's own model (the same lanes,
+  directions and ambient, Lambert with the body's power), through what B10 stores: the per-instance material colour
+  and per-view light colours recombined into lane colours, times the texture from the division. It must give GT4's
+  pixel within a few levels on the N.L items of `race_grid43` and `race_boot`; the numbers per capture and the split
+  rule go in the step's commit. Also in step 1: the division check (GT4's pixel over the channel against the
+  texture, a few levels), and the count of untagged equal-Z draws over items.
+- **Step 2, per-pixel lighting,** the first deliberate change. Per-pixel lighting from interpolated normals differs
+  from GT4's Gouraud by a known amount (lane B, CPU renderers, the N.L bodies' drawn triangles: `race_grid43` 92.4 %
+  of samples within 4 levels and 1.2 % over 16; `race_boot` 93.3 % and 1.9 %; power 2^3 the worst, mean 5.1),
+  reported per frame (the share over 4 and over 16 levels, by power).
+- Then the PBR terms one at a time (the classes' BRDFs, the sun's specular), each against the previous step.
+- Depends: B8, R8 (closed), R3's night, showroom and destination-alpha probes. Acceptance: `VAL`; a NaN and Inf
+  count; `PERF` under 4 ms GPU at 1440 x 1080 on the RX 7900 XTX; hybrid with `original` materials identical; the
+  closure test; a `GT4_SIDE_VIEW=class` debug view; the owner's review against PCSX2 stills of the REF scenes.
+  Before hybrid enters a preset: the CPU cost (quiet-window `PERF`, then the front end's +31 % and the render
+  thread's +0.35 ms cut or justified) and R9's two every-frame readers checked (B8).
 
 **B11: Cascaded shadows and contact shadows (M).** Course casts onto cars only. Depends: B10. Acceptance: `VAL`;
 `PERF(<= 1.5 ms)`; no shadow on the course where its baked shadow already is (review images).
