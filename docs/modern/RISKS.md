@@ -183,7 +183,7 @@ in a debug colour; check by eye on cars, glass, chrome, course.
 
 **Time box.** 3 days.
 
-**Result (lane B, 2026-11-08; open: photo census, showroom lights).** A spike (local, never pushed) ran
+**Result (lane B, 2026-11-08; closed).** A spike (local, never pushed) ran
 hybrid at `original` on `race_grid43` and `race_boot` (day) and `a6r_r5` (night): for each substituted item its
 lighting body (`ModelJob::chain >> 16`), and for the N.L bodies the four light lanes (qwords 201..203 per lane,
 colours 205..208, ambient 204) through the instance's `objectToView` into view space; a debug view coloured each
@@ -210,11 +210,15 @@ body (`GT4_R8_BODY=1` with `GT4_SIDE_VIEW=material`).
 - **Showroom** (lane A's `r6_show3.cap`, the garage's turning 240SX, 1,500 VBlanks): the car's bodies are 0x0290,
   0x0418 and 0x0B48 (N.L), 0x10A8 (car paint), 0x1508 (prelit) and body 0, all in the classes above. Every view there
   is a menu view (role 8), which B8 keeps on the GS path, so substituting the showroom car needs its own role rule
-  (B9). Its lights aren't measured yet: the lanes were read on main views only.
-- **Open:** the photo census (no capture with Photo Travel yet) and the showroom's light lanes (lane B; R8 closes
-  with them); with B10's first step, the untagged
-  draws at equal Z over items (B10's veiled question) and the error of colour divided by GT4's lighting factor
-  against the CPU renderers (B10's channel).
+  (B9). Its lights are the day's pattern: lanes 0 and 2 fixed directionals in white studio light (lane 0 at 128, the
+  ambient 25), one direction per view for every instance.
+- **Photo Travel** (lane A's `pt_r6.cap`: the shooting screen's preview and the shot): its batches' bodies are 0x0B0,
+  0x0290, 0x0418, 0x0B48, 0x10A8, 0x1508 and 0x16F8, all in the classes above (counted in the CPU renderers). The
+  capture holds no views: Photo Travel's render path sends no view records yet, so its lights per view are B9's to
+  read once it does.
+- **Left to B10's first step:** the untagged draws at equal Z over items (B10's veiled question), and the check that
+  GT4's pixel divided by its interpolated lit vertex colour returns the texture (B10's channel). Lighting per pixel
+  against GT4's per-vertex Gouraud is measured (B10's ticket: about 7 % of samples more than 4 levels apart).
 
 ---
 
