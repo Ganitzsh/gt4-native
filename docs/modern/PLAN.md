@@ -1040,7 +1040,7 @@ changes, `ORIG` and `STREAM` with records off and no page opened. In order:
 | **M3** UI renderer and asset pipeline | M | E5, E6 |
 | **M4** Settings bridge | S-M | M1, M2, E1 |
 | **M5** Game-side page host (`runtime/menu/`; the pad focus in `iop.cpp`, lane D reviews) | M | M0, M1, M2 |
-| **M6** Options entry (hooks in copies of 00109D00, 0010FE40) | S | M5 |
+| **M6** Options entry (a copy of 00109D00: both ways into GT4's Options reach `startProject`; the hub opens over GT4's Options, whose project runs the menu update the pages tick in) | S | M5 |
 | **M7** Native pause page (hooks in copies of 0038B428, 0038B2B0) | M | M5, M0 |
 | **M8** Start on the GT mode map | S | M5, M0 |
 | **M9** Host wiring; the old menu deleted (the pad chord kept; host commands 2, 3 retired) | S-M | M3, M4, M5 |
