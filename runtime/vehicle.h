@@ -23,8 +23,12 @@ gfx::scene::Vehicle decode_vehicle(const uint8_t *a, uint8_t entrant);
 uint32_t vehicle_conductor();
 
 // Each running car's record (at most `max`), by decode_vehicle; 0 outside a race. GT4_VEHICLE_LOG=PATH also writes
-// a CSV line per car per call (VBlank, speed, each wheel's load, slip ratio and slip angle) for the D6 plot.
+// a CSV line per car per call (VBlank, speed, yaw rate, each wheel's load, slip ratio and slip angle, pad 1's
+// steering byte, the steering angle at the wheels) for the D6 and D12 plots.
 int vehicle_records(gfx::scene::Vehicle *out, int max);
+
+// GT4_VEHICLE_LOG: pad 1's 18 bytes as the game reads them, for the log's next lines (its left stick X).
+void vehicle_log_pad(const uint8_t pad[18]);
 
 // Whether vehicle_records has anything to do without scene records (GT4_VEHICLE_LOG set).
 bool vehicle_log_on();

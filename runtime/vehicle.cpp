@@ -33,6 +33,12 @@ bool vehicle_log_on() {
     return on;
 }
 
+namespace {
+uint8_t g_logSteer = 0x80;   // pad 1's left stick X as last read (vehicle_log_pad)
+}  // namespace
+
+void vehicle_log_pad(const uint8_t pad[18]) { g_logSteer = pad[4]; }
+
 int vehicle_records(gfx::scene::Vehicle *out, int max) {
     using namespace car;
     const uint32_t cond = vehicle_conductor();
@@ -42,7 +48,7 @@ int vehicle_records(gfx::scene::Vehicle *out, int max) {
     static std::FILE *log = [] {
         std::FILE *f = vehicle_log_on() ? std::fopen(std::getenv("GT4_VEHICLE_LOG"), "w") : nullptr;
         if (f) std::fprintf(f, "vblank,car,speed_kmh,yaw_rate,load0,load1,load2,load3,slipratio0,slipratio1,slipratio2,"
-                               "slipratio3,slipangle0,slipangle1,slipangle2,slipangle3\n");
+                               "slipratio3,slipangle0,slipangle1,slipangle2,slipangle3,pad_steer,steer_rad\n");
         return f;
     }();
     int n = 0;
@@ -56,7 +62,8 @@ int vehicle_records(gfx::scene::Vehicle *out, int max) {
             for (const auto &w : v.wheel) std::fprintf(log, ",%.0f", w.load);
             for (const auto &w : v.wheel) std::fprintf(log, ",%.4f", w.slipRatio);
             for (const auto &w : v.wheel) std::fprintf(log, ",%.4f", w.slipAngle);
-            std::fputc('\n', log);
+            // the steering angle at the wheels (D + 0x468, radians; R14: 0.698 at full lock at a standstill)
+            std::fprintf(log, ",%u,%.4f\n", g_logSteer, guest_ref<float>(a + kDynamics + 0x468));
         }
         ++n;
     }
