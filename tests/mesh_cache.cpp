@@ -230,6 +230,32 @@ int main(int argc, char** argv) {
                   b.triangles[4] == 1 && b.triangles[5] == 3,
               "decode: two triangles, the second turned to the first's winding");
         check(b.starts[0] && b.starts[1] && !b.starts[2], "decode: the strip's first two vertices start no triangle");
+        // B7's raw words: as sent, the chain's flags; no next normal without the N.L model's bit.
+        check(b.raw.size() == 4 && b.raw[3].position[2] == static_cast<uint32_t>(-5) && b.raw[2].st[0] == 2 * 4096 &&
+                  b.raw[3].flags == (scene::kRawLit | scene::kRawDecoded | scene::kRawOdd | scene::kRawBefore1Decoded | scene::kRawBefore2Decoded) &&
+                  !b.raw[2].next[0] && !b.raw[2].next[1] && b.raw[3].before[0][0] == 0 && b.raw[3].before[1][0] == 10 &&
+                  b.raw[1].flags == (scene::kRawLit | scene::kRawDecoded | scene::kRawStart | scene::kRawOdd) && !b.raw[1].before[1][0],
+              "raw: the words as sent, lit and decoded, with the strip's two vertices before it");
+        {
+            gfx::ModelJob nl = job;
+            nl.nloop = 3;   // the fourth vertex as sent
+            nl.dot = scene::kDotNextNormal;
+            uint32_t w2[gfx::kModelWords];
+            std::memcpy(w2, words, sizeof w2);
+            for (int k = 0; k < 5; ++k) w2[(128 + k) * 4] = 0x3F800000u + k, w2[(128 + k) * 4 + 1] = 7u + k;
+            const scene::DecodedBatch d = scene::decodeBatch(nl, w2);
+            check(d.raw[0].next[0] == 0x3F800001u && d.raw[0].next[1] == 8u && (d.raw[0].flags & scene::kRawNextDecoded),
+                  "raw: the next vertex's normal words, decoded");
+            check(d.raw[2].next[0] == 0x3F800003u && !(d.raw[2].flags & scene::kRawNextDecoded) && (d.raw[2].flags & scene::kRawLit),
+                  "raw: the last lit vertex's next normal is qword 128 + NLOOP, as floats");
+            check(d.raw[3].flags == (scene::kRawOdd | scene::kRawBefore1Decoded | scene::kRawBefore2Decoded) && !d.raw[3].next[0],
+                  "raw: a vertex past NLOOP is neither lit nor decoded (the two before it are)");
+            gfx::ModelJob fade = job;
+            fade.nloop = 3;
+            fade.chain = 1u | 2u << 4 | 0x16F8u << 16;
+            const scene::DecodedBatch f = scene::decodeBatch(fade, words);
+            check((f.raw[3].flags & scene::kRawLit) && !(f.raw[3].flags & scene::kRawDecoded), "raw: the fade lights an even number");
+        }
         // Two copies of the batch welded: the same four vertices.
         std::vector<scene::BatchCopy> items(2);
         items[0].job = items[1].job = job;
@@ -237,6 +263,12 @@ int main(int argc, char** argv) {
         std::memcpy(items[1].words, words, sizeof words);
         const scene::Mesh mesh = scene::buildMesh(items);
         check(mesh.vertices.size() == 4 && mesh.indices.size() == 12 && mesh.sourceVertices == 8, "weld: equal vertices shared");
+        check(mesh.raw.size() == mesh.vertices.size(), "weld: raw words parallel to the vertices");
+        {   // equal decoded, different words (a colour's high byte, which the GS drops): two vertices
+            std::vector<scene::BatchCopy> two = items;
+            two[1].words[(128 + 3) * 4] = 0x100;
+            check(scene::buildMesh(two).vertices.size() == 5, "weld: not across different words");
+        }
         // The key ignores the setup's constants (qwords 193..) and sees the vertices.
         std::vector<scene::BatchCopy> moved = {items[0]};
         moved[0].words[195 * 4] ^= 1;

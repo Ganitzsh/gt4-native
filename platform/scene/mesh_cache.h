@@ -33,6 +33,27 @@ struct MeshVertex {
     uint32_t colour = 0;       // the given colour words as RGBA8 (unlit and prelit models), 0x80 = 1.0 alpha
 };
 
+// One vertex as the batch sent it (B7's parity path, PLAN B7): its words, which modern_parity.vert decodes and lights
+// with gsn_models.comp's own expressions, so the GS path's values come out to the bit (a decode on the CPU would round
+// differently, e.g. normals over 127). With the two vertices before it in its strip: gsn_models.comp decides per vertex,
+// for the triangle ending at it, whether that triangle is drawn (the cull, the hidden test, the ADC bit) and the vertex's
+// fog word (raised for a triangle not drawn), and the parity stage makes the same decision. Parallel to Mesh::vertices.
+struct MeshRawVertex {
+    uint32_t position[3] = {};   // qword k (x, y, z)
+    uint32_t st[3] = {};         // qword 64 + k
+    uint32_t colour[4] = {};     // qword 128 + k
+    uint32_t next[2] = {};       // qword 128 + k + 1 (x, y): the next normal of the N.L model's quirk (dot & 0x1000), else 0
+    uint32_t flags = 0;          // kRaw* below
+    uint32_t before[2][3] = {};  // qwords k - 1 and k - 2 (x, y, z): the strip's two vertices before it (0 for a strip's first two)
+};
+constexpr uint32_t kRawLit = 1;           // the lighting chain's body runs on it (k below the lit count)
+constexpr uint32_t kRawDecoded = 2;       // the chain's routine decodes it (k < NLOOP)
+constexpr uint32_t kRawNextDecoded = 4;   // ... and the next vertex (k + 1 < NLOOP; else qword 128 + NLOOP as floats)
+constexpr uint32_t kRawStart = 8;         // one of its strip's first two vertices (index j < 2): ends no triangle
+constexpr uint32_t kRawOdd = 16;          // its index in the strip is odd (the facing test's order)
+constexpr uint32_t kRawBefore1Decoded = 32, kRawBefore2Decoded = 64;   // k - 1, k - 2 decoded (below NLOOP)
+constexpr uint32_t kDotNextNormal = 0x1000;   // ModelJob::dot: the N.L model adds the next vertex's terms
+
 // How a batch was drawn; the per-frame passes need it, the geometry does not change with it.
 struct MeshItem {
     uint32_t firstIndex = 0, indexCount = 0;   // in Mesh::indices
@@ -45,11 +66,18 @@ struct MeshItem {
 
 struct Mesh {
     MeshKey key{};
-    std::vector<MeshVertex> vertices;    // welded: equal vertices of the items share one entry
-    std::vector<uint32_t> indices;       // triangles, each in one winding (the strips' alternation undone)
+    std::vector<MeshVertex> vertices;    // welded: vertices of the items equal here and in `raw` share one entry
+    std::vector<MeshRawVertex> raw;      // parallel to vertices
+    std::vector<uint32_t> indices;       // triangles, each in one winding (the strips' alternation undone), the strip's
+                                         // last vertex third (flat shading's and the ADC bit's vertex)
+    std::vector<uint8_t> turned;         // per triangle: 1 when its first two vertices were swapped (a strip's odd
+                                         // triangles): the GS path draws it (v - 2, v - 1, v), B7's parity draws too
     std::vector<MeshItem> items;
     uint32_t sourceVertices = 0;         // before welding (the batches' vertices)
-    size_t bytes() const { return vertices.size() * sizeof(MeshVertex) + indices.size() * 4 + items.size() * sizeof(MeshItem); }
+    size_t bytes() const {
+        return vertices.size() * (sizeof(MeshVertex) + sizeof(MeshRawVertex)) + indices.size() * 4 + turned.size() +
+               items.size() * sizeof(MeshItem);
+    }
 };
 
 // One batch as the 3D renderers got it.
@@ -71,7 +99,9 @@ enum class MeshRequest : uint8_t { Ready, Pending, Queued, PerFrame };
 // The decode of one batch (its vertices in batch order, and its triangles over them); exposed for the tests.
 struct DecodedBatch {
     std::vector<MeshVertex> vertices;    // the first job.count of the batch (the strips' vertices)
+    std::vector<MeshRawVertex> raw;      // the same vertices' words
     std::vector<uint32_t> triangles;     // indices into vertices, three per triangle
+    std::vector<uint8_t> turned;         // per triangle (Mesh::turned)
     std::vector<uint8_t> starts;         // 1 for a vertex that starts no triangle (the first two of each strip)
     bool normals = false, texture = false, animated = false;
 };
