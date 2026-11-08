@@ -128,6 +128,11 @@ Taken 2026-11-08 (lane C): `build/refs/original_circuits_rest.png` (El Capitan, 
 
 ## Comparisons and timings
 
+**ORIG moved once (2026-11-08):** the commit "render: GT4's lighting and transform in shared, precise shader code"
+made the GS path's shared shader arithmetic precise (CONTRACTS b.10), which changes the 3D at GT4's near-equal depth
+tests (about 9 % of race7's pixels). Compare ORIG and PRESETS only between hosts on the same side of that commit; its
+hash was announced to every lane.
+
 A replay or session runs with `--fixed-step` (the default headless and with `--session-dir`): frame interpolation
 then counts presents instead of the wall clock, and the HD texture pack decodes each replacement at its first use
 instead of on its worker threads, so the same capture gives the same frames every run with both on
