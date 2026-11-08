@@ -1,3 +1,5 @@
+#include <cstdio>
+#include <string>
 // GT4's 3D renderers as native code (see renderers3d.h). Byte addresses in comments are the entry points of
 // the original VU1 programs in GT4's micro image (docs/VU1_PROGRAMS.md); "qword N" is qword N of the batch.
 #include "renderers3d.h"
@@ -635,6 +637,40 @@ struct DotModel {
     bool nextNormal;
 };
 
+
+// SPIKE B10 (local, never pushed): GT4_B10_GOURAUD=1, with the CPU renderers (GT4_GPU_MODELS=0). For each drawn
+// triangle of an N.L body (the one ending at vertex k, ADC clear), at 7 interior points: GT4's Gouraud colour (the lit
+// vertex colours interpolated) against lighting per pixel from the interpolated normal with the same lanes, powers,
+// ambient and clamp. The worst channel's difference in vertex-colour levels (128 = 1.0), histogrammed, by power; at exit.
+namespace b10 {
+const bool on = [] { const char* e = std::getenv("GT4_B10_GOURAUD"); return e && *e == '1'; }();
+struct Hist {
+    uint64_t bins[8] = {}, samples = 0, triangles = 0;
+    double sum = 0;
+};
+Hist all, byPower[16];
+const char* const names[8] = {"0", "1", "2", "3-4", "5-8", "9-16", "17-32", ">32"};
+int bin(double e) { return e < 0.5 ? 0 : e < 1.5 ? 1 : e < 2.5 ? 2 : e < 4.5 ? 3 : e < 8.5 ? 4 : e < 16.5 ? 5 : e < 32.5 ? 6 : 7; }
+void add(Hist& h, double e) { ++h.bins[bin(e)]; ++h.samples; h.sum += e; }
+void print(const char* what, const Hist& h) {
+    if (!h.samples) return;
+    std::string s;
+    for (int i = 0; i < 8; ++i) s += std::string(" ") + names[i] + ":" + std::to_string(h.bins[i]);
+    std::printf("B10 gouraud %s: %llu triangles, %llu samples, mean %.2f levels;%s\n", what, (unsigned long long)h.triangles,
+                (unsigned long long)h.samples, h.sum / double(h.samples), s.c_str());
+}
+struct Report {
+    ~Report() {
+        if (!on) return;
+        print("all", all);
+        for (int k = 0; k < 16; ++k) {
+            const std::string w = "power 2^" + std::to_string(k);
+            print(w.c_str(), byPower[k]);
+        }
+    }
+} report;
+}  // namespace b10
+
 void dotLighting(const Reader& r, Vertices& in, uint32_t n, const DotModel& model) {
     Vec4 a[3], e[3], c[8];
     for (int k = 0; k < 3; ++k) a[k] = r.floats(201 + k);
@@ -662,6 +698,49 @@ void dotLighting(const Reader& r, Vertices& in, uint32_t n, const DotModel& mode
             colour[i] = std::min(std::max(saturate(acc), 0.0f), clamp[i]);
         }
         in.colour[k] = toIntegers(colour);
+    }
+    if (b10::on) {   // SPIKE B10: Gouraud against per-pixel lighting on the drawn triangles
+        auto light = [&](const Vec4& normal) {
+            Vec4 d = dots(a, normal), f{}, out;
+            d.z = power(d.z, model.squaringsA);
+            d.w = power(d.w, model.squaringsA);
+            if (model.second) {
+                f = dots(e, normal);
+                for (int i = 0; i < 4; ++i) f[i] = power(f[i], model.squaringsB);
+            }
+            for (int i = 0; i < 3; ++i) {
+                float acc = ambient[i] + c[0][i] * d.x + c[1][i] * d.y + c[2][i] * d.z + c[3][i] * d.w;
+                if (model.second)
+                    for (int j = 0; j < 4; ++j) acc += c[4 + j][i] * f[j];
+                out[i] = std::min(std::max(acc, 0.0f), clamp[i]);
+            }
+            return out;
+        };
+        static const float w[7][3] = {{1.f / 3, 1.f / 3, 1.f / 3}, {2.f / 3, 1.f / 6, 1.f / 6}, {1.f / 6, 2.f / 3, 1.f / 6},
+                                      {1.f / 6, 1.f / 6, 2.f / 3}, {0.5f, 0.5f, 0}, {0, 0.5f, 0.5f}, {0.5f, 0, 0.5f}};
+        for (uint32_t k = 2; k < n; ++k) {
+            if (r.words(kPositions + k)[3] & 0x8000u) continue;   // (ADC: no triangle ends here)
+            ++b10::all.triangles;
+            ++b10::byPower[model.squaringsA & 15].triangles;
+            for (const auto& b : w) {
+                Vec4 nrm{}, g{};
+                for (int j = 0; j < 3; ++j) {
+                    const uint32_t v = k - 2 + j;
+                    for (int i = 0; i < 3; ++i) {
+                        nrm[i] += b[j] * in.normal[v][i];
+                        g[i] += b[j] * static_cast<float>(static_cast<int32_t>(in.colour[v][i]));
+                    }
+                }
+                const float len = std::sqrt(nrm.x * nrm.x + nrm.y * nrm.y + nrm.z * nrm.z);
+                if (len < 1e-6f) continue;
+                for (int i = 0; i < 3; ++i) nrm[i] /= len;
+                const Vec4 pp = light(nrm);
+                double worst = 0;
+                for (int i = 0; i < 3; ++i) worst = std::max(worst, std::abs(double(pp[i]) - double(g[i])));
+                b10::add(b10::all, worst);
+                b10::add(b10::byPower[model.squaringsA & 15], worst);
+            }
+        }
     }
 }
 
