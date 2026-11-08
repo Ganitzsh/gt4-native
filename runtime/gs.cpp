@@ -11,6 +11,7 @@
 #include "gt4/link/protocol.h"
 #include "kernel.h"
 #include "link.h"
+#include "load_stats.h"
 #include "log.h"
 #include "runtime.h"
 
@@ -52,6 +53,7 @@ void send_tick(const ClockTick &t) {
 
 void on_frame(uint32_t count) {
     g_field ^= 1;   // the field alternates every frame
+    load_stats_vblank(count);   // (GT4_LOAD_STATS: the loads timed, D10)
     audio_frame();
     if (link_capture_finished() && !link_connected()) {  // a standalone capture run ends with its window
         link_capture_close();

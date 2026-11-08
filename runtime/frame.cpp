@@ -12,6 +12,7 @@
 #include "guest.h"
 #include "kernel.h"
 #include "link.h"
+#include "load_stats.h"
 #include "log.h"
 #include "runtime.h"
 #include "vehicle.h"
@@ -582,6 +583,7 @@ bool send_vehicles_frame() {
 // starts and where its PATH3 list starts. The original started both DMA channels and let their interrupts tell
 // the library when they were done; here the list is walked and sent at once.
 extern "C" void gt4_replace_func_004A11F8(uint32_t pair) {
+    load_stats_kick();   // (GT4_LOAD_STATS: the frames drawn during a load)
     if (!pair) {
         pair = guest_ref<uint32_t>(kContext + 0x20C);
         if (!pair) return;

@@ -11,6 +11,7 @@
 #include "image.h"
 #include "kernel.h"
 #include "link.h"
+#include "load_stats.h"
 #include "log.h"
 #include "menu/menu_host.h"
 #include "runtime.h"
@@ -40,7 +41,9 @@ const bool g_trace_disc = getenv("GT4_TRACE_DISC") != nullptr;  // log every dis
 std::mutex g_iso_mutex;
 constexpr uint32_t kLayer1Start = 1317040;  // absolute LBA of layer 1 (the image is linear)
 
-bool iso_read(uint64_t offset, void *dst, uint32_t n) {
+// `load`: a file or sector read the game waits for (GT4_LOAD_STATS counts those; not music and movie streams)
+bool iso_read(uint64_t offset, void *dst, uint32_t n, bool load = true) {
+    const double started = load ? load_stats_begin() : 0.0;   // (GT4_LOAD_STATS: the disc's share of a load, D10; the lock's wait too)
     std::lock_guard<std::mutex> lock(g_iso_mutex);
     if (g_iso == INVALID_HANDLE_VALUE) return false;
     // Until all of it is read: under Wine (Proton) a read can stop early, as the host's read() may (it did at 64 KB
@@ -63,6 +66,7 @@ bool iso_read(uint64_t offset, void *dst, uint32_t n) {
         got += part;
     }
     if (got < n) std::memset(out + got, 0, n - got);
+    if (load) load_stats_read(started, n);
     return got > 0;
 }
 
@@ -716,7 +720,7 @@ extern "C" int gt4_replace_iWakeupThread(int id) { return gt4_sys_WakeupThread(i
 
 namespace gt4::rt {
 
-bool disc_read(uint64_t offset, void *dst, uint32_t n) { return iso_read(offset, dst, n); }
+bool disc_read(uint64_t offset, void *dst, uint32_t n) { return iso_read(offset, dst, n, false); }   // (music, movies)
 
 void iop_init() {
     pad_neutral();
