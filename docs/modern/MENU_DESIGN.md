@@ -171,7 +171,10 @@ Each hook is a `game_src` copy of a matched function with one added call, guarde
    is read, not hooked (M0 section 9): the top of the menu project's page stack, a root window named `MAP`, active and
    at rest, so a dialog over the map, Home and every other page are not it; the pad thread takes Start only while the
    menu tick saw the map within two VBlanks. With `ui.entry = integrated` only (3.8).
-3. **The mode select at game start.** Its Options item as in 1. If it has none [U], Start there as in 2.
+3. **The mode select at game start.** It has no Options item (M0: two items). Point 2's rule applies once M8b's
+   spike finds what Start does there: if Start is free, Start opens the hub, as on the map; if Start does
+   something, Settings becomes our item beside GT4's two, with its own button (the mode select is itself the menu to
+   add to).
 4. **The race pause.** `ui.pause = native` (presets low to ultra from M9, 3.8): the copy of `RacePause::update`
    (003C3820) keeps GT4's pause (the race frozen by `RaceBase + 0xCD8`, the course clock stopped) but answers with
    our **pause page** instead of `pause.strb`, which never starts (`+0xC` stays 0, so `RacePause::render` draws
@@ -532,6 +535,16 @@ path references it. `ui.pause = gt4` loads `pause.strb` as before.
 session test: Start on the map opens the hub, other pages of `"gtmode"` are unaffected, the map's state after close
 is unchanged. The hub takes Start only on the page detection says is the map (M0 open point 1), never in Home: GT4's
 help line promises Start in Home for car settings, so Start in Home is checked unchanged even where it does nothing.
+
+**M8b: Settings at the mode select (S).** The fourth way in the owner asked for (3.2, point 3): the mode select at
+game start, a page of project `"boot"` with two scripted items (Arcade Mode, Gran Turismo Mode) and no Options. A
+short spike first: what Start does on that page, and how the page is read (`boot`'s root windows have no name at
++ 0xE0, M0 section 9; the stack and state of M8's detection still apply). Then point 2's rule: if Start is free,
+Start opens the hub, as on the map; if Start does something, Settings becomes our item beside GT4's two, with its own
+button (GT4's scripted lists are not edited; the mode select is itself the menu to add to). M8b's commit says which
+case it found, as M8 did for the map. With `ui.entry = integrated` only (3.8). Depends: M5, M8. Acceptance: session
+test: on the mode select the button opens the hub and closing it leaves the page as it was; Arcade Mode and Gran
+Turismo Mode still start as before; the opening and the attract video are unaffected.
 
 **M9: Host wiring; the old menu deleted (S-M).** `platform/sdl/main.cpp` (C's order; D13's `pad_devices` already
 moved the pad reads out of it, so the diff is small), `settings_menu.*` and the overlay menu drawing removed;

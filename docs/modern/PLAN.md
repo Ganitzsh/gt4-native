@@ -1277,6 +1277,7 @@ changes, `ORIG` and `STREAM` with records off and no page opened. In order:
 | **M6** Options entry (a copy of 00109D00: both ways into GT4's Options reach `startProject`; the hub opens over GT4's Options, whose project runs the menu update the pages tick in) | S | M5 |
 | **M7** Native pause page (a copy of 003C3820 `RacePause::update`, which every mode's `updatePause` reaches) | M | M5, M0 |
 | **M8** Start on the GT mode map | S | M5, M0 |
+| **M8b** Settings at the mode select (the fourth way in: Start if free there, else our item beside GT4's two) | S | M5, M8 |
 | **M9** Host wiring; the old menu deleted (the pad chord kept; host commands 2, 3 retired) | S-M | M3, M4, M5 |
 | **M10** Style guide and the first asset set (the owner's sign-off) | M | M3 |
 | **M11** Controls, Audio and HUD pages (E8a, E8b, E9's rows) | M | M4, M5, D12, D13, D5, E6 |
