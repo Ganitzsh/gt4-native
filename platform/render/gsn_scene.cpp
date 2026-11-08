@@ -923,14 +923,19 @@ void GsnScene::Impl::execute(VkCommandBuffer command, uint32_t slot) {
 void GsnScene::Impl::segments(const gsn::FrameList& list, std::vector<Segment>& out) {
     out.clear();
     const size_t n = list.commands.size();
+    // (a Light naming no light, skipped by the commands' loop, stays inside its range: no pass of its own, and the
+    // render pass open across it stays inside one graph pass, as the loop had it)
+    auto light = [&](size_t at) {
+        return list.commands[at].kind == gsn::FrameList::Command::Kind::Light && list.commands[at].index < list.lights.size();
+    };
     for (size_t at = 0; at < n;) {
-        if (list.commands[at].kind == gsn::FrameList::Command::Kind::Light) {
+        if (light(at)) {
             out.push_back({Segment::Kind::Light, at, at + 1});
             ++at;
             continue;
         }
         size_t to = at + 1;
-        while (to < n && list.commands[to].kind != gsn::FrameList::Command::Kind::Light) ++to;
+        while (to < n && !light(to)) ++to;
         out.push_back({Segment::Kind::Range, at, to});
         at = to;
     }
@@ -1722,7 +1727,10 @@ void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t
     // GT4_GSN_LIMIT=K (debugging): only the first K draws of each frame.
     static const long limit = std::getenv("GT4_GSN_LIMIT") ? std::strtol(std::getenv("GT4_GSN_LIMIT"), nullptr, 10) : -1;
     long& executed = ex.executed;
-    if (ex.limited) return;
+    if (ex.limited) {   // (GT4_GSN_LIMIT reached earlier: nothing more is drawn; no render pass left open past this pass)
+        end();
+        return;
+    }
     for (size_t at = from; at < to; ++at) {
         const auto& cmd = frame.commands[at];
         if (cmd.kind == gsn::FrameList::Command::Kind::Light) {
@@ -2116,13 +2124,11 @@ void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t
             tally("draws");
         }
     }
-    // A range ends with its render pass ended when the scene stage (a valid Light) or the list's end follows: their
-    // first act is end() anyway, so the commands are the same, and no render pass stays open across a graph pass's
-    // boundary (lane A, B4 step 2b: barriers between passes must not land inside one). Before a Light that is skipped
-    // (index out of range) the pass stays open, as the loop left it.
-    const bool lightOrEndNext = to >= frame.commands.size() ||
-        (frame.commands[to].kind == gsn::FrameList::Command::Kind::Light && frame.commands[to].index < frame.lights.size());
-    if (lightOrEndNext) end();
+    // A range ends with its render pass ended: a valid Light (the scene stage) or the list's end follows it (segments()
+    // keeps a skipped Light inside its range), and their first act is end() anyway, so the commands are the same, and no
+    // render pass stays open across a graph pass's boundary (lane A, B4 step 2b: barriers between passes must not land
+    // inside one). execute() calls the pieces in segments()'s order too.
+    end();
 }
 
 // The scene stage at the list's Light command `at` (`frame.commands[at]`), as the commands' loop ran it.
