@@ -36,8 +36,7 @@ void CourseLampPass::lights(const scene::SceneFrame& frame, uint16_t view, const
             if (known == materials.end()) {   // (first sight on the render thread: the table's lock once per id)
                 Material entry;
                 entry.classes = sources.classes ? sources.classes(id) : 0u;
-                if ((entry.classes & kMaterialGlow) && !(sources.glowColour && sources.glowColour(id, entry.colour)))
-                    entry.colour[0] = entry.colour[1] = entry.colour[2] = 1.0f;
+                if (entry.classes & kMaterialGlow) glowColour(entry.classes, entry.colour);
                 known = materials.emplace(id, entry).first;
             }
             const Material& material = known->second;

@@ -16,12 +16,11 @@
 
 namespace gt4::render {
 
-// Where the pass reads B6's caches (SceneCache: MeshCache::mesh, MaterialTable::classes, and the classifier's colour by
-// the material's texture). Functions, so a test can give a synthetic frame.
+// Where the pass reads B6's caches (SceneCache: MeshCache::mesh, MaterialTable::classes, whose glow bits carry the
+// glow's colour: glow_classifier.h). Functions, so a test can give a synthetic frame.
 struct LampSources {
-    std::function<std::shared_ptr<const scene::Mesh>(scene::MeshId)> mesh;           // null: dropped or not decoded
-    std::function<uint32_t(scene::MaterialId)> classes;                                // 0: none or unknown
-    std::function<bool(scene::MaterialId, float colour[3])> glowColour;                // the glow texture's mean, 0..1
+    std::function<std::shared_ptr<const scene::Mesh>(scene::MeshId)> mesh;   // null: dropped or not decoded
+    std::function<uint32_t(scene::MaterialId)> classes;                        // 0: none or unknown
 };
 
 class CourseLampPass {

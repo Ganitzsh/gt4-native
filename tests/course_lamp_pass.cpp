@@ -116,18 +116,22 @@ int main() {
     o.texture = 0;
     expect(!glowSignature(o), "untextured: not the signature");
 
-    // 3. The classifier: the bit, the colour by texture, one verdict per texture.
+    // 3. The classifier: the bit with the colour in it, one verdict per texture.
     GlowClassifier classifier;
-    expect(classifier.classify(item, &glowSum) == kMaterialGlow, "a glow material gets the bit");
+    const uint32_t bits = classifier.classify(item, &glowSum);
     float colour[3] = {};
-    expect(classifier.glowColour(0xABCDEF, colour) && near(colour[0], glowSum.mean[0] / 255.0f), "its colour, by texture");
+    glowColour(bits, colour);
+    expect((bits & kMaterialGlow) && near(colour[0], glowSum.mean[0] / 255.0f, 0.5f / 255.0f) &&
+               near(colour[2], glowSum.mean[2] / 255.0f, 0.5f / 255.0f),
+           "a glow material gets the bit, its colour in the bits");
+    expect(classifier.classify(item, &flatSum) == bits, "the same texture keeps its first verdict");
     scene::ItemSource flatItem = item;
     flatItem.texture = 0x1111;
-    expect(classifier.classify(flatItem, &flatSum) == 0 && !classifier.glowColour(0x1111, colour), "a flat texture: no bit, no colour");
+    expect(classifier.classify(flatItem, &flatSum) == 0, "a flat texture: no bit");
     expect(classifier.classify(o, &glowSum) == 0, "the signature fails first");
     expect(classifier.classify(item, nullptr) == 0, "no summary: no bit");
     const GlowClassifier::Stats cs = classifier.stats();
-    expect(cs.judged == 4 && cs.signature == 3 && cs.glows == 1 && cs.noSummary == 1, "the classifier's counts");
+    expect(cs.judged == 5 && cs.signature == 4 && cs.glows == 2 && cs.noSummary == 1 && cs.textures == 2, "the classifier's counts");
 
     // 4. The lamp pass on a SceneFrame: view 1, two instances of mesh 7 (item 0 a glow, item 1 not), one of mesh 9 whose
     // mesh is gone.
@@ -155,12 +159,8 @@ int main() {
     sf.materials = {100, 101};   // all three share materials 100 (glow) and 101
     LampSources sources;
     sources.mesh = [&](scene::MeshId id) { return id == 7 ? mesh : nullptr; };
-    sources.classes = [](scene::MaterialId id) { return id == 100 ? kMaterialGlow : 0u; };
-    sources.glowColour = [](scene::MaterialId id, float out[3]) {
-        if (id != 100) return false;
-        out[0] = 1.0f, out[1] = 0.5f, out[2] = 0.25f;
-        return true;
-    };
+    const uint8_t mean[3] = {255, 128, 64};   // (1, 0.5, 0.25)
+    sources.classes = [&](scene::MaterialId id) { return id == 100 ? glowClasses(mean) : 0u; };
     CourseLampPass pass;
     std::vector<gfx::scene::Light> lights;
     CourseLampPass::Stats s;
@@ -173,7 +173,7 @@ int main() {
         expect(l.view == 1 && l.source == gfx::scene::kSrcCourseGlow && l.kind == gfx::scene::kLightPoint, "a course glow point light");
         expect(near(l.position[0], 0.0f) && near(l.position[1], 5.0f) && near(l.position[2], -10.0f), "placed by objectToView");
         expect(near(l.width, 0.5f * std::sqrt(2.0f)) && near(l.height, l.width), "half the quad's diagonal");
-        expect(near(l.colour[0], 1.0f) && near(l.colour[1], 0.25f) && near(l.colour[2], 0.25f), "texture colour x vertex colour");
+        expect(near(l.colour[0], 1.0f) && near(l.colour[1], 128.0f / 255.0f * 0.5f) && near(l.colour[2], 64.0f / 255.0f), "texture colour x vertex colour");
         const gfx::scene::Light& big = lights[3];   // instance b's second lamp: (10, 5, 0) x 2 + (-20, 0, -10)
         expect(near(big.position[0], 0.0f) && near(big.position[1], 10.0f) && near(big.position[2], -10.0f) &&
                    near(big.width, std::sqrt(2.0f)),

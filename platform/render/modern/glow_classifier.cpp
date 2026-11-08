@@ -32,27 +32,18 @@ uint32_t GlowClassifier::classify(const scene::ItemSource& item, const scene::Te
         ++counters.noSummary;
         return 0;
     }
-    const GlowScores scores = glowTexture(*summary);
-    auto [it, fresh] = byTexture.try_emplace(item.texture);
+    auto [it, fresh] = byTexture.try_emplace(item.texture, 0u);
     if (fresh) {
-        it->second.glow = scores.glow;
-        for (int c = 0; c < 3; ++c) it->second.colour[c] = summary->mean[c] / 255.0f;
+        ++counters.textures;
+        const GlowScores scores = glowTexture(*summary);
+        it->second = scores.glow ? glowClasses(summary->mean) : 0u;
         if (log)
             std::fprintf(log, "F2b glow class: texture %016llx %ux%u centre/rim %.2f core %.3f mean %u,%u,%u: %s\n",
                          static_cast<unsigned long long>(item.texture), summary->width, summary->height, scores.centreToRim,
                          scores.alphaCore, summary->mean[0], summary->mean[1], summary->mean[2], scores.glow ? "glow" : "not a glow");
     }
-    if (!it->second.glow) return 0;
-    ++counters.glows;
-    return kMaterialGlow;
-}
-
-bool GlowClassifier::glowColour(uint64_t texture, float out[3]) const {
-    std::lock_guard<std::mutex> hold(lock);
-    auto it = byTexture.find(texture);
-    if (it == byTexture.end() || !it->second.glow) return false;
-    for (int c = 0; c < 3; ++c) out[c] = it->second.colour[c];
-    return true;
+    if (it->second) ++counters.glows;
+    return it->second;
 }
 
 GlowClassifier::Stats GlowClassifier::stats() const {
