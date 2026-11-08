@@ -91,6 +91,7 @@ void gt4_scene_marker(void *context, int kind);
 /* A7 step 1: the course's lamps and warning lamps as Lights of the main view `view` (gt4_scene_view_begin's number),
  * from the light-glow object `glow`'s list as 0033EAB8's method 0x3F0 filled it (after the main view: a.5 rule 4). */
 void gt4_scene_course_lights(void *context, unsigned int view, const void *glow);
+void gt4_debug_billboards(void *context, const void *set, int group);   /* DEBUG (never push) */
 #ifdef __cplusplus
 }
 #endif

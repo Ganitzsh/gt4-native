@@ -601,6 +601,45 @@ void gt4_scene_course_lights(uint32_t context, uint32_t view, uint32_t glow) {
     }
 }
 
+// DEBUG (never push): each billboard of a BillboardSet group as a Light of source 15 in the open view: id = type << 16 |
+// item, entrant = the item's +8 word (texture), position = its centre through set 0, width / height = the item's size,
+// colour = its world position, intensity = the group index.
+void gt4_debug_billboards(uint32_t context, uint32_t o, int idx) {
+    namespace scene = gfx::scene;
+    if (!gt4_scene_on() || !g_scene.inFrame || !g_scene.openView || !o) return;
+    if (idx < 0 || idx >= guest_ref<uint16_t>(o + 0x10)) return;
+    const uint32_t groups = guest_ref<uint32_t>(o + 0x18), items = guest_ref<uint32_t>(o + 0x24);
+    if (!groups || !items) return;
+    const uint32_t g = guest_ref<uint32_t>(groups + 4u * static_cast<uint32_t>(idx));
+    if (!g) return;
+    const uint32_t n = guest_ref<uint16_t>(g);
+    float set0[16], set1[16];
+    currentSets(set0, set1);
+    for (uint32_t k = 0; k < n && k < 512; ++k) {
+        const uint32_t e = g + 4 + 16 * k;
+        const uint32_t id = guest_ref<uint16_t>(e), type = guest_ref<uint16_t>(e + 2);
+        if (id & 0x8000) continue;
+        const uint32_t it = items + 16 * id;
+        const float w = guest_ref<float>(it), h = guest_ref<float>(it + 4);
+        const float x = guest_ref<float>(e + 4), y = guest_ref<float>(e + 8) + h * 0.5f, z = guest_ref<float>(e + 12);
+        scene::Light r{};
+        r.prefix = {scene::kLight, scene::kVersion};
+        r.view = g_scene.openView;
+        r.kind = scene::kLightPoint;
+        r.source = 15;
+        r.id = (type << 16) | id;
+        r.entrant = guest_ref<uint32_t>(it + 8);
+        for (int j = 0; j < 3; ++j) r.position[j] = x * set0[j] + y * set0[4 + j] + z * set0[8 + j] + set0[12 + j];
+        r.width = w;
+        r.height = h;
+        r.colour[0] = x;
+        r.colour[1] = y;
+        r.colour[2] = z;
+        r.intensity = static_cast<float>(idx);
+        sceneAppend(context, &r, sizeof r);
+    }
+}
+
 // One Cmd 0049D328 draws, after 0049E480 / 0049E548 and before its items (CONTRACTS.md a.4): its object-to-view (set 0
 // as 0049E480 picks it), the scales, its items, and the Projection of set 1 with the viewport the batch holds.
 void gt4_scene_cmd(uint32_t context, uint32_t cmd) {
