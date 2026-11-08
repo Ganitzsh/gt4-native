@@ -760,9 +760,16 @@ new game hook is needed, it is done once per mesh, and it works for other emissi
   37's producer: if the light image is drawn from the lamp heads themselves, the same geometry names them.
   If the lamp heads aren't separate geometry (the glow baked into the post's texture, or only in the lit-road
   layer), step 0 reports back to the architect before any extraction is written.
-- **Extraction:** for each course mesh (B5) with glow geometry, the centre and size of each lamp-head quad cluster,
-  cached with the mesh. Course instances draw with `objectToView` equal to the view's `worldToView` (A3's camera
-  check, real since A11a), so mesh positions are world positions.
+- **Step 0's answer** (lane F, `r5_ss_ab.cap`; `spikes/R11.md`): the street-lamp glows are one modeled draw a frame
+  onto the scene target. Its signature: blend (Cs - Cd) As + Cd, alpha test EQUAL 128, z test GEQUAL with z write,
+  textured, renderer 3, lighting body 0. The lamp heads are separate geometry, so extraction goes ahead.
+- **The glow class** is that draw-state signature plus the texture's identity (B6's `MaterialKey`, not the host
+  texture id, which differs between runs). Another night course may use another texture, or the signature may
+  match something else there: the acceptance checks a second course.
+- **Extraction:** for each course mesh (B5) with glow geometry, the centre and size of each lamp-head cluster,
+  cached with the mesh. A star-shaped glow may be several crossed quads, so quads whose centres coincide (within a
+  fraction of their size) are one lamp. Course instances draw with `objectToView` equal to the view's `worldToView`
+  (A3's camera check, real since A11a), so mesh positions are world positions.
 - **Lights:** each frame, for the course instances drawn in a view, their lamps go into that view's light list as
   `kSrcCourseGlow`, synthesised by the host (`GpuLight` without `kFromGame`). Colour comes from the glow texture's
   mean times the vertex colour. Range and intensity are set per class in `light_sources.cpp`, tuned against
@@ -773,6 +780,7 @@ new game hook is needed, it is done once per mesh, and it works for other emissi
     (misses = 0 over the run) and no light sits where no glow is drawn. "Drawn" means the glow's draw was
     submitted that frame, not that pixels survived: a lamp head behind a building is still lit, correctly. The
     lamps' count per course section is reported;
+  - on a second night course (one of lane F's sessions), the same: no miss and no light where no glow is drawn;
   - the gather's dropped count (`GatherStats::dropped`, lights over the list's cap) is 0 on the capture: a dropped
     lamp would show as a dark patch that the miss check, which only asks that the light exists, can't see;
   - the per-frame cost reported (0 extraction after a mesh's first sight);
