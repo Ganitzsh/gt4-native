@@ -839,6 +839,18 @@ int run(const Options& options) {
     uint32_t passesWithoutFrame = 0, drawsWithoutPresent = 0;
     std::vector<uint64_t> stagesBefore;   // the stages' totals at the last present (cpuprofile::busiest)
     double perfGpu = 0.0;   // GPU milliseconds of the frames presented so far
+    // GT4_TRACE_LATENCY=1 (PLAN.md D11, measurement): the input-to-present chain, a "latency:" line a step, in QPC
+    // microseconds (the game's lines, from its pad reads, use the same clock): the input events (their SDL time), pad
+    // 1's bytes sent when they change, and each present with the newest game frame it shows. tools/latency_report.py
+    // joins them. Off without the variable.
+    static const bool traceLatency = [] {
+        const char* e = std::getenv("GT4_TRACE_LATENCY");
+        return e && *e && std::strcmp(e, "0");
+    }();
+    const auto qpcUs = [&](Uint64 counter) { return static_cast<double>(counter) * 1e6 / frequency; };
+    // SDL's event times (SDL_GetTicksNS) to the same clock
+    const double ticksToQpcUs = qpcUs(SDL_GetPerformanceCounter()) - static_cast<double>(SDL_GetTicksNS()) * 1e-3;
+    uint8_t latencySent[18] = {};
     while (running) {
         for (; nextScriptedKey < scriptedKeys.size() && scriptedKeys[nextScriptedKey].frame <= frames; ++nextScriptedKey) {
             SDL_Event key{};
@@ -853,6 +865,19 @@ int run(const Options& options) {
         }
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
+            if (traceLatency) {
+                const double at = static_cast<double>(event.common.timestamp) * 1e-3 + ticksToQpcUs;
+                if ((event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP) && !event.key.repeat)
+                    std::printf("latency: input key %d %s at %.0f\n", static_cast<int>(event.key.scancode),
+                                event.key.down ? "down" : "up", at);
+                else if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN || event.type == SDL_EVENT_GAMEPAD_BUTTON_UP)
+                    std::printf("latency: input button %d %s at %.0f\n", static_cast<int>(event.gbutton.button),
+                                event.gbutton.down ? "down" : "up", at);
+                else if (event.type == SDL_EVENT_GAMEPAD_AXIS_MOTION)
+                    std::printf("latency: input axis %d %d at %.0f\n", static_cast<int>(event.gaxis.axis),
+                                static_cast<int>(event.gaxis.value), at);
+                std::fflush(stdout);   // (whole lines: the game's log shares the file)
+            }
             switch (event.type) {
             case SDL_EVENT_QUIT:
             case SDL_EVENT_WINDOW_CLOSE_REQUESTED: running = false; break;
@@ -1049,6 +1074,13 @@ int run(const Options& options) {
                 uint8_t pad[18];
                 gt4::ps2::encodePad(input, pad);
                 gs->sendPad(0, true, pad);
+                if (traceLatency && std::memcmp(pad, latencySent, sizeof pad) != 0) {
+                    std::memcpy(latencySent, pad, sizeof pad);
+                    char hex[37];
+                    for (int i = 0; i < 18; ++i) std::snprintf(hex + 2 * i, 3, "%02x", pad[i]);
+                    std::printf("latency: sent %s at %.0f\n", hex, qpcUs(SDL_GetPerformanceCounter()));
+                    std::fflush(stdout);
+                }
                 // a session records each pad's bytes when they change (its tests read what the game was sent)
                 const auto recordPad = [&](int port, const uint8_t* bytes) {
                     if (!session || std::memcmp(bytes, padRecorded[port], 18) == 0) return;
@@ -1276,6 +1308,11 @@ int run(const Options& options) {
             renderer.reset();
             renderer = makeRenderer("auto");
             continue;
+        }
+        if (presented && traceLatency) {
+            std::printf("latency: present VBlank %llu at %.0f\n", static_cast<unsigned long long>(newestAdded),
+                        qpcUs(SDL_GetPerformanceCounter()));
+            std::fflush(stdout);
         }
         if (presented && freshPending) {
             ++freshShown;

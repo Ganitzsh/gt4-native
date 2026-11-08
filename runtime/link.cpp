@@ -603,10 +603,30 @@ bool link_take_settings(std::vector<uint8_t> &out) {
 uint32_t link_take_menu_command() { return g_menu_command.exchange(0); }
 
 bool link_pad(int port, uint8_t out[18]) {
-    KernelScope ks;   // link_poll takes this mutex in the interrupt handlers (see link_send)
-    std::lock_guard<std::mutex> lock(g_pad_mutex);
-    if (port < 0 || port > 1 || !g_pad_valid[port]) return false;
-    std::memcpy(out, g_pad[port], 18);
+    {
+        KernelScope ks;   // link_poll takes this mutex in the interrupt handlers (see link_send)
+        std::lock_guard<std::mutex> lock(g_pad_mutex);
+        if (port < 0 || port > 1 || !g_pad_valid[port]) return false;
+        std::memcpy(out, g_pad[port], 18);
+    }
+    // GT4_TRACE_LATENCY=1 (PLAN.md D11, measurement): the game's first read of new bytes on pad 1, with its VBlank and
+    // the time (QPC microseconds: the host's "latency:" lines use the same clock), joined by tools/latency_report.py
+    // with the host's input, send and present lines. Outside the locks: the log may block.
+    static const bool trace = [] {
+        const char *e = std::getenv("GT4_TRACE_LATENCY");
+        return e && *e && *e != '0';
+    }();
+    static uint8_t last[18];
+    if (trace && port == 0 && std::memcmp(out, last, 18) != 0) {
+        std::memcpy(last, out, 18);
+        LARGE_INTEGER now, frequency;
+        QueryPerformanceCounter(&now);
+        QueryPerformanceFrequency(&frequency);
+        char hex[37];
+        for (int i = 0; i < 18; ++i) std::snprintf(hex + 2 * i, 3, "%02x", out[i]);
+        log_info("latency: read %s VBlank %u at %.0f", hex, kernel_frame_count(),
+                 static_cast<double>(now.QuadPart) * 1e6 / static_cast<double>(frequency.QuadPart));
+    }
     return true;
 }
 
