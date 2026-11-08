@@ -32,8 +32,12 @@ permanent residue:
   - the HUD: E6 (an output-resolution layer), E7 (SDF text for GT4's font pages), E9 (HUD scale, safe area);
   - GT4's own menus keep drawing through the GS path: E6 and E7 change how their 2D and text look (output
     resolution, SDF text), and P3b makes their draw state native, but nothing replaces them. Lane M adds new
-    settings pages inside GT4's menu flow, drawn by the host with host-owned assets and SDF text (page logic stays
-    in the game; lane M's `MENU_DESIGN.md`, tickets M1-Mn, once the coordinator approves them);
+    settings pages that are native pages in GT4's menu flow, not an overlay. Their logic, navigation, input focus,
+    sounds (GT4's own menu sounds) and frame pacing run in the game process, as native C++ hooked into matched
+    code (the project flow, the quick menu's option path, the race pause). They are entered from GT4's own menus:
+    its Options items, Start on the GT mode map, the race pause. GT4's scripted menus on the disc are not edited.
+    Only the pixels are host-owned (generated assets and SDF text), drawn from records the game sends (lane M's
+    `MENU_DESIGN.md`, tickets M1-Mn, once the coordinator approves them);
 - **reads of graphics memory** that the game logic uses (luminance probe, photo tiles, car icons): R9 decides each,
   served from the modern targets where they exist;
 - **GS-shaped records**: the `gfx` records still carry GS register images (TEX0, ALPHA, TEST, ZBUF...) and name
