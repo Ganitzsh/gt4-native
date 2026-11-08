@@ -827,6 +827,8 @@ enum ViewRole : uint8_t {
     kViewPhoto = 6,        // Photo Travel / photo mode
     kViewHud = 7,          // 3D drawn by the HUD outside render_world (RaceRoundMeterBase 003BE3C8); never substituted
     kViewMenu = 8,         // menus' 3D (mRenderContextPS2::virtual_64 00217058)
+    kViewEnvCopy = 9,      // an env face's copy into the shared env map (0044E660, after the face's ViewEnd); `pass` =
+                           //   face; never substituted
     kViewOther = 15,
 };
 enum ViewFlags : uint8_t {

@@ -1,10 +1,12 @@
 /* compiler: ee-gcc2.96-no-strict-aliasing */
 /* Native copy of 0044E660 (the car's environment map: three passes, first in render_world) from gt4-decomp's
  * src/engine/unit_0044D510/func_0044E660.cpp, the source the native game compiled until now, with each pass's scene
- * records (docs/modern/CONTRACTS.md a.4, spike R1): a kViewEnvFace view per pass (`pass` = 0, 1, 2), opened once the
- * pass's camera is loaded and closed after its orthographic background, so the background is part of the face. The
- * camera is loaded in 0044E528, whose only caller this is: it is copied here as envFaceScene, unchanged but for the
- * ViewBegin after the camera's +0x18. Nothing is sent while scene records are off. */
+ * records (docs/modern/CONTRACTS.md a.4, a.5.7, spike R1): a kViewEnvFace view per pass (`pass` = 0, 1, 2), opened once
+ * the pass's camera is loaded and closed after the face's scene; the face's copy into the shared env map (an
+ * orthographic Cmd sampling the face's target) is a kViewEnvCopy view of its own (A6: inside the face's view it split
+ * every face by rule 4). The camera is loaded in 0044E528, whose only caller this is: it is copied here as
+ * envFaceScene, unchanged but for the ViewBegin after the camera's +0x18. Nothing is sent while scene records are
+ * off. */
 #include "gt4_gfx.h"
 #include "spr.h"
 struct Buf { int w0, w4; char pad[56]; };
@@ -120,17 +122,19 @@ extern "C" void func_0044E660(void *target, Self *scene, Cam *camera, int slot, 
    func_004A7988(0x1.3fe668p+6f); func_004A79D8(pass*-120.0f);
    func_001056A0(&bufferA); func_00105708(&bufferB);
    envFaceScene((FaceSelf *)scene,(FaceObj *)camera,(unsigned short *)visibleList,face);
+   gt4_scene_view_end(spr_base());   /* the face's scene is drawn; its copy into the env map is a view of its own */
    func_00397ED8(scene->p80); func_004A4910();
    func_001056A0(target); func_00105728(&bufferA);
    RaceEntryCar__update(1); func_004A7454();
    func_004A5A90(-0x1.ccccccp-1f,0x1.ccccccp-1f,-0x1.ccccccp-1f,0x1.ccccccp-1f,-1.0f,1.0f);
    RaceEntryCar__update(0); func_004A7454();
    func_004A79D8(240.0f-pass*120.0f);
+   gt4_scene_view_begin(spr_base(), 9, 4, (unsigned)face);   /* kViewEnvCopy, kViewCameraKnown: the copy's ortho set 0 */
    func_004AB040(5); func_004AB040(4); func_004AB040(3); func_004AB040(15);
    func_004A29A8(0); func_004A2980(0xffffff);
    func_0049CE68(0); func_0049CE40(0); func_0049CC38(0); func_0049D308(D_006A7D00);
+   gt4_scene_view_end(spr_base());   /* the face is copied */
    func_004A1638(17); func_004A29A8(1); func_004A2980(-1);
-   gt4_scene_view_end(spr_base());   /* the face's background is drawn */
   } while(i<3);
   func_004A4910(); func_004A5688();
   func_00105280(&bufferB,2); func_00105280(&bufferA,2);
