@@ -7,7 +7,11 @@
  * original's jal at 0x33E7E0 passes interlace in $t1 = 0 (0x33E7AC), alpha in $f12 = 0.0 (0x33E7C8) and
  * r, g, b in $f13 = $f14 = $f15 = 1.0 (0x33E798, 0x33E7E4, 0x33E7B4). The draft declared three floats and
  * no int, which the EE's separate float registers allow: natively interlace read the 0.0f, alpha 1.0f
- * (should be 0.0), and g and b came from the stack after the arguments (garbage). */
+ * (should be 0.0), and g and b came from the stack after the arguments (garbage).
+ * Scene records (R6, CONTRACTS a.4): its draws, the depth of field's Z24 passes (Photo Travel's preview, the replay's
+ * Dive view), between kMarkDofBegin and kMarkDofEnd; nothing is sent while scene records are off. */
+#include "gt4_gfx.h"
+#include "spr.h"
 typedef int s32;
 
 extern "C" void func_00105280(void *, s32);
@@ -33,11 +37,13 @@ extern "C" void func_0033E6E0(void *arg0, s32 *arg1, void *arg2, Dim *arg3, floa
     *(float *)(sp + 8) = fp1;
     *(float *)(sp + 0x10) = fp2;
     func_003994C0(sp);
+    gt4_scene_marker(spr_base(), 13);   /* kMarkDofBegin: the depth of field's draws, its Z24 passes (R6) */
     if (*arg1 == arg3->a) {
         func_00399550(sp, arg1, arg3, arg2, obj, 1.0f, 1.0f, 1.0f, 0, 1.0f);
     } else {
         func_00399998(sp, arg1, arg3, arg2, obj, 0, 0.0f, 1.0f, 1.0f, 1.0f);
     }
+    gt4_scene_marker(spr_base(), 14);   /* kMarkDofEnd */
     func_00105280(obj, 2);
     func_00105280(sp + 0x2C, 2);
 }
