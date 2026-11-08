@@ -77,6 +77,7 @@ void blend_frames(std::uint32_t a[8]) {
 void colour_packet(std::uint32_t a[8]) {
     fill(kScratch, 0x2000);
     put32(kScratch + 0x1F8, kScratch + 0x1000);
+    put32(kScratch + 0x1FC, kScratch + 0x2000);   // the buffer's top
     a[0] = kScratch;
     a[1] = 1 + rnd() % 64;
     a[2] = rnd() % 2;
@@ -110,6 +111,7 @@ void triangles(std::uint32_t a[8]) {
     putf(s + 0x20, rnd() % 2 ? 0.0f : rndf(-1.0f, 1.0f));
     put32(s + 0x40, rnd() % 4 ? rnd() : 0x3f3f3f3f);
     put32(s + 0x1F8, kScratch + 0x1000);
+    put32(s + 0x1FC, kScratch + 0x8000);   // the buffer's top
     fill(kScratch, 0x2000);
     fill_floats(s + 0xF50, 16, -100.0f, 100.0f);
     random_vectors(28, 31, -100.0f, 100.0f);

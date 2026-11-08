@@ -182,6 +182,7 @@ void vertex_packet(std::uint32_t a[8]) {
     a[0] = kScratch;
     put32(kScratch + 0x58, kScratch + 0x1000);
     put32(0x700021F8, kScratch + 0x1800);
+    put32(0x700021FC, kScratch + 0x2000);   // its top
     a[1] = kScratch + 0x200;
     a[5] = 3 + rnd() % 4;
     fill_floats(a[1], 3 * a[5] + 1, -50.0f, 50.0f);

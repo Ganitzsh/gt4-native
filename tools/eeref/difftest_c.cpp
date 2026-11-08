@@ -29,6 +29,7 @@ void skin_context() {
     fill(kScratch, 0x1000);
     fill(kScratch + 0x40000, 0x2000);
     put32(kScratch + 0x1F8, kScratch + 0x40000);
+    put32(kScratch + 0x1FC, kScratch + 0x80000);   // the buffer's top
     if (rnd() % 6 == 0) {
         put32(kScratch + 0xC34, 0);
     } else {

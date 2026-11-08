@@ -699,15 +699,31 @@ bool run(const Test &t, int trials) {
 
 }  // namespace
 
-// The understood differences (tools/eeref/known.txt, which replay.py reads too): address -> why.
+// The understood differences (tools/eeref/known.txt, which replay.py reads too): address -> why. GT4_DIFFTEST_KNOWN,
+// else the known.txt beside this source (game_link.py compiles it by its full path, so the run needs no particular
+// working directory), else tools/eeref/known.txt under the working directory.
 std::map<std::uint32_t, std::string> known_differences() {
     std::map<std::uint32_t, std::string> out;
-    const char *path = getenv("GT4_DIFFTEST_KNOWN") ? getenv("GT4_DIFFTEST_KNOWN") : "tools/eeref/known.txt";
-    std::FILE *f = std::fopen(path, "r");
+    std::string path;
+    std::FILE *f = nullptr;
+    if (getenv("GT4_DIFFTEST_KNOWN")) {
+        path = getenv("GT4_DIFFTEST_KNOWN");
+        f = std::fopen(path.c_str(), "r");
+    } else {
+        path = __FILE__;
+        const std::size_t slash = path.find_last_of("/\\");
+        path = slash == std::string::npos ? "known.txt" : path.substr(0, slash + 1) + "known.txt";
+        f = std::fopen(path.c_str(), "r");
+        if (!f) {
+            path = "tools/eeref/known.txt";
+            f = std::fopen(path.c_str(), "r");
+        }
+    }
     if (!f) {
-        gt4::rt::log_warn("difftest: no %s; every difference counts", path);
+        gt4::rt::log_warn("difftest: no %s; every difference counts", path.c_str());
         return out;
     }
+    gt4::rt::log_info("difftest: known differences from %s", path.c_str());
     char line[512];
     while (std::fgets(line, sizeof line, f)) {
         unsigned addr = 0;

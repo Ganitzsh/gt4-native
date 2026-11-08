@@ -152,7 +152,12 @@ the user's game and stays in `build/`.
   `tools/eeref/difftest.cpp` (a function, the memory it reads and writes, random inputs in a scratch area of guest
   RAM) on the native and on the original code, compares everything written, logs a line per test and exits before
   the game starts (`GT4_DIFFTEST_TRIALS`, default 200). A native rewrite that changes one operation fails every
-  trial (XOR made OR in 001C1C50: 200 of 200).
+  trial (XOR made OR in 001C1C50: 200 of 200). A function that sends a packet (`sends_packet`, `appends_gif` in
+  `difftest.h`) is compared on what the packet delivers: batch runs, buffers, vertices, records. The run needs
+  the game executable as any run does: `--elf <decomp>/orig/SCUS-97328/CORE.GT4.elf` (or `GT4_ELF`) unless the
+  working directory holds `orig/SCUS-97328/CORE.GT4.elf`. `tools/eeref/known.txt` is read from beside the
+  compiled `difftest.cpp` (the run logs which), or from `GT4_DIFFTEST_KNOWN`; a function listed there is reported
+  `known` and does not fail the run. PLAN.md's `DIFFTEST` gate is `GT4_DIFFTEST=all` exiting 0.
 - `tools/eeref/calltree.py --elf ... --functions ... ADDR --depth N --min-size B` lists a function's static
   callees (jal and tail calls) for a GT4_RECORD list. `GT4_PROFILE=FILE:FROM:TO` (runtime/profile.cpp) samples
   the game's threads (frame-pointer walk, game code only) to find a scene's call tree in the first place.

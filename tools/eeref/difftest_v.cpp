@@ -50,6 +50,7 @@ std::uint32_t draw_2d(std::uint32_t a[8]) {
     fill(kScratch, 0x1000);
     fill(kScratch + 0x40000, 0x2000);
     put32(kScratch + 0x1F8, kScratch + 0x40000);
+    put32(kScratch + 0x1FC, kScratch + 0x80000);   // the buffer's top
     const std::uint32_t n = 1 + rnd() % 12;
     a[0] = kScratch;
     a[1] = rnd() & 0xFFFF;
@@ -171,6 +172,7 @@ void view_packet(std::uint32_t a[8]) {
     fill(kScratch, 0x1000);
     fill(kScratch + 0x40000, 0x200);
     put32(kScratch + 0x1F8, kScratch + 0x40000);
+    put32(kScratch + 0x1FC, kScratch + 0x80000);   // the buffer's top
     fill_floats(kScratch + 0xFA0, 16, -2.0f, 2.0f);
     a[0] = kScratch;
     a[1] = rnd() % 2 ? 0xC1 : rnd() % 248;

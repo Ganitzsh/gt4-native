@@ -36,6 +36,8 @@ void draw_vertices(std::uint32_t a[8]) {
     const std::uint32_t pos = kScratch + 0x8000, uv = kScratch + 0x9000, colors = kScratch + 0xA000;
     fill(kScratch, 0xB000);
     std::memcpy(ram(ctx + 0x1F8), &packet, 4);
+    const std::uint32_t packet_top = pos;   // the buffer's top (+0x1FC): room up to pos
+    std::memcpy(ram(ctx + 0x1FC), &packet_top, 4);
     fill_floats(pos, 0x100, -400.0f, 400.0f);
     fill_floats(uv, 0x100, 0.0f, 1.0f);
     fill_floats(colors, 0x100, -0.2f, 1.2f);
@@ -63,6 +65,8 @@ void matrix_packet(std::uint32_t a[8]) {
     fill(kScratch, 0x2100);
     ram(s)[1] = rnd() % 2 ? 2 : static_cast<std::uint8_t>(rnd());
     std::memcpy(ram(s + 0x1F8), &cursor, 4);
+    const std::uint32_t top = kScratch + 0x3000;   // the buffer's top (+0x1FC)
+    std::memcpy(ram(s + 0x1FC), &top, 4);
     fill_floats(s + 0xF50, 16, -100.0f, 100.0f);
     random_vectors(28, 31, -100.0f, 100.0f);
     a[0] = s;
