@@ -30,9 +30,18 @@ kScene = 11,   // scene::Prefix, then the record of that kind (docs/modern/CONTR
   payload to `GsTarget::scene(const uint8_t* payload, size_t bytes)` (new virtual in `platform/gs/stream.h`, no-op
   default). `QueuedTarget` (`gs_host.cpp:306`) forwards it in order like `effect`.
 - `GT4_LINK_VERSION` (`include/gt4/link/protocol.h:22`) goes from 2 to 3.
-- Records are sent only when the host sets game option `kOptionSceneRecords = 5` (`runtime/runtime.h:26`) to 1.
-  The host sets it when `render.scene != original`, and when recording a capture with
-  `GT4_HOST_RECORD_SCENE=1` (so the parity captures carry them).
+- Records are sent only when the host sets game option `kOptionSceneRecords = 5` (`runtime/runtime.h:26`):
+  - **0, off**: nothing (the `original` preset).
+  - **1, full** (as before): every record of this section. The host sends 1 when `sceneRecordsWanted()`
+    (`render.scene != original`, `lighting.night = enhanced`, and when recording a capture with
+    `GT4_HOST_RECORD_SCENE=1`, so the parity captures carry them).
+  - **2, vehicles only**: else, when `input.haptics = physics` (D14). Haptics need only the `Vehicle` records, and
+    full records would change every preset's timing through the tick deferral (a.5.1). In this mode
+    `gt4_scene_on()` stays false: pgl's hooks send nothing, game code sends no `FrameBegin`, and the kick never
+    defers the clock. While a race runs (`vehicle_live()`), the kick sends one `GT4_REC_GFX` block of its own:
+    `FrameBegin` (flags `kFrameVehiclesOnly`), the `Vehicle`s (each padded to whole qwords), then `FrameEnd` (views,
+    instances, lights, emitters, projections 0; `begins` 1). It is one block, so nothing comes between it and its
+    `FrameEnd`, and a.5.1 holds without the deferral.
 
 ### a.2 Game-side API (`compat/game/gt4_gfx.h`) and the game's copy of the structs
 
@@ -98,7 +107,10 @@ struct Prefix {
 static_assert(sizeof(Prefix) == 4);
 
 // --- Frame ----------------------------------------------------------------------------------------------
-enum FrameFlags : uint32_t { kFrameField = 1, kFrameOddField = 2 };   // the race's 224-line fields
+enum FrameFlags : uint32_t {
+    kFrameField = 1, kFrameOddField = 2,   // the race's 224-line fields
+    kFrameVehiclesOnly = 4,                // kOptionSceneRecords 2 (a.1): only Vehicles, no view; not a scene to draw
+};
 struct FrameBegin {
     Prefix prefix;
     uint32_t frame;     // runtime: +1 per FrameBegin since the game started
@@ -324,7 +336,9 @@ Where each record is sent (tickets in PLAN.md):
 
 ### a.5 Ordering within a frame, and against the existing records
 
-1. **A scene frame is one kicked list.** `FrameBegin` is its first scene record and `FrameEnd` its last.
+1. **A scene frame is one kicked list.** `FrameBegin` is its first scene record and `FrameEnd` its last. (A
+   vehicles-only frame, a.1 mode 2, is a single block the runtime sends at the kick: `FrameBegin`, the `Vehicle`s,
+   `FrameEnd`.)
    - The first `FrameBegin` since the last kick opens the frame. The runtime drops any later one until the kick
      and counts it in `FrameEnd::begins`, so the opening one's `flags` stand.
    - The kick (004A11F8) sends `FrameEnd` after `walk(list)` when a frame is open. It goes as a `GT4_REC_GFX` block
@@ -487,6 +501,7 @@ Where each record is sent (tickets in PLAN.md):
 |---|---|---|
 | `records`, `bad`, `versionUnknown`, `unknownKind`, `outsideFrame` | decoding | `bad == versionUnknown == unknownKind == 0` |
 | `framesUnclosed`, `countsMismatch` | `FrameEnd`'s counts differ from what arrived | 0 |
+| `framesVehiclesOnly` | frames flagged `kFrameVehiclesOnly`: complete with 0 views when their counts match; no consumer draws them as a scene | reported |
 | `framesTruncated` | a frame still open when the stream ends (a capture's last list, a.5.1) | reported |
 | `viewsNested`, `viewEndWithoutBegin`, `viewsUnclosed` | pairing (`viewsUnclosed`: a view still open at `FrameEnd`) | 0 |
 | `lights`, `lightsAfterViewEnd`, `lightViewUnknown` | lights by view; those that came after their view's `ViewEnd` (a.5 rule 4); those naming a view not begun this frame | `lightViewUnknown == 0` |

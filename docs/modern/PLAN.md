@@ -521,7 +521,11 @@ The kerb signal waits for the id table (or comes from stroke speed alone until t
 - GT4's own rumble (D2) stays and mixes in (crashes), taking the larger value per motor.
 - Settings: `input.haptics` (`original`: D2 only, the PS2 behaviour; `physics`), `input.haptics.strength` (0-100 %),
   and `input.trigger_effects` (`off`, `on`; default `on` outside `original`).
-- Depends: D2, D6, A9, D13 (per-device). Acceptance:
+- **The records it needs:** with full scene records off, the host asks for vehicles only (`kOptionSceneRecords` 2,
+  CONTRACTS a.1): one block at the kick with the `Vehicle`s, no tick deferral, nothing sent outside a race. The
+  `original` preset stays at 0.
+- Depends: D2, D6, A9, D13 (per-device). Acceptance (also: `ORIG`; with vehicles only, frame pacing unchanged
+  within noise against records off, and `STREAM`'s extra bytes reported):
   - `CTEST`: the mapping from recorded wheel fields to motor and trigger values, on a recorded lap's fields
     (one-frame steps, no output when stopped).
   - A session test reads the haptic records over a lap with a kerb, a lock-up and a spin, and each shows where
