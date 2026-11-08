@@ -285,12 +285,24 @@ place, copied only on a miss) and its materials per item, into `FrameList::ViewO
     materials); the same object (`InstanceData::object`) keeps its mesh and material ids across race frames,
     counted; new meshes per frame after the race's first 300 frames near 0 outside the per-frame ones (after
     the first lap, for a lap-long capture or a live session);
-  - `PERF`: the front-end thread's added time with the split on, at most 0.5 ms a race frame at p95, measured as
-    the thread's CPU time (`QueryThreadCycleTime` on Windows, `CLOCK_THREAD_CPUTIME_ID` on Linux) beside the wall
-    clock, since the wall clock's p95 includes preemption (lane B measured 330 us mean, p95 538-743 us under load).
-    Cycles are converted with a one-time calibration against the high-resolution clock, said in the summary line,
-    and the margin under 0.5 ms is reported, not only pass or fail (headroom for the Odin under FEX);
+  - `PERF`: the front-end thread's added time with the split on, at most 0.5 ms a race frame at p95, measured as the
+    thread's CPU time (`QueryThreadCycleTime` on Windows, `CLOCK_THREAD_CPUTIME_ID` on Linux) beside the wall clock,
+    since the wall clock's p95 includes preemption (lane B measured 330 us mean, p95 538-743 us under load). Cycles
+    are converted with a one-time calibration against the high-resolution clock, said in the summary line, and the
+    margin under 0.5 ms is reported, not only pass or fail (headroom for the Odin under FEX). Measured (4761e96,
+    `race_boot.cap` after the race's first 300 frames): CPU p95 439 us (from 700), median 360 (from 587), p99 532,
+    about 12 % under the bar; accepted by the coordinator. It took three cuts inside B6 (the mesh key hashes only
+    what the decode reads; one material lookup per run of items from one draw; the stability check only with the
+    log), which also decode 3x fewer meshes. A per-job identity in `vif1.cpp` ("B6b") was dropped: its buffers are
+    never cleared, so a running hash never repeats, and a content hash per written qword costs more than it saves.
+    The next cuts are B6c;
   - `ORIG` and `PRESETS` identical.
+
+**B6c: B6's front-end cost, for the Odin (S, lane B; lane A reviews the `gs_frontend` parts).** Before `hybrid`
+ships to players (before B8's release), the coordinator's follow-up to B6: the front end's item gathering per
+instance, and the mesh request's lock taken once per view instead of per instance. Depends: B6. Acceptance: B6's span
+in thread CPU time on `race_boot.cap` (after the race's first 300 frames), p95 below B6's 439 us and the margin
+reported; the same span measured on the Odin in lane C's device run; `ORIG` and `PRESETS` identical.
 
 **B7: Parity view renderer (L).** `platform/render/modern/parity_view.cpp`, `shaders/modern_parity.*`: draws a
 view's instances from the mesh cache with GT4's lighting per vertex (the bodies of `gsn_models.comp`), at 1x, with
@@ -1006,7 +1018,7 @@ No two day-one tickets edit the same file except `main.cpp` / `renderer.cpp` (B2
 |---|---|---|
 | 0. Foundations (weeks 1-3) | A0, A1, A10, A2, A3; B2, B1, B5, B3; C1-C4, C10; E1-E4; F0, F1, N0, N1; spikes R1-R7, R9-R12 | `SCENE` gates on race and event captures; B3 `PRESETS` |
 | 1. Parity (weeks 3-8) | B4, B6, B7, A4, A5a, A6, A11a, P1, P2a (after B4, before B8's imports), P3a, P4, P5; D-track (D12, D13 first; P6 after D5) | `PARITY` on REF |
-| 2. Hybrid ships (weeks 8-10) | A7 step 1a, B8, B9, F2, F2b, N3, N4 (hybrid parts) | `render.scene = hybrid` in presets low-ultra; `R5` gates in hybrid |
+| 2. Hybrid ships (weeks 8-10) | A7 step 1a, B6c (before B8's release), B8, B9, F2, F2b, N3, N4 (hybrid parts) | `render.scene = hybrid` in presets low-ultra; `R5` gates in hybrid |
 | 3. Modern lighting (weeks 10-18) | B10-B15, F3, F4, A7 step 2, A8 (N2b/c and A11b only if N2 reopens) | `R5` gates in modern; owner review |
 | 4. Resolution and effects | B16-B22, F5, E6-E9, P2b, P2c, P3b | per ticket |
 | 5. Optional | B23, C6 on devices, research track | per ticket |
