@@ -439,7 +439,20 @@ Where each record is sent (tickets in PLAN.md):
    the runtime and never reach the host. At the host, `outsideFrame` counts any that do (a stream fault) and drops
    them.
 7. **Relation to the Light command.** The front end still decides where the Light command goes (`sceneRead`,
-   `gs_frontend.cpp:821`). A Light command on a target with a bound view substitutes that view.
+   `gs_frontend.cpp:821`). A Light command on a target with a bound view substitutes that view. Several views can
+   bind the same target: in a race the rear-view mirror (view 5) is drawn into the scene target with a smaller
+   scissor (R5). The Light then substitutes the bound views in their order on the list, each within its own
+   rectangle; where rectangles overlap, the later view wins, as GT4 draws them (the mirror over the main view's
+   corner: the main view's rectangle is the whole target). The rectangle is the scissor its tagged draws used:
+   `ViewBegin::scissor` stays 0 (pgl sets the scissor with the view's first draws, after `ViewBegin`), so the front
+   end keeps the union of the SCISSORs of each bound view's tagged draws and publishes it as `ViewOnList::scissor`.
+   Not the projection's viewport: the mirror's scissor is tighter than its viewport.
+   - **Destination alpha is part of the picture.** Later draws read the target's alpha: Z set from it (R5 (c)), a
+     low-resolution render added by it (R5 (d)), the car paint's reflection pass with the destination alpha test,
+     and at night the light-image glow weighted by it (R11). So a substituted view writes alpha as GT4's draws
+     would have left it at the Light, not only colour and Z: that is the alpha after the mid-frame draws (R5 (d)
+     resets it at 0.47 of the order and later draws mark it), not the alpha the view alone would write. B8 defines
+     how.
    - **Principal target.** The host binds a view to its principal target: the colour target (FBP, FBW, PSM) and
      depth buffer (ZBP) of the view's first tagged model draw with a depth test (ZTE on, ZTST not ALWAYS). A view
      with no such draw binds to its first tagged draw's colour target, as before (the HUD view never binds to a
@@ -637,6 +650,7 @@ read, then the one that receives `FrameEnd`. (Race route: 38 reads in about 4900
       uint8_t auxCount = 0;                       // a fifth is split (a.5.7 rule 5), so no allocation
       uint8_t auxReads = 0;                       // bit i: a principal draw samples auxTargets[i]
       uint16_t auxDraws = 0;                      // tagged draws into the auxiliary targets
+      uint16_t scissor[4] = {};                   // x0, y0, x1, y1: the union of its tagged draws' SCISSORs (a.5.7)
       struct InstanceIds { MeshId mesh = 0; uint32_t firstMaterial = 0, materialCount = 0; };
       std::vector<InstanceIds> ids;               // B6: by position in package->instances, filled in
                                                   //   sceneView() before the view goes on the list; mesh 0:
