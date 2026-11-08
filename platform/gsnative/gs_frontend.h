@@ -331,9 +331,11 @@ public:
         // HudBegin < HudEnd, by command index), those where they did not, those not checked (a cut inside the frame)
         uint64_t markersInOrder = 0, markersOutOfOrder = 0, markersNotChecked = 0, markersAbsent = 0;
         uint64_t lightBeforePost = 0, lightInsidePost = 0;   // of those in order: the Light before PostBegin, or after it
-        // N4: draws made inside a bracket (index kBracketFlare, kBracketGlare), by the rule that marked them (into the main
-        // view's principal target; else into a screen-sized one), and those left unmarked (another target: the samples)
+        // N4: Draws made inside a bracket (index kBracketFlare, kBracketGlare; a merged extension is not counted again), by
+        // the rule that marked them (into the main view's principal target; else into a screen-sized one), and those left
+        // unmarked (another target: the samples); scene frames that ended with a bracket open (an End missing: 0 expected)
         uint64_t bracketPrincipal[3] = {}, bracketScreen[3] = {}, bracketKept[3] = {};
+        uint64_t bracketsOpenAtEnd = 0;
     } stats;
 
     // The state groups of include/gt4/gfx.h: a state record from the game (the shared groups, then the

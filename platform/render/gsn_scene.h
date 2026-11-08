@@ -40,6 +40,7 @@ public:
     // Running totals for the host's hitch log (main.cpp): what can make one frame slow.
     struct Counters {
         uint64_t framesSkipped = 0, textures = 0, textureBytes = 0, targets = 0, pipelines = 0;
+        uint64_t flareDrawsSkipped = 0, glareDrawsSkipped = 0;   // N4 (setSkippedBrackets); also printed at exit when not 0
     };
     Counters counters() const;
     std::string textureHeapSummary() const;   // the textures' memory blocks and their free ranges (hitch log)
@@ -70,8 +71,8 @@ public:
     // game's scene records (sceneRecordsWanted), which carry the lamps and each view's projection.
     void setNightLighting(float strength);
     // N4 (PLAN.md): the draws the front end marked inside the flare's (glare's) bracket onto the picture are not drawn.
-    // Counted per bracket ("N4 flare draws skipped"); GT4_GSN_LIMIT still counts them. The flare's samples, which the
-    // game reads back, are never marked.
+    // Counted per bracket (Counters::flareDrawsSkipped, glareDrawsSkipped); GT4_GSN_LIMIT still counts them; the motion
+    // pre-pass leaves them out too. The flare's samples, which the game reads back, are never marked.
     void setSkippedBrackets(bool flare, bool glare);
     // Temporal anti-aliasing of the 3D scenes in the scene stage (render.aa = taa, or FSR 2): jittered draws,
     // motion vectors from the 3D renderers, a resolve against each scene's history (docs/NATIVE_RENDERER.md).

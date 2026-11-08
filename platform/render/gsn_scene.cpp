@@ -495,6 +495,9 @@ struct GsnScene::Impl {
         vkDeviceWaitIdle(device.device);
         if (!profile.quiet) printProfile();
         if (framesSkipped) std::printf("Frames skipped behind the game: %llu\n", static_cast<unsigned long long>(framesSkipped));
+        if (counters.flareDrawsSkipped || counters.glareDrawsSkipped)
+            std::printf("N4 draws skipped onto the picture: flare %llu, glare %llu\n",
+                        static_cast<unsigned long long>(counters.flareDrawsSkipped), static_cast<unsigned long long>(counters.glareDrawsSkipped));
         if (stagesOnTransients || stagesOnMembers)
             std::printf("Scene stages run on the members: %llu (the build's plan was wrong); on the render graph's transients: %llu\n",
                         static_cast<unsigned long long>(stagesOnMembers), static_cast<unsigned long long>(stagesOnTransients));
@@ -1529,6 +1532,7 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
             if (cmd.kind != gsn::FrameList::Command::Kind::Draw) continue;
             const gsn::Draw& d = frame.draws[cmd.index];
             if (d.target != l.target || d.topology != gsn::Topology::Triangles || !d.count) continue;
+            if (d.bracket && ((skippedBrackets >> d.bracket) & 1)) continue;   // (N4: not drawn, so no motion of its own)
             if (!(d.moving || (!d.modeled && (frame.vertices[d.first].mw > 0.0f || frame.vertices[d.first + d.count - 1].mw > 0.0f)))) continue;
             const gfx::Context& c = d.state.c;
             const bool zt = d.depth && c.depthTest;
@@ -1990,7 +1994,7 @@ void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t
         }
         const gsn::Draw& d = frame.draws[cmd.index];
         if (d.bracket && ((skippedBrackets >> d.bracket) & 1)) {   // N4: the flare's (glare's) draws onto the picture
-            tally(d.bracket == gsn::kBracketFlare ? "N4 flare draws skipped" : "N4 glare draws skipped");
+            ++(d.bracket == gsn::kBracketFlare ? counters.flareDrawsSkipped : counters.glareDrawsSkipped);
             continue;
         }
         auto targetIt = targets.find(d.target);

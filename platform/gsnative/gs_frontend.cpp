@@ -2358,11 +2358,13 @@ void GsFrontend::finishBinding(ViewBinding& b) {
 // N4 (PLAN.md): a draw into `colour` inside the flare's or glare's bracket is marked when it draws onto the picture: the
 // main view's principal target (decided at its ViewEnd, before the flare pass), or a screen-sized target by sceneRead's
 // rule (the display buffer after the post effects, named only by the display record, later). The flare's samples go into
-// a small target the game reads back: never marked. The flare's bracket wins should both be open.
+// a small target the game reads back: never marked. The flare's bracket wins should both be open. A main view with no
+// tagged draw is never decided (finishBinding): its draws in a bracket fall to the size rule (its principal would be
+// screen-sized anyway). Outside a scene frame nothing is marked (the brackets close with it: sceneFrame).
 uint8_t GsFrontend::bracketFor(uint32_t colour, uint8_t& rule) const {
     rule = 0;
     const uint8_t open = (sceneBrackets >> kBracketFlare) & 1 ? kBracketFlare : (sceneBrackets >> kBracketGlare) & 1 ? kBracketGlare : 0;
-    if (!open || !colour) return 0;
+    if (!open || !colour || !sceneOpen) return 0;
     for (const uint16_t id : sceneMainViews)
         if (id <= viewBindings.size() && viewBindings[id - 1u].decided && viewBindings[id - 1u].target == colour) {
             rule = 1;
@@ -2381,7 +2383,7 @@ uint8_t GsFrontend::bracketFor(uint32_t colour, uint8_t& rule) const {
 // A new Draw made inside a bracket, counted by the rule that marked it (or kept).
 void GsFrontend::countBracket(uint8_t rule) {
     const uint8_t open = (sceneBrackets >> kBracketFlare) & 1 ? kBracketFlare : (sceneBrackets >> kBracketGlare) & 1 ? kBracketGlare : 0;
-    if (!open) return;
+    if (!open || !sceneOpen) return;
     (rule == 1 ? stats.bracketPrincipal : rule == 2 ? stats.bracketScreen : stats.bracketKept)[open]++;
 }
 
@@ -2570,6 +2572,9 @@ void GsFrontend::sceneFrame(std::unique_ptr<scene::SceneFrame> f) {
     sceneOpen = false;
     viewBindings.clear();
     sceneCuts = sceneCutsAsync = 0;
+    if (sceneBrackets) ++stats.bracketsOpenAtEnd;   // (N4: an End marker missing; the bracket closes with the frame)
+    sceneBrackets = 0;
+    sceneMainViews.clear();
 }
 
 void GsFrontend::vsync(uint64_t vblank, FrameList& out) {

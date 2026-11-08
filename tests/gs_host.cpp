@@ -570,14 +570,20 @@ int main(int argc, char** argv) {
         marker(gt4::gfx::scene::kMarkFlareBegin);
         target2d(0, 10, 448);
         drawSprite(640, 448);
+        expect(fe.stats.bracketsOpenAtEnd == 0, "N4: the first frame closed its brackets");
         frameBegin();
+        drawSprite(640, 448);
+        // a frame that ends with the flare's bracket open (its End lost): counted, and nothing after it is marked
+        marker(gt4::gfx::scene::kMarkFlareBegin);
+        fe.sceneFrame(std::make_unique<gt4::scene::SceneFrame>());
         drawSprite(640, 448);
         gt4::gsn::FrameList next;
         fe.cut(next);
         const std::string nextMarks = brackets(next);
-        expect(nextMarks == "10", ("N4: without a main view the size rule marks; a new frame starts outside the brackets (got " +
-                                   nextMarks + ")").c_str());
+        expect(nextMarks == "10", ("N4: without a main view the size rule marks; a new frame starts outside the brackets, and "
+                                   "draws after a FrameEnd are outside them (got " + nextMarks + ")").c_str());
         expect(fe.stats.bracketScreen[kBracketFlare] == 2, "N4: that draw counted by the size rule");
+        expect(fe.stats.bracketsOpenAtEnd == 1, "N4: a frame ending with a bracket open is counted");
     }
 
     // 3. A capture replayed through GsHost (no game: reads stay in memory): one displayed list per VBlank.
