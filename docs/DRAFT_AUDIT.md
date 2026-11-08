@@ -91,7 +91,9 @@ literals; hexadecimal constants were already exact).
   a `.psu`. The same with a copy of the approved save (a career in the middle of the Pan Euro Championship): loaded
   and saved natively, loaded and saved in PCSX2, imported and loaded natively, it shows the same career at each step
   (the owner's Home: 13.7 %, 3,674 A-spec points, Days 300, 629,068 Cr, 26 JAN, the BMW M3 CSL '03, the championship
-  still running). Not compared: the garage list and the licences, which GT4 only opens after withdrawing from the
-  championship. Left open: the save files are compressed or encrypted (8.0 bits a byte), so no scan tells what else
-  they hold. A host pointer no load ever follows would round-trip silently too: this shows that no load depends on
-  one, not that none is written.
+  still running). A second copy, withdrawn from the championship first so GT4 opens the rest, kept the same through
+  the same three steps: the garage (12 cars, the same list, power and driven order), one car's record (the NISMO 400R
+  '96: Lightning Yellow, 492 HP, 408.37 ft-lb, 98.7 miles) and the licences (B, IB, A and IA passed, Super not). The
+  garage list's sort order, a display setting, is not kept by a save. Left open: the save files are compressed or
+  encrypted (8.0 bits a byte), so no scan tells what else they hold. A host pointer no load ever follows would
+  round-trip silently too: this shows that no load depends on one, not that none is written.
