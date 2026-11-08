@@ -10,7 +10,10 @@ than --tolerance ms (PLAN.md E4: "presented frame times within 1 ms of 16.7 ms")
 memory (the most a frame held). Per stage (the render graph's passes, the GS back end's GPU stages, the host's CPU
 stages; same-named entries in a frame added up): the mean and 95th percentile in microseconds. --skip leaves out the first N
 frames (start-up: shaders, the first textures). With --baseline, each statistic's change in percent; the exit code
-is 1 when a mean or a 95th percentile grew by more than --max-change percent (PERF(x) in PLAN.md section 2).
+is 1 when a mean or a 95th percentile grew by more than --max-change percent (PERF(x) in PLAN.md section 2). A stage
+found on one side only (renamed, split, new or gone between the builds) compares against nothing and cannot fail
+--max-change: such stages are listed by name ("only in the baseline", "only in the run", and in --json), so a rename
+shows as one instead of passing unseen.
 """
 import argparse
 import json
@@ -170,6 +173,13 @@ def main():
                     ok = False
             print(f"  {k[0]}/{k[1]} {k[2]}: " + "  ".join(parts))
         report["stages"] = {f"{k[0]}/{k[1]}/{k[2]}": {"baseline": base_stages.get(k), "run": run_stages.get(k)} for k in keys}
+        # one side only: not held to --max-change (nothing to compare with), so named here
+        one_sided = {"only_in_baseline": sorted(k for k in base_stages if k not in run_stages),
+                     "only_in_run": sorted(k for k in run_stages if k not in base_stages)}
+        for side, label in (("only_in_baseline", "only in the baseline"), ("only_in_run", "only in the run")):
+            if one_sided[side]:
+                print(f"stages {label} (not compared): " + ", ".join(f"{k[0]}/{k[1]} {k[2]}" for k in one_sided[side]))
+        report["one_sided_stages"] = {side: [f"{k[0]}/{k[1]}/{k[2]}" for k in ks] for side, ks in one_sided.items()}
     elif run_stages:
         print("stages (microseconds a frame):")
         for k in sorted(run_stages, key=lambda k: -run_stages[k]["mean"])[:a.stages]:
