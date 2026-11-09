@@ -815,6 +815,7 @@ static_assert(sizeof(Prefix) == 4);
 enum FrameFlags : uint32_t {
     kFrameField = 1, kFrameOddField = 2,   // the race's 224-line fields
     kFrameVehiclesOnly = 4,                // kOptionSceneRecords 2 (CONTRACTS a.1): only Vehicles, no view; not a scene to draw
+    kFrameLampsOn = 8,                     // GT4's car-lamp switch: the course scene's flag bit 0x8000 (CONTRACTS a.4)
 };
 struct FrameBegin {
     Prefix prefix;

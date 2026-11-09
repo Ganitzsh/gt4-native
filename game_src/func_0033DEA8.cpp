@@ -51,7 +51,9 @@ void func_004AB040(int);
 }
 extern "C" void RacePS2Base__render_world(char *self, Buf *out,float t) {
  Buf b; Buf aux;
- gt4_scene_frame_begin(spr_base(),0);   /* opens the scene records' frame, which the kick closes (docs/modern/CONTRACTS.md a.5.1) */
+ /* opens the scene records' frame, which the kick closes (docs/modern/CONTRACTS.md a.5.1); kFrameLampsOn (8) from the
+  * course scene's flag word bit 0x8000, GT4's car-lamp switch as 0033EAB8 reads it (CONTRACTS a.4) */
+ gt4_scene_frame_begin(spr_base(),(I(P(P(P(P(self,0x6C),0x80),4),0x80),0x10)&0x8000)?8u:0u);
  char *cam=cameraT(self,t);
  char *scene=P(P(P(P(self,0x6C),0x80),4),0x80);
  func_0033E8E0(self);

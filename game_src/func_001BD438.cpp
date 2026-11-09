@@ -51,7 +51,10 @@ extern "C" void mPhotoViewFace__virtual_70(void *arg0, View *view, int enabled) 
  func_003C7DA8(race);
  Buf b, c;
  func_001052E0(&b,0,width,height);func_00105338(&c,&b,0x31);
- gt4_scene_frame_begin(spr_base(),0);
+ {   /* kFrameLampsOn (8): the course scene's flag word bit 0x8000, as render_world's copy reads it (CONTRACTS a.4) */
+  char *course=*(char **)(*(char **)(*(char **)((char *)race+0x6C)+0x80)+4);
+  gt4_scene_frame_begin(spr_base(),(*(int *)(*(char **)(course+0x80)+0x10)&0x8000)?8u:0u);
+ }
  gt4_scene_main_role(spr_base(),6);   /* kViewPhoto */
  func_0033E368(race, &b, &c, -1, 0.0f);
  gt4_scene_main_role(spr_base(),0);
