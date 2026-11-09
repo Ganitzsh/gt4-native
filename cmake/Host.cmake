@@ -665,6 +665,9 @@ add_test(NAME material_table COMMAND gt4_material_table_test)
     add_test(NAME comment_only_selftest
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/comment_only.py --self-test)
     set_tests_properties(comment_only_selftest PROPERTIES SKIP_RETURN_CODE 77)
+    # The disk pruner (tools/prune.py) on a temporary home: an idle clean worktree removed through git, dirty and
+    # recent ones kept, newest packages and build trees kept, a junction removed without its target, saves kept.
+    add_test(NAME prune_selftest COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/prune.py --self-test)
     # A replay comes out the same every run with frame interpolation and the HD pack on (C1): a capture with 3D
     # replayed twice, every frame bit for bit. Needs GT4_DETERMINISM_CAPTURE (captures are not in the repository)
     # and a Vulkan GPU; skipped (77) without the capture.
