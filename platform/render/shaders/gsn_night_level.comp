@@ -1,0 +1,56 @@
+#version 460
+// lighting.night (PLAN.md F2b): the view's level, which the night relight's albedo estimate divides by. One
+// workgroup: gsn_night_lum.comp's per-block (sum of log luminance, count) pairs reduced over the whole scene area to
+// the log average over its geometry pixels (sky and clear colour count 0 there), then smoothed over time in a
+// one-element buffer kept per view (by target, role and pass): level = mix(previous, now, blend), blend =
+// 1 - exp(-dt / 0.5 s) from the host.
+// Reset to the frame's level when the host says so (a new view, a cut), when the previous frame had no geometry, and
+// when the level moves by more than a factor of 2 in one frame (a camera cut, as no record marks one yet). A frame
+// without geometry keeps the previous level (0 on a reset: a new buffer is defined) and marks it, so the next frame
+// with geometry starts afresh.
+layout(local_size_x = 256) in;
+layout(set = 0, binding = 0) uniform sampler2D blockSums;   // gsn_night_lum.comp: (sum of log luminance, count) per block
+layout(std430, set = 0, binding = 1) buffer Level {
+    float level;   // the smoothed log-average luminance (linear)
+    float count;   // the geometry pixels behind it (0: none, the next frame resets)
+    float pad[2];
+} v;
+layout(push_constant) uniform Push {
+    ivec2 blocks;   // the scene area's blocks (the image may be larger: it only grows)
+    float blend;    // 1 - exp(-dt / 0.5 s)
+    uint reset;     // 1: take the frame's level
+} p;
+
+shared float sums[256];
+shared float counts[256];
+
+void main() {
+    const uint i = gl_LocalInvocationIndex;
+    float s = 0.0, c = 0.0;
+    const int n = p.blocks.x * p.blocks.y;
+    for (int k = int(i); k < n; k += 256) {
+        const vec2 b = texelFetch(blockSums, ivec2(k % p.blocks.x, k / p.blocks.x), 0).rg;
+        s += b.x;
+        c += b.y;
+    }
+    sums[i] = s;
+    counts[i] = c;
+    barrier();
+    for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+        if (i < stride) {
+            sums[i] += sums[i + stride];
+            counts[i] += counts[i + stride];
+        }
+        barrier();
+    }
+    if (i != 0u) return;
+    if (!(counts[0] > 0.5)) {
+        if (p.reset != 0u) v.level = 0.0;
+        v.count = 0.0;
+        return;
+    }
+    const float now = exp(sums[0] / counts[0]);
+    const bool fresh = p.reset != 0u || !(v.count > 0.5) || !(v.level > 0.0) || now > 2.0 * v.level || now < 0.5 * v.level;
+    v.level = fresh ? now : mix(v.level, now, p.blend);
+    v.count = counts[0];
+}

@@ -8,9 +8,10 @@
 // lighting.night (PLAN.md F2, CONTRACTS.md c.3): after the occlusion, before the grade, the view's lamps are added.
 // Each pixel's view-space position comes from GT4's Z through the view's own projection and viewport
 // (ProjectionData), its normal from the nearer neighbour on each axis; the lights from the clustered light list
-// (light_list.glsl); the albedo is estimated as colour / local log-average luminance x 0.18, clamped to [0, 0.9]
-// (gsn_night_lum.comp's per-block sums, sampled bilinearly and divided). The sky, pixels whose four blocks have no
-// geometry and the rear-view mirror's inset get no added light.
+// (light_list.glsl); the albedo is estimated as colour / the view's log-average luminance x 0.18, clamped to
+// [0, 0.9]: one level for the whole view (gsn_night_level.comp, smoothed over about half a second), so a dim far
+// road stays dim instead of being lifted to mid-grey block by block. The sky, a view without geometry and the
+// rear-view mirror's inset get no added light.
 #extension GL_GOOGLE_include_directive : require
 #include "light_list.glsl"
 layout(local_size_x = 8, local_size_y = 8) in;
@@ -22,7 +23,11 @@ layout(std430, set = 0, binding = 4) readonly buffer Header { LightListHeader he
 layout(std430, set = 0, binding = 5) readonly buffer Lights { GpuLight lights[]; };
 layout(std430, set = 0, binding = 6) readonly buffer Cells { ClusterCell cells[]; };
 layout(std430, set = 0, binding = 7) readonly buffer Indices { uint indices[]; };
-layout(set = 0, binding = 8) uniform sampler2D localLuminance;   // gsn_night_lum.comp: (sum of log luminance, count) per 8 x 8
+layout(std430, set = 0, binding = 8) readonly buffer Level {   // gsn_night_level.comp: the view's level
+    float level;
+    float count;
+    float pad[2];
+} viewLevel;
 layout(push_constant) uniform Light {
     vec2 size;
     float aoStrength;   // 0: no occlusion
@@ -62,31 +67,15 @@ vec3 nightPosition(ivec2 q, float d) {
     const vec2 v = (vec2(q) + 0.5 - p.centre) / p.focal * d;
     return vec3(v, -d);
 }
-// The local log-average luminance (gsn_night_lum.comp), bilinear over the per-block (sum, count) pairs; 0 where the
-// four blocks around the pixel hold no geometry.
-float nightLocal(ivec2 q) {
-    const ivec2 blocks = (ivec2(p.size) + 7) / 8;   // (the image may be larger: it only grows)
-    const vec2 f = (vec2(q) + 0.5) / 8.0 - 0.5;
-    const ivec2 b = ivec2(floor(f));
-    const vec2 t = f - vec2(b);
-    vec2 s = vec2(0.0);
-    for (int y = 0; y < 2; ++y)
-        for (int x = 0; x < 2; ++x) {
-            const ivec2 at = clamp(b + ivec2(x, y), ivec2(0), blocks - 1);
-            const float w = (x == 1 ? t.x : 1.0 - t.x) * (y == 1 ? t.y : 1.0 - t.y);
-            s += texelFetch(localLuminance, at, 0).rg * w;
-        }
-    return s.y > 1e-3 ? exp(s.x / s.y) : 0.0;
-}
 // `linear`: the pixel's colour before the occlusion (the albedo's; lamp light is not dimmed by ambient occlusion).
 vec3 nightLight(ivec2 q, ivec2 last, vec3 linear) {
     if (p.inset.z >= p.inset.x && all(greaterThanEqual(vec2(q), p.inset.xy)) && all(lessThanEqual(vec2(q), p.inset.zw)))
         return vec3(0.0);   // the rear-view mirror: another view (step 2: unlit)
     const float d = nightDistance(q);
     if (!(d > 0.0 && d < p.maxDistance)) return vec3(0.0);
-    const float local = nightLocal(q);
-    if (!(local > 0.0)) return vec3(0.0);
-    const vec3 albedo = clamp(linear / max(local, 1e-3) * 0.18, vec3(0.0), vec3(0.9));
+    const float level = viewLevel.level;
+    if (!(level > 0.0)) return vec3(0.0);
+    const vec3 albedo = clamp(linear / max(level, 1e-3) * 0.18, vec3(0.0), vec3(0.9));
     // The normal: from the nearer neighbour on each axis, towards the camera.
     const vec3 P = nightPosition(q, d);
     const ivec2 l = max(q - ivec2(1, 0), ivec2(0)), r = min(q + ivec2(1, 0), last);

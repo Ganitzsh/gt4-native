@@ -3,7 +3,8 @@
 // at 1/8 resolution. Per 8 x 8 block of the scene area: the sum of log(luminance) over the pixels with geometry
 // (GT4's Z drawn, the view distance inside the view's range) and their count. gsn_light.comp samples both
 // bilinearly and divides, so a block without geometry (sky, clear colour) weighs 0. The log average keeps small
-// bright spots (lamp heads, headlights) from lifting it; the floor keeps black finite.
+// bright spots (lamp heads, headlights) from lifting it; the floor keeps black finite. The rear-view mirror's inset
+// (another view, unlit) counts 0 too, so it doesn't set the main view's level (gsn_night_level.comp).
 layout(local_size_x = 8, local_size_y = 8) in;
 layout(set = 0, binding = 0) uniform sampler2D scene;         // colour / 255, display-referred
 layout(set = 0, binding = 1) uniform sampler2D depthBuffer;   // GS Z / 2^32
@@ -13,6 +14,8 @@ layout(push_constant) uniform Lum {
     float distanceA;    // view distance = distanceA / (Z + distanceB) (the view's projection and viewport)
     float distanceB;
     float maxDistance;  // metres: farther is not geometry
+    float pad[3];       // (std430: inset at 32)
+    vec4 inset;         // the mirror, render pixels (x0, y0, x1, y1, inclusive); x1 < x0: none
 } p;
 
 const vec3 kLuma = vec3(0.2126, 0.7152, 0.0722);
@@ -25,7 +28,8 @@ void main() {
     const ivec2 q = ivec2(gl_GlobalInvocationID.xy);
     const uint i = gl_LocalInvocationIndex;
     float s = 0.0, c = 0.0;
-    if (all(lessThan(q, ivec2(p.size)))) {
+    const bool inset = p.inset.z >= p.inset.x && all(greaterThanEqual(vec2(q), p.inset.xy)) && all(lessThanEqual(vec2(q), p.inset.zw));
+    if (all(lessThan(q, ivec2(p.size))) && !inset) {
         const float z = texelFetch(depthBuffer, q, 0).r * 4294967296.0;
         const float d = z > 0.5 ? p.distanceA / (z + p.distanceB) : -1.0;
         if (d > 0.0 && d < p.maxDistance) {
