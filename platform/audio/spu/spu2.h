@@ -99,10 +99,14 @@ public:
     Interpolation interpolation = Interpolation::kLinear;
     // mix()'s volumes in place of a voice's VOLL / VOLR (the host's audio.spatial, PLAN.md D9), by hardware voice
     // (core * 24 + voice): `on` takes `left` and `right` (Q15, as the registers' volumes) for the dry and the effect
-    // sends alike. Null (the game, audio.spatial = original): every voice mixes with its registers, as always.
+    // sends alike; with `ramp`, the gains go linearly from leftFrom / rightFrom to left / right across the block, so a
+    // voice whose gains change between blocks doesn't step at the block's edge. Null (the game, audio.spatial =
+    // original): every voice mixes with its registers, as always.
     struct VoiceGain {
         bool on = false;
         int32_t left = 0, right = 0;
+        bool ramp = false;
+        int32_t leftFrom = 0, rightFrom = 0;
     };
     const VoiceGain* gains = nullptr;
     // The next frame (the frame clock's): the key-on gaps below count frames.
@@ -135,5 +139,7 @@ private:
 };
 
 void envelope(Voice& v);   // one step of the ADSR envelope generator
+// A VOLL / VOLR register's volume as mix() applies it (Q15; sweep mode, not modelled, at half volume).
+int32_t volume(uint16_t reg);
 
 }  // namespace gt4::spu

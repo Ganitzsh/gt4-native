@@ -90,6 +90,13 @@ private:
     uint64_t imagesSeen_ = 0;  // every GT4_SPU2_IMAGE, before the state too (GT4_TRACE_D9's join with the game's)
     bool trace_ = false;
     std::array<spu::Spu2::VoiceGain, GT4_SPU2_TAG_VOICES> gains_{};
+    // stereo: the gains each voice was mixed with last block (its override's, or its registers'), so a voice whose
+    // gains change, or that goes into or out of the bed, ramps from them instead of stepping at the block's edge
+    struct Last {
+        bool on = false, panned = false;
+        int32_t left = 0, right = 0;
+    };
+    std::array<Last, GT4_SPU2_TAG_VOICES> last_{};
     std::FILE* wav_ = nullptr;
     uint32_t wavBytes_ = 0;
     Stats stats_;

@@ -125,6 +125,7 @@ void HostMixer::record(uint32_t type, const uint8_t* p, uint32_t size) {
             const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
             stats_.mixMicroseconds += us;
             stats_.mixMicrosecondsMax = std::max(stats_.mixMicrosecondsMax, us);
+            if (trace_) std::printf("d9b: %u\n", value);   // (the blocks' sizes: where their edges fall in the output)
             pending_.insert(pending_.end(), scratch_.begin(), scratch_.end());
             stats_.samplesMixed += value;
             ++stats_.runs;
@@ -138,29 +139,50 @@ void HostMixer::record(uint32_t type, const uint8_t* p, uint32_t size) {
 
 void HostMixer::spatialGains() {
     spu_.gains = nullptr;
-    if (!tagsFresh_) {   // an older game, or an image whose tags didn't come: every voice in the bed
-        ++stats_.framesWithoutTags;
-        return;
-    }
     const bool stereo = static_cast<Spatial>(spatial_.load()) == Spatial::kStereo;
+    if (!tagsFresh_) ++stats_.framesWithoutTags;   // an older game, or an image whose tags didn't come: all the bed
     bool any = false;
+    // (a voice keyed on since the last block: spu2 stamps its key-on with the frame before this block's tick)
+    const uint32_t keyedFrame = spu_.counters.frame - 1;
     for (uint32_t hw = 0; hw < GT4_SPU2_TAG_VOICES; ++hw) {
         gains_[hw].on = false;
+        Last& last = last_[hw];
+        const Last before = last;
+        last = Last{};
         const spu::Voice& v = spu_.core[hw / 24].v[hw % 24];
         if (v.phase == spu::kOff) continue;
         const Gt4Spu2Tag& t = tags_[hw];
-        if (t.entrant == 0xFF) {
-            ++stats_.voicesUntagged;
-            continue;
+        bool panned = false;
+        if (tagsFresh_) {
+            if (t.entrant == 0xFF) {
+                ++stats_.voicesUntagged;
+            } else if (!(t.flags & 1)) {
+                ++stats_.voicesNoPosition;
+            } else {
+                ++stats_.voicesTagged;
+                panned = stereo && !(v.voll & 0x8000) && !(v.volr & 0x8000);   // (sweep mode: the bed)
+            }
         }
-        if (!(t.flags & 1)) {
-            ++stats_.voicesNoPosition;
-            continue;
+        if (!stereo) continue;   // (original: no voice changed)
+        // where the voice ends this block: panned, or its registers (the bed)
+        spu::Spu2::VoiceGain g;
+        if (panned)
+            g = stereoGain(static_cast<int16_t>(v.voll << 1), static_cast<int16_t>(v.volr << 1), t.direction);
+        else
+            g.left = spu::volume(v.voll), g.right = spu::volume(v.volr);
+        last = Last{true, panned, g.left, g.right};
+        // from where it was last block, unless it was keyed on since (a new sound starts at its gains)
+        const bool keyed = spu_.counters.konFrame[hw / 24][hw % 24] == keyedFrame;
+        const bool from = before.on && !keyed && (before.left != g.left || before.right != g.right);
+        if (!panned && !(before.panned && from)) continue;   // the bed, as original mixes it
+        g.on = true;
+        if (from) {
+            g.ramp = true;
+            g.leftFrom = before.left;
+            g.rightFrom = before.right;
         }
-        ++stats_.voicesTagged;
-        if (!stereo || (v.voll & 0x8000) || (v.volr & 0x8000)) continue;   // (sweep mode: the bed)
-        gains_[hw] = stereoGain(static_cast<int16_t>(v.voll << 1), static_cast<int16_t>(v.volr << 1), t.direction);
-        ++stats_.voicesPanned;
+        gains_[hw] = g;
+        if (panned) ++stats_.voicesPanned;
         any = true;
     }
     if (any) spu_.gains = gains_.data();

@@ -70,12 +70,12 @@ enum ReverbReg {
 int32_t vol(int32_t reg) { return static_cast<int16_t>(reg); }
 int16_t sat(int32_t v) { return static_cast<int16_t>(std::clamp(v, -32768, 32767)); }
 
+}  // namespace
+
 int32_t volume(uint16_t reg) {
     if (reg & 0x8000) return 0x4000;   // sweep mode: not modelled, half volume
     return static_cast<int16_t>(reg << 1);
 }
-
-}  // namespace
 
 void decodeBlock(const uint8_t* b, int32_t& s1, int32_t& s2, int16_t out[28]) {
     int shift = b[0] & 15, filter = (b[0] >> 4) & 7;
@@ -346,6 +346,33 @@ template <bool kMix> void Spu2::run(int32_t* mix, int n, bool dryOnly) {
                 const bool wet_l = cr.vmixel >> k & 1, wet_r = cr.vmixer >> k & 1;
                 const VoiceGain* g = gains && gains[24 * c + k].on ? &gains[24 * c + k] : nullptr;
                 const int32_t vl = g ? g->left : volume(v.voll), vr = g ? g->right : volume(v.volr);
+                if (g && g->ramp && n > 0) {
+                    // the dry and effect gains at both ends of the block (as below), then linearly between
+                    auto route = [&](int32_t l, int32_t r, int32_t out[4]) {
+                        out[0] = dry_l ? l : (!fx && (wet_l || wet_r)) ? l * std::abs(cr.evol[0]) >> 15 : 0;
+                        out[1] = dry_r ? r : (!fx && (wet_l || wet_r)) ? r * std::abs(cr.evol[1]) >> 15 : 0;
+                        out[2] = fx && wet_l ? l : 0;
+                        out[3] = fx && wet_r ? r : 0;
+                    };
+                    int32_t a[4], b[4];
+                    route(g->leftFrom, g->rightFrom, a);
+                    route(vl, vr, b);
+                    int64_t at[4], step[4];   // Q15 << 16
+                    for (int j = 0; j < 4; ++j) {
+                        at[j] = static_cast<int64_t>(a[j]) << 16;
+                        step[j] = ((static_cast<int64_t>(b[j]) << 16) - at[j]) / n;
+                    }
+                    for (int i = 0; i < n && v.phase != kOff; ++i) {
+                        const int64_t s = voiceSample<kMix>(cr, k, v) * v.env >> 15;
+                        envelope(v);
+                        mix[2 * i] += static_cast<int32_t>(s * (at[0] >> 16) >> 15);
+                        mix[2 * i + 1] += static_cast<int32_t>(s * (at[1] >> 16) >> 15);
+                        wet[2 * i] += static_cast<int32_t>(s * (at[2] >> 16) >> 15);
+                        wet[2 * i + 1] += static_cast<int32_t>(s * (at[3] >> 16) >> 15);
+                        for (int j = 0; j < 4; ++j) at[j] += step[j];
+                    }
+                    continue;
+                }
                 // without the reverb, effect-only voices come back dry at the effect return volume
                 gl = dry_l ? vl : (!fx && (wet_l || wet_r)) ? vl * std::abs(cr.evol[0]) >> 15 : 0;
                 gr = dry_r ? vr : (!fx && (wet_l || wet_r)) ? vr * std::abs(cr.evol[1]) >> 15 : 0;

@@ -142,7 +142,10 @@ int main() {
             std::vector<int16_t> out;
             audio::HostMixer::Stats stats;
         };
-        auto session = [&](audio::Spatial mode, bool sendTags, int voices, int first = 0) {
+        // flipAt: from that frame, voice 0's group is to the left instead (an image without a key-on, then its tags)
+        // keyAtFlip: that image keys the voice on again (a new sound): no ramp
+        auto session = [&](audio::Spatial mode, bool sendTags, int voices, int first = 0, int flipAt = -1,
+                           bool keyAtFlip = false) {
             Run run;
             audio::HostMixer h([&](uint32_t, const int16_t* frames, size_t count) {
                 run.out.insert(run.out.end(), frames, frames + 2 * count);
@@ -168,6 +171,20 @@ int main() {
                             h.record(GT4_REC_SPU2_REGS, tr.data(), static_cast<uint32_t>(tr.size()));
                         }
                     }
+                }
+                if (f == flipAt) {
+                    std::vector<uint8_t> im = keyed(0, 0x3000, 0x7000);   // the same registers, no key-on unless asked
+                    if (!keyAtFlip) {
+                        put32(im.data(), rd32(im.data()) & ~0x800u);
+                        put32(im.data() + 0x1B4, 0);
+                    }
+                    const std::vector<uint8_t> r = regs(GT4_SPU2_IMAGE, 0, im.data(), im.size());
+                    h.record(GT4_REC_SPU2_REGS, r.data(), static_cast<uint32_t>(r.size()));
+                    std::vector<uint8_t> moved = tags;
+                    reinterpret_cast<Gt4Spu2Tag*>(moved.data())[0].direction[0] = -0.6f;
+                    const std::vector<uint8_t> tr = regs(GT4_SPU2_TAGS, GT4_SPU2_TAG_VOICES, moved.data(),
+                                                         moved.size());
+                    h.record(GT4_REC_SPU2_REGS, tr.data(), static_cast<uint32_t>(tr.size()));
                 }
                 const std::vector<uint8_t> r = regs(GT4_SPU2_RUN, 800);
                 h.record(GT4_REC_SPU2_REGS, r.data(), static_cast<uint32_t>(r.size()));
@@ -206,6 +223,40 @@ int main() {
         for (size_t i = 0; i + 1 < carStereo.out.size(); i += 2)
             corr += double(carStereo.out[i]) * carStereo.out[i + 1];
         expect(corr > 0, "stereo: no side inverted");
+        // a car crossing from right to left between two blocks: its left side ramps up across the block instead of
+        // stepping at its edge (the first 50 samples still near the old gain, the last ones at the new)
+        {
+            const Run moving = session(audio::Spatial::kStereo, true, 1, 0, 10);
+            auto rms = [&](size_t from, int channel) {
+                double p = 0;
+                for (size_t i = from; i < from + 50; ++i)
+                    p += double(moving.out[2 * i + channel]) * moving.out[2 * i + channel];
+                return std::sqrt(p / 50);
+            };
+            // the left against the right in each 50-sample window (the sample's own loudness cancels): about 0.33
+            // before, still under 0.6 at the block's start with the ramp (3 without), about 3 at its end
+            auto ratio = [&](size_t from) { return rms(from, 0) / std::max(rms(from, 1), 1.0); };
+            const double before = ratio(10 * 800 - 50), start = ratio(10 * 800), end = ratio(11 * 800 - 50);
+            std::printf("host_mixer: stereo crossing, left over right: %.2f before, %.2f at the block's start, %.2f "
+                        "at its end\n", before, start, end);
+            expect(before < 0.5 && start < 0.6 && end > 2.0, "stereo: a crossing car ramps across the block");
+            // the same crossing with the voice keyed on again in that image: a new sound, at its gains from its
+            // first samples (no ramp from the old sound's)
+            const Run rekeyed = session(audio::Spatial::kStereo, true, 1, 0, 10, true);
+            auto rekeyedRatio = [&](size_t from) {
+                double l = 0, r = 0;
+                for (size_t i = from; i < from + 50; ++i) {
+                    l += double(rekeyed.out[2 * i]) * rekeyed.out[2 * i];
+                    r += double(rekeyed.out[2 * i + 1]) * rekeyed.out[2 * i + 1];
+                }
+                return std::sqrt(l / std::max(r, 1.0));
+            };
+            std::printf("host_mixer: stereo crossing keyed on again, left over right %.2f at the block's start\n",
+                        rekeyedRatio(10 * 800));
+            expect(rekeyedRatio(10 * 800) > 2.0, "stereo: a voice keyed on where its gains change starts at them");
+            const Run steady = session(audio::Spatial::kStereo, true, 1);
+            expect(steady.out == carStereo.out, "stereo: a steady voice is not ramped (the same gains every block)");
+        }
         // the gains themselves
         const float right[3] = {1, 0, 0}, ahead[3] = {0, 0, -1}, none[3] = {0, 0, 0};
         const spu::Spu2::VoiceGain r = audio::stereoGain(0x6000, -0x2000, right);
