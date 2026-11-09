@@ -1494,12 +1494,13 @@ Additions to existing tickets, with the same rules:
   the brake's start and down after its release, so it fades them over 4 frames. Each element goes out as
   `kSrcHeadlight`, `kSrcBrakeLight` or `kSrcTailLight` by group, its points through the car instance's
   `objectToWorld`. Every car with lamps sends them, whether or not virtual 35 draws that frame: in an Arcade time
-  trial at night the player's car logged no call (not drawn in that view, or an early return), and the player's
-  headlights matter most (F6), so the elements are read from the car model itself. The brake state and intensity are
-  sent every frame, day and night (F9's day brake glow); where virtual 35 doesn't run (by day), the intensity ramps
-  from car + 0x590 as GT4's k does. 0x3F0's 'on' matched 0x8000 on every logged call; a call-by-call proof is not
-  needed, since the lights read 0x8000 itself. Acceptance adds: under braking, the car behind lit red (review); the
-  player's headlights present in a time trial at night.
+  trial at night the player's car logged no call (in an Arcade time trial only, cause unknown; not in an A-spec race,
+  where the player's lamps run in the bumper view too), and the player's headlights matter most (F6), so the elements
+  are read from the car model itself. The brake state and intensity are sent every frame, day and night (F9's day
+  brake glow); where virtual 35 doesn't run (by day), the intensity ramps from car + 0x590 as GT4's k does. 0x3F0's
+  'on' matched 0x8000 on every logged call; a call-by-call proof is not needed, since the lights read 0x8000 itself.
+  Acceptance adds: under braking, the car behind lit red (review); the player's headlights present in a time trial at
+  night.
 - **F4**: lens flares and streaks from real lights: from the light list's brightest sources (occlusion from the depth
   buffer), replacing GT4's flare pass in `modern` (N4 suppresses it there); acceptance adds the flare's occlusion
   behind a car (review), no flare from a light outside the view, and on the warning capture the tint stays below N4's
