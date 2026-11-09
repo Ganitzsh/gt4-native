@@ -831,24 +831,26 @@ memory keeps the last set's blocks; reads by set don't see it), and stale 4-bit 
 these pages. The fix has two halves (lane B, 2026-11-09). (1) The read-back: `drawnTargets` includes the Z buffers,
 and the read service reads them with a compute pass (`gsn_depth_read.comp`; a Z buffer is not a transfer source),
 turning the depth aspect into the GS's Z (floor(d x 2^32), at most the format's largest, largest - Z while the target
-is inverted), packed as Z32, Z24 or Z16 for `GsMemory`'s own Z swizzle, counted. It isn't gated: any GS-to-host read
-reaching a Z buffer's pages now gets the GPU's Z, in from-boot runs too, so it has its own `ORIG` account and a count
-of the Z pages GT4's own reads touch in a from-boot run (the flare's asynchronous read, the photo reads), 0 expected.
-(2) The restore: `GsnScene` creates every new target cleared, so the snapshot's memory alone restores nothing. In a
-run that started from a restored state (`GsFrontend::restoreMemory`, a sub-capture), a Z buffer the front end creates
-for the first time takes its initial Z decoded from GS memory on the front end's thread, carried in the FrameList with
-the new target, and `GsnScene` loads it into the depth image (the depth aspect, each render pixel its GS pixel's Z,
-never filtered: expanded to the render scale before the copy, or by a nearest draw) instead of clearing it. A
-from-boot run never restores a state, so `ORIG` and every from-boot capture are unchanged by construction. Colour
-targets start the same way but stay out unless the 36 frames show they matter. A lockstep replay's recording reads its
-targets back too, without the deadlock the read service has there (gs_host.cpp withholds it on purpose), as a separate
-step after these. The two halves are two commits landed together (lane B): the restore first, gated on
-`restoreMemory`, then the read-back; the 36 frames need both, since without the read-back the snapshot's memory still
-holds stale Z for the restore to load. Depends: nothing beyond the GS path. Acceptance: lane C's sub-capture pair
-(`lap_ssr5r_boot` against its sub-capture from VBlank 9,926, `subcap_night`'s 36 frames) identical; `ORIG` unchanged
-(the snapshot runs only when a capture starts mid-run), with an assertion and a counter of new Z buffers loaded from
-memory, 0 in every `ORIG` run, since they prove the restore can't fire from boot; `CTEST` of the Z write-back's
-swizzle in each format. Until it lands, references come from captures recorded from game start, as CAPTURES says.
+is inverted), packed as Z32, Z24 or Z16 for `GsMemory`'s own Z swizzle, counted. It serves the snapshot's read only;
+the game's own reads are unchanged (lane B): `GT4_REC_GS_READ` goes through `GsFrontend::read`, which picks its target
+from the page table, not `drawnTargets`; a read of pages a Z buffer owns fails its depth test there and is served from
+the memory model as before (counted in `readMismatches`), and `GsnScene::copyRect` refuses a non-depth request on a Z
+buffer as it did. A counter of depth reads served per run shows 0 in a from-boot run. (2) The restore: `GsnScene`
+creates every new target cleared, so the snapshot's memory alone restores nothing. In a run that started from a
+restored state (`GsFrontend::restoreMemory`, a sub-capture), a Z buffer the front end creates for the first time takes
+its initial Z decoded from GS memory on the front end's thread, carried in the FrameList with the new target, and
+`GsnScene` loads it into the depth image (the depth aspect, each render pixel its GS pixel's Z, never filtered:
+expanded to the render scale before the copy, or by a nearest draw) instead of clearing it. A from-boot run never
+restores a state, so `ORIG` and every from-boot capture are unchanged by construction. Colour targets start the same
+way but stay out unless the 36 frames show they matter. A lockstep replay's recording reads its targets back too,
+without the deadlock the read service has there (gs_host.cpp withholds it on purpose), as a separate step after these.
+The two halves are two commits landed together (lane B): the restore first, gated on `restoreMemory`, then the
+read-back; the 36 frames need both, since without the read-back the snapshot's memory still holds stale Z for the
+restore to load. Depends: nothing beyond the GS path. Acceptance: lane C's sub-capture pair (`lap_ssr5r_boot` against
+its sub-capture from VBlank 9,926, `subcap_night`'s 36 frames) identical; `ORIG` unchanged (the snapshot runs only
+when a capture starts mid-run), with an assertion and a counter of new Z buffers loaded from memory, 0 in every `ORIG`
+run, since they prove the restore can't fire from boot; `CTEST` of the Z write-back's swizzle in each format. Until it
+lands, references come from captures recorded from game start, as CAPTURES says.
 
 ### Lane C: platform, ARM64, tooling
 
