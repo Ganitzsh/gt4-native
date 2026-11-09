@@ -2347,7 +2347,11 @@ void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t
     vk::Buffer& vertices = *ex.vertices;
     const uint32_t modelBase = ex.modelBase;
     // GT4_GSN_LIMIT=K (debugging): only the first K draws of each frame.
-    static const long limit = std::getenv("GT4_GSN_LIMIT") ? std::strtol(std::getenv("GT4_GSN_LIMIT"), nullptr, 10) : -1;
+    static const long limitAll = std::getenv("GT4_GSN_LIMIT") ? std::strtol(std::getenv("GT4_GSN_LIMIT"), nullptr, 10) : -1;
+    // DEBUG (R7, never for main): GT4_GSN_LIMIT_AT=VBLANK applies the limit to that VBlank's list only (a bisection that
+    // leaves the earlier frames, and so the history, whole)
+    static const long limitAt = std::getenv("GT4_GSN_LIMIT_AT") ? std::strtol(std::getenv("GT4_GSN_LIMIT_AT"), nullptr, 10) : -1;
+    const long limit = limitAt < 0 || static_cast<long>(frame.vblank) == limitAt ? limitAll : -1;
     long& executed = ex.executed;
     if (ex.limited) {   // (GT4_GSN_LIMIT reached earlier: nothing more is drawn; no render pass left open past this pass)
         end();
