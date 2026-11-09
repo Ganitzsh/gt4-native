@@ -797,8 +797,9 @@ void gt4_scene_car_drawn(uint32_t context, uint32_t model) {
              body[1], body[2]);
 }
 
-// After a main view and its glow pass (0033EAB8's copy, once per render_world: per half in 2 Player Battle; after
-// method 0x3F0, whose virtual 35 calls drew with this frame's brake level and calibrated the offsets), naming the view
+// After a main view and its glow pass (0033EAB8's copy, once per render_world; after method 0x3F0, whose virtual 35
+// calls drew with this frame's brake level and calibrated the offsets; not in 2 Player Battle, whose split screen
+// draws through render_world_split, 0033FD88, and sends no scene records until PLAN A12), naming the view
 // (`view`; 0: the frame's last kViewMain): one Light per lamp element of every car in the race's list (RacePS2Base
 // `race` + 0x6C, + 0x60), spots (headlights along their beam, tail and brake lamps backwards; range and cone 0,
 // unknown), id entrant << 8 | group << 5 | index (group 0 headlights, 1 brake, 2 tail), every frame, day and night.
@@ -849,7 +850,7 @@ void gt4_scene_car_lamps(uint32_t context, uint32_t view, uint32_t race) {
         if (!c.calibrated) ++g_lampCounters.uncalibrated;
         const float offset = c.calibrated ? c.offset : kDefaultLampOffset;
         const scene::Vehicle v = decode_vehicle(static_cast<const uint8_t *>(guest_ptr(vehicle)), entrant);
-        if (c.rampFrame != g_sceneFrames) {   // (once a frame: 2 Player Battle's second half doesn't move it again)
+        if (c.rampFrame != g_sceneFrames) {   // (once a frame: a second main view in it doesn't move it again)
             c.rampFrame = g_sceneFrames;
             const bool braking = guest_ref<float>(vehicle + kCarBrake) > 0.0f;
             c.ramp = braking ? std::min(1.0f, c.ramp + 0.25f) : std::max(0.0f, c.ramp - 0.25f);
