@@ -8,9 +8,11 @@
 // lighting.night (PLAN.md F2, CONTRACTS.md c.3): after the occlusion, before the grade, the view's lamps are added.
 // Each pixel's view-space position comes from GT4's Z through the view's own projection and viewport
 // (ProjectionData), its normal from the nearer neighbour on each axis; the lights from the clustered light list
-// (light_list.glsl); the albedo is estimated as colour / local log-average luminance x 0.18, clamped to [0, 0.9]
-// (gsn_night_lum.comp's per-block sums, sampled bilinearly and divided). The sky, pixels whose four blocks have no
-// geometry and the rear-view mirror's inset get no added light.
+// (light_list.glsl); the albedo is estimated as colour / level x 0.18, clamped to [0, 0.9], the level the local
+// log-average luminance (gsn_night_lum.comp's per-block sums, sampled bilinearly and divided) floored at k times the
+// view's (gsn_night_level.comp, smoothed): a dim far block is not lifted to mid-grey, a lit one keeps its own level
+// (F2b amendment). The sky, pixels whose four blocks have no geometry and the rear-view mirror's inset get no added
+// light. GT4_LIGHT_VIEW=3 shows the albedo.
 #extension GL_GOOGLE_include_directive : require
 #include "light_list.glsl"
 layout(local_size_x = 8, local_size_y = 8) in;
@@ -23,6 +25,11 @@ layout(std430, set = 0, binding = 5) readonly buffer Lights { GpuLight lights[];
 layout(std430, set = 0, binding = 6) readonly buffer Cells { ClusterCell cells[]; };
 layout(std430, set = 0, binding = 7) readonly buffer Indices { uint indices[]; };
 layout(set = 0, binding = 8) uniform sampler2D localLuminance;   // gsn_night_lum.comp: (sum of log luminance, count) per 8 x 8
+layout(std430, set = 0, binding = 9) readonly buffer Level {   // gsn_night_level.comp: the view's level
+    float level;
+    float count;
+    float pad[2];
+} viewLevel;
 layout(push_constant) uniform Light {
     vec2 size;
     float aoStrength;   // 0: no occlusion
@@ -32,7 +39,7 @@ layout(push_constant) uniform Light {
     uint view;          // debugging (GT4_LIGHT_VIEW): 1 the occlusion, 2 the view distance in 10 m bands
     uint aoStep;        // the occlusion's texels per pixel (gsn_ao.comp's step)
     float night;        // 0: no night relight; else its strength
-    float pad0;
+    float levelFloor;   // k: the albedo's level is at least k x the view's level (0: the local level alone)
     vec2 focal;         // render pixels: x = focal * v / d + centre (v view-space x or y, d the view distance)
     vec2 centre;
     float distanceA;    // view distance = distanceA / (Z + distanceB)
@@ -78,15 +85,23 @@ float nightLocal(ivec2 q) {
         }
     return s.y > 1e-3 ? exp(s.x / s.y) : 0.0;
 }
-// `linear`: the pixel's colour before the occlusion (the albedo's; lamp light is not dimmed by ambient occlusion).
-vec3 nightLight(ivec2 q, ivec2 last, vec3 linear) {
+// The albedo estimate (0: no added light here: the mirror's inset, no geometry, the sky).
+vec3 nightAlbedo(ivec2 q, vec3 linear, out float d) {
+    d = 0.0;
     if (p.inset.z >= p.inset.x && all(greaterThanEqual(vec2(q), p.inset.xy)) && all(lessThanEqual(vec2(q), p.inset.zw)))
         return vec3(0.0);   // the rear-view mirror: another view (step 2: unlit)
-    const float d = nightDistance(q);
+    d = nightDistance(q);
     if (!(d > 0.0 && d < p.maxDistance)) return vec3(0.0);
     const float local = nightLocal(q);
     if (!(local > 0.0)) return vec3(0.0);
-    const vec3 albedo = clamp(linear / max(local, 1e-3) * 0.18, vec3(0.0), vec3(0.9));
+    const float level = max(local, p.levelFloor * viewLevel.level);
+    return clamp(linear / max(level, 1e-3) * 0.18, vec3(0.0), vec3(0.9));
+}
+// `linear`: the pixel's colour before the occlusion (the albedo's; lamp light is not dimmed by ambient occlusion).
+vec3 nightLight(ivec2 q, ivec2 last, vec3 linear) {
+    float d;
+    const vec3 albedo = nightAlbedo(q, linear, d);
+    if (all(equal(albedo, vec3(0.0)))) return vec3(0.0);
     // The normal: from the nearer neighbour on each axis, towards the camera.
     const vec3 P = nightPosition(q, d);
     const ivec2 l = max(q - ivec2(1, 0), ivec2(0)), r = min(q + ivec2(1, 0), last);
@@ -163,5 +178,6 @@ void main() {
     }
     if (p.view == 1u) linear = vec3(texelFetch(occlusion, q / int(p.aoStep), 0).r);
     if (p.view == 2u) { const float d = distanceAt(q); linear = vec3(d < 5.0 ? 1.0 : 0.0, d < 20.0 ? 1.0 : 0.0, d < 80.0 ? 1.0 : 0.0); }
+    if (p.view == 3u && p.night > 0.0) { float d; linear = nightAlbedo(q, unoccluded, d); }   // the albedo estimate
     imageStore(result, q, vec4(pow(linear, vec3(1.0 / 2.2)), c.a));
 }

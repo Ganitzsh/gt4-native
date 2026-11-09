@@ -78,6 +78,7 @@ static_assert(sizeof(ParityConstants) == 104);
 constexpr float kHalton[8][2] = {{0.0f, -1.0f / 6.0f},   {-0.25f, 1.0f / 6.0f}, {0.25f, -7.0f / 18.0f}, {-0.375f, -1.0f / 18.0f},
                                  {0.125f, 5.0f / 18.0f}, {-0.125f, -5.0f / 18.0f}, {0.375f, 1.0f / 18.0f}, {-0.4375f, 7.0f / 18.0f}};
 constexpr VkFormat kVelocity = VK_FORMAT_R16G16_SFLOAT;
+constexpr float kNightLevelFloor = 0.5f;   // F2b amendment: k in the albedo level max(L_block, k x L_view), from the review images
 
 enum : uint32_t {
     kTextured = 1, kUv = 2, kFog = 4, kBlend = 8, kPabe = 16, kFba = 32, kFromTarget = 64, kTarget24 = 128, kDestAlphaBlend = 256,
@@ -258,6 +259,16 @@ struct GsnScene::Impl {
     vk::Pipeline nightLumPass;
     render::LightClusters clusters;
     vk::Image nightLocal;                      // (sum of log luminance, count) per 8 x 8 block
+    vk::Pipeline nightLevelPass;
+    // The view's level (gsn_night_level.comp) per view, keyed by its target, role and pass (split screen's halves are
+    // two main views in one target, A12): written and read on the GPU only, kept from frame to frame (16 bytes each,
+    // kept until teardown: a session has few views).
+    struct NightLevel {
+        vk::Buffer buffer;
+        uint64_t used = 0, vblank = 0;   // displayedFrames and the list's VBlank when last written
+        bool valid = false;
+    };
+    std::unordered_map<uint64_t, NightLevel> nightLevels;
     vk::Buffer nightCells, nightIndices, nightStats;   // written by the cluster build, read by gsn_light.comp
     // Per Light command of a list (its ordinal), per (list, slot): the light list's header and lights and the cluster
     // grid, which the CPU writes (separate buffers: the cluster build binds each at offset 0).
@@ -276,7 +287,8 @@ struct GsnScene::Impl {
     uint64_t nightSplitSkipped = 0;   // Lights not relit: their target holds more than one main view (split screen)
     // gsn_light.comp's push constants from `night` on (offset 40): mirrored field for field.
     struct NightPush {
-        float night = 0.0f, pad0 = 0.0f;
+        float night = 0.0f;
+        float levelFloor = 0.0f;   // k: the albedo's level is at least k x the view's (gsn_night_level.comp)
         float focal[2] = {1.0f, 1.0f}, centre[2] = {0.0f, 0.0f};
         float distanceA = 0.0f, distanceB = 0.0f, maxDistance = 0.0f, pad1 = 0.0f;
         float inset[4] = {1.0f, 1.0f, 0.0f, 0.0f};   // x1 < x0: no mirror
@@ -294,6 +306,7 @@ struct GsnScene::Impl {
         vk::Buffer* header = nullptr;
         vk::Buffer* lights = nullptr;
         VkDeviceSize lightBytes = sizeof(render::GpuLight);
+        vk::Buffer* level = nullptr;   // the view's level (gsn_night_level.comp)
     };
     static void computeBarrier(VkCommandBuffer command, VkAccessFlags2 src, VkAccessFlags2 dst) {
         VkMemoryBarrier2 m{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
@@ -652,6 +665,8 @@ struct GsnScene::Impl {
         vk::destroy(device, nightLumPass);
         clusters.destroy(device);
         vk::destroy(device, nightLocal);
+        vk::destroy(device, nightLevelPass);
+        for (auto& [id, level] : nightLevels) vk::destroy(device, level.buffer);
         vk::destroy(device, nightCells);
         vk::destroy(device, nightIndices);
         vk::destroy(device, nightStats);
@@ -1811,6 +1826,7 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
                 .storageBuffer(7, nightIndices.buffer, 0,
                                sizeof(uint32_t) * render::kClusterCount * render::kMaxLightsPerCluster)
                 .sampled(8, lamps ? nightLocal.view : ao.view, samplers[0])
+                .storageBuffer(9, lamps ? nightBuffers.level->buffer : nightCells.buffer, 0, 16)
                 .push(command, lightPass);
             const LightPush k{{float(e.width), float(e.height)}, lighting.occlusion, kZScale, lighting.grade, 1.18f, 0.3f, 1.0f,
                               lightView, kAoStep, nightPush};
@@ -3469,12 +3485,52 @@ bool GsnScene::Impl::nightFinish(const gsn::FrameList::Lighting& l, const SceneI
         .storage(2, nightLocal.view)
         .push(command, nightLumPass);
     struct {
-        float size[2], distanceA, distanceB, maxDistance;
-    } lk{{float(e.width), float(e.height)}, k.distanceA, k.distanceB, k.maxDistance};
+        float size[2], distanceA, distanceB, maxDistance, pad[3];
+        float inset[4];   // the mirror's: not counted (offset 32, as the shader's std430 block aligns its vec4)
+    } lk{{float(e.width), float(e.height)}, k.distanceA, k.distanceB, k.maxDistance, {}, {k.inset[0], k.inset[1], k.inset[2], k.inset[3]}};
+    static_assert(sizeof(lk) == 48 && offsetof(decltype(lk), inset) == 32);
     vk::pushConstants(command, nightLumPass, lk);
     vkCmdDispatch(command, blocks.width, blocks.height, 1);
     vk::toSampled(ex.b, nightLocal, vk::kCompute);
     ex.b.flush(command);
+    // The view's level (F2b): the blocks reduced to one log average, smoothed over about half a second of VBlanks (the
+    // list's, so a replay's frames don't depend on its speed). Reset for a new or resized view, one not lit last frame,
+    // a VBlank going back (a replay's restart) and a cut (kViewCut, when a record marks one; the shader also resets on a
+    // jump of over a factor of 2). A second Light of the view in the same VBlank keeps the level (dt 0). The mirror is
+    // not a Light of its own (the main view's inset, left out of night_lum's counts), so it never shares the level.
+    const scene::ViewData* view = nullptr;
+    if (frame.scene)
+        for (const scene::ViewData& v : frame.scene->views)
+            if (v.id == viewId) view = &v;
+    const uint64_t levelKey = uint64_t(l.target) << 32 | uint64_t(view ? view->role : 0) << 24 | (view ? view->pass & 0xFFFFFFu : 0u);
+    NightLevel& nl = nightLevels[levelKey];
+    if (!nl.buffer.buffer) nl.buffer = vk::createBuffer(device, 16, storage, false);
+    bool cut = !nl.valid || displayedFrames > nl.used + 1 || frame.vblank < nl.vblank;
+    if (view && (view->flags & gfx::scene::kViewCut)) cut = true;
+    const float dt = cut ? 0.0f : float(frame.vblank - nl.vblank) / 59.94f;
+    nl.valid = true;
+    nl.used = displayedFrames;
+    nl.vblank = frame.vblank;
+    // (the previous frame's light pass read the buffer and its level pass wrote it: ordered here whatever ran before)
+    computeBarrier(command, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+                   VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+    vk::bind(command, nightLevelPass);
+    vk::Descriptors().sampled(0, nightLocal.view, samplers[0]).storageBuffer(1, nl.buffer.buffer, 0, 16).push(command, nightLevelPass);
+    struct {
+        int32_t blocks[2];
+        float blend;
+        uint32_t reset;
+    } vl{{int32_t(blocks.width), int32_t(blocks.height)}, 1.0f - std::exp(-dt / 0.5f), cut ? 1u : 0u};
+    vk::pushConstants(command, nightLevelPass, vl);
+    vkCmdDispatch(command, 1, 1, 1);
+    computeBarrier(command, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
+    out.level = &nl.buffer;
+    // The F2b amendment's floor (L = max(L_block, k x L_view)); GT4_NIGHT_LEVEL_K (tuning) sets k, 0 the local level alone.
+    static const float levelFloor = [] {
+        const char* e = std::getenv("GT4_NIGHT_LEVEL_K");
+        return e && *e ? std::strtof(e, nullptr) : kNightLevelFloor;
+    }();
+    k.levelFloor = levelFloor;
     k.night = night;
     out.header = &hb;
     out.lights = &lb;
@@ -3949,7 +4005,7 @@ void GsnScene::prepare(const SceneFormats& formats) {
                                          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
                                          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+                                         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER},
                                         96, "gsn light");
     // lighting.night (PLAN.md F2): the local luminance pass, the cluster build and its buffers. The light pass reads
     // these bindings whether or not the night is on (the shader skips them), so they always exist.
@@ -3957,7 +4013,10 @@ void GsnScene::prepare(const SceneFormats& formats) {
         s.nightLumPass = vk::createCompute(s.device, shaders::gsn_night_lum_comp(),
                                            {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                                             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
-                                           20, "gsn night luminance");
+                                           48, "gsn night luminance");
+        s.nightLevelPass = vk::createCompute(s.device, shaders::gsn_night_level_comp(),
+                                             {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, 16,
+                                             "gsn night level");
         s.clusters.create(s.device, shaders::lights_cluster_comp());
         const VkBufferUsageFlags storage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
         s.nightCells = vk::createBuffer(s.device, sizeof(render::ClusterCell) * render::kClusterCount, storage, false);
