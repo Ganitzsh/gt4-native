@@ -304,8 +304,129 @@ void spup(uint32_t fno, uint8_t *send, uint32_t, uint8_t *recv, uint32_t rsize) 
 
 // ---- Logitech wheel: version 0x010B2400, no device
 
+// GT4_FAKE_DFP=1 (debugging, RISKS.md R15): the stub reports one Logitech Driving Force Pro, so GT4 opens it and drives
+// its force effects, and every effect call is logged ("lgdev:"). GT4's client (docs/IOP_SERVICES.md 5.8; the map in
+// spikes/R15-lgdev-effects.md): device info (fno 1) index 0 found, index 1 not; open (2) a handle; property 0x10005
+// (4) the signature 0x046DC298; downloads (7) get an effect handle at +0x18; the input read (6) gives pad 1's state as
+// the wheel's (GT4 drives the effects only for the controller in use), so the pad still drives. Off: no device, as
+// always. One GT4 thread makes every LGDEV call (the VBlank thread 005552B8; the asynchronous wrappers have no
+// caller), so fake_dfp's statics need no lock.
+bool ds2_buttons(int port, int8_t out[16]);   // (below: GT4's DualShock 2 assignment)
+
+const bool g_fake_dfp = [] {
+    const char *e = std::getenv("GT4_FAKE_DFP");
+    return e && *e && *e != '0';
+}();
+
+void fake_dfp(uint32_t fno, uint8_t *b) {
+    static uint32_t next_effect = 0x100;
+    static uint8_t last[0x200][60];   // the last block logged per effect handle (0x100 + n)
+    static uint64_t calls[19] = {};
+    if (fno < 19) ++calls[fno];
+    auto hex = [](const uint8_t *p, int n) {
+        static char s[3 * 64 + 1];
+        for (int i = 0; i < n && i < 64; ++i) std::snprintf(s + 3 * i, 4, "%02x ", p[i]);
+        s[3 * std::min(n, 64) - 1] = 0;
+        return s;
+    };
+    const uint32_t frame = kernel_frame_count();
+    wr32(b, 0);
+    switch (fno) {
+    case 1:   // device info: index 0 is the wheel (slot 0: the info's byte +0xC, at +0x7C, 0)
+        if (rd32(b + 4) == 0) std::memset(b + 0x70, 0, 0x18);
+        else wr32(b, 0x80000002);
+        break;
+    case 2:   // open
+        wr32(b + 8, 1);
+        log_info("lgdev: %u open index %u -> handle 1", frame, rd32(b + 4));
+        break;
+    case 3:
+        log_info("lgdev: %u close handle %u", frame, rd32(b + 8));
+        break;
+    case 4:   // get property: 0x10005 the signature, VID << 16 | PID
+        wr32(b + 0x5C, rd32(b + 0x58) == 0x10005 ? 0x046DC298u : 0u);
+        log_info("lgdev: %u get property %x", frame, rd32(b + 0x58));
+        break;
+    case 5:
+        log_info("lgdev: %u set property %x = %d", frame, rd32(b + 0x58), static_cast<int32_t>(rd32(b + 0x5C)));
+        break;
+    case 6: {   // the input read: pad 1's state as the wheel's, so the race is driven through the wheel and GT4 sends
+                // the wheel its force effects (it sends them only to the controller in use: none with the read failing)
+        uint8_t p[18];
+        if (!link_pad(0, p)) {
+            std::memset(p, 0, sizeof p);
+            p[4] = 0x80;
+        }
+        // the pedals: the pressures of the buttons GT4 has accelerate and brake on (its assignment)
+        int8_t buttons[16];
+        uint8_t accelerate = 0, brake = 0;
+        if (ds2_buttons(0, buttons))
+            for (int key = 0; key < 16; ++key) {
+                const int k = pad::kPressureOf[key];
+                if (k < 0) continue;
+                if (buttons[key] == pad::kAccelerate) accelerate = std::max(accelerate, p[6 + k]);
+                if (buttons[key] == pad::kBrake) brake = std::max(brake, p[6 + k]);
+            }
+        // the reply (spikes/R15-lgdev-effects.md): +0x70 type 0, +0x72 the steering (s16), +0x7E / +0x80 the two
+        // pedal axes (u16, read >> 8), +0x82 the hat (8: none), +0x84 the buttons (none: the pad keeps the menus)
+        std::memset(b + 0x70, 0, 0x18);
+        const int16_t steer = static_cast<int16_t>(std::clamp((static_cast<int>(p[4]) - 128) * 256, -32767, 32767));
+        const uint16_t axis1 = static_cast<uint16_t>(accelerate << 8), axis2 = static_cast<uint16_t>(brake << 8);
+        std::memcpy(b + 0x72, &steer, 2);
+        std::memcpy(b + 0x7E, &axis1, 2);
+        std::memcpy(b + 0x80, &axis2, 2);
+        b[0x82] = 8;
+        break;
+    }
+    case 7:   // download an effect: its 60-byte block at +0x70, the new handle at +0x18
+    case 13: {   // update an effect
+        uint32_t h = rd32(b + 0x18);
+        if (fno == 7) {
+            h = next_effect++;
+            wr32(b + 0x18, h);
+        }
+        const uint32_t slot = (h - 0x100) & 0x1FF;
+        if (fno == 7 || std::memcmp(last[slot], b + 0x70, 60)) {
+            std::memcpy(last[slot], b + 0x70, 60);
+            log_info("lgdev: %u %s effect %x: %s", frame, fno == 7 ? "download" : "update", h, hex(b + 0x70, 60));
+        }
+        break;
+    }
+    case 8: case 9: case 10:
+        log_info("lgdev: %u %s effect %x", frame, fno == 8 ? "start" : fno == 9 ? "stop" : "unload", rd32(b + 0x18));
+        break;
+    case 15: case 16: {   // start / stop several: the count at +0x5C, the handles from +0x18
+        const uint32_t n = std::min<uint32_t>(rd32(b + 0x5C), 16);
+        static uint32_t lastSet[2][17] = {};
+        uint32_t now[17] = {n};
+        for (uint32_t i = 0; i < n; ++i) now[1 + i] = rd32(b + 0x18 + 4 * i);
+        if (std::memcmp(lastSet[fno - 15], now, sizeof now)) {   // (once a VBlank: logged when the set changes)
+            std::memcpy(lastSet[fno - 15], now, sizeof now);
+            char list[16 * 9 + 1] = {};
+            for (uint32_t i = 0; i < n; ++i) std::snprintf(list + 9 * i, 10, "%08x ", now[1 + i]);
+            log_info("lgdev: %u %s %u: %s", frame, fno == 15 ? "start set" : "stop set", n, list);
+        }
+        break;
+    }
+    default:
+        break;
+    }
+    static uint32_t summary = 0;
+    if (frame - summary >= 600) {
+        summary = frame;
+        auto c = [&](int f) { return static_cast<unsigned long long>(calls[f]); };
+        log_info("lgdev: %u calls: info %llu open %llu prop %llu/%llu read %llu download %llu update %llu start %llu "
+                 "stop %llu unload %llu set %llu/%llu", frame, c(1), c(2), c(4), c(5), c(6), c(7), c(13), c(8), c(9),
+                 c(10), c(15), c(16));
+    }
+}
+
 void logitech(uint32_t fno, uint8_t *send, uint32_t, uint8_t *, uint32_t) {
     // send and receive share one buffer, processed in place; result code at +0
+    if (g_fake_dfp && fno != 12 && fno != 17 && fno != 18) {
+        fake_dfp(fno, send);
+        return;
+    }
     if (fno == 12) {
         const uint32_t notify = rd32(send + 0x5C);
         if (notify) {
