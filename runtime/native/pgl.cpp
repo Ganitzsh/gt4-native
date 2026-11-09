@@ -9,6 +9,7 @@
 #include "../kernel.h"
 #include "../link.h"
 #include "../log.h"
+#include "../mapped_read.h"
 #include "../runtime.h"
 #include "../shared_state.h"
 #include "../vehicle.h"
@@ -1179,23 +1180,10 @@ void gt4_gfx_batch_unpack(uint32_t context, uint32_t qword, uint32_t format, int
     // when the count is rounded up; on the PS2 other memory followed): zeros past it.
     static thread_local std::vector<uint8_t> bytes;
     bytes.assign(size_t(words) * 4, 0);
-    const uintptr_t at = reinterpret_cast<uintptr_t>(data);
-    if (data && words && in_guest_ram(at, bytes.size())) {
-        // (game memory, mapped whole: read at once. Asking the system for every unpack's source was a system
-        // call each, thousands a frame: 70% of the game's main thread in kernel time on a cheap race frame.)
-        std::memcpy(bytes.data(), data, bytes.size());
-    } else if (data && words) {
-        const uint8_t *src = static_cast<const uint8_t *>(data);
-        size_t done = 0;
-        while (done < bytes.size()) {
-            MEMORY_BASIC_INFORMATION mbi;
-            if (!VirtualQuery(src + done, &mbi, sizeof mbi) || mbi.State != MEM_COMMIT || (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD))) break;
-            const size_t avail = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize - reinterpret_cast<uintptr_t>(src + done);
-            const size_t take = std::min(avail, bytes.size() - done);
-            std::memcpy(bytes.data() + done, src + done, take);
-            done += take;
-        }
-    }
+    // (game memory, mapped whole, and the calling thread's stack are read at once; asking the system for every
+    // unpack's source was a system call each, thousands a frame: 70% of the game's main thread in kernel time on a
+    // cheap race frame, and for the arrays on a native stack still about 250 us a frame in a race in 2026-11)
+    if (data && words) read_mapped_into(bytes.data(), static_cast<const uint8_t *>(data), bytes.size());
     struct Run {
         uint32_t first = 0, lanes = 0, count = 0;
         uint32_t values[256 * 4];

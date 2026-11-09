@@ -14,6 +14,7 @@
 #include "link.h"
 #include "load_stats.h"
 #include "log.h"
+#include "mapped_read.h"
 #include "runtime.h"
 #include "vehicle.h"
 #include "gt4/gfx.h"
@@ -54,20 +55,7 @@ uint8_t *ptr(uint32_t addr) {
 // end when a count is rounded up).
 std::vector<uint8_t> read_mapped(const uint8_t *p, size_t bytes) {
     std::vector<uint8_t> out(bytes, 0);
-    const uintptr_t a = reinterpret_cast<uintptr_t>(p);
-    if (in_guest_ram(a, bytes)) {
-        std::memcpy(out.data(), p, bytes);
-        return out;
-    }
-    size_t done = 0;
-    while (done < bytes) {
-        MEMORY_BASIC_INFORMATION mbi;
-        if (!VirtualQuery(p + done, &mbi, sizeof mbi) || mbi.State != MEM_COMMIT || (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD))) break;
-        const size_t avail = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize - (a + done);
-        const size_t take = std::min(avail, bytes - done);
-        std::memcpy(out.data() + done, p + done, take);
-        done += take;
-    }
+    read_mapped_into(out.data(), p, bytes);
     return out;
 }
 

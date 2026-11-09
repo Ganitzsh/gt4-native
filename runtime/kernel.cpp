@@ -5,6 +5,7 @@
 #include "link.h"
 #include "gt4/link/protocol.h"
 #include "log.h"
+#include "mapped_read.h"
 
 #include <windows.h>
 
@@ -674,6 +675,11 @@ DWORD WINAPI watchdog_thread(void *p) {
             for (const Alarm &a : g_alarms) alarms += a.used ? 1 : 0;
             n += snprintf(line + n, sizeof line - n, "; alarms %d, self-wakeups %u, flip %d/%d", alarms,
                           g_self_wakeups.load(), guest_ref<int32_t>(0x006186E4), guest_ref<int32_t>(0x006186DC));
+            // reads of game data outside the guest's RAM (mapped_read.h): from the calling thread's stack at once,
+            // or asking the system
+            const MappedReadCounts reads = mapped_read_counts();
+            n += snprintf(line + n, sizeof line - n, "; reads off guest RAM %llu from the stack, %llu asked",
+                          static_cast<unsigned long long>(reads.stack), static_cast<unsigned long long>(reads.asked));
             if (Thread *r = g_running) {
                 running = r->id;
                 if (!r->host_frozen && SuspendThread(r->host) != static_cast<DWORD>(-1)) {
