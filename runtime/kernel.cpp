@@ -102,6 +102,11 @@ std::vector<FrameTick> g_ticks;
 int g_next_tick_id = 1;
 bool g_tick_pending = false;
 Alarm g_alarms[64];
+// How many of g_alarms are set (PLAN.md D5's profile, 2026-11-10): g_alarms_due, called at every exit from runtime
+// code (3,500 times a frame in a race, link_send's scope), reads the clock only when one is. It goes up before an
+// alarm's `used` is set and down after it is cleared, on whichever thread does it (each under g_lock), so a zero
+// read means no alarm was set at that moment: the answer the scan would have given then.
+std::atomic<int> g_alarms_set{0};
 LARGE_INTEGER g_qpc_freq, g_qpc_start;
 std::atomic<uint32_t> g_frames{0};
 HANDLE g_irq_wake = nullptr;
@@ -248,6 +253,7 @@ void deliver_pending() {
         Alarm &a = g_alarms[i];
         if (a.used && a.due_cycles <= now) {
             a.used = false;
+            g_alarms_set.fetch_sub(1);
             reinterpret_cast<AlarmFn>(guest_ptr(a.func))(i, a.ticks, a.arg);
         }
     }
@@ -334,6 +340,7 @@ bool interrupt_now() {
 
 bool g_alarms_due() {
     if (!g_callbacks.empty() || g_tick_pending) return true;
+    if (g_alarms_set.load() == 0) return false;   // (no alarm set: none due, and no clock read)
     const uint64_t now = kernel_bus_cycles();
     for (const Alarm &a : g_alarms)
         if (a.used && a.due_cycles <= now) return true;
@@ -1156,6 +1163,7 @@ SYSCALL int gt4_sys_SetAlarm(uint32_t ticks, uint32_t func, uint32_t arg) {
     for (int i = 0; i < 64; ++i) {
         Alarm &a = g_alarms[i];
         if (a.used) continue;
+        g_alarms_set.fetch_add(1);   // (before `used`: see g_alarms_set)
         a.used = true;
         a.ticks = static_cast<uint16_t>(ticks);
         a.func = func;
@@ -1171,6 +1179,7 @@ SYSCALL int gt4_sys_ReleaseAlarm(int id) {
     KERNEL_ENTRY;
     if (id < 0 || id >= 64 || !g_alarms[id].used) return -1;
     g_alarms[id].used = false;
+    g_alarms_set.fetch_sub(1);
     return id;
 }
 
