@@ -103,10 +103,11 @@ void filtering() {
     expect(s.unknownSource == 1, "an unknown source does not light, counted apart");
     {
         const SourceDefaults car = sourceDefaults(gfx::scene::kSrcCarLamp), other = sourceDefaults(gfx::scene::kSrcOther);
-        expect(car.known && car.lights && car.range == sourceDefaults(gfx::scene::kSrcTailLight).range && other.range == 10.0f,
-               "a car lamp of unknown group reaches as far as a tail lamp; 'other' keeps its general reach");
+        expect(car.known && !car.lights && car.range == sourceDefaults(gfx::scene::kSrcTailLight).range &&
+                   other.range == 10.0f,
+               "an unknown-group car lamp keeps a tail lamp's reach for F9, unlit; 'other' its general reach");
     }
-    {   // A7 step 2's car lamps arrive but don't light until F6 / F9 tune them; step 1a's kSrcCarLamp lights them
+    {   // A7's car lamps (step 2's three and step 1a's kSrcCarLamp) arrive but don't light until F6 / F9 tune them
         std::vector<Light> lamps;
         for (uint8_t source : {gfx::scene::kSrcHeadlight, gfx::scene::kSrcTailLight, gfx::scene::kSrcBrakeLight})
             lamps.push_back(record(1, source, 0, 0, -5));
@@ -114,8 +115,8 @@ void filtering() {
         std::vector<GpuLight> lit;
         GatherStats ls;
         gatherLights(lamps.data(), lamps.size(), 1, 0.5f, 500.0f, 1.0f, lit, ls);
-        expect(ls.notLights == 3 && ls.kept == 1,
-               "headlights, tail and brake lamps counted as not lights; kSrcCarLamp lit");
+        expect(ls.notLights == 4 && ls.kept == 0,
+               "headlights, tail and brake lamps and kSrcCarLamp counted as not lights");
     }
     expect(s.invalid == 1, "a NaN position is invalid");
     expect(s.dark == 2, "black and intensity 0 are dark lamps, counted apart");
