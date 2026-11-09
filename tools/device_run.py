@@ -47,6 +47,10 @@ in the data folder yet is 'missing' and doesn't fail the run. The items:
     night_bands     lap_ssr5r and lap_csr5 at the owner's settings at 1280x800, every 100th frame from 600 through
                     tools/band_measure.py (lane F's), the frames deleted: per frame a triage score, to compare with the
                     desktop's same frames (the live dump on L3 + R3 is the item's other half)
+    night_strips    lap_ssr5r_prog at the playtest dump's settings (low, scene original, progressive, 1920x1080),
+                    lighting.night enhanced and original, every 100th frame from 300 to 1300: each frame's vertical
+                    steps across the near road and how many sit on a 32 GS-pixel grid (GT4's light strips) or a 40 one
+                    (the relight's tiles); the frames deleted; read beside the desktop's run
 
 Items that wait for their ticket (B16c's memory and GPU cost, F6-F9's budgets, the settings pages' cost, the
 shooting screen with the held picture) are listed as pending until they are added here. The device items of C6b
@@ -92,6 +96,15 @@ MIXER_CAP = "race_mixer_host.cap"
 MIXER_FRAMES = 8121   # its VBlanks: a replay doesn't end by itself at the capture's end, so --frames is its length
 # The night bands' laps (lane F's, CAPTURES' night section): every 100th frame from 600 (after the re-upload window).
 NIGHT_LAPS = (("lap_ssr5r.cap", 10200), ("lap_csr5.cap", 9000))
+# The night strips (the owner's Odin playtest, 2026-11-09: hard vertical steps across the lit road, 32 GS pixels
+# apart, in our own frame): a progressive night lap replayed at the playtest dump's settings, with the night relight
+# on and off, every 100th frame from 300 to 1300 (the coordinator's run). The steps are measured on each frame
+# (strip_steps): 32 GS pixels apart is GT4's light strips, 40 the relight's cluster tiles (640 / 16).
+NIGHT_STRIPS_CAP = "lap_ssr5r_prog.cap"
+NIGHT_STRIPS_FRAMES = ("300-1300/100", 1300)
+NIGHT_STRIPS_FLAGS = ["--size", "1920x1080", "--preset", "low", "--set", "render.scene=original", "--set",
+                      "display.race_frames=progressive", "--set", "aspect.ratio=16:9"]
+# (the HD pack off, as every replay here: FIXED; 16:9 as the capture's game drew it, option 4 = 1778, and the dump)
 # C6's ORIG on the device (c6_orig): each REF capture, its VBlanks, the hash list its frames are compared with (lane
 # B's R6 lists, the re-baseline 7f58836 and later; for the progressive race, which has none, the desktop's, made with
 # the same flags by `--make-hashes`), and the step of its reference frames in DIR/ref/ (`--make-refs`: every frame of
@@ -112,7 +125,7 @@ ORIG_BASELINES = {"aarch64": {}}
 ORIG_FLAGS = ["--size", "1280x960", "--preset", "original", "--set", "texture.hd_pack=off", "--set",
               "display.frame_interpolation=off", "--set", "debug.overlay=off"]
 ITEMS = ("env", "provoking", "c6_orig", "c6_race7", "b6_span", "night", "hybrid", "pipeline_cache", "mixer",
-         "mixer_cpu", "load_times", "photo_travel", "night_bands")
+         "mixer_cpu", "load_times", "photo_travel", "night_bands", "night_strips")
 PENDING = {
     "b16c_memory": "B16c (lane B): its kept images' memory, with the freed MSAA targets beside it",
     "b16c_gpu": "B16c (lane B): FSR 2 on the game's frames against the GS scene's own resolve",
@@ -126,6 +139,52 @@ FIXED = ["--set", "display.frame_interpolation=off", "--set", "texture.hd_pack=o
 DESKTOP = {"commit": "97d0809a", "b6_p95_us": 348,
            # (the front end's wall clock: +342 and +28 us in two runs of one build under other lanes' load)
            "night_added_p95_us": "28 to 342"}
+
+
+def strip_steps(width, height, rgb, gs_width=640, rows=(0.65, 0.75), threshold=1.5):
+    """The vertical steps across a frame's near road (the night strips): each column's median luma over `rows` of the
+    height, its change across one GS pixel's width (an upscaled step spreads over a few output columns), the columns
+    where that change peaks at `threshold` levels or more, and how many of those steps fall on a grid of 32 and of
+    40 GS pixels (the light strips', the relight's tiles), scaled from the picture's width to the GS frame's. The
+    picture is the columns between black side bars (a 4:3 frame pillarboxed in 16:9 is 2.25 output pixels per GS
+    pixel, not 3): columns at each edge whose brightest pixel is at most 4 levels are bars, unless that leaves less
+    than half the frame. The road's own edges (markings, a car) add steps off the grid, so the count on the grid is
+    the signal, its share the check. A pattern on a divisor or a multiple of 32 GS pixels (16, 64) also scores on the
+    32 grid; the 40 grid's count tells the relight's tiles apart. Needs numpy. Returns {"steps", "on32", "share32",
+    "on40", "share40", "phase32", "content"}: on32 counts the steps within span / 2 + 1 output pixels of the 32 grid's
+    best phase (phase32, in output pixels from the picture's left edge); content is the picture's columns [x0, x1)."""
+    import numpy as np
+    img = np.frombuffer(rgb, np.uint8).reshape(height, width, 3).astype(np.float32)
+    luma = img[..., 0] * 0.299 + img[..., 1] * 0.587 + img[..., 2] * 0.114
+    lit = np.nonzero(luma.max(axis=0) > 4)[0]
+    x0, x1 = (int(lit[0]), int(lit[-1]) + 1) if len(lit) else (0, width)
+    if x1 - x0 < width // 2:
+        x0, x1 = 0, width
+    band = luma[int(height * rows[0]):max(int(height * rows[1]), int(height * rows[0]) + 1), x0:x1]
+    med = np.median(band, axis=0)
+    scale = (x1 - x0) / float(gs_width)
+    span = max(1, int(round(scale)))
+    s = np.abs(med[span:] - med[:-span])
+    peak = np.ones_like(s, dtype=bool)
+    for k in range(1, span + 1):   # (a step's own place, not its slope's neighbours)
+        peak[k:] &= s[k:] >= s[:-k]
+        peak[:-k] &= s[:-k] > s[k:]
+    steps = np.nonzero((s >= threshold) & peak)[0] + span // 2 + 1
+    tolerance = span // 2 + 1
+    out = {"steps": int(len(steps)), "content": [x0, x1]}
+    for grid in (32, 40):
+        period = grid * scale
+        if not len(steps):
+            out[f"on{grid}"], out[f"share{grid}"] = 0, 0.0
+            continue
+        phase = np.mod(steps, period)
+        counts = [int(np.sum(np.minimum(np.abs(phase - p), period - np.abs(phase - p)) <= tolerance))
+                  for p in np.arange(0, period, 1.0)]
+        best = int(np.argmax(counts))
+        out[f"on{grid}"], out[f"share{grid}"] = counts[best], round(counts[best] / len(steps), 3)
+        if grid == 32:
+            out["phase32"] = best
+    return out
 
 
 # ---------------------------------------------------------------------------------------------------------- desktop
@@ -246,7 +305,8 @@ class Device:
     # preflight
     def preflight(self, items):
         needs = {"c6_race7": ("race7.cap", "orig_r6_race7.sha256"), "b6_span": ("race_boot.cap",),
-                 "night": ("lap_csr5.cap",), "hybrid": ("race_grid43.cap",), "pipeline_cache": ("race7.cap",),
+                 "night": ("lap_csr5.cap",), "night_strips": (NIGHT_STRIPS_CAP,), "hybrid": ("race_grid43.cap",),
+                 "pipeline_cache": ("race7.cap",),
                  "load_times": ("saves-pe-race2",), "mixer_cpu": ("saves-pe-race2",),
                  "photo_travel": ("r5_saves",),
                  "mixer": (MIXER_CAP,), "night_bands": tuple(cap for cap, _ in NIGHT_LAPS),
@@ -887,6 +947,44 @@ class Device:
                             "photo_captures": captures.group(1) if captures else None},
                 "pass_line": "photo_check OK (the photo developed within PHOTO_TRIES x 600 VBlanks) and no read "
                              "over 1 s"}
+
+    def item_night_strips(self):
+        """The night strips (the owner's playtest): NIGHT_STRIPS_CAP replayed at the dump's settings with
+        lighting.night = enhanced and = original, every 100th frame from 300 to 1300, each frame's steps measured
+        (strip_steps) and the frames deleted. Run on the desktop too, the report says which of the four it is: steps
+        on the device in both settings and none on the desktop (the device's interpolation), only with enhanced (our
+        relight), or on the desktop as well (ours everywhere)."""
+        try:
+            import numpy   # noqa: F401  (strip_steps)
+        except ImportError:
+            return {"status": "error", "note": "numpy is missing"}
+        spec, frames = NIGHT_STRIPS_FRAMES
+        res = {}
+        for mode in ("enhanced", "original"):
+            d = os.path.join(self.work, f"night_strips_{mode}")
+            shutil.rmtree(d, ignore_errors=True)
+            os.makedirs(d)
+            code, _ = self.replay(NIGHT_STRIPS_CAP, frames, NIGHT_STRIPS_FLAGS + ["--set", f"lighting.night={mode}"],
+                                  f"night_strips_{mode}", capture=(spec, d))
+            per = []
+            for f in sorted(os.listdir(d)):
+                m = re.search(r"(\d+)\.ppm$", f)
+                if not m:
+                    continue
+                w, h, rgb = self.frames_rgb(os.path.join(d, f))
+                per.append(dict(frame=int(m.group(1)), **strip_steps(w, h, rgb)))
+            shutil.rmtree(d, ignore_errors=True)   # (game frames: never kept)
+            strips = [p for p in per if p["on32"] >= 6 and p["on32"] > 1.5 * p["on40"]]
+            res[mode] = {"exit": code, "frames": len(per), "with_32px_steps": len(strips), "per_frame": per}
+        both = all(res[m]["frames"] for m in res)
+        failed = [f"{m} exited {res[m]['exit']}" for m in res if res[m]["exit"]]
+        note = [] if both else ["a replay gave no frames (its log in logs/)"]
+        if failed:
+            note.append("replay " + ", ".join(failed) + ": its frames may stop early (its log in logs/)")
+        return {"status": "reported" if both else "error", "numbers": res,
+                "pass_line": "reported: frames with steps on a 32 GS-pixel grid (6 or more on it, half again as "
+                             "many as on a 40 grid), with the night relight on and off; read beside the desktop's run",
+                "note": "; ".join(note)}
 
     def item_night_bands(self):
         """The night bands' triage (C6b; tools/band_measure.py, lane F's): both night laps replayed at the owner's
