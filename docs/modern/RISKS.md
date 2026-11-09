@@ -170,33 +170,35 @@ model contents to the state record (a capture format change, version 5).
 
 **Time box.** 1 day.
 
-**Textures in a mid-run capture (lane C, 2026-11-09; cause found: B25).** Ground truth for the day captures: a mid-run
+**Mid-run captures (lane C, 2026-11-09; cause named, fix B25).** Ground truth for the day captures: a mid-run
 sub-capture recorded while replaying a from-boot capture, replayed and compared with it over the same VBlanks:
 `race_boot` at the grid and `menus_boot` at the track menus, 298 of 300 frames identical in each. Only the first two
 frames after the state snapshot differ, in both tests (and `race_pe2_r`'s known dark frame 1). So the snapshot
 carries what the day races and the menus draw from, and `race_grid43` and `race_pe2_r` are right past their first
 frames (b.10's re-baseline and R6's pairing on `race_grid43` stand). The night laps recorded from a trigger
-(`lap_ssr5r`, `lap_csr5`) replay some textures differently: 4-bit indexed textures decoded from GS memory with
-CLD 0 (2,348 decodes on `lap_ssr5r`, 0-1 on the day captures).
+(`lap_ssr5r`, `lap_csr5`) don't.
 - **Pinned** on `lap_ssr5r_boot` (lane F's, from game start, exact against the live game): its sub-capture from
   VBlank 9,926 differs from the from-boot replay on every sampled frame (36 over 3,600 VBlanks: 34-41 % of pixels
   identical, mean 2-4 levels, the worst 100-244), and the difference never decays. Not the frames' alignment, a
-  shift, a field, a GS register or the snapshot's restore: every target matches at the first frame after it.
-- **Where (lane B, 2026-11-09).** At VBlank 9,944 nine GS pages differ between the two replays, every one read
-  as a 4-bit texture or palette (PSMT4) from GS memory: pages the page table gives to drawn targets (bp32a0,
-  bp3ae0, bp3da0) in both replays, and pages a transfer handed back to memory since. A page goes to a target for
-  any draw whose rectangle covers it, whole 8 KiB pages, so the table can over-claim. Both ways then go wrong,
-  page by page: where the target really drew, memory still holds the bytes from before the draw, and the live game
-  and every from-boot replay read stale texels; where it only over-claimed, the snapshot writes the target's pixels
-  over memory the PS2 still holds as a texture or palette, and the mid-run replay is the wrong one (`lap_ssr5r`'s
-  green markings, white live and from boot).
-- **Next: measured, not assumed.** B25 (lane B: 4- and 8-bit reads of drawn pages, PLAN) starts by measuring each
-  page's texels under memory and under the owning target against PCSX2's GS dump of the same race (lane C's
-  stills and dump, its own run at a matching moment: which kind each page holds, texture bytes or drawn content),
-  then fixes per case: a finer claim where the table over-claims,
-  the read built from the target's pixels where memory is stale. If the live game's texels move, the from-boot
-  captures are right as recordings and get re-rendered, not re-recorded, with an `ORIG` re-baseline on those
-  stills. The regression test: `lap_ssr5r_boot`'s sub-capture pair, identical after B25.
+  shift, a field, a GS register or the snapshot's restore: every colour target matches at the first frame after it.
+- **Cause (lane B, 2026-11-09): the snapshot holds no depth buffer.** `GsFrontend::drawnTargets` skips depth
+  targets, so the snapshot reads back colour targets only (a sub-capture recorded from a lockstep replay reads back
+  none), and a sub-capture starts with Z from GS memory, which the GPU-drawn Z never reaches. GT4 inverts Z in place
+  each frame instead of clearing it, so the stale Z survives where the scene keeps covering it: under the car ahead.
+  Found by limiting only VBlank 9,944's list, the history whole (`debug/b-r7-trace` 691bf4f): the same 577 draws in
+  both replays; at draw 450 the 3D's Z buffer (bp0000) differs in 21 values, all on the car's silhouette; the 3D
+  target (bp1a40) first differs within draws 465-469 (the car's body, then its env-map pass), 495 pixels by the
+  frame's end. From there the difference likely spreads through GT4's feedback buffers (the glare levels, the post
+  copy) to the whole picture by 10,926.
+- **Ruled out on the way, still true of memory:** the 4-bit texture reads (on the nine pages first suspected, every
+  read follows an upload in the same frame, so none reads a target's pixels), and blocks written by several sets (set
+  textures are decoded from the set's own copy; switching to block-wise writes changed no pixel).
+- **What is right:** the live game and every capture recorded from game start (lane F's 13 shots against the live
+  game: mean difference 0.00). Only mid-run captures are affected, so until B25 lands, colours are judged on
+  captures recorded from game start, never on a mid-run capture.
+- **Fix: B25** (PLAN 96ea9ab): the snapshot reads the depth buffers back in their GS formats (Z24, Z32, Z16 through
+  GsMemory's Z swizzle), counted, and a lockstep replay's recording gets its targets too. The regression test:
+  `lap_ssr5r_boot`'s sub-capture pair, 36 of 36 frames identical (lane C), with `ORIG` unchanged.
 
 ---
 
