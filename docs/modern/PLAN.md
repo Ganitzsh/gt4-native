@@ -1163,16 +1163,44 @@ draw numbers are those of replay 2514, and the draws are found by what they are,
   relight), the layer stays. `original` keeps it.
 - **the light-image glow** (draws 325-326: GT4's reflection view of course geometry into target 71, blurred and
   spread over the road; F2b's step 0): R11's first band candidate, skipped only if R11 finds it makes the bands.
-- **Step 0:** on a night capture with records, the lit-road layer's instances (Cmd, set, model) and their
-  materials. The signature alone isn't unique: other course draws share it (lane F, replay 2514: textures 18957,
-  22853, 27077 / 27078 beside the layer's 20203 / 20204). So step 0 finds a property computed from the texture or
-  the mesh that separates the layer from them (coverage of the road surface, the texture's grain), checked on both
-  courses (`r11_csr5r.cap` the second); a false positive would skip ordinary course geometry. Then how the
-  GS back end skips a modeled draw of that class, given that B6's ids are known at the view's `ViewEnd` (designed
-  with lanes A and B, before the skip is written).
-Depends: R11, A7, B4, B6, F2, F2b. Acceptance `R5` on the lamps capture: band ratio at most 1.3 in every frame (the
-GS path's value for comparison); suppression counter > 0 on the frames where the GS path draws the layer; on the
-second course, no other draw skipped; `ORIG` unchanged.
+- **Step 0, done** (lane F, `spikes/N3-lit-road-rule.md`; the architect accepted v4, 2026-11-09). The layer's state
+  also matches road markings, the start/finish checkers, logos and crossings by day, and a chain-link fence, so the
+  rule is per item at first sight, cached by (material, item), and only on frames flagged `kFrameNight` (CONTRACTS
+  FrameFlags): the Route 5 layouts that have it (four on the disc: `crs/route5`, `route5_club`, `r_route5`,
+  `r_route5_club`; lane A's flag measurement says which are night). An item is lamp light when it has the layer state;
+  a vertex colour (its mean over the item) of luminance over 16 and alpha at least 100; a texture centre/rim under 3
+  (not a glow); at least 0.9 of its area with |n.up| >= 0.9; a footprint width of at least 0.9 m (2 x area / perimeter
+  of its up-facing pieces; markings reach 0.60 m); and at least 0.03 m per texel (the checkers are 0.017 m, the pools
+  0.039 and up). The proof is exhaustive, since GT4's night layouts are a closed set: proven on Clubman Stage Route 5
+  and Special Stage Route 5 Reverse, both full B-spec laps, every item judged in a debug host, the skip imaged against
+  the base, and only lamp light changes. Any further night layout is hunted the same way (B-spec if an event runs
+  there, else throttle segments) before N3 counts as proven there: the same textures, but other geometry, so other
+  items. A pool sliver under the width stays baked (0.058 % of pool area), the safe miss. The texture-locator fallback
+  is parked in the spike; no hash list exists.
+- **Step 1, the mechanism** (lanes F and B write it together, lane B the back end's skip; lane A the flag): the
+  verdict per (material, mesh item) in `SceneCache` (`platform/scene/scene_cache.h`), beside the `MaterialTable`: a
+  map keyed by (`MaterialId`, the mesh's `MeshKey`, item index), filled in `SceneCache::assign` at each view's
+  `ViewEnd` on the front end's thread, and delivered per item on `FrameList::ViewOnList` as a flag parallel to
+  `materials`, which the GS back end reads when it executes the view's modeled draws (lane B). A new key is judged
+  there synchronously, not on the mesh worker: the cheap material tests first (layer state, vertex colour,
+  centre/rim), then only the items passing them get `decodeBatch()` from the batch where it lies (`ItemSource::batch`)
+  for the up-facing share, footprint width and texel size; memoised, so each key is judged once. A view's `ViewEnd`
+  comes before its list is cut, so the verdict is there when the draws execute: 0 frames late. Waiting for the mesh
+  worker would be late by the decode, several frames at a course's first frames, the pop N3 must not have. The one
+  exception is a list cut inside a view (a read in the middle of the main view; none expected at night): items drawn
+  before their verdict keep GT4's look and are counted in `n3Pending`. The up-facing share comes through the
+  instance's `objectToWorld` at the item's first sight, since a mesh is shared between instances and only the share
+  depends on the rotation (every lit-road item has an identity rotation today); an instance of a judged item whose
+  rotation differs counts in `n3LaterFail`, so a tilted copy can't inherit a flat verdict. The GS path skips the
+  item's draws on a `kFrameNight` frame with `lighting.night = enhanced` only; `original` never builds the map (assign
+  runs only with the scene split on). Open: lane A's `kFrameNight` source (GT4's own switch, else the two courses' ids
+  in the runtime). Counters per frame: `n3Judged`, `n3Skipped` (items and draws), `n3SkipGatedOff`, `n3LaterFail` (a
+  later batch or instance of a cached item that would fail), `n3Pending`; the judging's cost in B6's front-end CPU
+  line.
+Depends: R11, A7, B4, B6, F2, F2b. Acceptance: the step 0 hunt repeated on every night layout's lap with the mechanism
+in place of the debug skip (only lamp light changes, every marking and the checkers kept); `R5` on the lamps capture
+(band ratio at most 1.3 in every frame, the GS path's value for comparison); no skip on a frame without `kFrameNight`
+(Seoul by day: 0); `PERF` with night enhanced against off; `ORIG` unchanged.
 
 **N4: Warning-light tint suppressed (S-M).** The flare (and, in `modern`, glare) draws R12 identified are skipped
 between their markers (A5b); each light keeps its own bloom (pipeline bloom on linear light, F4). Depends: R12,
