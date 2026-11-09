@@ -373,7 +373,8 @@ int main(int argc, char** argv) {
                      item.y + item.h <= kCanvasHeight + 0.01f;
         check(inside, "every item inside the canvas");
         bool panel = false;
-        for (const auto& item : list.items) panel = panel || item.asset == assetId("panel.detail");
+        // (by its frame: a nine-slice 620 wide; until the art is packed no item names an asset, kUiAssetsPacked)
+        for (const auto& item : list.items) panel = panel || (item.kind == ItemKind::NineSlice && item.w == 620.0f);
         check(panel == (width >= 1900.0f), "the detail panel only where the canvas is wide enough");
         const std::string text = describe(list);
         char name[64];
@@ -402,10 +403,82 @@ int main(int argc, char** argv) {
         const DrawList list = layout(menu, LayoutOptions());
         bool dialog = false, countdown = false;
         for (const auto& item : list.items) {
-            dialog = dialog || item.asset == assetId("dialog.frame");
+            dialog = dialog || (item.kind == ItemKind::NineSlice && item.w == 760.0f);   // its frame
             countdown = countdown || item.text == "Going back to the previous ones in 10 s";
         }
         check(dialog && countdown, "the dialog with its countdown");
+    }
+
+    // The hub's eight tabs (M4's titles) at 16:9, 21:9 and 4:3: every item inside the canvas (the chips shrink to
+    // fit), and the help line ends before the prompts in every prompt style.
+    {
+        Schema s;
+        for (const char* title : {"Game", "Graphics", "Display", "Image", "Controls", "Audio", "Accessibility",
+                                  "System"}) {
+            Page p;
+            p.id = title;
+            p.title = title;
+            Row r;
+            r.kind = RowKind::Choice;
+            r.key = std::string(title) + ".row";
+            r.label = "A row";
+            r.choices = {{"a", "A"}, {"b", "B"}};
+            r.value = "a";
+            r.presetValue = "a";
+            r.help = "A help line long enough to run into the prompts if nothing stopped it at their left edge, "
+                     "and then some more words.";
+            p.rows.push_back(r);
+            s.pages.push_back(p);
+            s.tabs.push_back(title);
+        }
+        Menu menu;
+        menu.setSchema(s);
+        menu.open();
+        menu.tick(5.0f);
+        for (const float width : {1440.0f, 1920.0f, 2520.0f})
+            for (const PromptStyle style : {PromptStyle::Xbox, PromptStyle::PlayStation, PromptStyle::Keyboard}) {
+                LayoutOptions options;
+                options.canvasWidth = width;
+                options.prompts = style;
+                const DrawList list = layout(menu, options);
+                bool inside = true;
+                float helpRight = 0.0f, promptsLeft = width;
+                for (const auto& item : list.items) {
+                    if (item.kind == ItemKind::ClipPush || item.kind == ItemKind::ClipPop) continue;
+                    inside = inside && item.x >= 0.0f && item.x + item.w <= width + 0.01f;
+                    if (item.kind == ItemKind::Text && item.y == 1006.0f) helpRight = item.x + item.w;
+                    else if (item.y >= 1008.0f) promptsLeft = std::min(promptsLeft, item.x);
+                }
+                check(inside, "the eight tabs and the caps inside the canvas");
+                check(helpRight > 0.0f && helpRight + 40.0f <= promptsLeft + 0.01f,
+                      "the help line ends 40 units before the prompts");
+            }
+    }
+
+    // Until the art is packed (kUiAssetsPacked, M10): no item names an asset; the prompts are key caps with the
+    // button's name as text, per controller (the architect: words, no console symbols).
+    {
+        Menu menu;
+        menu.setSchema(schema());
+        menu.open();
+        menu.tick(5.0f);
+        for (const PromptStyle style : {PromptStyle::Xbox, PromptStyle::PlayStation, PromptStyle::Keyboard}) {
+            LayoutOptions options;
+            options.prompts = style;
+            const DrawList list = layout(menu, options);
+            bool named = false, caps = false;
+            for (const auto& item : list.items) {
+                named = named || item.asset != 0;
+                caps = caps || (item.kind == ItemKind::Text && item.text == buttonName(style, "confirm"));
+            }
+            check(kUiAssetsPacked || !named, "no asset named before the art is packed");
+            check(kUiAssetsPacked || caps,
+                  (std::string("the confirm key cap reads ") + buttonName(style, "confirm")).c_str());
+        }
+        check(std::string(buttonName(PromptStyle::Xbox, "back")) == "B" &&
+                  std::string(buttonName(PromptStyle::PlayStation, "back")) == "Circle" &&
+                  std::string(buttonName(PromptStyle::Keyboard, "back")) == "C",
+              "back: B, Circle, the keyboard's C");
     }
 
     if (failures) std::fprintf(stderr, "%d failure(s)\n", failures);

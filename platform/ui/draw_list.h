@@ -23,7 +23,9 @@ enum class ItemKind : uint8_t {
     Quad,       // a rectangle: the asset stretched over it, or the colour
     NineSlice,  // the asset as a nine-slice frame (insets from the manifest)
     Gradient,   // a vertical gradient from colour (top) to colour2 (bottom)
-    Text,       // UTF-8 text in the rectangle's box: x, y the top-left of the box, w the most it may take (0: no limit)
+    Text,       // UTF-8 text in the rectangle's box: x, y the top-left of the box, w the most it may take (0: no limit);
+                // the host wraps it at spaces when h holds more than one of the face's lines, and cuts what still
+                // does not fit (the last line) with an ellipsis
     ClipPush,   // later items are clipped to the rectangle until the matching ClipPop
     ClipPop,
 };
