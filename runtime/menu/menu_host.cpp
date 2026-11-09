@@ -132,6 +132,25 @@ Page &page() {
 }
 
 std::atomic<bool> g_open_requested{false};
+
+// The host's command 6 in a race (MENU_DESIGN 3.2 point 5, M9d2). The game_src copy of RaceBasic::updatePlayCheckPause
+// (func_0038B0E0.cpp) reports the race's state each frame through gt4_race_pause_command; a command 6 taken while a
+// race runs waits there until GT4's own Start branch would pause (state 0), then that frame acts as Start and GT4 opens
+// its pause. That pause shows the native page on Settings, under ui.pause = gt4 too (a deliberate exception for
+// original). Waiting, the game tells the host why once (page.waiting), and the host says so.
+std::atomic<bool> g_race_open_wanted{false};   // a command 6 waits for the race to be pausable
+std::atomic<uint32_t> g_race_seen{0};          // the VBlank the race's Start check last ran (0: never)
+std::atomic<int> g_race_wait_state{-1};        // the state the waiting command last saw (its reason sent once)
+std::atomic<bool> g_pause_by_command{false};   // the open pause came from command 6: native, on Settings
+std::atomic<bool> g_pause_settings{false};     // that pause's page shows the host's first tab once its tabs are in
+std::atomic<bool> g_cancel_waiting{false};     // the menu tick's waiting open is done with (the race paused for it)
+std::atomic<uint32_t> g_boot_project{0};       // GT4's opening ("boot"): command 6 waits through it (M9d2)
+
+// page.waiting (M9d2): the reason a command 6 waits, to the host (no Page: request 0, any thread).
+void send_waiting(const char *reason) {
+    const std::vector<uint8_t> bytes = ui::encodeSet(0, ui::wire::kAction, "page.waiting", reason);
+    link_send(GT4_REC_SETTINGS_SET, bytes.data(), static_cast<uint32_t>(bytes.size()));
+}
 std::atomic<uint32_t> g_entry_project{0};   // GT4's Options project just started under ui.entry = integrated
 
 // The page is ticked by GT4's menu update and by the race pause, on whichever guest threads run them. One guest thread
@@ -485,6 +504,8 @@ void open_pause(Page &p, uint32_t pause, int items, int *screen) {
 
 
 void close_pause(Page &p, const char *why) {
+    g_pause_by_command.store(false);
+    g_pause_settings.store(false);
     close_page(p, why);
     p.pause = 0;
     p.items = 0;
@@ -605,17 +626,45 @@ extern "C" int gt4_menu_tick(uint32_t project) {
         // An open asked for while no menu project runs (a race, a load: GT4's menu object idles) waits for one; the
         // pages never open over a running race (M7 opens them over GT4's own pause).
         static const char *waiting = nullptr;
+        if (g_cancel_waiting.exchange(false)) waiting = nullptr;   // the race paused for it (M9d2)
+        if (command == kCommandClose && (waiting || g_race_open_wanted.load())) {
+            waiting = nullptr;   // the host asked to close: a waiting open is dropped
+            g_race_open_wanted.store(false);
+            return sound;
+        }
         const char *why = waiting;
         if (command == kCommandOpen) why = "host command";
         else if (asked) why = "entry";
         else if (scripted) why = "GT4_MENU_OPEN_AT";
         if (!why) return sound;
         if (!project) {
+            if (command == kCommandOpen) {
+                // A race is running when its Start check ran within the last few VBlanks: it decides (and says why
+                // it waits); else a load, a movie or the opening.
+                const uint32_t seen = g_race_seen.load();
+                if (seen && kernel_frame_count() - seen < 4) {
+                    g_race_wait_state.store(-1);
+                    g_race_open_wanted.store(true);
+                } else {
+                    send_waiting("load");
+                }
+            }
             if (!waiting) log_info("menu: settings asked for (%s) with no menu project: they open with the next", why);
             waiting = why;
             return sound;
         }
+        if (project == g_boot_project.load() && (command == kCommandOpen || waiting)) {
+            // The opening (GT4's boot): the hub waits for the next menu project (the architect, M9d2), the opening
+            // runs on unchanged.
+            if (command == kCommandOpen) {
+                log_info("menu: settings asked for in the opening: they open with the next menu screen");
+                send_waiting("menu");
+            }
+            waiting = why;
+            return sound;
+        }
         waiting = nullptr;
+        g_race_open_wanted.store(false);
         open_page(p, project, 0, why);
     } else if (command == kCommandClose) {
         return close_page(p, "host command") | sound;
@@ -657,6 +706,43 @@ extern "C" int gt4_menu_tick(uint32_t project) {
     return sound;
 }
 
+extern "C" void gt4_menu_started(uint32_t project, const char *name) {
+    if (name && std::strcmp(name, "boot") == 0) g_boot_project.store(project);
+    else if (project == g_boot_project.load()) g_boot_project.store(0u);   // (a project object reused by another)
+}
+
+extern "C" int gt4_race_pause_command(uint32_t race, int state) {
+    g_race_seen.store(kernel_frame_count() ? kernel_frame_count() : 1u);
+    // GT4's menu update doesn't run in a race (the M9d2 session: no menu tick between the route's start and its
+    // pause), so the race's check takes the host's commands while the race runs unpaused; paused, the pause tick
+    // takes them as before.
+    const uint32_t command = link_take_menu_command();
+    if (command == kCommandOpen) {
+        g_race_wait_state.store(-1);
+        g_race_open_wanted.store(true);
+        log_info("menu: command 6 in a race (%08x, state %d)", race, state);
+    } else if (command == kCommandClose && g_race_open_wanted.load()) {
+        g_race_open_wanted.store(false);
+        log_info("menu: command 7: the race's waiting open dropped");
+    }
+    if (!g_race_open_wanted.load()) return 0;
+    if (state == 0) {
+        g_race_open_wanted.store(false);
+        g_race_wait_state.store(-1);
+        g_pause_by_command.store(true);
+        g_cancel_waiting.store(true);
+        log_info("menu: command 6 pauses the race (%08x) through GT4's Start branch", race);
+        return 1;
+    }
+    if (g_race_wait_state.exchange(state) != state) {
+        static const char *const why[] = {"", "before the start", "a B-spec race (its pause is M9d3's)",
+                                          "a replay or the demo", "the race's end delay"};
+        log_info("menu: command 6 waits in the race (%s)", state > 0 && state < 5 ? why[state] : "?");
+        send_waiting(state == 1 ? "race-start" : state == 2 || state == 4 ? "race-end" : "menu");
+    }
+    return 0;
+}
+
 extern "C" void gt4_pause_end(uint32_t pause) {
     if (!pause || g_pause_open.load() != pause) return;
     const PageTake take;
@@ -669,7 +755,7 @@ extern "C" void gt4_pause_end(uint32_t pause) {
 }
 
 extern "C" int gt4_pause_tick(uint32_t pause, int items, int *screen) {
-    const bool native = gt4_game_option(static_cast<int>(kOptionUiPause)) == 1;
+    const bool native = gt4_game_option(static_cast<int>(kOptionUiPause)) == 1 || g_pause_by_command.load();
     if (trace() && screen) {
         // GT4_TRACE_MENU: the brightness and contrast as either pause leaves them (GT4's SETVAL or the page).
         static int shown[2] = {0x7FFFFFFF, 0x7FFFFFFF};
@@ -695,7 +781,12 @@ extern "C" int gt4_pause_tick(uint32_t pause, int items, int *screen) {
     if (!p.pause) {
         if (p.menu.isOpen()) close_page(p, "race pause");
         open_pause(p, pause, items, screen);
+        if (g_pause_by_command.load()) g_pause_settings.store(true);
         return 1 | sound << 8;
+    }
+    if (g_pause_settings.load() && !p.host.tabs.empty()) {
+        g_pause_settings.store(false);
+        p.menu.selectTab(p.host.tabs.front());   // command 6's pause opens on Settings
     }
     if (p.screen) {
         p.menu.setValue(kKeyBrightness, std::to_string(p.screen[0]));

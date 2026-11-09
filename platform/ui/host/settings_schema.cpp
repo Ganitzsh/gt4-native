@@ -358,6 +358,12 @@ SettingsBridge::Reply SettingsBridge::handle(Settings &settings, const uint8_t *
             result(had, had ? std::string() : "no confirm-class change of " + value + " is waiting");
             return reply;
         }
+        if (key == "page.waiting") {
+            // The game says why a command 6 waits (M9d2, MENU_DESIGN 3.2 point 5): no setting changes.
+            reply.waiting = value;
+            result(true, std::string());
+            return reply;
+        }
         result(false, "unknown action " + key);
         return reply;
     case wire::kSet:

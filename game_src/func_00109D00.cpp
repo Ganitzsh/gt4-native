@@ -118,6 +118,7 @@ extern "C" S00659988 *func_005C11A8(void);
 extern "C" char *func_005C2560(StringRep *);
 extern "C" void *func_005C2630(void *, u32, u32, const char *, u32);
 extern "C" void gt4_menu_entry(unsigned int project);
+extern "C" void gt4_menu_started(unsigned int project, const char *name);
 
 static inline char *grab(StringRep *r) {
     if (r->selfish)
@@ -170,6 +171,7 @@ static inline G *game(GPtr *g) { return (G *)(g->p + 0x3A368); }
 extern "C" s32 GranTurismo4__MenuGameObject__startProject(Self *self, const char *name, s32 arg2) {
     /* gt4-native: GT4's Options (`name` is next-project's buffer on sequence 1, which the project itself rewrites) */
     bool option = func_0057F238(name, optionProject) == 0;
+    bool started = true;   /* gt4-native: the project's name to the runtime at its first run (M9d2) */
     func_0042FCE0(game(&D_00622F4C), emptyProjectName);
     int was = func_00109398();
     if (!was)
@@ -273,6 +275,10 @@ extern "C" s32 GranTurismo4__MenuGameObject__startProject(Self *self, const char
         bool has = self->f70 != 0;
         func_0010AF10(1);
         if (has) {
+            if (started) {   /* gt4-native: which project runs (M9d2: the opening's boot waits for command 6) */
+                started = false;
+                gt4_menu_started((unsigned int)self->f70, name);
+            }
             if (option) {   /* gt4-native: once, at the project's first run */
                 option = false;
                 gt4_menu_entry((unsigned int)self->f70);

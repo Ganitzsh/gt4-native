@@ -32,6 +32,10 @@ public:
     void frame(uint32_t number, double milliseconds, double gpuMilliseconds, uint32_t width, uint32_t height);
     // "set KEY VALUE" commands: the handler applies a setting and returns an error message (empty: done).
     void onSetting(std::function<std::string(const std::string&, const std::string&)> handler);
+    // "settings" commands (MENU_DESIGN M9): what Esc does (the game's pages, else the host's hub, else the overlay
+    // menu), timed in the session's own steps (a scripted key's frame drifts from the game's); unlike Esc it needs no
+    // interactive window or key script (menuEnabled). The handler answers what it opened or closed.
+    void onSettings(std::function<std::string()> handler);
     // The game's clock in VBlanks, for "vwait N" (a game session: presses timed in game frames, which the
     // host's frames are not when the game is busy).
     void onGameClock(std::function<uint64_t()> clock);

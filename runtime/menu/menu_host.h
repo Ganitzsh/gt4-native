@@ -48,6 +48,10 @@ extern "C" int gt4_menu_tick(uint32_t project);
 // otherwise ends GT4's Options (kLeaveProject). With ui.entry = hotkey, nothing changes.
 extern "C" void gt4_menu_entry(uint32_t project);
 
+// From the same hook, for every project at its first run (M9d2): its name. The opening's "boot" project is not a place
+// for the hub: a command 6 there waits for the next menu project (the architect: the opening runs on unchanged).
+extern "C" void gt4_menu_started(uint32_t project, const char *name);
+
 // One frame of a race pause, from the copy of RacePause::update (game_src/func_003C3820.cpp, M7), on the thread that
 // runs the race's updatePause. `pause` is the RacePause; `items` its PauseItem bits; `screen` the brightness and
 // contrast the strobe's SETVAL writes (two ints, D_00622F4C + 0x39E34 or + 0x39E44). Returns -1 with ui.pause = gt4

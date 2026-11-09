@@ -41,6 +41,7 @@ public:
         bool save = false;      // this request means a save: a live, next-race or restart value set, a confirm value
                                 // kept; never a revert, a refusal or an unconfirmed confirm value (the architect's)
         std::string summary;    // one line for the host's log: the request and what came of it
+        std::string waiting;    // page.waiting (M9d2): why the game's pages wait to open (load, race-start, ...)
     };
     // One GT4_REC_SETTINGS_SET payload: kOpenSchema answers the schema; kSet and kRevert go through setOption (a key
     // not on a page is refused); the confirm.keep action marks a confirm value kept. Answers kResult, then kValues

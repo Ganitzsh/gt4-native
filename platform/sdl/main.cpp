@@ -997,6 +997,17 @@ int run(const Options& options) {
         default: break;
         }
     };
+    // A session's "settings" command: what Esc does (the game's pages, else the host's hub; M9).
+    if (session)
+        session->onSettings([&]() -> std::string {
+            bool handled = false;
+            toggleSettings(handled);
+            if (handled) return "the game's pages";
+            toggleHub(handled);
+            if (handled) return "the host's hub";
+            openMenu(!menu.isOpen());   // (Esc's third branch: the overlay menu, a live game with hotkey entry)
+            return "the host's menu";
+        });
     auto hubKey = [&](SDL_Keycode key, bool down) {
         using In = gt4::ui::Input;
         switch (key) {
@@ -1465,6 +1476,18 @@ int run(const Options& options) {
             for (const auto& request : requests) {
                 const auto reply = settingsBridge.handle(settings, request.data(), request.size());
                 if (!reply.summary.empty()) std::printf("settings page: %s\n", reply.summary.c_str());
+                if (!reply.waiting.empty()) {
+                    // The game's reason a command 6 waits (M9d2): said once, in place of M9d1's general line.
+                    const std::string& w = reply.waiting;
+                    const char* line = w == "load"         ? "Settings open when loading ends"
+                                       : w == "race-start" ? "Settings open when the race starts"
+                                       : w == "race-end"   ? "Settings open when the race ends"
+                                       : w == "menu"       ? "Settings open at the next menu screen"
+                                                           : nullptr;
+                    if (line) renderer->showMessage(line, 4.0f);
+                    else std::printf("settings: page.waiting %s: no line for it\n", w.c_str());   // (lane C)
+                    settingsAskedAt = 0;
+                }
                 changed = changed || reply.changed;
                 saveNow = saveNow || reply.save;
                 for (const auto& payload : reply.payloads) gs->sendSettings(payload);

@@ -76,6 +76,7 @@ struct Session::Impl {
         return false;
     }
     std::function<std::string(const std::string&, const std::string&)> setting;
+    std::function<std::string()> settings;   // "settings" (onSettings)
     explicit Impl(const std::string& path) : directory(path) {}
     ~Impl() {
         if (audio) SDL_DestroyAudioStream(audio);
@@ -332,6 +333,10 @@ struct Session::Impl {
             if (const std::string error = setting(key, value); !error.empty()) throw std::runtime_error(error);
             event("setting", "\"key\":" + quote(key) + ",\"value\":" + quote(value) +
                   ",\"pipeline\":" + quote(renderer.pipelineDescription()));
+        } else if (op == "settings") {
+            // settings: as Esc, the settings pages opened or closed (MENU_DESIGN M9)
+            if (!settings) throw std::runtime_error("settings: no handler in this session");
+            event("settings", "\"action\":" + quote(settings()));
         } else if (op == "wait") {
             int count = 0;
             if (!(input >> count) || count < 1 || count > 100000) throw std::runtime_error("wait FRAMES requires 1..100000");
@@ -401,6 +406,8 @@ SDL_Gamepad* Session::gamepad2() const { return impl->gamepad2; }
 uint32_t Session::padId(int pad) const { return pad == 0 ? (impl->joystick ? impl->id : 0) : (impl->joystick2 ? impl->id2 : 0); }
 bool Session::action() const { return SDL_GetGamepadButton(impl->gamepad, SDL_GAMEPAD_BUTTON_SOUTH); }
 void Session::submitAudio(const int16_t* samples, uint32_t frames) { impl->submit(samples, frames); }
+void Session::onSettings(std::function<std::string()> handler) { impl->settings = std::move(handler); }
+
 void Session::onSetting(std::function<std::string(const std::string&, const std::string&)> handler) {
     impl->setting = std::move(handler);
 }

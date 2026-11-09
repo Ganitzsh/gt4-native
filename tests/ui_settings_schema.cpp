@@ -133,6 +133,16 @@ int main() {
         check(!applyClass("display.window_width", a) && !applyClass("no.such", a), "hidden and unknown keys: no class");
     }
 
+    // page.waiting (M9d2): the game's reason a command 6 waits; answered ok, no setting touched, the reason handed on.
+    {
+        Settings s = start;
+        SettingsBridge b(s);
+        const auto bytes = encodeSet(1, wire::kAction, "page.waiting", "race-start");
+        const auto reply = b.handle(s, bytes.data(), bytes.size());
+        check(reply.waiting == "race-start" && !reply.changed && !reply.save && formatSettings(s) == formatSettings(start),
+              "page.waiting hands on its reason and changes nothing");
+    }
+
     // ui.prompts (M9): auto follows the input used last and the pad's type; a fixed choice wins over both (a
     // PlayStation player under Steam Input, whose pad reports itself as an Xbox one). Values as kOptionPromptStyle.
     {
