@@ -270,7 +270,7 @@ int main(int argc, char** argv) {
         Gif z = setup();
         z.ad({{ZBUF_1, zbuf(0x70, PSMZ24, false)}});
         sprite(z, 0, 0, 640, 448, rgbaq(1, 2, 3, 0x80));
-        z.ad({{BITBLTBUF, bitbltbuf(0, 0, 0, 0x70, 10, PSMZ32)}, {TRXPOS, trxpos(0, 0, 316, 220)}, {TRXREG, trxreg(8, 4)}, {TRXDIR, 1}});
+        z.ad({{BITBLTBUF, bitbltbuf(0, 0, 0, 0xE00, 10, PSMZ32)}, {TRXPOS, trxpos(0, 0, 316, 220)}, {TRXREG, trxreg(8, 4)}, {TRXDIR, 1}});
         fe.gif(3, static_cast<const uint8_t*>(z.data()), z.bytes());
         expect(fe.readFromTarget() && fe.takeGpuRead(request) && request.depth && !request.inverted && request.targetPsm == PSMZ24 &&
                    request.psm == PSMZ32 && request.x == 316 && request.y == 220 && request.width == 8 && request.height == 4,
@@ -1051,11 +1051,11 @@ int main(int argc, char** argv) {
     {
         gt4::gsn::GsFrontend fe;
         Gif g = setup();
-        g.ad({{ZBUF_1, zbuf(0x70, PSMZ24, false)}});   // Z written: the Z buffer at 0x70 (Z24, 640 wide)
+        g.ad({{ZBUF_1, zbuf(0x70, PSMZ24, false)}});   // Z written: the Z buffer at page 0x70, block 0xE00 (Z24, 640 wide)
         sprite(g, 0, 0, 640, 448, rgbaq(1, 2, 3, 0x80));
-        const auto copyZ = [&] {   // a field's Z into a Z24 frame at 0x3600, sampled as Z24 from the buffer's base
-            g.ad({{FRAME_1, frame(0x3600, 10, PSMZ24)}, {ZBUF_1, zbuf(0x70, PSMZ24, true)}, {TEST_1, test(true, 1)},
-                  {TEX0_1, tex0(0x70, 10, PSMZ24, 10, 9, true, 1)}});
+        const auto copyZ = [&] {   // a field's Z into a Z24 frame at block 0x3600, sampled as Z24 from the buffer's base
+            g.ad({{FRAME_1, frame(0x3600 / 32, 10, PSMZ24)}, {ZBUF_1, zbuf(0x70, PSMZ24, true)}, {TEST_1, test(true, 1)},
+                  {TEX0_1, tex0(0xE00, 10, PSMZ24, 10, 9, true, 1)}});
             g.reglist(prim(6, false, true, false, true), {UV, XYZ2, UV, XYZ2}, {uv(0, 0), xyz(0, 0), uv(640, 448), xyz(640, 224)});
         };
         copyZ();
@@ -1075,13 +1075,14 @@ int main(int argc, char** argv) {
             if (i >= ids.size() || ids[i] >= list.reinterpretations.size()) return false;
             const gt4::gsn::Reinterpretation& r = list.reinterpretations[ids[i]];
             const bool zbuffer = r.target && r.target <= list.targets.size() && list.targets[r.target - 1].depth;
-            return r.depth && zbuffer && r.targetBp == 0x70 && r.targetBw == 10 && r.targetPsm == PSMZ24 && r.depthInverted == inverted &&
+            return r.depth && zbuffer && r.targetBp == 0xE00 && r.targetBw == 10 && r.targetPsm == PSMZ24 && r.depthInverted == inverted &&
                    r.width == 1024 && r.height == 512;
         };
-        expect(ids.size() == 3 && depthOne(0, false), "P2c: a Z buffer read as Z24: a depth reinterpretation of the Z buffer");
-        expect(ids.size() == 3 && ids[1] == ids[0], "P2c: read again unchanged: the same one");
-        expect(ids.size() == 3 && ids[2] != ids[0] && depthOne(2, true), "P2c: after the Z24 pass: a new one, turned round");
-        expect(fe.stats.depthTextures == 2 && fe.stats.readFallbacks == 0, "P2c: counted, and no read from memory");
+        // (the two copies before the pass are one draw: the same state and texture)
+        expect(ids.size() == 2 && depthOne(0, false), "P2c: a Z buffer read as Z24: a depth reinterpretation of the Z buffer");
+        expect(ids.size() == 2 && ids[1] != ids[0] && depthOne(1, true), "P2c: after the Z24 pass: a new one, turned round");
+        expect(fe.stats.depthTextures == 2 && fe.stats.readFallbacks == 0,
+               "P2c: read again unchanged, the same one; counted, and no read from memory");
     }
 
     // 3. A capture replayed through GsHost (no game: reads stay in memory): one displayed list per VBlank.

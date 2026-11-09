@@ -735,7 +735,10 @@ void GsFrontend::emit(const Vertex* v, uint32_t n, Topology topology) {
                         std::fprintf(stderr, "gsn: Z24 pass at bp %X drew its first primitive again: a second inversion (%llu so far)\n", t.bp,
                                      static_cast<unsigned long long>(passes));
                 }
-                if (invertRun != t.id || again) t.inverted = !t.inverted;
+                if (invertRun != t.id || again) {
+                    t.inverted = !t.inverted;
+                    lastTexture.valid = false;   // (a Z texture of this buffer, P2c, reads it turned round now)
+                }
                 invertRun = t.id;
                 ++stats.draws;
                 return;
