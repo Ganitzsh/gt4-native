@@ -1127,6 +1127,8 @@ void GsFrontend::texSet(const uint8_t* payload, size_t bytes) {
                         const uint32_t page = (bp / 32 + py * perRow + px + extra) & 511;
                         if (pageLogged(page) && frameCount >= pageLogFrom())   // DEBUG
                             std::printf("pagelog: frame %llu page %u set %u loaded\n", (unsigned long long)frameCount, page, slot.id);
+                        static const bool setBlocks = [] { const char* e = std::getenv("GT4_SET_BLOCKS"); return e && *e && *e != '0'; }();
+                        if (setBlocks) materializePage(page, kForOther);   // DEBUG (B25 (d)): the previous set's blocks kept
                         pages[page] = {0, ++serial};
                         memorySerial[page] = serial;
                         ++pageGeneration[page];
@@ -1283,6 +1285,40 @@ void GsFrontend::loadSetContent(uint64_t hash, const SetContent& sc) {
     assetLoaded = hash;
 }
 
+// DEBUG (B25 (d)): per page of memory, the blocks a content's uploads write: loaded twice into a probe filled with 0x00
+// and 0xFF, a block covered where either load changed it (exact, whatever the bytes).
+const std::vector<uint32_t>& GsFrontend::setCoverOf(uint64_t hash, const SetContent& sc) {
+    auto it = setCover.find(hash);
+    if (it != setCover.end()) return it->second;
+    if (!coverProbe) coverProbe = std::make_unique<GsMemory>();
+    std::vector<uint32_t> cover(512, 0);
+    for (const uint8_t fill : {uint8_t(0x00), uint8_t(0xFF)}) {
+        std::memset(coverProbe->data(), fill, GsMemory::kBytes);
+        size_t at = 0;
+        for (const gfx::TexSetUpload& u : sc.uploads) {
+            GsMemory::Transfer tr;
+            tr.dbp = u.destination & 0x3FFF;
+            tr.dbw = (u.destination >> 16) & 0x3F;
+            tr.dpsm = (u.destination >> 24) & 0x3F;
+            tr.rrw = u.w;
+            tr.rrh = u.h;
+            const size_t n = std::min<size_t>(size_t(u.qwords) * 16, sc.bytes.size() - std::min(at, sc.bytes.size()));
+            coverProbe->beginWrite(tr);
+            if (n) coverProbe->write(sc.bytes.data() + at, n);
+            at += size_t(u.qwords) * 16;
+        }
+        for (uint32_t block = 0; block < GsMemory::kBytes / 256; ++block) {
+            const uint8_t* b = coverProbe->data() + size_t(block) * 256;
+            for (uint32_t k = 0; k < 256; ++k)
+                if (b[k] != fill) {
+                    cover[block / 32] |= 1u << (block % 32);
+                    break;
+                }
+        }
+    }
+    return setCover.emplace(hash, std::move(cover)).first->second;
+}
+
 void GsFrontend::materializePage(uint32_t page, MaterializeCause cause) {
     page &= 511;
     SetPage& sp = setPages[page];
@@ -1301,7 +1337,14 @@ void GsFrontend::materializePage(uint32_t page, MaterializeCause cause) {
         loadSetContent(sp.hash, content->second);
         bytes.assign(assetMemory->data() + size_t(from) * 8192, assetMemory->data() + size_t(from + 1) * 8192);
     }
-    std::memcpy(mem.data() + size_t(page) * 8192, bytes.data(), 8192);
+    static const bool setBlocks = [] { const char* e = std::getenv("GT4_SET_BLOCKS"); return e && *e && *e != '0'; }();
+    if (setBlocks) {   // DEBUG (B25 (d)): only the blocks the set's uploads write
+        const uint32_t m = setCoverOf(sp.hash, content->second)[from];
+        for (uint32_t b = 0; b < 32; ++b)
+            if (m >> b & 1) std::memcpy(mem.data() + size_t(page) * 8192 + b * 256, bytes.data() + b * 256, 256);
+    } else {
+        std::memcpy(mem.data() + size_t(page) * 8192, bytes.data(), 8192);
+    }
     ++stats.setPagesWritten;
     ++stats.setPagesByCause[cause];
 }

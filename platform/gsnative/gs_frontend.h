@@ -641,6 +641,11 @@ private:
     void materializeRect(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t x, uint32_t y, uint32_t w, uint32_t h, MaterializeCause cause);
     std::unordered_map<uint64_t, std::vector<uint32_t>> setPalettes;   // palettes from sets' contents (clutWritten)
     std::unordered_map<uint64_t, std::vector<uint8_t>> setPageBytes;   // (content, page) -> its 8 KiB (materializePage)
+    // DEBUG (B25 (d), never for main as is): GT4_SET_BLOCKS=1 writes a set into memory only in the blocks its uploads
+    // write (per content: per page, a mask of 32 blocks), and writes a page's previous set before another takes it.
+    std::unordered_map<uint64_t, std::vector<uint32_t>> setCover;
+    std::unique_ptr<GsMemory> coverProbe;
+    const std::vector<uint32_t>& setCoverOf(uint64_t hash, const SetContent& sc);
 public:
     void materializeAll() { for (uint32_t page = 0; page < 512; ++page) materializePage(page, kForOther); }
 private:
