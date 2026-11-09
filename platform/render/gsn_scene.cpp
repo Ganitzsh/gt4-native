@@ -294,6 +294,15 @@ struct GsnScene::Impl {
     render::GatherStats nightStatsLast;
     // F2b: the course's street lamps from B6's meshes (course_lamp_pass.h), and its totals (printed at exit)
     render::CourseLampPass lampPass;
+    // A view's Light records with F2b's lamps promoted (lampsOf): once per view per list, whoever asks first (the night
+    // relight's nightPrepare; N3's coverage gate), so LampTotals count each view once. Cleared by executeBegin.
+    struct ViewLamps {
+        uint16_t view = 0;
+        std::vector<gfx::scene::Light> records;
+    };
+    std::vector<ViewLamps> viewLamps;
+    size_t viewLampsUsed = 0;   // (the entries in use this list; the vectors kept for their capacity)
+    const std::vector<gfx::scene::Light>& lampsOf(const scene::SceneFrame& sf, uint16_t view);
     struct LampTotals {
         uint64_t frames = 0, candidates = 0, kept = 0, dropped = 0, noInstance = 0, merged = 0, mergedAgain = 0;
         double microseconds = 0.0;   // the pass's time on the render thread
@@ -1732,6 +1741,7 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
     ex.command = command;
     ex.slot = slot;
     nightOrdinal = 0;
+    viewLampsUsed = 0;
     if (gsExact()) makeExactSprites();
     snapSprites();
     if (seamOn) {   // B16c: this list's display seam
@@ -3592,6 +3602,33 @@ void GsnScene::Impl::executeLightPart(VkCommandBuffer command, size_t at, int st
     for (const char* m : after) mark(command, m);
 }
 
+// The frame's Light records with view `view`'s lamps promoted. F2b: the view's street lamps, A7 step 1b's billboard
+// candidates whose instance's material has the glow class, become kSrcCourseGlow (the list's scene cache, shared with
+// the front end, holds the classes). Once per view per list; the reference lasts until the next call.
+const std::vector<gfx::scene::Light>& GsnScene::Impl::lampsOf(const scene::SceneFrame& sf, uint16_t view) {
+    for (size_t i = 0; i < viewLampsUsed; ++i)
+        if (viewLamps[i].view == view) return viewLamps[i].records;
+    if (viewLamps.size() <= viewLampsUsed) viewLamps.resize(viewLampsUsed + 1);
+    ViewLamps& v = viewLamps[viewLampsUsed++];
+    v.view = view;
+    v.records.assign(sf.lights.begin(), sf.lights.end());
+    if (const std::shared_ptr<const scene::SceneCache> cache = frame.sceneCache) {
+        render::CourseLampPass::Stats ls;
+        const auto started = std::chrono::steady_clock::now();
+        lampPass.promote(sf, view, [&cache](scene::MaterialId id) { return cache->materials().classes(id); }, v.records, &ls);
+        LampTotals& t = lampTotals;
+        t.microseconds += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - started).count();
+        ++t.frames;
+        t.candidates += ls.candidates;
+        t.kept += ls.kept;
+        t.dropped += ls.dropped;
+        t.noInstance += ls.noInstance;
+        t.merged += ls.merged;
+        t.mergedAgain += ls.mergedAgain;
+    }
+    return v.records;
+}
+
 bool GsnScene::Impl::nightPrepare(const gsn::FrameList::Lighting& l, const SceneImages& si, VkImageView colourView,
                                   VkImageView depthOnly, NightPush& k, NightBuffers& out) {
     // Debugging only (GT4_NIGHT_TEST_LIGHTS without scene records, e.g. an older capture): the test lamps in a stand-in
@@ -3662,27 +3699,11 @@ bool GsnScene::Impl::nightPrepare(const gsn::FrameList::Lighting& l, const Scene
     const float far = std::fabs(m[2][2] + 1.0f) > 1e-6f ? m[3][2] / (m[2][2] + 1.0f) : 0.0f;
     k.maxDistance = far > 0.0f && std::isfinite(far) ? far * 1.01f : 1e4f;
     if (!(std::fabs(k.focal[0]) > 0.0f && std::fabs(k.focal[1]) > 0.0f && k.distanceA != 0.0f)) return false;
-    // The lamps: the view's records, and the test lamps.
-    nightRecords.assign(sf.lights.begin(), sf.lights.end());
+    // The lamps: the view's records with F2b's promoted (lampsOf), and the test lamps.
+    nightRecords = lampsOf(sf, view->id);
     // (the test lamps follow the game's records: no kFromGame. kFromGame means 'came through a game record': F2b's
     // promoted billboard candidates keep it, as A7 step 1b sent them)
-    nightHostFrom = nightRecords.size();
-    // F2b: the main view's street lamps: A7 step 1b's billboard candidates whose instance's material has the glow class
-    // become kSrcCourseGlow (the list's scene cache, shared with the front end, holds the classes)
-    if (const std::shared_ptr<const scene::SceneCache> cache = frame.sceneCache) {
-        render::CourseLampPass::Stats ls;
-        const auto started = std::chrono::steady_clock::now();
-        lampPass.promote(sf, view->id, [&cache](scene::MaterialId id) { return cache->materials().classes(id); }, nightRecords, &ls);
-        LampTotals& t = lampTotals;
-        t.microseconds += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - started).count();
-        ++t.frames;
-        t.candidates += ls.candidates;
-        t.kept += ls.kept;
-        t.dropped += ls.dropped;
-        t.noInstance += ls.noInstance;
-        t.merged += ls.merged;
-        t.mergedAgain += ls.mergedAgain;
-    }
+    nightHostFrom = sf.lights.size();
     if (const uint32_t n = render::testLightCount()) {
         const std::vector<gfx::scene::Light> test = render::testLights(view->id, n);
         nightRecords.insert(nightRecords.end(), test.begin(), test.end());
