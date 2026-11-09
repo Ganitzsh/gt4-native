@@ -47,7 +47,8 @@ void displayOptions(std::vector<Option>& o) {
         "clean = the line a TV hides below the picture stays black (in menus and fields-mode races alike), and where "
         "something moved between the fields only the newer field is shown. "
         "clean is meant for the menus: a race in fields mode (display.race_frames = fields) looks better with blend, "
-        "since clean leaves seams along its moving edges."));
+        "since clean leaves seams along its moving edges. In no preset for now: where something moves (the intro, "
+        "a menu over a video) clean bobs by a line every frame."));
     o.push_back(enumOption("aspect.ratio", &Settings::aspect, kAspects,
         "Content aspect ratio. Other window shapes get black bars (letterbox or pillarbox). 3D is Hor+: the "
         "vertical field of view stays fixed and wider ratios see more to the sides."));

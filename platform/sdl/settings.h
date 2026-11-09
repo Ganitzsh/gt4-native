@@ -80,7 +80,7 @@ struct Settings {
     bool hdr = false;                 // HDR10 output (PQ, BT.2020) where the display offers it
     float hdrPaperWhite = 200.0f;     // HDR: the nits of SDR white
     float hdrPeak = 1000.0f;          // HDR: the display's peak, nits (highlights expand towards it)
-    FieldMode fieldMode = FieldMode::Clean;   // display.field_mode (GsnScene::setFieldMode)
+    FieldMode fieldMode = FieldMode::Blend;   // display.field_mode (GsnScene::setFieldMode)
 
     // [aspect]
     AspectRatio aspect = AspectRatio::Window;
