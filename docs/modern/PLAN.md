@@ -1498,6 +1498,28 @@ draw numbers are those of replay 2514, and the draws are found by what they are,
   never builds the map (assign runs only with the scene split on). Counters per frame: `n3Judged`, `n3Skipped` (items
   and draws), `n3SkipGatedOff`, `n3LaterFail` (a later batch or instance of a cached item that would fail),
   `n3Pending`; the judging's cost in B6's front-end CPU line.
+- **The coverage gate** (the architect, 2026-11-09, from lane F's never-dark phases; lane B's review): a skip also
+  needs a lamp that replaces the light it removes, so the road is never darker than GT4's where nothing of ours lights
+  it (a tunnel's lights are not lamp billboards). It decides at execute time in `GsnScene`, with the frame's own
+  lamps, since a draw knows its instance only as an index into its own frame's list: (a) the front end passes a skip
+  candidate through as draws carrying their instance (no merge across a change of instance, which adds draws on the
+  lamp-pool items only) instead of dropping it; (b) `GsnScene` promotes the lamps at `executeBegin`, per main view
+  keyed by view id, and `nightPrepare` reuses that result, so lamps are not promoted twice and `LampTotals` don't
+  double (a Light whose target no view binds gets no lamps, as today); (c) each candidate's footprint, the centre and
+  radius of its v4 items' up-facing triangles, is a property of the item, cached in object space by
+  `InstanceData::object` (set, model, LOD) and the item (instances exist per frame, and a record's serial is not
+  trusted), and taken through the instance's `objectToView` each frame. The disc test runs in view space, where the
+  Lights already are (`gfx::scene::Light`, kept so by `promote()`): no inverse is needed. A candidate's draws are
+  skipped only if one lamp's ground disc holds the whole footprint (distance from the lamp's foot plus the footprint's
+  radius at most the disc's radius, (lamp height - centre height) x tan(theta_c), the heights and the lamp's foot
+  measured along world up as seen in view space (the view's worldToView applied to (0, 1, 0)), not along view y, which
+  tilts with the camera's pitch); otherwise GT4's baked draw stays. Everything stays baked on a frame where the view's
+  lamps can't be trusted: a view not seen last frame (matched by role and `pass`, as `previousWorldToView` is), a
+  scene switch, `kViewCut` once something sends it (nothing sets it today, so a mid-race camera change is caught only
+  when the view drops out for a frame), and a list cut before `FrameEnd` (a.8: the flare's asynchronous read), which
+  has no scene frame and no lamps. Counters per frame: candidates, skipped, held back for no covering disc, and held
+  back for a partial list or a view not yet trusted, apart, so a flicker on read frames doesn't read as a gate fault.
+  The cached verdict above is unchanged; the gate is an extra test on top of it.
 Depends: R11, A7, B4, B6, F2, F2b. Acceptance: the step 0 hunt repeated on the lap of every course with the flag (Hong
 Kong at dusk included) with the mechanism in place of the debug skip (only lamp light changes, every marking and the
 checkers kept); v4's verdicts judged on what the live game draws, not a mid-run replay's textures (v4 reads the
@@ -1505,7 +1527,10 @@ texture's centre/rim, and a mid-run capture can hold wrong texture content, RISK
 live run's verdicts per identity against the replay hunt's, or the hunt on a night capture recorded from game start
 (C10); `R5` on `lap_ssr5r_boot`, the from-boot night lap whose colours equal live (band ratio at most 1.3 in every
 frame, the GS path's value for comparison); no skip on a frame without `kFrameLampsOn` (Seoul by day: 0) nor outside
-`kViewMain` (the Arcade menus' background: 0); `PERF` with night enhanced against off; `ORIG` unchanged.
+`kViewMain` (the Arcade menus' background: 0); the never-dark check on both sides on all three laps (the skipped
+patches against the GS path, lane F's measure and bounds, stated with the rule), with the gate's held-back count per
+lap; `PERF` with night enhanced against off, the gate's cost in it, and the front end's batches with and without the
+gate on `lap_ssr5r_boot` (the extra draws of the unmerged candidates); `ORIG` unchanged.
 
 **N4: Warning-light tint suppressed (S-M).** The flare (and, in `modern`, glare) draws R12 identified are skipped
 between their markers (A5b); each light keeps its own bloom (pipeline bloom on linear light, F4). Depends: R12,
