@@ -929,6 +929,12 @@ struct Renderer::Impl {
         gt4::SceneSource& active = gameFrame ? static_cast<gt4::SceneSource&>(*gsnScene) : static_cast<gt4::SceneSource&>(*scene);
         if (sceneSwitched) { GT4_STAGE_SCOPE("render: new scene source"); vkDeviceWaitIdle(device.device); pipeline.reset(); pipeline = std::make_unique<gt4::FramePipeline>(device, pool);
                              pipeline->prepareOutput(format, srgbFormat, static_cast<uint32_t>(presentedBits)); sceneSwitched = false; }
+        // Temporal anti-aliasing in the game's 3D scenes (motion vectors from its 3D renderers): for TAA, and for
+        // FSR 2, whose temporal part it takes (the game's frames reach the pipeline whole, HUD included). Set before
+        // configure, which reads it (antiAliasesItself: the display side's AA then stays off), so the first game frame
+        // after a change is configured right instead of drawing one frame of SMAA / FXAA and rebuilding the targets.
+        if (gameFrame)
+            gsnScene->setTemporal(settings.aa == gt4::AntiAliasing::Taa || settings.upscaler == gt4::Upscaler::Fsr2);
         {
             GT4_STAGE_SCOPE("render: pipeline setup (targets)");
             pipeline->configure(settings, extent, active);
@@ -958,9 +964,6 @@ struct Renderer::Impl {
             // N4: the night relight replaces GT4's flare veil; render.scene = modern drops its glare too (B15)
             gsnScene->setSkippedBrackets(settings.night == gt4::LightingMode::Enhanced,
                                          settings.night == gt4::LightingMode::Enhanced && settings.scene == gt4::SceneRenderer::Modern);
-            // Temporal anti-aliasing in the game's 3D scenes (motion vectors from its 3D renderers): for TAA, and for
-            // FSR 2, whose temporal part it takes (the game's frames reach the pipeline whole, HUD included).
-            gsnScene->setTemporal(settings.aa == gt4::AntiAliasing::Taa || settings.upscaler == gt4::Upscaler::Fsr2);
             gsnScene->setParity(settings.scene == gt4::SceneRenderer::Parity || settings.scene == gt4::SceneRenderer::Hybrid);   // B7
             gsnScene->setHybrid(settings.scene == gt4::SceneRenderer::Hybrid);   // B8 (render.scene = hybrid)
             gsnScene->setFieldMode(settings.fieldMode == gt4::FieldMode::Clean);
