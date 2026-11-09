@@ -736,6 +736,13 @@ held; GT4's volume files are inflated on the game thread; no load time is measur
 - Acceptance: the load times (race and menus) reported before and after, against those targets; `ORIG` unchanged in
   its picture and the game's pacing (faster reads shorten `original`'s loads too, which is the point; the frame in
   which the game sees each read's result is unchanged); saves and replays unaffected (session test).
+- **Done on the desktop** (lane C, 9df2a5a; its message holds the table): the race load's blocked VBlanks 22 to 7
+  (0.12 s), the race start 9 to 1, the menus' loads already unblocked; `GT4_LOAD_STATS` prints `blocked` (it assumes a
+  screen drawn every VBlank: a 30 fps screen counts half its VBlanks with nothing blocking). Saves: GT4 re-encrypts
+  each save, so they were checked through the game's load (Home pixel-identical from both); replays: the race and its
+  six times identical before and after, main run twice as the control; the replay itself one VBlank phase off from the
+  shorter loads (99.99 % within a VBlank). Open: the Odin's `GT4_LOAD_STATS` (the owner's device list), and (c)'s
+  warm-up follow-up (lane B).
 
 **D11: Latency (S-M; lane C, moved from lane D).** The input-to-photon budget D12-D16's filters count against. From
 the audit (section 4.6): two frames in flight today, and the pad sampled every host frame. Design: one frame in
