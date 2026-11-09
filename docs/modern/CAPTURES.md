@@ -255,6 +255,17 @@ Clear, then B-spec. C.S. Route 5 Reverse is Beginner Events > Sunday Cup race 4 
 Route 5 forward is in the Arcade City row. A replay's first 300 to 500 frames show textures not yet uploaded again
 (a mid-session recording); counts leave them out.
 
+Colours in these replays are not always the game's (RISKS R7). The captures here were recorded mid-run: lane F's
+sessions boot from game start, but the recording starts at a trigger once the race runs (`lap_ssr5r` at VBlank
+9,926, `lap_csr5` at 9,478), and lane A's start after 300 VBlanks of driving, so each replay starts from a state
+snapshot. Some textures the live game drew are not right in it: in `lap_ssr5r` the lane markings and the edge
+line are green (frame 3,500) and the left kerb is cyan and garbled (frame 1,000), at every setting, even
+`--preset original` with the HD pack off; live shots at the same race times show white markings and a red and
+white kerb. Lane C is tracing which textures (RISKS R7). N3's proof holds, since v4 decides from geometry and each
+hunt compared both runs on the same replay; don't judge colours from these replays, and record new references from
+game start (C10). The captures recorded from boot (`race_boot`, `race_grid43_r6`, `garage_r6`) are the ones to
+judge colours on.
+
 The Arcade route below is the one the first, throttle-only sections captures used (`r5_sections*.cap`, no scene
 records; not references).
 
