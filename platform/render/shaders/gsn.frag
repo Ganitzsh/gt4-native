@@ -127,6 +127,24 @@ vec4 bilinearSubTexels(vec2 position) {
     return mix(top, bottom, f.y) * 255.0;
 }
 
+// A target sampled with the bilinear filter (B24): the four render pixels around the point and their weights computed
+// here, not by the GPU's sampler, whose sub-texel precision differs between devices (the Odin's night bands). The
+// target is clamped at its edges, as the sampler was. PROTOTYPE: draw.lod's bits 30-31 (unused for targets) pick the
+// weights' rounding while it is measured: 0 full precision, 1 rounded to 1/256, 2 floored to 1/256.
+vec4 targetBilinear(vec2 gsPixel) {
+    const ivec2 last = textureSize(source, 0) - 1;
+    const vec2 p = gsPixel * draw.sourceScale - 0.5;
+    const vec2 cell = floor(p);
+    vec2 f = p - cell;
+    const uint q = (draw.lod >> 30) & 3u;
+    if (q == 1u) f = floor(f * 256.0 + 0.5) / 256.0;
+    else if (q == 2u) f = floor(f * 256.0) / 256.0;
+    const ivec2 a = clamp(ivec2(cell), ivec2(0), last), b = clamp(ivec2(cell) + 1, ivec2(0), last);
+    const vec4 top = mix(texelFetch(source, a, 0), texelFetch(source, ivec2(b.x, a.y), 0), f.x);
+    const vec4 bottom = mix(texelFetch(source, ivec2(a.x, b.y), 0), texelFetch(source, b, 0), f.x);
+    return mix(top, bottom, f.y);
+}
+
 float pixelQ = 1.0;   // this pixel's Q (the GS's mipmap level comes from it)
 
 // The GS's level of detail for its own mipmaps: K, or (log2(1 / Q) << L) + K, then less by the render
@@ -170,7 +188,7 @@ vec4 texel(vec2 coordinate) {
     }
     if ((draw.flags & kFromTarget) != 0u) {
         const vec2 gsPixel = draw.sourceOffset + fromTargetPosition(coordinate * draw.textureSize);
-        const vec4 t = texture(source, gsPixel / draw.sourceSize);
+        const vec4 t = targetBilinear(gsPixel);
         vec4 c = min(vec4(t.rgb * 255.0, t.a * 128.0), 255.0);   // COLCLAMP, as above
         if ((draw.flags & kTarget24) != 0u) {
             const bool black = all(lessThan(c.rgb, vec3(0.5)));

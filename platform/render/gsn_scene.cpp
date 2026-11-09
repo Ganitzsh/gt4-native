@@ -2346,6 +2346,9 @@ void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t
             k.clampV = sm.wrapV | (static_cast<uint32_t>(sm.minV) << 2) | (static_cast<uint32_t>(sm.maxV) << 12);
             k.lod = sm.lodFixed | (static_cast<uint32_t>(sm.lodL) << 1) | ((static_cast<uint32_t>(sm.lodK) & 0xFFF) << 3) |
                     (static_cast<uint32_t>(sm.mipMax) << 16);
+            // PROTOTYPE (B24, GT4_B24_Q=0/1/2): the target filter's weight rounding while it is measured (gsn.frag targetBilinear)
+            static const uint32_t b24q = [] { const char* e = std::getenv("GT4_B24_Q"); return e ? uint32_t(std::atoi(e) & 3) : 0u; }();
+            k.lod |= b24q << 30;
             sampler = samplers[(linear ? 2 : 0) + (repeat ? 1 : 0)];
             if (d.texture.kind == gsn::TextureSource::Kind::Target) {
                 auto source = targets.find(d.texture.id);
