@@ -770,6 +770,12 @@ GPLv3 and RELEASE_POLICY.md, and only the owner can change that. Depends: B16, R
 (without it FSR 3.1 reaches only the test scene and the modern scene); B16b for fractional scales.
 Acceptance: `VAL`; `PERF`; as for FSR 2, the same frames on every device class CI runs (the Linux and arm64 cross
 builds).
+Step 1 done (lane C, 2026-11-09): the SDK's FSR 3.1 upscaler vendored unmodified, the upscaler only, with no frame
+generation, and a manifest of upstream hashes (6157b187); `gt4_fsr3` built on every host platform from our glslang's
+SPIR-V in both FFX_HALF variants, its bindings reflected, the variant logged per device, a compile-time check that the
+SDK's private context fits the public size, and linked into nothing (7d17cd5a). Step 2: the backend behind
+`upscale::Upscaler`, `render.upscaler = fsr3` in no preset, reaching the test scene and the modern scene until B16c's
+part 4.
 
 **B18: GPU particles from emitters (M).** Depends: A8, B22. Acceptance: `VAL`; smoke and sparks at the emitters
 (review against the GS path's sprites); in the reactive mask.
