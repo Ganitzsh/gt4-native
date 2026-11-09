@@ -475,10 +475,34 @@ void PadDevices::feel(int port, uint32_t gt4Rumble, const input::HapticsOut& h, 
     const uint16_t low = std::max(static_cast<uint16_t>((gt4Rumble & 0xFF) * 257), to16(h.low));
     const uint16_t high = std::max(static_cast<uint16_t>((gt4Rumble & 0x100) ? 0xFFFF : 0), to16(h.high));
     const bool on = low || high;
+    // the summary (the Odin's report: a first-on line alone can't say how strong the asks got)
+    Port::Asked& a = p.asked;
+    if (!a.since) a.since = now;
+    ++a.frames;
+    a.large = std::max(a.large, static_cast<uint8_t>(gt4Rumble & 0xFF));
+    if (gt4Rumble & 0x100) ++a.smallOn;
+    a.physicsLow = std::max(a.physicsLow, h.low);
+    a.physicsHigh = std::max(a.physicsHigh, h.high);
+    a.low = std::max(a.low, low);
+    a.high = std::max(a.high, high);
+    if (now - a.since >= 30000) {
+        if (a.low || a.high)
+            std::printf("Input: port %d: rumble, the last %.0f s: GT4 large up to %u of 255, "
+                        "small on %.0f%% of frames; physics low up to %.2f, high up to %.2f; "
+                        "sent low up to %.0f%%, high up to %.0f%% (%u calls, %u failed)\n",
+                        port + 1, static_cast<double>(now - a.since) / 1000.0, static_cast<unsigned>(a.large),
+                        100.0 * a.smallOn / a.frames, static_cast<double>(a.physicsLow),
+                        static_cast<double>(a.physicsHigh), 100.0 * a.low / 65535.0, 100.0 * a.high / 65535.0,
+                        static_cast<unsigned>(a.calls), static_cast<unsigned>(a.failed));
+        a = Port::Asked{};
+        a.since = now;
+    }
     if (p.testPhase < 2) {
         // a rumble test has the motors
     } else if (low != p.low || high != p.high || (on && now - p.motorsAt >= 1000)) {
         const std::string result = rumble(pad, low, high, on ? 2000 : 0);
+        ++a.calls;
+        if (result != "ok") ++a.failed;
         // host.log: the first time each source asks for the motors, and the first failure (the Odin's report)
         if ((gt4Rumble & 0x1FF) && !p.gt4Said) {
             p.gt4Said = true;

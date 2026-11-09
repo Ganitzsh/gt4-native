@@ -106,6 +106,14 @@ private:
         uint8_t ds5Brake = 0, ds5Throttle = 0;   // a DualSense's trigger effects, in 16 steps (0: off)
         bool ds5Sent = false;
         bool gt4Said = false, physicsSaid = false, failSaid = false;   // (host.log's lines, once each)
+        // host.log's rumble summary every 30 s while anything was asked: the strongest asks and sends, and the calls
+        struct Asked {
+            uint64_t since = 0;
+            uint32_t frames = 0, smallOn = 0, calls = 0, failed = 0;
+            uint8_t large = 0;
+            float physicsLow = 0.0f, physicsHigh = 0.0f;
+            uint16_t low = 0, high = 0;
+        } asked;
         int testPhase = 2;   // the rumble test: -1 to start, 0 the low motor, 1 the high one, 2 done
     };
     void take(SDL_Gamepad* pad, int port);
