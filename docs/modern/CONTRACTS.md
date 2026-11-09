@@ -174,7 +174,7 @@ static_assert(sizeof(FrameEnd) == 20);
 
 // --- Views ----------------------------------------------------------------------------------------------
 enum ViewRole : uint8_t {
-    kViewMain = 1,         // render_world's main view (0033DEA8)
+    kViewMain = 1,         // render_world's main view (0033DEA8); in split screen each half's (0033FD88, kViewSplit)
     kViewMirror = 2,       // render_back_mirror (00341E50)
     kViewEnvFace = 3,      // the car's environment map passes (0044E660 / 0044EB10); `pass` = face
     kViewReflection = 4,   // reserved: the road reflection, if B9 ever draws it as a view (today kInstReflection)
@@ -193,13 +193,20 @@ enum ViewFlags : uint8_t {
     kViewCut = 1,          // camera moved discontinuously: temporal history resets
     kViewInset = 2,        // drawn inside another view's target (the race mirror)
     kViewCameraKnown = 4,  // worldToView is the camera the view loaded; else identity and the host estimates
+    kViewSplit = 8,        // a half of a split screen (2 Player Battle, A12): two kViewMain views a frame, drawing
+                           //   into one target with disjoint scissors; `pass` is the half (0 the first drawn, top or
+                           //   left; GT4 lays them out side by side at 16:9, top and bottom at 4:3) and `scissor` its
+                           //   rectangle. Each half's mirror (kViewMirror) carries the half's pass and the flag too,
+                           //   and each half's env views (kViewEnvFace, kViewEnvCopy: its car's map) the flag with
+                           //   pass = face | half << 8, so a consumer keyed by (role, pass) keeps the cars apart.
+                           //   A consumer that keeps state per view keeps it per half (temporal history, the seam)
 };
 struct ViewBegin {
     Prefix prefix;
     uint16_t view;               // 1.. in this frame
     uint8_t role;                // ViewRole
     uint8_t flags;               // ViewFlags
-    uint32_t pass;               // role-specific, else 0
+    uint32_t pass;               // role-specific, else 0 (kViewSplit: the half)
     uint16_t projection;         // the camera's Projection (set 1 as the view loaded it), sent before this record
     uint16_t reserved0;
     float worldToView[4][4];     // set 0 at the stack depth the view starts with (0 in the race, 4 on the

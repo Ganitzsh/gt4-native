@@ -88,6 +88,13 @@ void gt4_scene_view_end(void *context);
 /* R6: while `role` is not 0, a kViewMain the game opens (0033EAB8's view) opens as `role` instead; a FrameBegin clears
  * it. Photo Travel's preview (mPhotoViewFace virtual 70) draws the race's world into its own buffers: kViewPhoto. */
 void gt4_scene_main_role(void *context, int role);
+/* A12: RaceSplitBattleBase::render (0032FCC8) draws a split screen's halves through render_world_split
+ * (0033FD88): before each half, the half (0 the first drawn, top or left; -1 after the last) and its rectangle in
+ * the target (x, y, w, h, GS pixels, as func_001054C0 sets it). A kViewMain opened inside a half is marked
+ * kViewSplit with pass = the half and that rectangle as its scissor; the half's mirror view (kViewMirror) gets the
+ * half's pass and kViewSplit, its env views (kViewEnvFace, kViewEnvCopy) kViewSplit and pass = face | half << 8.
+ * A FrameBegin clears it. */
+void gt4_scene_split_half(void *context, int half, int x, int y, int w, int h);
 void gt4_scene_cmd(void *context, const void *cmd);
 /* A marker (include/gt4/gfx.h MarkerKind: 1/2 around render_post_effect, 3/4 around the panels' render_panel). */
 void gt4_scene_marker(void *context, int kind);

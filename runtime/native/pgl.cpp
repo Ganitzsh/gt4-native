@@ -396,6 +396,8 @@ struct SceneFrameState {
     float mainWorldToView[16] = {};   // that view's worldToView, as its ViewBegin sent it (A7 step 2's car lamps)
     bool haveMainWorldToView = false;
     int mainRole = 0;        // R6: the role a kViewMain request opens with instead (gt4_scene_main_role; 0 none)
+    int splitHalf = -1;      // A12: the split-screen half being drawn (gt4_scene_split_half; -1 none)
+    uint16_t splitScissor[4] = {};   // its rectangle, GS pixels, inclusive
     bool haveProjection = false;
     float clip[16] = {}, viewport[12] = {};   // the last Projection sent
 };
@@ -538,6 +540,16 @@ uint32_t gt4_scene_view_begin(uint32_t context, int role, int flags, uint32_t pa
     r.role = static_cast<uint8_t>(role);
     r.flags = static_cast<uint8_t>(flags);
     r.pass = pass;
+    if (g_scene.splitHalf >= 0) {   // (A12: inside a split-screen half)
+        if (role == scene::kViewMain || role == scene::kViewMirror) {
+            r.pass = static_cast<uint32_t>(g_scene.splitHalf);
+            r.flags |= scene::kViewSplit;
+            if (role == scene::kViewMain) std::memcpy(r.scissor, g_scene.splitScissor, sizeof r.scissor);
+        } else if (role == scene::kViewEnvFace || role == scene::kViewEnvCopy) {   // (each half's car's env map)
+            r.pass = pass | static_cast<uint32_t>(g_scene.splitHalf) << 8;
+            r.flags |= scene::kViewSplit;
+        }
+    }
     r.projection = sceneProjection(context, set1, viewport, view);
     if (r.flags & scene::kViewCameraKnown) {
         std::memcpy(r.worldToView, set0, sizeof r.worldToView);
@@ -561,6 +573,22 @@ uint32_t gt4_scene_view_begin(uint32_t context, int role, int flags, uint32_t pa
 void gt4_scene_main_role(uint32_t context, int role) {
     (void)context;
     g_scene.mainRole = role;
+}
+
+// A12: RaceSplitBattleBase::render's copy (0032FCC8), before each half it draws through render_world_split: the half
+// (0 the first drawn, top or left; -1 after the last) and its rectangle in the target (x, y, w, h, GS pixels, as
+// func_001054C0 sets it). gt4_scene_view_begin marks the half's kViewMain (pass, kViewSplit, scissor), its mirror
+// (pass, kViewSplit) and its car's env views (kViewSplit, pass = face | half << 8). A FrameBegin clears it.
+void gt4_scene_split_half(uint32_t context, int half, int x, int y, int w, int h) {
+    (void)context;
+    if (!gt4_scene_on()) return;
+    if (half < 0 || w <= 0 || h <= 0) {
+        g_scene.splitHalf = -1;
+        return;
+    }
+    g_scene.splitHalf = half;
+    const int r[4] = {x, y, x + w - 1, y + h - 1};
+    for (int i = 0; i < 4; ++i) g_scene.splitScissor[i] = static_cast<uint16_t>(std::clamp(r[i], 0, 0xFFFF));
 }
 
 void gt4_scene_view_end(uint32_t context) {
