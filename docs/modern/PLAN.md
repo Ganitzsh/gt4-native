@@ -480,6 +480,7 @@ Depends: A2, A3, A10, B4, B5, B6, R3, R5.
 Acceptance: `PARITY` on the race, flyover and event captures at 1x; Z equal to the GS path wherever both draw (a
 debug compare pass counts mismatches: 0); `VAL`; `viewFallbacks` reasons listed; `ORIG` and `PRESETS` identical (the
 parity path runs only with `render.scene = parity`).
+Parked (lane B): `parked/b7-fused-dump` (03b7c7a), B7's fused GS path with the dump tooling for the PCSX2 comparison.
 
 **B8: The ordered substitution, hybrid (M, lane B).** `render.scene = hybrid` draws each substituted view's tagged
 items in place, in GT4's command order, by modern stages: B7's vertex stage (GT4's transform and Z, exact, so every
@@ -1282,16 +1283,16 @@ and reset from the pad alone; a profile set in the menu matches the file; the me
 **E9: HUD scale, safe area, HUD off, photo export (M).** Depends: E6.
 
 **E10: `display.field_mode = clean` without a bob or flicker (M; lane B; parked).** clean (6df8aa1) blends where the
-two fields agree and shows the newer field alone where something moved; that field sits half a line from the other,
-so moving content bobs a line a frame (the owner's menu shake on the Odin; lane B, 2026-11-09). It left every preset
-(27f5729: `blend` again). Parked on lane B's branch `clean-still` (eeb298b): the field shown alone moved half way by
-its VBlank parity, which fixes the moved-area bob (`menus_boot`'s title window: 30 of 30 frame pairs moved before, 0
-after). Left: still thin edges that the motion test calls moved alternate fields (the GT map's icons and text: the
+two fields agree and shows the newer field alone where something moved; that field sits half a line from the other, so
+moving content bobs a line a frame (the owner's menu shake on the Odin; lane B, 2026-11-09). It left every preset
+(27f5729: `blend` again). Parked on origin as `parked/e10-clean-still` (eeb298b): the field shown alone moved half way
+by its VBlank parity, which fixes the moved-area bob (`menus_boot`'s title window: 30 of 30 frame pairs moved before,
+0 after). Left: still thin edges that the motion test calls moved alternate fields (the GT map's icons and text: the
 one-frame against two-frame ratio blend 0.65, clean 2.6, the parked fix 2.19); the fix is a same-parity motion test,
-each field compared with its own previous field (two kept field images in `GsnScene`, the shader reading them).
-clean returns to a preset only with 0 pairs moved on `menus_boot`'s GT map (3000-3030), its title (6450-6480) and an
-intro window picked on it (the intro movie itself), the edge ratio at blend's on the GT map, the hidden-line check,
-and a fields-mode race with no new shake.
+each field compared with its own previous field (two kept field images in `GsnScene`, the shader reading them). clean
+returns to a preset only with 0 pairs moved on `menus_boot`'s GT map (3000-3030), its title (6450-6480) and an intro
+window picked on it (the intro movie itself), the edge ratio at blend's on the GT map, the hidden-line check, and a
+fields-mode race with no new shake.
 
 ### Lane F: night lighting, and the Route 5 night artefacts
 
@@ -1696,9 +1697,10 @@ commits).** What is left of docs/NATIVE_V2.md (step 1's textures are done):
     identical against main with R6 on race7, race_grid43 and race_boot: nothing displayed in them samples that Z
     (CAPTURES' row says so). **Parked follow-up** (lane B): the focus probe's GS read of the Z buffer from the GPU
     (1b75e8f, Photo Travel's 8 x 4 Z32 reads; the photo itself unchanged against PCSX2) with a held picture for the
-    synchronous read's cut (8eda650), both on lane B's branch `p2c-ztex` with the trace commit a5aab72. They failed
-    the shooting screen's acceptance: half frames in some captures and pacing below main's, from field buffers and
-    screen changes the copy didn't cover. Its start: that trace, lane A's per-buffer hold, a VBlank stamp on session
+    synchronous read's cut (8eda650), both on origin as `parked/p2c-held-picture` with the trace commit a5aab72 at its
+    tip; the earlier iterations are `parked/p2c-hold-v1` (ddc8f39) and `parked/p2c-keept` (59144cf). They failed the
+    shooting screen's acceptance: half frames in some captures and pacing below main's, from field buffers and screen
+    changes the copy didn't cover. Its start: that trace, lane A's per-buffer hold, a VBlank stamp on session
     captures, measured in a quiet window. Until then the focus probe reads the memory model, as before.
 - A GS view of memory stays for every reader until R9 decides it: P2 needs only R9's list of readers, not its
   decisions.
