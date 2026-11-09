@@ -130,6 +130,15 @@ int main() {
         applyPreset(g, Preset::Ultra);   // native GS, TAA, FSR 2, native quality
         check(g.gsRenderer == GsRenderer::Native, "ultra draws with the native GS");
         check(!unusedReason(g, "render.upscaler").empty(), "fsr2 is listed: it doesn't run on the game's frames");
+        {   // fsr3 (B17) the same way, and the anti-aliasing it replaces listed with it
+            Settings f = g;
+            check(setOption(f, "render.upscaler", "fsr3").empty() && f.upscaler == Upscaler::Fsr3,
+                  "fsr3 is a value of render.upscaler");
+            check(!unusedReason(f, "render.upscaler").empty(), "fsr3 is listed: it doesn't run on the game's frames");
+            check(setOption(f, "render.aa", "fxaa").empty() && !unusedReason(f, "render.aa").empty(),
+                  "fxaa is listed while upscaler = fsr3");
+            check(getOption(f, "render.upscaler") == "fsr3", "fsr3 is written back as fsr3");
+        }
         check(unusedReason(g, "render.aa").empty(), "taa is not listed: it runs, as the GS scene's own resolve");
         check(unusedReason(g, "render.msaa").empty(), "msaa 1 is not listed");
         check(setOption(g, "render.msaa", "4").empty() && !unusedReason(g, "render.msaa").empty(),

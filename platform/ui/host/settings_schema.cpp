@@ -46,7 +46,7 @@ const std::vector<PageSpec> &pages() {
             {"render.quality", "Render resolution", kLive},
             {"render.scale", "Render scale", kLive, 10, false, "%"},
             {"render.upscaler", "Upscaler", kLive, 0, false, "",
-             "bilinear=Bilinear|bicubic=Bicubic|lanczos=Lanczos|fsr1=AMD FSR 1|fsr2=AMD FSR 2"},
+             "bilinear=Bilinear|bicubic=Bicubic|lanczos=Lanczos|fsr1=AMD FSR 1|fsr2=AMD FSR 2|fsr3=AMD FSR 3.1"},
             {"render.sharpness", "Sharpening", kLive, 0.05f, true},
             {"render.aa", "Anti-aliasing", kLive, 0, false, "",
              "off=Off|fxaa=FXAA|smaa=SMAA|smaa_t2x=SMAA T2x|taa=TAA"},

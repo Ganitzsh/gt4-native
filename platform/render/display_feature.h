@@ -18,7 +18,7 @@ struct DisplayConfig {
     VkRect2D content{};
     VkExtent2D render{}, output{}, post{};
     uint32_t msaa = 1;
-    bool fsr2 = false, taa = false;
+    bool fsr = false, taa = false;   // fsr: a temporal upscaler runs, `upscaler` (FSR 2 or FSR 3.1)
     AntiAliasing spatialAa = AntiAliasing::Off;
     Upscaler upscaler = Upscaler::Bilinear;
 };

@@ -226,6 +226,7 @@ render size. The PS2 game has none, so R1 must produce them:
 | `render.aa = smaa_t2x` | SMAA T2x: two-frame ±0.25 px jitter with the matching subsample indices, velocity-weighted reprojected resolve |
 | `render.aa = taa` | TAA / TAAU: Halton(2,3) jitter (more phases when upsampling); 3x3 Gaussian (Blackman-Harris-like) reconstruction of the jittered samples at output resolution; depth-dilated motion vectors (Karis 2014); 5-tap Catmull-Rom history (Jimenez 2016); variance clipping in YCoCg (Salvi 2016) towards the mean; reversible tonemap weighting against fireflies (Karis 2013); blend factor adapted to speed |
 | `render.upscaler = fsr2` | AMD FSR 2.2.1: temporal upscaling and anti-aliasing in one; at `render.quality = native` it is FSR native AA |
+| `render.upscaler = fsr3` | AMD FSR 3.1's upscaler (FidelityFX SDK 1.1.4, PLAN.md B17), the same way; in no preset yet. `GT4_FSR3_HALF=0` or `1` forces its 32 or 16-bit passes; `GT4_FSR3_FAIL=1` refuses its context, as a device that can't make it would (it then upscales as FSR 1) |
 | `render.msaa` = 2, 4, 8 | MSAA on the scene (clamped to the device) with the custom resolve; combines with every other mode |
 | `render.scale` > 100 | Supersampling: up to 200 % per axis, Lanczos-2 low-pass downsample |
 
@@ -317,7 +318,7 @@ renders the default preset at 1280x720 in about 8 ms.
 - R1 replaces the test scene: motion vectors and the FSR 2 reactive mask for the game's geometry and effects
   (see the scene contract); its 2D GS primitives go through the 2D layer mapping (`docs/WIDESCREEN.md`).
 - Heat haze, particles and ambient occlusion are settings without an implementation in the test scene.
-- FSR 2's auto-generated reactive mask and FSR 3 / frame generation are not done.
+- FSR 2's auto-generated reactive mask and frame generation are not done (FSR 3.1 is its upscaler only).
 - Window moves between adapters are handled but could not be exercised on the test machine (one active display).
 
 ## Settings reference
@@ -361,9 +362,9 @@ Generated from `gt4_host --list-options` (defaults are the `high` preset).
 |---|---|---|---|
 | `render.quality` | `native` | native \| ultra_quality \| quality \| balanced \| performance \| ultra_performance \| custom | Render resolution relative to the output: native 1.0x, ultra_quality 1.3x, quality 1.5x, balanced 1.7x, performance 2.0x, ultra_performance 3.0x smaller per axis; custom uses render.scale. |
 | `render.scale` | `100` | 50..200 | Render scale in percent of the output resolution when render.quality = custom. Above 100 is supersampling (downsampled with a Lanczos filter). |
-| `render.upscaler` | `fsr1` | bilinear \| bicubic \| lanczos \| fsr1 \| fsr2 | Upscaler from render to output resolution: bilinear, bicubic (Catmull-Rom), lanczos (2 lobes), fsr1 (AMD FSR 1 EASU, spatial) or fsr2 (AMD FSR 2, temporal; it also does the anti-aliasing and at quality = native it is FSR Native AA). With render.gs = native the game's frames bring no motion vectors yet, so fsr2 runs there as the GS scene's own temporal resolve and FSR 1 (PLAN.md B16c). |
+| `render.upscaler` | `fsr1` | bilinear \| bicubic \| lanczos \| fsr1 \| fsr2 \| fsr3 | Upscaler from render to output resolution: bilinear, bicubic (Catmull-Rom), lanczos (2 lobes), fsr1 (AMD FSR 1 EASU, spatial), fsr2 (AMD FSR 2, temporal; it also does the anti-aliasing and at quality = native it is FSR Native AA) or fsr3 (AMD FSR 3.1's upscaler, the same way; in no preset yet, PLAN.md B17). With render.gs = native the game's frames bring no motion vectors yet, so fsr2 and fsr3 run there as the GS scene's own temporal resolve and FSR 1 (PLAN.md B16c). |
 | `render.sharpness` | `0.2` | 0..1 | Contrast-adaptive sharpening strength (AMD RCAS) after upscaling; 0 = off. |
-| `render.aa` | `taa` | off \| fxaa \| smaa \| smaa_t2x \| taa | Post-process anti-aliasing: fxaa, smaa (SMAA 1x), smaa_t2x (SMAA with 2-frame temporal supersampling) or taa (temporal AA; it also upsamples when rendering below the output). Ignored when render.upscaler = fsr2. With render.gs = native the game's frames bring no motion vectors yet: taa runs there as the GS scene's own temporal resolve, and smaa_t2x as SMAA 1x. |
+| `render.aa` | `taa` | off \| fxaa \| smaa \| smaa_t2x \| taa | Post-process anti-aliasing: fxaa, smaa (SMAA 1x), smaa_t2x (SMAA with 2-frame temporal supersampling) or taa (temporal AA; it also upsamples when rendering below the output). Ignored when render.upscaler = fsr2 or fsr3. With render.gs = native the game's frames bring no motion vectors yet: taa runs there as the GS scene's own temporal resolve, and smaa_t2x as SMAA 1x. |
 | `render.msaa` | `1` | 1 \| 2 \| 4 \| 8 | Multisample anti-aliasing samples for the 3D scene (clamped to the device). Not used on the game's frames with render.gs = native: they reach the display stages whole. |
 | `render.scene` | `original` | original | What draws the game's 3D scenes: original = the GS path, the PS2's picture. hybrid, modern and parity (debugging) come with the modern renderer (docs/modern/ARCHITECTURE.md 4.1, PLAN.md B7, B8, B15) and are refused until then. |
 

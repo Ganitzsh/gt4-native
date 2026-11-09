@@ -3,6 +3,7 @@
 #include "../gs/cpu_profile.h"
 #include "display_feature.h"
 #include "fsr2.h"
+#include "fsr3.h"
 #include "render_graph.h"
 #include "gt4_shaders.h"
 
@@ -23,20 +24,25 @@ uint32_t roundSize(float value) { return std::max(1u, static_cast<uint32_t>(std:
 
 bool sameExtent(VkExtent2D a, VkExtent2D b) { return a.width == b.width && a.height == b.height; }
 
+// The temporal upscalers (B16's interface: FSR 2, and FSR 3.1 from B17), as the settings name them.
+bool temporalUpscaler(Upscaler u) { return u == Upscaler::Fsr2 || u == Upscaler::Fsr3; }
+const char* fsrName(Upscaler u) { return u == Upscaler::Fsr3 ? "FSR 3.1" : "FSR 2"; }
+
 // The path through the pipeline that the settings select (what really runs, after device limits).
 struct Config {
     VkExtent2D swapchain{};
     VkRect2D content{};
     VkExtent2D render{}, output{}, post{};
     uint32_t msaa = 1;
-    bool fsr2 = false, taa = false;
+    bool fsr = false, taa = false;   // fsr: a temporal upscaler runs, `upscaler` (FSR 2 or FSR 3.1)
     AntiAliasing spatialAa = AntiAliasing::Off;
     Upscaler upscaler = Upscaler::Bilinear;
-    bool temporal() const { return fsr2 || taa; }
+    bool temporal() const { return fsr || taa; }
     bool operator==(const Config& o) const {
         return sameExtent(swapchain, o.swapchain) && sameExtent(render, o.render) && sameExtent(output, o.output) &&
-               msaa == o.msaa && fsr2 == o.fsr2 && taa == o.taa && spatialAa == o.spatialAa &&
-               content.offset.x == o.content.offset.x && content.offset.y == o.content.offset.y;
+               msaa == o.msaa && fsr == o.fsr && (!fsr || upscaler == o.upscaler) && taa == o.taa &&
+               spatialAa == o.spatialAa && content.offset.x == o.content.offset.x &&
+               content.offset.y == o.content.offset.y;
     }
 };
 
@@ -47,7 +53,9 @@ struct FramePipeline::Impl {
     Settings settings;
     Config config;
     bool configured = false;
-    bool fsr2Failed = false;
+    bool fsrFailed[2] = {false, false};   // FSR 2, FSR 3.1: its context couldn't be made on this device
+    bool& failed(Upscaler u) { return fsrFailed[u == Upscaler::Fsr3 ? 1 : 0]; }
+    bool failed(Upscaler u) const { return fsrFailed[u == Upscaler::Fsr3 ? 1 : 0]; }
     // The display stages after the scene pass (ticket B3, docs/modern/CONTRACTS.md b.9): their pipelines and samplers,
     // FSR 2, exposure, the work images and the output pass.
     DisplayFeature display;
@@ -127,12 +135,15 @@ struct FramePipeline::Impl {
         c.content.extent = {width, height};
         c.output = {width, height};
         float ratio = upscaleRatio(s);
-        c.upscaler = !motionVectors && s.upscaler == Upscaler::Fsr2 ? Upscaler::Fsr1 : s.upscaler;
-        c.fsr2 = c.upscaler == Upscaler::Fsr2 && !fsr2Failed;
-        if (c.fsr2 && ratio < 1.0f) ratio = 1.0f;   // FSR 2 does not downsample; supersampling uses the other paths
+        // A temporal upscaler with no motion vectors (the GS scene until B16c), or whose context the device couldn't
+        // make, upscales as FSR 1 (and TAA runs if render.aa asks for it)
+        const bool noFsr = !motionVectors || failed(s.upscaler);
+        c.upscaler = temporalUpscaler(s.upscaler) && noFsr ? Upscaler::Fsr1 : s.upscaler;
+        c.fsr = temporalUpscaler(c.upscaler);
+        if (c.fsr && ratio < 1.0f) ratio = 1.0f;   // FSR does not downsample; supersampling uses the other paths
         AntiAliasing aa = !motionVectors && (s.aa == AntiAliasing::Taa || s.aa == AntiAliasing::SmaaT2x) ? AntiAliasing::Smaa : s.aa;
-        if (selfResolved && (s.aa == AntiAliasing::Taa || s.upscaler == Upscaler::Fsr2)) aa = AntiAliasing::Off;
-        c.taa = !c.fsr2 && aa == AntiAliasing::Taa;
+        if (selfResolved && (s.aa == AntiAliasing::Taa || temporalUpscaler(s.upscaler))) aa = AntiAliasing::Off;
+        c.taa = !c.fsr && aa == AntiAliasing::Taa;
         c.spatialAa = c.temporal() ? AntiAliasing::Off : aa;
         c.render = {roundSize(static_cast<float>(width) / ratio), roundSize(static_cast<float>(height) / ratio)};
         c.msaa = multisampled ? device.maxSamples(static_cast<uint32_t>(std::max(1, s.msaa))) : 1u;
@@ -148,7 +159,7 @@ struct FramePipeline::Impl {
         d.output = config.output;
         d.post = config.post;
         d.msaa = config.msaa;
-        d.fsr2 = config.fsr2;
+        d.fsr = config.fsr;
         d.taa = config.taa;
         d.spatialAa = config.spatialAa;
         d.upscaler = config.upscaler;
@@ -161,7 +172,9 @@ struct FramePipeline::Impl {
         display.releaseTargets();
         const auto& c = config;
         std::printf("Pipeline: targets for render %ux%u, output %ux%u%s%s, MSAA %u\n", c.render.width, c.render.height,
-                    c.output.width, c.output.height, c.fsr2 ? ", FSR 2" : "", c.taa ? ", TAA" : "", c.msaa);
+                    c.output.width, c.output.height,
+                    c.fsr ? (c.upscaler == Upscaler::Fsr3 ? ", FSR 3.1" : ", FSR 2") : "", c.taa ? ", TAA" : "",
+                    c.msaa);
         const VkImageUsageFlags rw = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         const VkImageUsageFlags attachment = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         sceneColor = image(kHdr, c.render, attachment | VK_IMAGE_USAGE_STORAGE_BIT, "scene colour");
@@ -179,9 +192,11 @@ struct FramePipeline::Impl {
         }
         // The display stages' targets: FSR 2 and its output, the work images' descriptions.
         if (!display.configure(displayConfig())) {
-            fsr2Failed = true;
+            const Upscaler lost = c.upscaler;
+            failed(lost) = true;
             config = resolveConfig(settings, c.swapchain, scene.hasMotionVectors(), scene.antiAliasesItself(),
                                    scene.usesMultisampling());
+            std::fprintf(stderr, "%s is unavailable on this device; instead: %s\n", fsrName(lost), describe().c_str());
             createTargets(scene);
             return;
         }
@@ -203,7 +218,7 @@ struct FramePipeline::Impl {
         if (settings.autoLodBias) {
             const float ratio = static_cast<float>(config.render.width) / static_cast<float>(std::max(1u, config.output.width));
             bias = std::min(0.0f, std::log2(ratio));
-            if (config.fsr2) bias -= 1.0f;          // AMD's FSR 2 recommendation
+            if (config.fsr) bias -= 1.0f;           // AMD's FSR 2 and FSR 3.1 recommendation
             else if (config.taa) bias -= 0.5f;      // temporal accumulation resolves the extra detail
         }
         bias += settings.lodBias;
@@ -246,9 +261,12 @@ struct FramePipeline::Impl {
         view.lodBias = materialBias;
         view.settings = &settings;
         jitter = Vec2{};
-        if (config.fsr2) {
-            const int phases = Fsr2::phaseCount(config.render.width, config.output.width);
-            jitter = Fsr2::offset(static_cast<int>(index % static_cast<uint32_t>(phases)), phases);
+        if (config.fsr) {   // the selected upscaler's own sequence
+            const bool three = config.upscaler == Upscaler::Fsr3;
+            const int phases = three ? Fsr3::phaseCount(config.render.width, config.output.width)
+                                     : Fsr2::phaseCount(config.render.width, config.output.width);
+            const int phase = static_cast<int>(index % static_cast<uint32_t>(phases));
+            jitter = three ? Fsr3::offset(phase, phases) : Fsr2::offset(phase, phases);
         } else if (config.taa) {
             // Halton (2, 3), with more phases when upsampling so every output pixel gets covered.
             const float ratio = static_cast<float>(config.output.width) / static_cast<float>(config.render.width);
@@ -446,7 +464,7 @@ struct FramePipeline::Impl {
         const bool upscaling = config.render.width < config.output.width;
         const bool downsampling = config.render.width > config.output.width;
         std::string path;
-        if (config.fsr2) path = upscaling ? "FSR 2" : "FSR 2 native AA";
+        if (config.fsr) path = std::string(fsrName(config.upscaler)) + (upscaling ? "" : " native AA");
         else if (config.taa) path = upscaling ? "TAAU" : downsampling ? "TAA, supersampled" : "TAA";
         else if (downsampling) path = "supersampled, Lanczos downsample";
         else if (upscaling) path = config.upscaler == Upscaler::Fsr1 ? std::string("FSR 1 EASU") : std::string(name(config.upscaler));
@@ -455,7 +473,8 @@ struct FramePipeline::Impl {
             << config.output.height << " (" << path << ")";
         if (config.msaa > 1) out << " MSAA " << config.msaa << "x";
         if (!config.temporal() && config.spatialAa != AntiAliasing::Off) out << " AA " << name(config.spatialAa);
-        if (fsr2Failed) out << " [FSR 2 unavailable]";
+        for (Upscaler u : {Upscaler::Fsr2, Upscaler::Fsr3})
+            if (failed(u)) out << " [" << fsrName(u) << " unavailable]";
         return out.str();
     }
 };

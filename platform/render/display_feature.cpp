@@ -1,6 +1,7 @@
 #include "display_feature.h"
 
 #include "fsr2.h"
+#include "fsr3.h"
 #include "upscaler.h"
 #include "gt4_shaders.h"
 #include "smaa_textures.h"
@@ -52,7 +53,9 @@ struct DisplayFeature::Impl {
     const vk::Device& device;
     VkCommandPool pool;
     DisplayConfig config;   // configure's, then each frame's (DisplayInputs::config)
-    std::unique_ptr<upscale::Upscaler> upscaler;   // the temporal upscaler (B16: FSR 2, its one backend so far)
+    // The temporal upscaler (B16's interface): FSR 2, or FSR 3.1 (B17), made anew when the selection changes
+    std::unique_ptr<upscale::Upscaler> upscaler;
+    Upscaler upscalerKind = Upscaler::Fsr2;
 
     // Samplers.
     VkSampler linearClamp = VK_NULL_HANDLE, pointClamp = VK_NULL_HANDLE;
@@ -254,11 +257,19 @@ struct DisplayFeature::Impl {
             separateBytes += 2 * imageBytes(kHdr, c.output, rw);
             historyBytes += 2 * imageBytes(kHdr, c.output, rw);
         }
-        if (c.fsr2) {
-            fsrOutput = image(kHdr, c.output, rw, "fsr2 output");
+        if (c.fsr) {
+            const bool three = c.upscaler == Upscaler::Fsr3;
+            if (c.upscaler != upscalerKind) {   // (FSR 2 <-> FSR 3.1: the other backend, its context made below)
+                upscaler->destroy();
+                if (three) upscaler = std::make_unique<Fsr3>(device);
+                else upscaler = std::make_unique<Fsr2>(device);
+                upscalerKind = c.upscaler;
+            }
+            fsrOutput = image(kHdr, c.output, rw, three ? "fsr3 output" : "fsr2 output");
             if (!upscaler->valid() || !sameExtent(upscaler->displaySize(), c.output)) {
                 if (!upscaler->create(c.output)) {
-                    std::fprintf(stderr, "FSR 2 is unavailable on this device; using TAA instead\n");
+                    // (pipeline.cpp then says what runs instead)
+                    std::fprintf(stderr, "%s: its context couldn't be made on this device\n", upscaler->name());
                     return false;
                 }
             }
@@ -461,12 +472,13 @@ struct DisplayFeature::Impl {
         // next stages read: an import (the scene colour, FSR 2's output), a work transient or the TAA history.
         vk::Image* hdrKey = &sceneColor();   // an image of current.textures, or null for the TAA history
         bool hdrIsHistory = false;
-        if (config.fsr2) {
-            graph->pass("fsr2", [&](rg::PassBuilder& b) {
+        if (config.fsr) {
+            const char* const pass = upscalerKind == Upscaler::Fsr3 ? "fsr3" : "fsr2";   // (--profile-json's names)
+            graph->pass(pass, [&](rg::PassBuilder& b) {
                 for (vk::Image* image : {&sceneColor(), &depthImage(), &sceneVelocity(), &exposure, &fsrOutput})
                     H(b, *image) = b.use(H(b, *image), Use::Opaque, kAll);
             }, [&](rg::PassContext& c) {
-                vk::beginLabel(c.command, "fsr2");
+                vk::beginLabel(c.command, pass);
                 upscale::Inputs in;
                 in.color = &sceneColor();
                 in.depth = &depthImage();
@@ -618,8 +630,8 @@ struct DisplayFeature::Impl {
             out = &outA;
         }
 
-        // 6. Sharpening (FSR 2 sharpens inside its own pass).
-        if (settings->sharpness > 0.0f && !config.fsr2) {
+        // 6. Sharpening (FSR 2 and FSR 3.1 sharpen inside their own passes).
+        if (settings->sharpness > 0.0f && !config.fsr) {
             vk::Image* sharpened = out == &outA ? &outB : &outA;
             graph->pass("rcas", [&](rg::PassBuilder& b) {
                 b.use(H(b, *out), Use::Sampled, kC);

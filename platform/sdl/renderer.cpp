@@ -336,9 +336,12 @@ struct Renderer::Impl {
         vkGetPhysicalDeviceFeatures(device.physical, &supported);
         VkPhysicalDeviceVulkan13Features supported13{};
         supported13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+        VkPhysicalDeviceVulkan12Features supported12{};
+        supported12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+        supported12.pNext = &supported13;
         VkPhysicalDeviceFeatures2 query{};
         query.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-        query.pNext = &supported13;
+        query.pNext = &supported12;
         vkGetPhysicalDeviceFeatures2(device.physical, &query);
 
         VkPhysicalDeviceVulkan13Features features13{};
@@ -348,9 +351,19 @@ struct Renderer::Impl {
         features13.shaderDemoteToHelperInvocation = VK_TRUE;   // required by 1.3; glslang emits it for discard
         features13.subgroupSizeControl = supported13.subgroupSizeControl;   // FSR 2 may request wave64
         features13.computeFullSubgroups = supported13.computeFullSubgroups;
+        // 16-bit shader arithmetic (B17: FSR 3.1's FFX_HALF passes declare Float16 and Int16 and swap 16-bit vectors
+        // across quads), enabled where the device has all three; fsr3.cpp serves those passes only then
+        VkPhysicalDeviceVulkan12Features features12{};
+        features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+        features12.pNext = &features13;
+        device.shaderHalf = supported12.shaderFloat16 && supported.shaderInt16 &&
+                            supported12.shaderSubgroupExtendedTypes;
+        features12.shaderFloat16 = device.shaderHalf ? VK_TRUE : VK_FALSE;
+        features12.shaderSubgroupExtendedTypes = device.shaderHalf ? VK_TRUE : VK_FALSE;
         VkPhysicalDeviceFeatures2 features{};
         features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-        features.pNext = &features13;
+        features.pNext = &features12;
+        features.features.shaderInt16 = device.shaderHalf ? VK_TRUE : VK_FALSE;
         features.features.samplerAnisotropy = supported.samplerAnisotropy;
         features.features.shaderStorageImageReadWithoutFormat = supported.shaderStorageImageReadWithoutFormat;
         features.features.shaderStorageImageWriteWithoutFormat = supported.shaderStorageImageWriteWithoutFormat;
@@ -399,6 +412,9 @@ struct Renderer::Impl {
         std::printf("Device: parity path: last provoking vertex %s\n",
                     device.provokingLast ? "yes (VK_EXT_provoking_vertex, per pipeline)"
                                          : "no (or not per pipeline: triangles rotated, Z may differ from the GS path's)");
+        std::printf("Device: 16-bit shader arithmetic %s\n",
+                    device.shaderHalf ? "yes (shaderFloat16, shaderInt16, shaderSubgroupExtendedTypes)"
+                                      : "no (FSR 3.1 runs its 32-bit passes)");
         // (the destination alpha test's two paths differ by device: C6b's night bands)
         std::printf("Device: destination alpha test: stencil export %s\n",
                     device.stencilExport ? "yes (VK_EXT_shader_stencil_export)"
@@ -1060,7 +1076,8 @@ struct Renderer::Impl {
         // configure, which reads it (antiAliasesItself: the display side's AA then stays off), so the first game frame
         // after a change is configured right instead of drawing one frame of SMAA / FXAA and rebuilding the targets.
         if (gameFrame)
-            gsnScene->setTemporal(settings.aa == gt4::AntiAliasing::Taa || settings.upscaler == gt4::Upscaler::Fsr2);
+            gsnScene->setTemporal(settings.aa == gt4::AntiAliasing::Taa || settings.upscaler == gt4::Upscaler::Fsr2 ||
+                                  settings.upscaler == gt4::Upscaler::Fsr3);
         {
             GT4_STAGE_SCOPE("render: pipeline setup (targets)");
             pipeline->configure(settings, extent, active);

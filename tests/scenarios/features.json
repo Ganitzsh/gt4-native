@@ -112,6 +112,18 @@
   "command": "capture 07_aa_fsr2_native"
  },
  {
+  "at": 0.136,
+  "command": "set render.upscaler fsr3"
+ },
+ {
+  "at": 0.137,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.138,
+  "command": "capture 07_aa_fsr3_native"
+ },
+ {
   "at": 0.14,
   "command": "set render.upscaler fsr1"
  },
@@ -234,6 +246,18 @@
  {
   "at": 0.29,
   "command": "capture 15_perf_fsr2"
+ },
+ {
+  "at": 0.291,
+  "command": "set render.upscaler fsr3"
+ },
+ {
+  "at": 0.292,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.293,
+  "command": "capture 15_perf_fsr3"
  },
  {
   "at": 0.295,
@@ -682,6 +706,18 @@
  {
   "at": 0.85,
   "command": "capture 44_motion_fsr2_perf"
+ },
+ {
+  "at": 0.86,
+  "command": "set render.upscaler fsr3"
+ },
+ {
+  "at": 0.865,
+  "command": "wait 90"
+ },
+ {
+  "at": 0.87,
+  "command": "capture 44_motion_fsr3_perf"
  },
  {
   "at": 0.905,

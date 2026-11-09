@@ -4,8 +4,10 @@
 #include <FidelityFX/host/backends/vk/ffx_vk.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <cwchar>
+#include <string>
 #include <vector>
 
 namespace gt4 {
@@ -27,13 +29,31 @@ VKAPI_ATTR VkResult VKAPI_CALL createComputePipelines(VkDevice device, VkPipelin
                                     pipelines);
 }
 
+// The SDK also loads some functions by their extension's name and calls them on what the GPU supports, not on what
+// our device enabled: vkGetBufferMemoryRequirements2KHR whenever VK_KHR_dedicated_allocation is listed (ffx_vk.cpp's
+// breadcrumbs setup). On our Vulkan 1.1+ device that function is core and the extension isn't enabled under its own
+// name, so the KHR name looked up as null and the SDK called through it (B17: the crash at context creation). A KHR
+// name that is null is looked up again as its core name (the same function, promoted). SDK 1.1.4 looks up that one
+// KHR name only, and it needs no feature; a later SDK's new KHR lookups must be checked against their features
+// (a promoted function whose feature isn't enabled would be handed out) before this may serve them (lane D). Any
+// name still null is logged at each lookup (each context creation, resizes included), so a gap shows in host.log
+// rather than as a crash.
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL deviceProcAddr(VkDevice device, const char* name) {
-    if (g_pipelineCache != VK_NULL_HANDLE && name && std::strcmp(name, "vkCreateComputePipelines") == 0) {
+    if (!name) return nullptr;
+    if (g_pipelineCache != VK_NULL_HANDLE && std::strcmp(name, "vkCreateComputePipelines") == 0) {
         g_createComputePipelines =
             reinterpret_cast<PFN_vkCreateComputePipelines>(vkGetDeviceProcAddr(device, "vkCreateComputePipelines"));
         if (g_createComputePipelines) return reinterpret_cast<PFN_vkVoidFunction>(&createComputePipelines);
     }
-    return vkGetDeviceProcAddr(device, name);
+    PFN_vkVoidFunction f = vkGetDeviceProcAddr(device, name);
+    const size_t length = std::strlen(name);
+    if (!f && length > 3 && std::strcmp(name + length - 3, "KHR") == 0) {
+        const std::string core(name, length - 3);
+        f = vkGetDeviceProcAddr(device, core.c_str());
+        if (f) std::fprintf(stderr, "FSR 3: %s served as core %s\n", name, core.c_str());
+    }
+    if (!f) std::fprintf(stderr, "FSR 3: %s is not available on this device\n", name);
+    return f;
 }
 
 void message(FfxMsgType type, const wchar_t* text) {
@@ -71,6 +91,9 @@ struct Fsr3::Impl {
 
 namespace {
 
+// The SDK's description of one of our images. `usage` must be a subset of the usage the image was made with (vk::Image
+// doesn't keep it): the backend makes a storage view from STORAGE here, invalid on an image made without it (lane B).
+// Inputs declare SAMPLED; the output and the shared images, made with STORAGE, declare it.
 FfxResource resource(vk::Image& image, VkImageUsageFlags usage, const wchar_t* name, FfxResourceStates state) {
     VkImageCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -95,6 +118,11 @@ Fsr3::~Fsr3() { destroy(); }
 
 bool Fsr3::create(VkExtent2D displaySize) {
     destroy();
+    // GT4_FSR3_FAIL=1: refuse, as a device that can't make the context would, so the fallback can be checked
+    if (const char* e = std::getenv("GT4_FSR3_FAIL"); e && e[0] == '1') {
+        std::fprintf(stderr, "FSR 3: GT4_FSR3_FAIL=1: not made (the fallback's test)\n");
+        return false;
+    }
     // The context's size as gt4_fsr3 was built: a file here without the forced header would allocate the SDK's
     // default and overflow on a 4-byte wchar_t (ffx3_compat.h; lane D)
     if (sizeof(FfxFsr3UpscalerContext) != gt4Fsr3ContextSize()) {
@@ -103,6 +131,7 @@ bool Fsr3::create(VkExtent2D displaySize) {
         return false;
     }
     g_pipelineCache = impl->device.pipelineCache;
+    gt4Fsr3AllowHalf(impl->device.shaderHalf);   // (the 16-bit passes only where the device enabled what they declare)
     impl->deviceContext = {impl->device.device, impl->device.physical, &deviceProcAddr};
     impl->scratch.assign(ffxGetScratchMemorySizeVK(impl->device.physical, FFX_FSR3UPSCALER_CONTEXT_COUNT), 0);
     FfxFsr3UpscalerContextDescription description{};
@@ -234,7 +263,8 @@ void Fsr3::dispatch(VkCommandBuffer command, const upscale::Inputs& in) {
     const FfxErrorCode error = ffxFsr3UpscalerContextDispatch(&impl->context, &d);
     if (error != FFX_OK) std::fprintf(stderr, "FSR 3: dispatch failed (%d)\n", static_cast<int>(error));
     // The states the backend leaves, exactly as declared above
-    for (vk::Image* image : {in.color, in.depth, in.velocity, in.exposure, in.reactive, in.transparencyAndComposition}) {
+    for (vk::Image* image :
+         {in.color, in.depth, in.velocity, in.exposure, in.reactive, in.transparencyAndComposition}) {
         if (!image) continue;
         image->layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         image->stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;

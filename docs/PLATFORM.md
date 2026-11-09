@@ -9,7 +9,7 @@ links no game code yet. It renders a procedural test scene through the full disp
 |---|---|---|
 | Window / presentation | Vulkan 1.3 device chosen among those that can present to the window's display, swapchain, resize, minimize/restore, windowed / borderless / exclusive fullscreen, vsync modes, frame cap, surface loss and display changes | `gt4_host --probe`, `--smoke-test`, `--list-gpus`, `--list-displays` |
 | Headless | the whole pipeline into an offscreen image on any GPU, no window or desktop | `gt4_host --headless --frames N --capture F` |
-| Display pipeline | render scale, MSAA, FXAA, SMAA 1x/T2x, TAA(U), FSR 1, FSR 2, RCAS, anisotropic filtering, bloom, DOF, motion blur, tonemapping, aspect ratios, 2D layer | `tests/scenarios/features.json`, Vulkan validation layers |
+| Display pipeline | render scale, MSAA, FXAA, SMAA 1x/T2x, TAA(U), FSR 1, FSR 2, FSR 3.1, RCAS, anisotropic filtering, bloom, DOF, motion blur, tonemapping, aspect ratios, 2D layer | `tests/scenarios/features.json`, Vulkan validation layers |
 | Settings | versioned settings file, presets, `--set` overrides, live changes | `ctest -R host_settings` |
 | Input | SDL gamepad, including a scripted virtual gamepad | `tools/host_session.py run` drives `tests/scenarios/controller.json` |
 | Audio | SDL playback, stereo 48 kHz, with a PCM WAV tap of what is submitted | session report (clipping, level) |

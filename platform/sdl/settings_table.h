@@ -154,7 +154,7 @@ inline const std::vector<const char*> kAspects{"window", "4:3", "16:9", "16:10",
 inline const std::vector<const char*> kHud{"anchored", "centered", "stretched"};
 inline const std::vector<const char*> kQuality{"native", "ultra_quality", "quality", "balanced", "performance",
                                                "ultra_performance", "custom"};
-inline const std::vector<const char*> kUpscalers{"bilinear", "bicubic", "lanczos", "fsr1", "fsr2"};
+inline const std::vector<const char*> kUpscalers{"bilinear", "bicubic", "lanczos", "fsr1", "fsr2", "fsr3"};
 inline const std::vector<const char*> kGsRenderers{"original", "native"};
 inline const std::vector<const char*> kSceneRenderers{"original", "parity", "hybrid", "modern"};
 inline const std::vector<const char*> kAa{"off", "fxaa", "smaa", "smaa_t2x", "taa"};

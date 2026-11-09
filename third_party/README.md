@@ -39,6 +39,17 @@ flow, its swapchain) is here, not even unused.
   `ffxSetFrameGenerationConfigToSwapchainVK` (`platform/render/upscale/fsr3_no_framegen.cpp`). `ffx_vk.cpp` stores
   its address in the backend interface, and its definition is in the frame-interpolation swapchain, which isn't
   here, so nothing would link without it. It returns an error and logs once. The upscaler never calls it.
+- Twelve external names the SDK's Vulkan backend shares with FSR 2.2.1's (above), such as `addBarrier` and
+  `ffxGetDeviceVK`, are renamed at compile time for the SDK (`platform/render/upscale/ffx3_compat.h`, forced on its
+  files and on what links it), so the host links both without a clash. The files themselves are unmodified.
+- One header is compiled as a patched copy: `include/FidelityFX/gpu/fsr3upscaler/ffx_fsr3upscaler_callbacks_glsl.h`,
+  its `rw_luma_history` declaration `rgba8` made `rgba16f`. `ffx_fsr3upscaler.cpp` (lines 592-596) makes the luma
+  history `R16G16B16A16_FLOAT`, so the validation layer reports every load and store through the `rgba8` image as
+  undefined (the HLSL path names no format). AMD's upstream issue:
+  https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK/issues/161 (open). `cmake/Host.cmake` writes the copy
+  into the build folder, ahead of the vendored file on the FSR 3 passes' include path, and configure stops unless the
+  declaration is found exactly once; `tests/fsr3_provider.cpp` checks the compiled format. The vendored file stays
+  as upstream has it.
 
 ## stb/
 

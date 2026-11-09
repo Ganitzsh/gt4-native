@@ -173,24 +173,53 @@ set(GT4_FSR3_DEFINES FFX_GLSL=1 FFX_GPU=1 FFX_FSR3UPSCALER_OPTION_HDR_COLOR_INPU
     FFX_FSR3UPSCALER_OPTION_LOW_RESOLUTION_MOTION_VECTORS=1 FFX_FSR3UPSCALER_OPTION_JITTERED_MOTION_VECTORS=0
     FFX_FSR3UPSCALER_OPTION_INVERTED_DEPTH=1 FFX_FSR3UPSCALER_OPTION_REPROJECT_USE_LANCZOS_TYPE=0)
 set(GT4_FSR3_PASSES ${GT4_FSR3_DIR}/src/backends/vk/shaders/fsr3upscaler)
+# The SDK's GLSL declares the luma history rgba8, but the SDK makes it R16G16B16A16_FLOAT (ffx_fsr3upscaler.cpp's
+# LumaHistory1/2), so every load and store through it is undefined (the validation layer: B17 step 2's VAL; the
+# HLSL path names no format). The vendored header stays as it is: a copy with that one declaration corrected is
+# written here and found first, beside its own folder for the copy's relative includes. Configure stops if the line
+# isn't there exactly once (a later SDK: check whether it's still needed).
+set(GT4_FSR3_FIX ${GT4_SHADER_OUT}/fsr3_fix)
+set(GT4_FSR3_GPU ${GT4_FSR3_DIR}/include/FidelityFX/gpu)
+file(READ ${GT4_FSR3_GPU}/fsr3upscaler/ffx_fsr3upscaler_callbacks_glsl.h GT4_FSR3_CALLBACKS)
+set(GT4_FSR3_WRONG "binding = FSR3UPSCALER_BIND_UAV_LUMA_HISTORY, rgba8)")
+string(REPLACE "${GT4_FSR3_WRONG}" "" GT4_FSR3_WITHOUT "${GT4_FSR3_CALLBACKS}")
+string(LENGTH "${GT4_FSR3_CALLBACKS}" GT4_FSR3_LENGTH_A)
+string(LENGTH "${GT4_FSR3_WITHOUT}" GT4_FSR3_LENGTH_B)
+string(LENGTH "${GT4_FSR3_WRONG}" GT4_FSR3_LENGTH_W)
+math(EXPR GT4_FSR3_FOUND "(${GT4_FSR3_LENGTH_A} - ${GT4_FSR3_LENGTH_B}) / ${GT4_FSR3_LENGTH_W}")
+if(NOT GT4_FSR3_FOUND EQUAL 1)
+  message(FATAL_ERROR "FSR 3: the luma history's declaration was found ${GT4_FSR3_FOUND} times, not once")
+endif()
+string(REPLACE "${GT4_FSR3_WRONG}" "binding = FSR3UPSCALER_BIND_UAV_LUMA_HISTORY, rgba16f)" GT4_FSR3_CALLBACKS
+       "${GT4_FSR3_CALLBACKS}")
+set(GT4_FSR3_FIXED ${GT4_FSR3_FIX}/fsr3upscaler/ffx_fsr3upscaler_callbacks_glsl.h)
+set(GT4_FSR3_OLD "")
+if(EXISTS ${GT4_FSR3_FIXED})
+  file(READ ${GT4_FSR3_FIXED} GT4_FSR3_OLD)
+endif()
+if(NOT GT4_FSR3_OLD STREQUAL GT4_FSR3_CALLBACKS)   # (rewritten only when it changes: no needless shader rebuilds)
+  file(WRITE ${GT4_FSR3_FIXED} "${GT4_FSR3_CALLBACKS}")
+endif()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+             ${GT4_FSR3_GPU}/fsr3upscaler/ffx_fsr3upscaler_callbacks_glsl.h)
 set(GT4_SHADER_INCLUDES_BEFORE_FSR3 ${GT4_SHADER_INCLUDES})
-list(APPEND GT4_SHADER_INCLUDES ${GT4_FSR3_SHADER_INCLUDES})
+list(APPEND GT4_SHADER_INCLUDES ${GT4_FSR3_SHADER_INCLUDES} ${GT4_FSR3_FIXED})
 foreach(pass prepare_inputs luma_pyramid shading_change_pyramid shading_change prepare_reactivity luma_instability
              debug_view autogen_reactive accumulate)
   foreach(half 0 1)
     gt4_shader(fsr3_${pass}_h${half} ${GT4_FSR3_PASSES}/ffx_fsr3upscaler_${pass}_pass.glsl comp ENV vulkan1.1
         DEFINES ${GT4_FSR3_DEFINES} FFX_HALF=${half} FFX_FSR3UPSCALER_OPTION_APPLY_SHARPENING=0
-        INCLUDES ${GT4_FSR3_DIR}/include/FidelityFX/gpu)
+        INCLUDES ${GT4_FSR3_FIX} ${GT4_FSR3_GPU} ${GT4_FSR3_GPU}/fsr3upscaler)
   endforeach()
 endforeach()
 foreach(half 0 1)
   gt4_shader(fsr3_accumulate_sharpen_h${half} ${GT4_FSR3_PASSES}/ffx_fsr3upscaler_accumulate_pass.glsl comp
       ENV vulkan1.1 DEFINES ${GT4_FSR3_DEFINES} FFX_HALF=${half} FFX_FSR3UPSCALER_OPTION_APPLY_SHARPENING=1
-      INCLUDES ${GT4_FSR3_DIR}/include/FidelityFX/gpu)
+      INCLUDES ${GT4_FSR3_FIX} ${GT4_FSR3_GPU} ${GT4_FSR3_GPU}/fsr3upscaler)
 endforeach()
 gt4_shader(fsr3_rcas_h0 ${GT4_FSR3_PASSES}/ffx_fsr3upscaler_rcas_pass.glsl comp ENV vulkan1.1
     DEFINES ${GT4_FSR3_DEFINES} FFX_HALF=0 FFX_FSR3UPSCALER_OPTION_APPLY_SHARPENING=0
-    INCLUDES ${GT4_FSR3_DIR}/include/FidelityFX/gpu)
+    INCLUDES ${GT4_FSR3_FIX} ${GT4_FSR3_GPU} ${GT4_FSR3_GPU}/fsr3upscaler)
 set(GT4_SHADER_INCLUDES ${GT4_SHADER_INCLUDES_BEFORE_FSR3})
 set(GT4_FSR3_SHADER_NAMES ${GT4_SHADER_NAMES})
 list(REMOVE_ITEM GT4_FSR3_SHADER_NAMES ${GT4_SHADER_NAMES_BEFORE_FSR3})
@@ -494,7 +523,7 @@ target_include_directories(gt4_host PRIVATE platform/sdl platform/render platfor
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party
     ${GT4_FSR2_DIR})
 target_compile_definitions(gt4_host PRIVATE VK_NO_PROTOTYPES FFX_GCC GT4_LIGHTS_CLUSTER_GPU=1)
-target_link_libraries(gt4_host PRIVATE SDL3::SDL3 Vulkan::Headers gt4_guest_abi gt4_fsr2 gt4_gs gt4_saves gt4_input gt4_lighting gt4_ui_text ${GT4_VOLK} ${GT4_VOLK_HEADERS})
+target_link_libraries(gt4_host PRIVATE SDL3::SDL3 Vulkan::Headers gt4_guest_abi gt4_fsr2 gt4_fsr3_backend gt4_gs gt4_saves gt4_input gt4_lighting gt4_ui_text ${GT4_VOLK} ${GT4_VOLK_HEADERS})
 if(MSVC)
   target_compile_options(gt4_host PRIVATE /W4)
   # Generated SPIR-V tables and the volk loader are third-party style code: no warnings there.
@@ -751,10 +780,12 @@ add_test(NAME material_table COMMAND gt4_material_table_test)
 
   # FSR 3.1's library links, and our shader provider serves every pass the SDK asks for, in both FFX_HALF variants,
   # with its bindings named as the SDK binds them; the jitter sequence against FSR 2's formula (PLAN.md B17; no GPU).
-  add_executable(gt4_fsr3_provider_test tests/fsr3_provider.cpp)
+  # (FSR 2's provider reads the host's shader table, so the test compiles that table too)
+  add_executable(gt4_fsr3_provider_test tests/fsr3_provider.cpp ${GT4_SHADER_OUT}/gt4_shaders.cpp
+      ${GT4_SHADER_HEADERS})
   target_include_directories(gt4_fsr3_provider_test PRIVATE ${GT4_FSR3_DIR}/src/components/fsr3upscaler
-      ${GT4_FSR3_DIR}/src/backends/shared ${GT4_FSR3_DIR}/src/shared)
-  target_link_libraries(gt4_fsr3_provider_test PRIVATE gt4_fsr3 ${GT4_VOLK})
+      ${GT4_FSR3_DIR}/src/backends/shared ${GT4_FSR3_DIR}/src/shared ${GT4_SHADER_OUT} platform/render)
+  target_link_libraries(gt4_fsr3_provider_test PRIVATE gt4_fsr3 gt4_fsr2 ${GT4_VOLK} ${GT4_VOLK_HEADERS})
   if(UNIX AND NOT APPLE)
     target_link_libraries(gt4_fsr3_provider_test PRIVATE ${CMAKE_DL_LIBS})
   endif()

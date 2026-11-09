@@ -28,6 +28,7 @@ struct Device {
     bool dualSourceBlend = false;   // VkPhysicalDeviceFeatures::dualSrcBlend, enabled when supported
     bool stencilExport = false;     // VK_EXT_shader_stencil_export, enabled when supported (GT4_STENCIL_EXPORT=0: not)
     bool provokingLast = false;     // VK_EXT_provoking_vertex's provokingVertexLast (B7: else the triangles rotated)
+    bool shaderHalf = false;        // shaderFloat16, shaderInt16, shaderSubgroupExtendedTypes on (B17's FFX_HALF)
     VkPipelineCache pipelineCache = VK_NULL_HANDLE;   // every pipeline made through it (openPipelineCache)
     uint32_t memoryType(uint32_t bits, VkMemoryPropertyFlags flags) const;
     uint32_t maxSamples(uint32_t requested) const;

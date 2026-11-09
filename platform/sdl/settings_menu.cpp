@@ -89,11 +89,11 @@ std::vector<Item> buildItems(bool game) {
         "supersampling."));
     items.push_back(choice("Upscaler", "render.upscaler",
         {{"bilinear", "Bilinear"}, {"bicubic", "Bicubic"}, {"lanczos", "Lanczos"}, {"fsr1", "AMD FSR 1"},
-         {"fsr2", "AMD FSR 2"}},
-        game ? "From the render to the output resolution. FSR 2 needs motion vectors, which the game's frames "
-               "do not have yet: it upscales as FSR 1, and with render.gs = native it also turns on the native "
-               "renderer's own temporal anti-aliasing."
-             : "From the render to the output resolution. FSR 2 is temporal and also anti-aliases."));
+         {"fsr2", "AMD FSR 2"}, {"fsr3", "AMD FSR 3.1"}},
+        game ? "From the render to the output resolution. FSR 2 and FSR 3.1 need motion vectors, which the game's "
+               "frames do not have yet: they upscale as FSR 1, and with render.gs = native they also turn on the "
+               "native renderer's own temporal anti-aliasing."
+             : "From the render to the output resolution. FSR 2 and FSR 3.1 are temporal and also anti-alias."));
     items.push_back(step("Sharpening", "render.sharpness", 0.05f, 0.0f, 1.0f, true,
         "AMD RCAS contrast-adaptive sharpening after upscaling."));
     items.push_back(choice("Anti-aliasing", "render.aa",

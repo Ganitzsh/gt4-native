@@ -3,6 +3,24 @@
 // (cmake/Host.cmake), so every C++ file of gt4_fsr3 and of a target linking it is compiled with it, and all of them
 // agree on the context's size below.
 #pragma once
+// The SDK's Vulkan backend and FSR 2.2.1's (third_party/fidelityfx-fsr2, gt4_fsr2) define twelve of the same
+// external names, some with different layouts behind them (BackendContext_VK). Linked into one host they clash
+// (MSVC: LNK2005), or a static link could quietly take one library's for the other's. They are renamed here, for
+// the SDK only: this header is forced on every file of gt4_fsr3 and of what links it, so its definitions and its
+// callers agree, and the vendored files stay unmodified. The list is every strong symbol both libraries define (nm
+// over both, 2026-11-09); tests/fsr3_provider.cpp links both libraries, so a new clash fails its link.
+#define addBarrier gt4_fsr3_addBarrier
+#define flushBarriers gt4_fsr3_flushBarriers
+#define setVKObjectName gt4_fsr3_setVKObjectName
+#define findMemoryTypeIndex gt4_fsr3_findMemoryTypeIndex
+#define getVKAccessFlagsFromResourceState gt4_fsr3_getVKAccessFlagsFromResourceState
+#define getVKImageLayoutFromResourceState gt4_fsr3_getVKImageLayoutFromResourceState
+#define getVKImageUsageFlagsFromResourceUsage gt4_fsr3_getVKImageUsageFlagsFromResourceUsage
+#define getVKPipelineStageFlagsFromResourceState gt4_fsr3_getVKPipelineStageFlagsFromResourceState
+#define ffxAssertReport gt4_fsr3_ffxAssertReport
+#define ffxAssertSetPrintingCallback gt4_fsr3_ffxAssertSetPrintingCallback
+#define ffxGetCommandListVK gt4_fsr3_ffxGetCommandListVK
+#define ffxGetDeviceVK gt4_fsr3_ffxGetDeviceVK
 #include "ffx_compat.h"   // volk, the MSVC CRT helpers FSR 2 needs too
 #ifdef __cplusplus
 #include <bit>      // std::popcount (ffx_util.h; MSVC's headers include it transitively)
@@ -45,4 +63,8 @@ inline int sprintf_s(char* buffer, size_t size, const char* format, Args... args
 // sizeof(FfxFsr3UpscalerContext) as gt4_fsr3 was built (platform/render/upscale/fsr3_shaders.cpp), for a caller to
 // compare with its own before creating a context. Declared only here, so a file that misses this header can't call it.
 std::size_t gt4Fsr3ContextSize();
+// Whether the device enabled 16-bit shader arithmetic (shaderFloat16, shaderInt16, shaderSubgroupExtendedTypes):
+// the SDK asks for FFX_HALF from what the GPU supports, not what the device enabled, so fsr3_shaders.cpp serves the
+// 16-bit passes only when the backend says so here (off until then).
+void gt4Fsr3AllowHalf(bool allowed);
 #endif

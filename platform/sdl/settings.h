@@ -17,7 +17,7 @@ enum class VSync : uint8_t { On, Off, Adaptive, Mailbox };      // FIFO, IMMEDIA
 enum class AspectRatio : uint8_t { Window, R4_3, R16_9, R16_10, R21_9, R32_9 };
 enum class HudLayout : uint8_t { Anchored, Centered, Stretched };
 enum class QualityMode : uint8_t { Native, UltraQuality, Quality, Balanced, Performance, UltraPerformance, Custom };
-enum class Upscaler : uint8_t { Bilinear, Bicubic, Lanczos, Fsr1, Fsr2 };
+enum class Upscaler : uint8_t { Bilinear, Bicubic, Lanczos, Fsr1, Fsr2, Fsr3 };
 // The resolution GT4's graphics are drawn at by the native renderer (docs/NATIVE_RENDERER.md): the PS2's own
 // (one render pixel per GS pixel, 640 x 448), or the render resolution.
 enum class GsRenderer : uint8_t { Original, Native };

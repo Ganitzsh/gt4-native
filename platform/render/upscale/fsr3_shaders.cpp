@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <atomic>
 #include <mutex>
 #include <set>
 #include <string>
@@ -34,6 +35,12 @@ static_assert(sizeof(FfxFsr3UpscalerContext) >= sizeof(FfxFsr3UpscalerContext_Pr
               "FfxFsr3UpscalerContext is smaller than the SDK's private context: raise FFX_SDK_DEFAULT_CONTEXT_SIZE");
 
 std::size_t gt4Fsr3ContextSize() { return sizeof(FfxFsr3UpscalerContext); }
+
+namespace {
+std::atomic<bool> g_allowHalf{false};   // (gt4Fsr3AllowHalf: the device enabled 16-bit shader arithmetic)
+}  // namespace
+
+void gt4Fsr3AllowHalf(bool allowed) { g_allowHalf.store(allowed); }
 
 namespace {
 
@@ -156,10 +163,12 @@ extern "C" FfxErrorCode ffxGetPermutationBlobByIndex(FfxEffect effectId, FfxPass
     const uint32_t forbidden = FSR3UPSCALER_SHADER_PERMUTATION_JITTER_MOTION_VECTORS;
     if ((permutationOptions & required) != required || (permutationOptions & forbidden)) return FFX_ERROR_INVALID_ARGUMENT;
     const bool sharpen = (permutationOptions & FSR3UPSCALER_SHADER_PERMUTATION_ENABLE_SHARPENING) != 0;
+    // 16-bit passes only where the component asks for them (the GPU supports 16-bit arithmetic) and the device enabled
+    // what they declare (gt4Fsr3AllowHalf: shaderFloat16, shaderInt16, shaderSubgroupExtendedTypes)
     const bool allowed = (permutationOptions & FSR3UPSCALER_SHADER_PERMUTATION_ALLOW_FP16) != 0 &&
-                         passId != FFX_FSR3UPSCALER_PASS_RCAS;
-    // GT4_FSR3_HALF=0 or 1 forces a variant, so VAL can run each on one device; 1 only where the component allowed
-    // 16-bit arithmetic (the device has it), else ignored and said.
+                         passId != FFX_FSR3UPSCALER_PASS_RCAS && g_allowHalf.load();
+    // GT4_FSR3_HALF=0 or 1 forces a variant, so VAL can run each on one device; 1 only where 16-bit is allowed as
+    // above, else ignored and said.
     static const int forced = [] {
         const char* e = std::getenv("GT4_FSR3_HALF");
         return e && (e[0] == '0' || e[0] == '1') && !e[1] ? e[0] - '0' : -1;
@@ -177,12 +186,12 @@ extern "C" FfxErrorCode ffxGetPermutationBlobByIndex(FfxEffect effectId, FfxPass
             std::printf("FSR 3: %s passes (GT4_FSR3_HALF=%d)\n", half ? "16-bit" : "32-bit", forced);
         else
             std::printf("FSR 3: %s passes (the device %s 16-bit shader arithmetic)\n", half ? "16-bit" : "32-bit",
-                        half ? "has" : "lacks");
+                        half ? "has enabled" : "hasn't enabled");
         std::fflush(stdout);
     }
     if (forced == 1 && !allowed && passId != FFX_FSR3UPSCALER_PASS_RCAS && !saidIgnored) {
         saidIgnored = true;
-        std::printf("FSR 3: GT4_FSR3_HALF=1 ignored: the device lacks 16-bit shader arithmetic\n");
+        std::printf("FSR 3: GT4_FSR3_HALF=1 ignored: the device hasn't enabled 16-bit shader arithmetic\n");
         std::fflush(stdout);
     }
     const uint32_t key = passId * 4u + (sharpen ? 2u : 0u) + (half ? 1u : 0u);
