@@ -377,7 +377,14 @@ struct Vehicle {
                                  //   then consumers take entrant 0 as pad 1's car and 1 as pad 2's (split
                                  //   screen), as seen in Arcade and GT mode
     uint16_t valid;              // VehicleFields that are filled
-    float bodyToWorld[4][4];
+    float bodyToWorld[4][4];     // rows as stored are the body's axes in world space, row 3 its position:
+                                 //   row 0 forward, along the car's motion (speed is the velocity along it),
+                                 //   row 1 right, row 2 up (from the model's +y; its sign not yet measured
+                                 //   against world up); world = p0 * row 0 + p1 * row 1 + p2 * row 2 + row 3.
+                                 //   GT4's model space: a model point (x, y, z) is the body point (-z, x, y) plus
+                                 //   a per-car offset along row 0 (the model's origin against the body's: 0 to
+                                 //   -0.39 m on the six cars measured), so the model's front is at negative z
+                                 //   (lanes D and A, 2026-11-09: the motion, and the lamps' groups)
     float velocity[3], speed;    // world units / s; m/s
     float angularVelocity[3], rpm;
     float throttle, brake, clutch, steer;   // 0..1; steer -1..1
