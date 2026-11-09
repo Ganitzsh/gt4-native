@@ -759,6 +759,11 @@ add_test(NAME material_table COMMAND gt4_material_table_test)
     # found where they are; its PPM and PNG readers (all five PNG filters); numpy and plain Python agree.
     add_test(NAME band_measure_selftest
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/band_measure.py --self-test)
+    # ORIG on another device class (tools/orig_compare.py, PLAN section 2): identical and 1-2 level noise pass, 32-GS-
+    # pixel strips within 2 levels and the owner's 2-5 level bands fail, the 1-2 share against a baseline; numpy and
+    # plain Python agree.
+    add_test(NAME orig_compare_selftest
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/orig_compare.py --self-test)
     # The machine's slots (tools/slot.py): a live holder kept, a dead or reused one removed, on a temporary folder.
     add_test(NAME slot_selftest COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/slot.py --self-test)
     # The sources the game shares with the host (platform/ui, platform/audio/spu): none includes a host-only header,

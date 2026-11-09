@@ -19,6 +19,13 @@ in the data folder yet is 'missing' and doesn't fail the run. The items:
     env             the device: kernel, OS, Vulkan driver (vulkaninfo), FEX, the package's build
     provoking       VK_EXT_provoking_vertex and VK_EXT_shader_stencil_export on the device (vulkaninfo; B7, C6, C6b)
     c6_race7        race7.cap replayed at 1280x960, original: every frame's SHA-256 against the x64 hashes (C6)
+    c6_orig         C6's ORIG by PLAN section 2's per-device-class rule: race7, race_grid43 and race_pe2_prog
+                    replayed with the hash lists' flags, every frame hashed against its list (the reference class,
+                    x64: identical); where DIR/ref/<capture>/ holds the reference's frames (--make-refs), each is
+                    compared on pixel values by tools/orig_compare.py (section 2's interim rule: no pixel over 32
+                    levels, no 32-GS-pixel steps, the over-2 and 1-2 shares against the capture's baselines for the
+                    class once set), else the first --keep-differing N
+                    differing frames are kept as PNG for the desktop's comparison (the routine run's sample)
     b6_span         B6's scene-cache span on race_boot.cap after its first 300 frames, per frame, p95 (B6c)
     night           the same span on the night lap with lighting.night = enhanced against original (F2b)
     hybrid          render.scene = hybrid against original on race_grid43.cap, every 10th frame: PARITY's two
@@ -58,7 +65,7 @@ import subprocess
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TOOLS = ("device_run.py", "photo_check.py", "perf_report.py", "band_measure.py")
+TOOLS = ("device_run.py", "photo_check.py", "perf_report.py", "band_measure.py", "orig_compare.py")
 ROUTE = "docs/modern/routes/race_gt_pe2.txt"
 
 # The files the device half reads in DIR (C6b; the coordinator copies them), with their sizes in bytes.
@@ -79,11 +86,22 @@ MIXER_CAP = "race_mixer_host.cap"
 MIXER_FRAMES = 8121   # its VBlanks: a replay doesn't end by itself at the capture's end, so --frames is its length
 # The night bands' laps (lane F's, CAPTURES' night section): every 100th frame from 600 (after the re-upload window).
 NIGHT_LAPS = (("lap_ssr5r.cap", 10200), ("lap_csr5.cap", 9000))
-# C6's ORIG on the device (c6_orig): each REF capture, its VBlanks, and the hash list its frames are compared with:
-# lane B's R6 lists (the re-baseline 7f58836 and later), and for the progressive race (no R6 list) the desktop's,
-# made with the same flags by `--make-hashes` (lane C).
-ORIG_CAPS = (("race7.cap", 100, "orig_r6_race7.sha256"), ("race_grid43.cap", 700, "orig_r6_race_grid43.sha256"),
-             ("race_pe2_prog.cap", 4915, "orig_desktop_race_pe2_prog.sha256"))
+# C6's ORIG on the device (c6_orig): each REF capture, its VBlanks, the hash list its frames are compared with (lane
+# B's R6 lists, the re-baseline 7f58836 and later; for the progressive race, which has none, the desktop's, made with
+# the same flags by `--make-hashes`), and the step of its reference frames in DIR/ref/ (`--make-refs`: every frame of
+# race7, every 10th of the others; the coordinator's choice, 2026-11-09).
+ORIG_CAPS = (("race7.cap", 100, "orig_r6_race7.sha256", 1),
+             ("race_grid43.cap", 700, "orig_r6_race_grid43.sha256", 10),
+             ("race_pe2_prog.cap", 4915, "orig_desktop_race_pe2_prog.sha256", 10))
+REF_DIR = "ref"
+# The reference device class (PLAN section 2's ORIG row): x64, the desktop's; there ORIG is bit-identical.
+REFERENCE_MACHINES = ("x86_64", "amd64")
+# Each class's baselines per capture (section 2's interim rule, until GS-exact texel sampling): the 1-2 level share
+# and the over-2 share ({"1-2": %, "over_2": %, the highest frame's}), set by the class's every-frame run (a frame
+# fails 5 points over the first or orig_compare.OVER_FACTOR times the second). Until a capture has them, its shares
+# are reported and only the over-32 cap and the grid test judge it. aarch64: the Odin's Adreno 830 under Turnip (lane
+# B's first frames, 2026-11-09: race7 1-2 at 23.2-23.9 %, over 2 at 0.02-0.03 %; race_pe2_prog over 2 at 0.10-0.49 %).
+ORIG_BASELINES = {"aarch64": {}}
 # the flags the hash lists were made with (CAPTURES' re-baselines): any other flag changes every hash
 ORIG_FLAGS = ["--size", "1280x960", "--preset", "original", "--set", "texture.hd_pack=off", "--set",
               "display.frame_interpolation=off", "--set", "debug.overlay=off"]
@@ -291,19 +309,28 @@ class Device:
                 "note": "absent: a B7 finding, not a C6 failure; no stencil export: DATE's rebuild path (C6b)"}
 
     @staticmethod
-    def write_png(path, w, h, rgb):
-        """An 8-bit RGB PNG in plain Python (zlib; no filter): a kept differing frame."""
+    def write_png(path, w, h, rgb, up=False):
+        """An 8-bit RGB PNG in plain Python (zlib): a kept frame (no filter), or with `up` a reference frame (each row
+        less the one above, PNG's Up filter: smaller; band_measure.py's reader takes it)."""
         import struct
         import zlib
 
         def chunk(kind, data):
             return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
-        rows = b"".join(b"\x00" + rgb[y * w * 3:(y + 1) * w * 3] for y in range(h))
+        stride = w * 3
+        if up:
+            parts = [b"\x02" + rgb[0:stride]]
+            for y in range(1, h):
+                line, above = rgb[y * stride:(y + 1) * stride], rgb[(y - 1) * stride:y * stride]
+                parts.append(b"\x02" + bytes((x - u) & 255 for x, u in zip(line, above)))
+            rows = b"".join(parts)
+        else:
+            rows = b"".join(b"\x00" + rgb[y * stride:(y + 1) * stride] for y in range(h))
         with open(path, "wb") as f:
             f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) +
                     chunk(b"IDAT", zlib.compress(rows, 6)) + chunk(b"IEND", b""))
 
-    def streamed_hashes(self, cap, frames, name, on_frame):
+    def streamed_hashes(self, cap, frames, name, on_frame, capture_list=None):
         """Replays `cap` with ORIG_FLAGS, every frame captured, and hands each frame file to on_frame(number, path)
         once it is whole, then deletes it: the disk holds a frame or two, not the whole replay (race_grid43 every
         frame is 2.6 GB at 1280x960). Whole: a later frame exists and the file's size is its P6 header's length
@@ -315,7 +342,7 @@ class Device:
         shutil.rmtree(d, ignore_errors=True)
         os.makedirs(d)
         cmd = [self.host, "--headless", "--replay", self.cap(cap), "--frames", str(frames), "--capture-frames",
-               f"1-{frames}", "--capture-dir", d] + ORIG_FLAGS
+               capture_list or f"1-{frames}", "--capture-dir", d] + ORIG_FLAGS
         log = open(os.path.join(self.report, "logs", f"c6_orig_{name}.log"), "w", encoding="utf-8", errors="replace")
         log.write("$ " + " ".join(cmd) + "\n")
         log.flush()
@@ -361,9 +388,14 @@ class Device:
         """C6's ORIG on the device: each REF capture replayed every frame with the hash lists' flags, each frame's
         SHA-256 against its list; with --keep-differing N the first N differing frames of each capture are kept as
         PNG in the report's frames/ (game content: the report then stays on the owner's machines)."""
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import orig_compare
         keep = self.a.keep_differing
-        res, ok = {}, True
-        for cap, frames, listname in ORIG_CAPS:
+        machine = platform.machine().lower()
+        reference_class = machine in REFERENCE_MACHINES
+        baselines = ORIG_BASELINES.get(machine, {})
+        res, verdicts = {}, []
+        for cap, frames, listname, step in ORIG_CAPS:
             name = cap[:-4]
             if not os.path.isfile(self.cap(listname)) or not os.path.isfile(self.cap(cap)):
                 res[name] = {"status": "missing", "note": f"needs {cap} and {listname} in the data folder"}
@@ -373,31 +405,85 @@ class Device:
                 m = re.match(r"f_(\d+)\.ppm\s+([0-9A-Fa-f]{64})", line)
                 if m:
                     ref[int(m.group(1))] = m.group(2).upper()
-            got, differ, kept = {}, [], []
+            refdir = self.cap(os.path.join(REF_DIR, name))
+            refs = {int(m.group(1)) for m in (re.match(r"frame_(\d+)\.png$", f) for f in
+                                              (os.listdir(refdir) if os.path.isdir(refdir) else [])) if m}
+            baseline = baselines.get(name)
+            got, differ, kept, compared, failing = {}, [], [], [], []
+            per_frame = open(os.path.join(self.report, "logs", f"c6_orig_{name}_frames.jsonl"), "w")
 
-            def on_frame(k, path, ref=ref, got=got, differ=differ, kept=kept, name=name):
+            def keep_frame(k, path, name=name, kept=kept):
+                if len(kept) < keep:
+                    w, h, rgb = self.frames_rgb(path)
+                    out = os.path.join(self.report, "frames", name)
+                    os.makedirs(out, exist_ok=True)
+                    self.write_png(os.path.join(out, f"frame_{k:06d}.png"), w, h, rgb)
+                    kept.append(k)
+
+            def on_frame(k, path, ref=ref, got=got, differ=differ, refs=refs, refdir=refdir, baseline=baseline,
+                         compared=compared, failing=failing, per_frame=per_frame, step=step):
                 data = open(path, "rb").read()
                 got[k] = hashlib.sha256(data).hexdigest().upper()
                 if k in ref and got[k] != ref[k]:
                     differ.append(k)
-                    if len(kept) < keep:
-                        w, h, rgb = self.frames_rgb(path)
-                        out = os.path.join(self.report, "frames")
-                        os.makedirs(out, exist_ok=True)
-                        png = os.path.join(out, f"{name}_{k:06d}.png")
-                        self.write_png(png, w, h, rgb)
-                        kept.append(os.path.basename(png))
-            code = self.streamed_hashes(cap, frames, name, on_frame)
+                    if not refs and k % step == 0:
+                        keep_frame(k, path)   # (the routine run: the desktop compares them with its --make-refs)
+                if k in refs:
+                    r = orig_compare.compare_files(path, os.path.join(refdir, f"frame_{k:06d}.png"),
+                                                   baseline=baseline)
+                    compared.append(r)
+                    per_frame.write(json.dumps(dict(r, frame=k)) + "\n")
+                    if not r["pass"]:
+                        failing.append(k)
+                        keep_frame(k, path)
+            try:
+                code = self.streamed_hashes(cap, frames, name, on_frame)
+            finally:
+                per_frame.close()
             same = sum(1 for k in ref if got.get(k) == ref[k])
             missing = sorted(k for k in ref if k not in got)
-            res[name] = {"exit": code, "reference frames": len(ref), "identical": same, "differing": len(differ),
-                         "first differing": differ[:20], "missing": len(missing), "kept": kept}
-            ok = ok and code == 0 and same == len(ref)
-        present = [r for r in res.values() if r.get("status") != "missing"]
-        return {"status": ("pass" if ok else "fail") if present else "missing", "numbers": res,
-                "pass_line": "every frame of each capture equal to its hash list (the R6 lists; the desktop's for "
-                             "race_pe2_prog)",
-                "note": "kept frames are game content: the report stays on the owner's machines" if keep else ""}
+            r = {"exit": code, "reference frames": len(ref), "identical": same, "differing": len(differ),
+                 "first differing": differ[:20], "missing": len(missing), "kept": kept}
+            if compared:
+                shares = [c["histogram"] for c in compared]
+                r.update({
+                    "compared": len(compared), "reference frames on the device": len(refs),
+                    "over the rule": len(failing), "first over": failing[:20],
+                    "worst": max(c["worst"] for c in compared),
+                    "mean shares": {b: round(sum(s[b] for s in shares) / len(shares), 3)
+                                    for b in orig_compare.BUCKETS},
+                    "1-2 share range": [min(s["1-2"] for s in shares), max(s["1-2"] for s in shares)],
+                    "over-2 share range": [min(c["over_2_share"] for c in compared),
+                                           max(c["over_2_share"] for c in compared)],
+                    "most over 2 in an 8x8 block": max(c["over_2_busiest_8x8"] for c in compared),
+                    "baselines": baseline,
+                    "largest boundary step": max(c["steps_at_boundaries"] for c in compared)})
+            if code != 0 or missing:
+                verdict = "fail"
+            elif reference_class:
+                verdict = "pass" if same == len(ref) else "fail"
+            elif compared:
+                unjudged = len(compared) < len(refs)
+                verdict = "fail" if failing or unjudged else "pass"   # (without baselines: the cap and the grid)
+                r["shares judged"] = bool(baseline and "1-2" in baseline and "over_2" in baseline)
+            else:
+                verdict = "reported"   # no reference frames: the kept frames are compared on the desktop
+            r["verdict"] = verdict
+            res[name] = r
+            verdicts.append(verdict)
+        status = ("missing" if not verdicts else "fail" if "fail" in verdicts else
+                  "reported" if "reported" in verdicts else "pass")
+        return {"status": status, "numbers": dict(res, device_class=machine),
+                "pass_line": "PLAN section 2's ORIG row: on x64 every frame identical to its hash list; on another "
+                             "class (interim, until GS-exact texel sampling) no pixel over 32 levels from the "
+                             "reference's frame, no 32-GS-pixel steps (band_measure.steps() on the difference: the "
+                             "boundary median under 0.25 levels or at most 5 times the median elsewhere), and once "
+                             "the capture has its class baselines, the 1-2 share within "
+                             "5 points and the over-2 share within 2x of them",
+                "note": ("per-frame numbers in logs/c6_orig_<capture>_frames.jsonl; 'reported': no reference frames "
+                         "on the device (the kept frames are compared on the desktop); 'shares judged' false: the "
+                         "capture's baselines aren't set yet (the every-frame run sets them)" +
+                         ("; kept frames are game content: the report stays on the owner's machines" if keep else ""))}
 
     def item_c6_race7(self):
         ref = {}
@@ -804,7 +890,7 @@ def make_hashes(host, capture, out):
     dev = Device(Args)
     dev.host = os.path.abspath(host)
     frames = None
-    for cap, n, _ in ORIG_CAPS:
+    for cap, n, _, _ in ORIG_CAPS:
         if cap == os.path.basename(capture):
             frames = n
     if frames is None:
@@ -823,6 +909,64 @@ def make_hashes(host, capture, out):
     return code
 
 
+def make_refs(host, data, out):
+    """The reference class's frames for c6_orig's pixel comparison (PLAN section 2's ORIG row; the coordinator's
+    choice (b), 2026-11-09): each ORIG_CAPS capture in DATA replayed on this machine (x64, the reference class) with
+    ORIG_FLAGS, its frames at the capture's step written as OUT/<capture>/frame_N.png, each one first checked
+    against the capture's hash list in DATA (a frame that doesn't match is not written, and the run fails: OUT would
+    not be the reference). The coordinator copies OUT to the device's DIR/ref/. Game content: the owner's machines
+    only, never committed or served."""
+    import tempfile
+    if platform.machine().lower() not in REFERENCE_MACHINES:
+        sys.exit(f"device_run: the reference frames are made on the reference class (x64), not {platform.machine()}")
+
+    class Args:
+        package = os.path.dirname(os.path.abspath(host))
+        report = tempfile.mkdtemp(prefix="gt4_refs_")
+        keep_differing = 0
+        min_free_gb = 3.0
+    Args.data = os.path.abspath(data)
+    dev = Device(Args)
+    dev.host = os.path.abspath(host)
+    bad = 0
+    for cap, frames, listname, step in ORIG_CAPS:
+        name = cap[:-4]
+        if not os.path.isfile(dev.cap(cap)) or not os.path.isfile(dev.cap(listname)):
+            print(f"device_run: {name}: {cap} or {listname} not in {data}, skipped")
+            bad += 1
+            continue
+        ref = {}
+        for line in open(dev.cap(listname)):
+            m = re.match(r"f_(\d+)\.ppm\s+([0-9A-Fa-f]{64})", line)
+            if m:
+                ref[int(m.group(1))] = m.group(2).upper()
+        d = os.path.join(out, name)
+        os.makedirs(d, exist_ok=True)
+        written, mismatched, size = [], [], [0]
+
+        def on_frame(k, path, ref=ref, d=d, written=written, mismatched=mismatched, size=size):
+            if k not in ref:
+                return   # (the lists end a frame before the replay: race7's 100, race_grid43's 700 aren't hashed)
+            if hashlib.sha256(open(path, "rb").read()).hexdigest().upper() != ref[k]:
+                mismatched.append(k)
+                return
+            w, h, rgb = dev.frames_rgb(path)
+            png = os.path.join(d, f"frame_{k:06d}.png")
+            Device.write_png(png, w, h, rgb, up=True)
+            written.append(k)
+            size[0] += os.path.getsize(png)
+        frame_list = f"1-{frames}" if step == 1 else f"{step}-{frames}/{step}"
+        code = dev.streamed_hashes(cap, frames, "refs_" + name, on_frame, capture_list=frame_list)
+        expected = sum(1 for k in range(1 if step == 1 else step, frames + 1, step) if k in ref)
+        bad += code != 0 or bool(mismatched) or len(written) != expected
+        print(f"device_run: {name}: {len(written)} of {expected} reference frames written ({size[0]:,} bytes), "
+              f"{len(mismatched)} not matching the hash list {mismatched[:10]}, host exit {code}")
+    shutil.rmtree(Args.report, ignore_errors=True)
+    total = sum(os.path.getsize(os.path.join(r, f)) for r, _, fs in os.walk(out) for f in fs)
+    print(f"device_run: {out}: {total:,} bytes in all")
+    return 1 if bad else 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--ssh", help="the device's ssh destination (desktop side)")
@@ -831,11 +975,17 @@ def main():
     ap.add_argument("--items", default="", help="comma-separated items (default: all)")
     ap.add_argument("--out", default="", help="where the report comes back to (desktop side)")
     ap.add_argument("--min-free-gb", type=float, default=3.0)
-    ap.add_argument("--keep-differing", type=int, default=0, help="c6_orig: keep the first N differing frames of each "
-                    "capture as PNG in the report (game content: the report then stays on the owner's machines)")
+    ap.add_argument("--keep-differing", type=int, default=0, help="c6_orig: keep the first N frames of each capture "
+                    "as PNG in report/frames/<capture>/: without reference frames on the device, differing ones at the "
+                    "references' step (for tools/orig_compare.py on the desktop); with them, those over the rule "
+                    "(game content: the report then stays on the owner's machines)")
     ap.add_argument("--make-hashes", nargs=3, metavar=("HOST", "CAPTURE", "OUT"),
                     help="write CAPTURE's hash list with ORIG_FLAGS, every frame, as lane B's lists (the desktop's "
                          "reference for a capture with no R6 list, such as race_pe2_prog)")
+    ap.add_argument("--make-refs", nargs=3, metavar=("HOST", "DATA", "OUT"),
+                    help="write the reference class's frames for c6_orig (x64 only): each ORIG_CAPS capture in DATA "
+                         "at its step as OUT/<capture>/frame_N.png, checked against its hash list; OUT goes to the "
+                         "device's DIR/ref/")
     ap.add_argument("--device", action="store_true", help="the device half (run by the desktop side over ssh)")
     ap.add_argument("--data", default="~/gt4-device")
     ap.add_argument("--report", default="")
@@ -846,6 +996,8 @@ def main():
         ap.error(f"unknown items {unknown}; known: {', '.join(ITEMS)}")
     if a.make_hashes:
         sys.exit(make_hashes(*a.make_hashes))
+    if a.make_refs:
+        sys.exit(make_refs(*a.make_refs))
     if a.device:
         if not a.report:
             ap.error("--device needs --report")
