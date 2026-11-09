@@ -1070,6 +1070,51 @@ subtraction, `gt4WindowPoint`) and the lighting chains (`gt4_transform.glsl`, `g
   VU's truncating rounding.
 - Adopting it moves `ORIG`: a re-baseline under PLAN section 2's rule, listed in CAPTURES.md.
 
+### b.11 `DisplayInputs`: the scene side's frame for the display side
+
+The seam between the scene side (lane B: the scene source, the GS path, the modern renderer) and the display side
+(lane C: the display stages and the upscalers, `platform/render/upscale/` from B16). The scene side delivers one frame
+at a render extent R. The display side takes it and the output extent, and nothing else. `DisplayInputs`
+(`platform/render/display_feature.h`) carries it, filled by `FramePipeline` (`pipeline.cpp`).
+
+| Input | Format and meaning |
+|---|---|
+| colour | `kHdr` (R16G16B16A16_SFLOAT) at R, linear, before exposure |
+| velocity | R16G16_SFLOAT at R: where the pixel's surface was in the previous frame less where it is now, **as a fraction of R** (x and y in 0..1 units), the jitter removed. A backend scales by R (FSR 2: `motionVectorScale` = R). 0 where nothing is known (2D, a surface new this frame) |
+| depth | D32_SFLOAT at R (the resolved one under MSAA), in the source's stated convention (below) |
+| reactive, transparency | R8_UNORM at R, optional (`SceneSource::reactiveMask`, `transparencyMask`; null: none). Reactive: particles and other blended effects. Transparency: surfaces whose shading the velocity doesn't describe (reflections, animated textures) |
+| camera | near plane, vertical field of view and the depth convention, as stated values (below) |
+| reset | `DisplaySceneState::reset`: the history is invalid this frame (a camera cut, a settings change) |
+| jitter | the sub-pixel offset applied this frame, in render pixels. Its sequence is the selected upscaler's (B16 (3)) |
+
+The units are R's, not pixels, so the same velocity stays right when R is not an integer scale of the output
+(B16b). The GS scene stage keeps its own units inside the GS path: `gsn_velocity.frag` writes GS pixels, previous
+less now, unjittered. Delivering velocity at this seam means dividing by the GS target's extent, the conversion
+B16b makes.
+
+Depth conventions, one per source, stated with the frame (the upscalers' flags are chosen from these, not assumed):
+- The test scene: reverse-Z with an infinite far plane (`SceneCamera`: near 0.1, 1 at the near plane, 0 at
+  infinity). FSR 2's `DEPTH_INVERTED | DEPTH_INFINITE` describes it exactly.
+- The GS path: GT4's integer Z times 2^-32, larger is nearer (GT4 tests GEQUAL). A 24-bit buffer tops out near
+  2^-8. On race views GT4's 3D Z is 1.6e6 / view distance (docs/LIGHTING.md; `kZScale` in `gsn_scene`'s light
+  and AO passes), so depth = 1.6e6 x 2^-32 / distance: a reversed infinite projection, its equivalent near
+  1.6e6 x 2^-32 = 3.73e-4 in the view's distance units. FSR 2's `DEPTH_INVERTED | DEPTH_INFINITE` fits it, with
+  that equivalent near as `cameraNear`, not the projection's own near. Measured on race views (lane B). Other
+  roles (the showroom's, the menus' 3D) may scale Z differently and are checked per role before they're used.
+  2D draws (a constant Z per sprite) and the sky put arbitrary values there. The reactive or transparency masks,
+  or B8's per-item side channels, must cover them before an upscaler trusts the GS path's depth.
+
+The camera, by role (with scene records on): the displayed frame's `kViewMain` view that drew into the shown target
+(B8's binding: its target is the shown target), else its `kViewPhoto`, else none. From that view's last `Projection`
+record (`viewToClip`, a GL perspective): the vertical fov = 2 atan(1 / viewToClip[1][1]). For the GS path the near
+given to the upscaler is the depth's equivalent near above. With none (records off, as at `original`, or a frame
+with no 3D view: menus, HUD-only screens) the backend uses stated defaults (near 0.1, vertical fov 0.87 rad), and
+the frame is flagged and counted in the display stages' summary.
+
+**What the GS path delivers today:** colour only. No velocity (`gsn_display.frag` writes 0; `hasMotionVectors()` is
+false, so FSR 2 falls back to FSR 1) and no depth. Its TAA resolves per scene target inside the GS scene stage
+(`antiAliasesItself()`, `resolveConfig`'s `selfResolved`). Delivering velocity and depth here is B16b's, lane B's.
+
 ---
 
 ## (c) The light list

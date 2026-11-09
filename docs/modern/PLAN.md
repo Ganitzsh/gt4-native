@@ -601,11 +601,12 @@ pattern.
 
 
 **B16: Upscaler interface and jitter (M; lane C, moved from lane B on 2026-11-08, lane B reviewing).** In order,
-after D10 (c) and R13: (1) CONTRACTS b.9 states `DisplayInputs`, the seam between the scene side (lane B) and the
-display side (lane C): at a render extent R, colour; velocity in render pixels, current to previous, the jitter
-removed; depth in its stated convention (today the GS path's float, Z times 2^-32, not reverse-Z); the reactive and
-transparency masks; reset; the jitter as applied. The display side takes those and the output extent, nothing
-else. (2) `platform/render/upscale/`: the `Upscaler` interface, FSR 2 moved in unchanged as its first backend.
+after D10 (c) and R13: (1) CONTRACTS b.11 states `DisplayInputs`, the seam between the scene side (lane B) and the
+display side (lane C): at a render extent R, colour; velocity as a fraction of R, previous less current, the jitter
+removed; depth in its stated convention (the GS path's Z times 2^-32, larger nearer: a reversed infinite projection
+on race views); the reactive and transparency masks; the camera by role; reset; the jitter as applied. The display
+side takes those and the output extent, nothing else. (2) `platform/render/upscale/`: the `Upscaler` interface,
+FSR 2 moved in unchanged as its first backend.
 (3) The jitter sequence (`pipeline.cpp`) one call to the selected upscaler (phase count, offset), and
 `resolveConfig`'s `selfResolved` rule for any temporal upscaler. The display side works at any R; until B16b the
 scene delivers integer scales. Depends: B3. Acceptance: `ORIG`; `PRESETS`, and the FSR 2 and TAA presets' frames
