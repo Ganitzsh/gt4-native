@@ -365,53 +365,59 @@ into `Instance::section`. **Parked with N2** (only N2's parts b and c need it); 
 A11a, N2 reopened. Acceptance: `REL`; `ORIG`; on N2's capture every course instance has a section, and the section
 under the camera changes at the crossing N2 reopened on.
 
-**A12: Scene records in split screen (M, lane A).** A split-screen race sends no scene records at all (lane A,
-2026-11-09, measured: a 600-VBlank 2 Player Battle capture has no `FrameBegin`), so 2 Player Battle runs none of our
-copies of 0033DEA8, 001BD438 or 00217058. Measured (lane A, 2026-11-09, `debug/a-a12-path`): 2 Player Battle draws
-through `RacePS2Base::render_world_split` (0033FD88), called twice a frame, once per half, by
-`RaceSplitBattleBase::render` (0032FCC8) through the object's vtable at +0x368; 0033EAB8 never runs in the race. Per
-half 0032FCC8 sets the half's rectangle (`func_001054C0`), the camera and HUD panel index (`func_00372080`), then
-draws (0033FD88 with arg2 always 1, so not the half) and the panel (vtable +0x358); half 0 is drawn first, top or
-left. `D_006184F0` picks the layout: 0 top and bottom, anything else side by side (GT4's widescreen switch). Outside
-split mode (mode >= 2 with the global flag clear) it calls `RaceBasic::render_world` through vtable +0x348, which
-reaches our 0033DEA8 copy. LAN and net battles show one player per console through the single-player slots, not split
-screen, and their records are untested (no route). Every modern feature then leaves split screen as `original` draws
-it, and no feature reaches it. **Step 0, done** (lane A, 2026-11-09): a 2 Player Battle of about 900 VBlanks at
-`settings-playtest.ini`'s settings (hybrid, night enhanced, FSR 1, the host mixer) on the playtest release
-(main-25e9b8c, windows-x64, the desktop's AMD card), under validation: no messages, no errors, both halves drawn with
-their HUDs, a clean exit. Not covered: the Odin (Turnip, arm64) and the sound (the run had no audio out). GT4 lays the
-halves out side by side at `aspect.ratio = 16:9` and top and bottom at 4:3, its own widescreen layout. Two `game_src`
-copies: of 0032FCC8, which opens the frame before the halves (one `FrameBegin` for the list, `kFrameLampsOn` from the
-course flags as 0033DEA8's copy does) and tells the runtime each half and its rectangle before its draw; and of
-0033FD88, which sends `ViewBegin` / `ViewEnd` around its course and cars with the course bracket, the reflection
-bracket (it calls method 0x378, `render_reflection`, when course flag 0x01000000 is set, bracketed as
-`kInstReflection` as in 0033EAB8's copy), step 1a's glow lights before 003B88C8 and A7 step 2's car lamps after its
-glow pass (method 0x3F0) or at its place when course flag 0x400000 skips it, every car's lamps in each half's view.
-Each half also draws its own mirror (method 0x3C0, `render_back_mirror`, 00341E50, which already opens a `kViewMirror`
-view through our hooks); in split screen that view gets its half's `pass` and `kViewSplit` too, so two mirror views a
-frame each say which half they belong to. Each half also draws its car's environment map (0033FD88 calls 0044E9A0,
-whose copy sends `kViewEnvFace` and `kViewEnvCopy` with `pass` = the face): inside a half they carry `kViewSplit` and
-`pass` = face | half << 8, so a consumer keyed by (role, `pass`) keeps the two cars' maps apart without inferring the
-half from the views' order (lane A, 2026-11-09). A5a's HUD markers go around each half's panel draw, so the HUD's
-regions are known per half. The halves are two `kViewMain` views drawing into one target with disjoint scissors, new
-for the host (until now a bound view had its own target or the whole of one, CONTRACTS a.5.7), so every feature that
-works per view reaches both, and every pass at a view's Light command (hybrid's substitution, the night relight) keeps
-to that view's scissor: `ViewBegin::pass` is the half (0 the first drawn, 1 the second; 0 in a single view, as today),
-`scissor` its rectangle (side by side or top and bottom, as GT4 lays them out), and a new `ViewFlags` bit,
-`kViewSplit` = 8, marks both, so a consumer that keeps one state per role can tell. CONTRACTS' `ViewBegin` says so in
-the same commit (the 'per half in 2 Player Battle' comments corrected in 19b3472). The consumers that keep state per
-main view are checked in the acceptance: temporal history (TAA, B16's upscalers) per view, not per role; B16c's seam;
-F6's player per half (its followed-entrant field). Depends: A3, A7 step 2. Acceptance: `REL`; `DIFFTEST`; `ORIG` and
-`STREAM` unchanged (records off); on a 2 Player Battle capture (Arcade, Mode Selection, 2 Player Battle, pad 2 from
-the session), every frame opened, two `kViewMain` views with `kViewSplit`, each with its scissor, and two mirror views
-each with its half's `pass` and `kViewSplit`, at 16:9 and at 4:3, both cars' lamps on their glow points, and
-`render.scene = hybrid` running in both halves without validation messages, each half substituted inside its own
-scissor only (lane B reviews it); the night relight is guarded off on a target holding more than one main view (split
-screen's halves; also the tiled photo capture: lane B's 3e6fa5e, since it would light both halves with the first
-half's view) until it runs per view, a lane B follow-up, so 2 Player Battle at night shows GT4's own lamps; and each
-half's picture its own, except where TAA, which keeps one history per target, reprojects across the split line, until
-the per-view follow-up clamps `gsn_taa`'s reprojection to the half's scissor (lane B). Priority: ahead of lane A's
-queue (the coordinator, 2026-11-09); A7 step 2's battle check waits on it, blocked rather than failed.
+**A12: Scene records in split screen (M, lane A). Done** (lane A, ae033d2, 2026-11-09: every acceptance item met; by
+day at 4:3 and 16:9 every frame opened with both halves' views and scissors; at night on C.S. Route 5 both cars' lamps
+on their glow points in both halves; at `settings-playtest.ini` 0 validation messages, hybrid in both halves, GT4's
+own night look). A split-screen race sends no scene records at all (lane A, 2026-11-09, measured: a 600-VBlank 2
+Player Battle capture has no `FrameBegin`), so 2 Player Battle runs none of our copies of 0033DEA8, 001BD438 or
+00217058. Measured (lane A, 2026-11-09, `debug/a-a12-path`): 2 Player Battle draws through
+`RacePS2Base::render_world_split` (0033FD88), called twice a frame, once per half, by `RaceSplitBattleBase::render`
+(0032FCC8) through the object's vtable at +0x368; 0033EAB8 never runs in the race. Per half 0032FCC8 sets the half's
+rectangle (`func_001054C0`), the camera and HUD panel index (`func_00372080`), then draws (0033FD88 with arg2 always
+1, so not the half) and the panel (vtable +0x358); half 0 is drawn first, top or left. `D_006184F0` picks the layout:
+0 top and bottom, anything else side by side (GT4's widescreen switch). Outside split mode (mode >= 2 with the global
+flag clear) it calls `RaceBasic::render_world` through vtable +0x348, which reaches our 0033DEA8 copy. LAN and net
+battles show one player per console through the single-player slots, not split screen, and their records are untested
+(no route). Every modern feature then leaves split screen as `original` draws it, and no feature reaches it. **Step 0,
+done** (lane A, 2026-11-09): a 2 Player Battle of about 900 VBlanks at `settings-playtest.ini`'s settings (hybrid,
+night enhanced, FSR 1, the host mixer) on the playtest release (main-25e9b8c, windows-x64, the desktop's AMD card),
+under validation: no messages, no errors, both halves drawn with their HUDs, a clean exit. Not covered: the Odin
+(Turnip, arm64) and the sound (the run had no audio out). GT4 lays the halves out side by side at `aspect.ratio =
+16:9` and top and bottom at 4:3, its own widescreen layout. Two `game_src` copies: of 0032FCC8, which opens the frame
+before the halves (one `FrameBegin` for the list, `kFrameLampsOn` from the course flags as 0033DEA8's copy does) and
+tells the runtime each half and its rectangle before its draw; and of 0033FD88, which sends `ViewBegin` / `ViewEnd`
+around its course and cars with the course bracket, the reflection bracket (it calls method 0x378,
+`render_reflection`, when course flag 0x01000000 is set, bracketed as `kInstReflection` as in 0033EAB8's copy), step
+1a's glow lights before 003B88C8 and A7 step 2's car lamps after its glow pass (method 0x3F0) or at its place when
+course flag 0x400000 skips it, every car's lamps in each half's view. Each half also draws its own mirror (method
+0x3C0, `render_back_mirror`, 00341E50, which already opens a `kViewMirror` view through our hooks); in split screen
+that view gets its half's `pass` and `kViewSplit` too, so two mirror views a frame each say which half they belong to.
+Each half also draws its car's environment map (0033FD88 calls 0044E9A0, whose copy sends `kViewEnvFace` and
+`kViewEnvCopy` with `pass` = the face): inside a half they carry `kViewSplit` and `pass` = face | half << 8, so a
+consumer keyed by (role, `pass`) keeps the two cars' maps apart without inferring the half from the views' order (lane
+A, 2026-11-09). A5a's HUD markers go around each half's panel draw, so the HUD's regions are known per half. The
+halves are two `kViewMain` views drawing into one target with disjoint scissors, new for the host (until now a bound
+view had its own target or the whole of one, CONTRACTS a.5.7), so every feature that works per view reaches both, and
+every pass at a view's Light command (hybrid's substitution, the night relight) keeps to that view's scissor:
+`ViewBegin::pass` is the half (0 the first drawn, 1 the second; 0 in a single view, as today), `scissor` its rectangle
+(side by side or top and bottom, as GT4 lays them out), and a new `ViewFlags` bit, `kViewSplit` = 8, marks both, so a
+consumer that keeps one state per role can tell. CONTRACTS' `ViewBegin` says so in the same commit (the 'per half in 2
+Player Battle' comments corrected in 19b3472). The consumers that keep state per main view are checked in the
+acceptance: temporal history (TAA, B16's upscalers) per view, not per role; B16c's seam; F6's player per half (its
+followed-entrant field). Depends: A3, A7 step 2. Acceptance: `REL`; `DIFFTEST`; `ORIG` and `STREAM` unchanged (records
+off); on a 2 Player Battle capture (Arcade, Mode Selection, 2 Player Battle, pad 2 from the session), every frame
+opened, two `kViewMain` views with `kViewSplit`, each with its scissor, and two mirror views each with its half's
+`pass` and `kViewSplit`, at 16:9 and at 4:3, both cars' lamps on their glow points, and `render.scene = hybrid`
+running in both halves without validation messages, each half substituted inside its own scissor only (lane B reviews
+it); split frames have no Light (their scene target is 224 lines, both halves inside it, under the front end's
+`sceneRead` 384-line minimum), so no scene stage runs on them at all, neither the night relight nor the occlusion or
+the enhanced grade, and 2 Player Battle at night shows GT4's own look; lane B's guard on a target holding more than
+one main view (3e6fa5e) is the second line, which can't fire today. The scene stage in split screen needs a Light per
+half first: a split case in `sceneRead` (lane A's front end), a Light per `kViewMain` scissor in such a target, the
+single-view size threshold kept as it is, the per-view follow-up's first step; and each half's picture its own, except
+where TAA, which keeps one history per target, reprojects across the split line, until the per-view follow-up clamps
+`gsn_taa`'s reprojection to the half's scissor (lane B). Priority: ahead of lane A's queue (the coordinator,
+2026-11-09); A7 step 2's battle check is done with it (both cars' lamps in both halves).
 
 ### Lane B: renderer
 
@@ -1902,7 +1908,8 @@ Additions to existing tickets, with the same rules:
   `lighting.night = enhanced` shows step 1a's `kSrcCarLamp` glows as before. Acceptance, met: at night 56 lamps a
   frame for 6 cars, on step 1a's glow points within 0.0002 m, 6 calibrations and none rejected; by day headlights and
   tail lamps 0 and the brake ramp 0.25 a frame. Its two lit reviews (the car behind lit red under braking, the
-  player's headlights on the road) moved to F9 and F6. Open: the 2 Player Battle check, blocked on A12.
+  player's headlights on the road) moved to F9 and F6. The 2 Player Battle check: done with A12 (ae033d2), both cars'
+  lamps in both halves.
 - **F4**: lens flares and streaks from real lights: from the light list's brightest sources (occlusion from the depth
   buffer), replacing GT4's flare pass in `modern` (N4 suppresses it there); acceptance adds the flare's occlusion
   behind a car (review), no flare from a light outside the view, and on the warning capture the tint stays below N4's
