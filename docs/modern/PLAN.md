@@ -399,7 +399,7 @@ place, copied only on a miss) and its materials per item, into `FrameList::ViewO
 ships to players (before B8's release), the coordinator's follow-up to B6: the front end's item gathering per
 instance, and the mesh request's lock taken once per view instead of per instance. Depends: B6. Acceptance: B6's span
 in thread CPU time on `race_boot.cap` (after the race's first 300 frames), p95 below B6's 439 us and the margin
-reported; the same span measured on the Odin in lane C's device run; `ORIG` and `PRESETS` identical.
+reported; the same span measured on the Odin (C6b); `ORIG` and `PRESETS` identical.
 
 **B7: Parity view renderer (L).** `platform/render/modern/parity_view.cpp`, `shaders/modern_parity.*`: draws a
 view's instances from the mesh cache with GT4's lighting per vertex (the bodies of `gsn_models.comp`), at 1x,
@@ -515,7 +515,7 @@ colour and alpha as they stand (particles Z-tested against the cars, t76 added b
    it worth it (the coordinator's call).
 Depends: B7, E1; R9's table for step 4's entries (the switch itself doesn't wait). Acceptance: `ORIG`; hybrid on REF
 at 1x within `PARITY`; differences confined to the scene rectangle; `VAL`; `PERF` against `original` (GPU and the
-front end); the Odin's device run (the provoking vertex, logged).
+front end); C6b (the provoking vertex, logged).
 - **Acceptance status** (lane B, 2026-11-08, on eea04c2): `ORIG` identical against b.10 alone (`race7` 1-100,
   `race_grid43` 1-700, `race_boot` 3800-4914, every frame, largest error 0); `PARITY` on `race_grid43` and `race_boot`
   (differences of 1 or 2 levels, inside the scene rectangle); `VAL` clean; night items checked on lane A's `a6r_r5`.
@@ -523,8 +523,8 @@ front end); the Odin's device run (the provoking vertex, logged).
   `race_pe2_r` (PE race 2, fields, 300 frames, scene records on lane A's `race_gt_pe2.txt` route; f90214e, judged from
   frame 20): 279 of 281 frames identical, largest error 1; 445,543 of 459,838 items from the mesh cache, 0 differ.
   `race7` stays as it is. Still owed: `PERF` from a quiet window (the CPU side: front end +31 %, render thread +27 %
-  outside one), and the Odin run. R9's two every-frame readers (the luminance probe, the flare samples) are GS-only by
-  default and are checked before hybrid enters a preset (step 4).
+  outside one), and the Odin run (C6b). R9's two every-frame readers (the luminance probe, the flare samples) are
+  GS-only by default and are checked before hybrid enters a preset (step 4).
 
 **B9: Mirror, env-map, reflection, showroom and photo views (M).** The road reflection is no view today
 (`kInstReflection`, out of the binding, A6): B9 first measures its readers on a wet course and makes it a
@@ -701,9 +701,30 @@ on a80cfca + these tickets; CPU renderers' output identical x64 vs aarch64 on th
 under gamescope, with the x86-32 game under FEX. Windows ARM64 is not run (no device). Depends: C5, R4, C9 (live
 link with the game under Wine). Acceptance: race capture replay `ORIG` identical to x64; a live race session runs 5
 minutes at the Odin settings (1280 x 800); timings reported; `VK_EXT_provoking_vertex` reported from the line the
-renderer logs at device creation (for B7's parity path), that line named in the owner's device list. Without it
+renderer logs at device creation (for B7's parity path), that line named in C6b. Without it
 parity's triangles are rotated and its Z may differ: a B7 finding, not a C6 failure (parity is `--set` only). That
 line waits for B7, which adds the log.
+
+**C6b: The Odin device run (S, recurring; lane C).** The measurements the desktop can't settle, made on the owner's
+AYN Odin 3 (C6's setup: aarch64 Linux, Adreno 830 under Mesa Turnip, the game under FEX, 1280 x 800) with the latest
+Odin build, and reported in one run report: the build's hash, the device's Mesa and FEX versions, and each item's
+number against its pass line. Tickets that need an Odin number point here instead of saying 'the Odin run'; an item
+leaves the list when its ticket is closed. Two kinds: **build** items run unattended from one script
+(`tools/device_run.py`, lane C, to write: replays of the REF captures and the test scene with `--profile-json`, the
+logs collected into the report), so the owner only starts it and sends the folder back; **device** items need a person
+at the Odin (a live game, the pad, a judgement on screen). Captures and saves stay on the device, never committed or
+served, as on the desktop: the report carries numbers and logs, never frames of the game.
+
+| Item | Measured | Waiting | Gates | Pass line | Kind |
+|---|---|---|---|---|---|
+| B6's span | the front end's thread CPU time per race frame with the scene split on, `race_boot.cap` after its first 300 frames, p95 and the margin | B6c | `render.scene = hybrid` and `lighting.night = enhanced` entering any preset (F2b) | p95 within the frame budget the coordinator sets from this first measurement (the desktop's bar is 0.5 ms; FEX's overhead is what is being measured), the margin reported | build |
+| Load times | `GT4_LOAD_STATS` on a race load and the menus' loads (blocked VBlanks, seconds) | D10 (c) | D10's close, and lane B's warm-up follow-up (textures before the read, pipelines from the cache) | the race load's blocked time under 0.2 s (D10 (c)'s target), else the follow-up is scheduled with this number | device |
+| Provoking vertex | the line the renderer logs at device creation: `VK_EXT_provoking_vertex` present or not | C6, B7 | `render.scene = parity` on the Odin (its triangles and Z) | reported; absent is a B7 finding, not a failure | build |
+| B16c's kept images | the device's free video memory before and after B16c (its kept velocity and lit pictures, about 2x the shown target), beside 97d0809a's freed MSAA targets | B16c | `render.upscaler = fsr2` in the Odin's device preset | no allocation failure, and free video memory above the device's floor, over a 5-minute race at the device preset, free memory reported (the floor is what the first run shows the device needs, named in the report) | build |
+| Modern lights' budgets | `PERF` at 1280 x 800 per setting level, from `--profile-json` on the REF captures at night (F2b's laps) | F6, F7, F8, F9 (each ticket's own Odin budget: F6 at `player`, F8 at `low` or off) | each setting's value in the Odin's device preset | each setting has a value that fits the Odin's frame budget or is off there; the device preset says which | build |
+| Host mixer | `audio.mixer = host` at each `audio.spatial` (original, stereo, hrtf): the mix's time per frame and, for hrtf, its own part and its active buses (the host summary's `hrtf: N buses a frame, T us a frame`); if hrtf is over budget, the same with the `GT4_HRTF_BUSES` environment variable (debugging only) at 8 and 4 (the cap, nearest cars first); underruns on a live race | D5, D9 (hrtf: D9 step 3) | `audio.mixer = host` becoming the default (the coordinator's call) and with it `audio.spatial = stereo` in low to ultra; hrtf's Odin cost | no underrun in a 5-minute race at each of the three; hrtf's time reported against the frame, and the bus cap that fits, if any | build (the times, from a replay of a capture recorded with `audio.mixer = host`), device (the underruns, on a live race) |
+| Settings pages | the page layer's draw cost with the hub open (`GT4_UI_PAGE_TEST=hub`), against E5's 98 us on the desktop | M3, if lane M asks | none yet | reported | build |
+| C6 itself | a race capture replayed (`ORIG` against the x64 host's hashes); a live race session of 5 minutes at the Odin settings, its frame times | C6 | C6's close | `ORIG` identical; the session runs its 5 minutes, frame times reported | build (replay), device (session) |
 
 **C7: Host job system (M).** `platform/core/jobs.{h,cpp}`: work-stealing pool, fibre-free. Depends: none.
 Acceptance: `CTEST` (stress test, TSan build on Linux); used by B5 and B2b with `PRESETS` unchanged.
@@ -757,7 +778,7 @@ held; GT4's volume files are inflated on the game thread; no load time is measur
     paid by the first reads (one present of 147 ms: 27 textures uploaded, 3 pipelines created, the pipeline cache
     on). Taking it out of the reads (textures before the read, pipelines from the cache) is a follow-up for lane
     B, not a D10 gate, after the R6 re-baseline and P2c's depth texture (the coordinator): bounded by those 7
-    VBlanks on the desktop, it is judged on the Odin's device run, where uploads and pipeline creation cost more.
+    VBlanks on the desktop, it is judged on the Odin (C6b), where uploads and pipeline creation cost more.
 - Acceptance: the load times (race and menus) reported before and after, against those targets; `ORIG` unchanged in
   its picture and the game's pacing (faster reads shorten `original`'s loads too, which is the point; the frame in
   which the game sees each read's result is unchanged); saves and replays unaffected (session test).
@@ -766,7 +787,7 @@ held; GT4's volume files are inflated on the game thread; no load time is measur
   screen drawn every VBlank: a 30 fps screen counts half its VBlanks with nothing blocking). Saves: GT4 re-encrypts
   each save, so they were checked through the game's load (Home pixel-identical from both); replays: the race and its
   six times identical before and after, main run twice as the control; the replay itself one VBlank phase off from the
-  shorter loads (99.99 % within a VBlank). Open: the Odin's `GT4_LOAD_STATS` (the owner's device list), and (c)'s
+  shorter loads (99.99 % within a VBlank). Open: the Odin's `GT4_LOAD_STATS` (C6b), and (c)'s
   warm-up follow-up (lane B).
 
 **D11: Latency (S-M; lane C, moved from lane D).** The input-to-photon budget D12-D16's filters count against. From
@@ -838,7 +859,7 @@ tests. (D10 and D11 moved to lane C.)
 **D9: Spatial audio (L, lane D).** The audit (section 4.2, design 3) gives the design but no acceptance; this is it
 (the architect, 2026-11-08; lane D reviewed). `audio.spatial = original | stereo | hrtf`, behind `audio.mixer =
 host` (D5). `original` in every preset while `audio.mixer` defaults to `game` (spatial does nothing there and would
-read as unused, as `audio.interpolation` does); the change that makes `host` the default (after the Odin run, the
+read as unused, as `audio.interpolation` does); the change that makes `host` the default (after the Odin run, C6b, the
 coordinator's call) gives low to ultra `stereo`. `hrtf` is the player's choice (it assumes headphones).
 - **How GT4 does it** (lane D's note, `spikes/D9-voices-to-entrants.md`): voices are allocated dynamically and no
   voice record holds a car; a voice reaches its car only through its owner (voice record +0x10: an engine pool
@@ -1353,7 +1374,7 @@ entries, game-side, with exact centres and sizes, and the host keeps those whose
   mean, the front-end thread's wall clock +30.6 %, of which B6's own thread CPU is p95 359 us, 141 us under B6's 0.5
   ms budget; `ORIG` identical to the R6 hash lists on race7, race_grid43 and race_boot; with records off the scene
   cache is never created and the lamp pass runs 0 times. Before `lighting.night = enhanced` enters a preset: the
-  Odin's measurement of B6's span (B6c, lane C's device run), as for hybrid.
+  Odin's measurement of B6's span (B6c, C6b), as for hybrid.
 
 **F3: Clustered lighting in the deferred and forward passes (M).** Depends: F1, B10, B22. Acceptance: `VAL`;
 `PERF`; the same lights as F2 in `modern`, with G-buffer normals.
@@ -1368,7 +1389,7 @@ on the sections capture); the warning capture's tint stays below N4's bar.
 **Modern racing lights (the owner, 2026-11-09).** The light systems match what modern racing games do. Each ticket
 below: `ORIG` untouched (`original` never runs it); a setting with presets, in no preset until its acceptance and the
 owner's review; `PERF` against a desktop budget at 1440 x 1080 on the RX 7900 XTX and an Odin budget at 1280 x 800
-measured in lane C's device run (each setting has a value that fits the Odin's frame, or is off there, and the device
+measured in C6b (each setting has a value that fits the Odin's frame, or is off there, and the device
 preset says which); all data our own, generated by our tools, no Sony or Polyphony assets. Order in phase 3: B10, then
 B11 (the sun, and the shadow atlas F6 shares), F3 (clustered lighting in `modern`), A7 step 2 (headlights, tail and
 brake lights as lights), F7 (profiles), F6 (local shadows), B14 (froxel fog), F8 (volumetric), F4 (bloom and flares),
