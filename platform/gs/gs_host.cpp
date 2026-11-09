@@ -74,6 +74,8 @@ public:
         // summary at decode; each verdict on a texture with the street-lamp draw's state is logged once.
         glow->setLog(stdout);
         native->setSceneClassifier([fe = native.get(), g = glow](const scene::ItemSource& item) {
+            if (std::getenv("GT4_N3_LOG")) std::printf("N3 host texture %u for %016llx\n", fe->debugTextureIdOf(item.texture),   // LOCAL N3 DEBUG
+                                                       static_cast<unsigned long long>(item.texture));
             scene::TextureSummary s;
             return g->classify(item, fe->textureSummary(item.texture, s) ? &s : nullptr);
         });

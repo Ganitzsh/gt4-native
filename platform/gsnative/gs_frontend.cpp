@@ -1,4 +1,9 @@
 // The native renderer's front end (see gs_frontend.h). Register layouts from the public GS documentation.
+#include <map>   // R10 spike (local)
+#include <array>     // LOCAL N3 DEBUG
+#include <numeric>   // LOCAL N3 DEBUG
+#include <unordered_set>   // LOCAL N3 DEBUG
+static std::unordered_set<uint64_t> n3SkipIdentities;   // LOCAL N3 DEBUG: identities judged v4 (GT4_N3_V4SKIP)
 #include "gs_frontend.h"
 
 #include <chrono>
@@ -1052,6 +1057,17 @@ void GsFrontend::texSet(const uint8_t* payload, size_t bytes) {
     std::vector<gfx::TexSetUpload> uploads(r.uploads);
     std::memcpy(uploads.data(), payload + sizeof r, r.uploads * sizeof(gfx::TexSetUpload));
     const gfx::SetSlots::Slot slot = gfx::SetSlots::of(r, uploads.data());
+    if (std::getenv("GT4_N3_SETLOG") && r.sent) {   // LOCAL N3 DEBUG: a sent set's uploads and first bytes (the locator)
+        std::printf("N3 set: id %u hash %016llx lo %u uploads %u bytes %zu first", r.id, static_cast<unsigned long long>(slot.hash),
+                    unsigned(slot.lo), unsigned(r.uploads), bytes - head);
+        for (size_t q = 0; q < 32 && head + q < bytes; ++q) std::printf("%s%02x", q ? "" : " ", payload[head + q]);
+        std::printf("\n");
+        for (uint32_t k = 0; k < r.uploads; ++k)
+            std::printf("N3 set upload: hash %016llx k %u bp %u bw %u psm %u w %u h %u qwords %u source %08x\n",
+                        static_cast<unsigned long long>(slot.hash), k, uploads[k].destination & 0x3FFF, (uploads[k].destination >> 16) & 0x3F,
+                        (uploads[k].destination >> 24) & 0x3F, unsigned(uploads[k].w), unsigned(uploads[k].h), uploads[k].qwords,
+                        uploads[k].source);
+    }
     if (!r.id) {   // a content kept with no set holding it (exportSets: a recording that starts mid-run)
         if (r.sent && !setContents.count(slot.hash)) {
             SetContent c;
@@ -1421,6 +1437,10 @@ bool GsFrontend::setTexture(const DrawState& s, TextureSource& src) {
         if (indexed) loadPalette();
         d.id = nextTexture++;
         setTextureIdentity(d.id, key);   // (B6: a material keys on it)
+        if (std::getenv("GT4_N3_SETLOG"))   // LOCAL N3 DEBUG: the texture's place in its set (the locator)
+            std::printf("N3 texid: id %u key %016llx set %016llx setbase %u tbp %u cbp %u psm %u cpsm %u tw %u th %u\n", d.id,
+                        static_cast<unsigned long long>(key), static_cast<unsigned long long>(hash), unsigned(sc.base),
+                        unsigned(t.tbp), unsigned(t.cbp), unsigned(t.psm), unsigned(t.cpsm), unsigned(t.tw), unsigned(t.th));
         d.texels = 0;
         TextureImage image;
         image.id = d.id;
@@ -1970,8 +1990,85 @@ void GsFrontend::effect(const gfx::EffectRecord& r) {
     frame.effects.push_back(e);
 }
 
+// R10 spike (local): per frame, how many batches carry each value of qwords 201..216 (the lighting constants)
+static std::map<uint64_t, uint32_t> r10Constants;
+static std::vector<float> r10Lanes[64];   // per frame: each float of qwords 201..216, one entry per batch
+static uint64_t r10LastVb = 0;            // the VBlank of the last frame finished
+// GT4_R10_FREEZE=FROM,TO,QLO,QHI (ablation): each model job (keyed by its renderer, chain, counts, strip header and
+// its place among jobs with the same key) gets for qwords QLO..QHI the values it had in the last frame before FROM,
+// in the frames after FROM up to TO. Everything else (geometry, matrices) stays as sent.
+struct R10Freeze {
+    bool on = false;
+    unsigned long long from = 0, to = 0;
+    unsigned qlo = 0, qhi = 0;
+    uint64_t frameOf = ~0ull;
+    std::map<uint64_t, unsigned> seen;
+    std::map<uint64_t, std::vector<uint32_t>> saved;
+    unsigned long long frozen = 0, missed = 0;
+    R10Freeze() {
+        const char* e = std::getenv("GT4_R10_FREEZE");
+        on = e && std::sscanf(e, "%llu,%llu,%u,%u", &from, &to, &qlo, &qhi) == 4 && qhi < 256 && qlo <= qhi;
+    }
+};
+static R10Freeze r10Freeze;
+
 void GsFrontend::model(const gfx::ModelJob& in, const uint32_t* words) {
     GT4_CPU_SCOPE("front end: 3D batches");
+    static std::vector<uint32_t> r10Copy(gfx::kModelWords);
+    if (r10Freeze.on) {
+        R10Freeze& F = r10Freeze;
+        if (F.frameOf != r10LastVb) {
+            F.frameOf = r10LastVb;
+            F.seen.clear();
+            if (r10LastVb == F.to) std::fprintf(stderr, "R10 freeze: %llu jobs frozen, %llu without a saved key\n", F.frozen, F.missed);
+        }
+        uint64_t h = 1469598103934665603ull;
+        auto mix = [&](uint32_t v) { h = (h ^ v) * 1099511628211ull; };
+        mix(in.renderer), mix(in.chain), mix(in.count), mix(in.nloop);
+        const uint32_t strips = std::min<uint32_t>(words[64 * 4 + 3] & 0xFFFF, 60);
+        for (uint32_t k = 0; k <= strips; ++k) mix(words[(64 + k) * 4 + 3]);
+        const uint64_t key = h ^ (uint64_t(F.seen[h]++) << 48);
+        const uint32_t lo = F.qlo * 4, n = (F.qhi - F.qlo + 1) * 4;
+        if (r10LastVb < F.from) {
+            F.saved[key].assign(words + lo, words + lo + n);
+        } else if (r10LastVb <= F.to) {
+            auto it = F.saved.find(key);
+            if (it != F.saved.end()) {
+                std::copy(words, words + gfx::kModelWords, r10Copy.begin());
+                std::copy(it->second.begin(), it->second.end(), r10Copy.begin() + lo);
+                words = r10Copy.data();
+                ++F.frozen;
+            } else {
+                ++F.missed;
+            }
+        }
+    }
+    {
+        uint64_t h = 1469598103934665603ull;
+        for (uint32_t i = 201 * 4; i < 217 * 4; ++i) h = (h ^ words[i]) * 1099511628211ull;
+        ++r10Constants[h ^ (uint64_t(in.renderer) << 60)];
+        for (uint32_t i = 0; i < 64; ++i) {
+            float f;
+            std::memcpy(&f, &words[201 * 4 + i], 4);
+            if (std::isfinite(f)) r10Lanes[i].push_back(f);
+        }
+    }
+    // R10 ablation (local): GT4_R10_SKIPBODY=hex drops the model jobs with that lighting body (chain >> 16),
+    // GT4_R10_SKIPTEX=id the ones that sample that texture
+    static const long r10SkipBody = [] { const char* e = std::getenv("GT4_R10_SKIPBODY"); return e ? std::strtol(e, nullptr, 16) : -1L; }();
+    static const std::vector<long> r10SkipTex = [] {   // a comma list
+        std::vector<long> v;
+        if (const char* e = std::getenv("GT4_R10_SKIPTEX"))
+            for (char* p = const_cast<char*>(e); *p;) {
+                char* end = nullptr;
+                const long id = std::strtol(p, &end, 10);
+                if (end == p) break;
+                v.push_back(id);
+                p = *end ? end + 1 : end;
+            }
+        return v;
+    }();
+    if (r10SkipBody >= 0 && long(in.chain >> 16) == r10SkipBody) return;
     setPrim(in.prim);
     const uint32_t prim = primValue();
     queued = 0;   // (the next batch starts its strips again: its first two vertices complete no triangle)
@@ -2015,6 +2112,10 @@ void GsFrontend::model(const gfx::ModelJob& in, const uint32_t* words) {
             lastTexture = {texture.kind == TextureSource::Kind::Memory, s, texture, uploads, ownerChanges, clutLoads};
         }
     }
+    if (!r10SkipTex.empty() && texture.kind == TextureSource::Kind::Memory &&
+        std::find(r10SkipTex.begin(), r10SkipTex.end(), long(texture.id)) != r10SkipTex.end()) return;
+    if (!n3SkipIdentities.empty() && texture.kind == TextureSource::Kind::Memory &&
+        n3SkipIdentities.count(textureIdentity(texture.id))) return;   // LOCAL N3 DEBUG: v4's textures (GT4_N3_V4SKIP)
     if (texture.kind == TextureSource::Kind::Target && texture.id != colour) sceneRead(texture.id);
     noteDraw(colour, depth, texture);
     const bool moving = (in.flags & 4) != 0;
@@ -2751,6 +2852,202 @@ void GsFrontend::sceneView(std::shared_ptr<const scene::SceneView> view) {
                 sceneItems.push_back(item);
                 v.items.push_back({sj.job, sj.draw, sj.firstVertex, sj.vertexCount});   // (parallel to the materials assign makes)
             }
+            if (std::getenv("GT4_N3_LOG")) {   // LOCAL N3 DEBUG, never committed: each layer-state item's vertex light, once
+                static std::unordered_set<uint64_t> seenItems;
+                for (const scene::ItemSource& it : sceneItems) {
+                    const gfx::Context* cx = it.context;
+                    if (!cx || !it.batch.job || !it.batch.words) continue;
+                    const bool state = ((it.prim >> 4) & 1) && ((it.prim >> 6) & 1) && cx->blendA == 0 && cx->blendB == 1 &&
+                                       cx->blendC == 0 && cx->blendD == 1 && !cx->alphaTest && cx->depthTest && cx->depthFunc == 2 &&
+                                       !cx->depthWrite && (it.batch.job->chain >> 16) == 0;
+                    if (!state) continue;
+                    uint64_t key = it.texture;
+                    for (uint32_t w = 0; w < 64 * 4 && w < gfx::kModelWords; ++w) key = key * 1099511628211ull ^ it.batch.words[w];
+                    if (!seenItems.insert(key).second) continue;
+                    const scene::DecodedBatch b = scene::decodeBatch(*it.batch.job, it.batch.words);
+                    const gfx::ModelJob& jb = *it.batch.job;
+                    double lo = 1e9, hi = -1, sum = 0;
+                    uint32_t base = 0, peak = 0, over = 0, above = 0;
+                    float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+                    auto lumOf = [](uint32_t c) { return 0.2126 * (c & 0xFF) + 0.7152 * ((c >> 8) & 0xFF) + 0.0722 * ((c >> 16) & 0xFF); };
+                    for (const scene::MeshVertex& mv : b.vertices) {
+                        const double l = lumOf(mv.colour);
+                        if (l < lo) lo = l, base = mv.colour;
+                        if (l > hi) hi = l, peak = mv.colour;
+                        sum += l;
+                        if ((mv.colour & 0xFF) > 0x80 || ((mv.colour >> 8) & 0xFF) > 0x80 || ((mv.colour >> 16) & 0xFF) > 0x80) ++over;
+                        float clip[4];
+                        for (int q = 0; q < 4; ++q)
+                            clip[q] = jb.matrix[0][q] * mv.position[0] + jb.matrix[1][q] * mv.position[1] + jb.matrix[2][q] * mv.position[2] + jb.matrix[3][q];
+                        if (clip[3] > 1e-3f) {
+                            const float sxp = jb.offset[0] + jb.scale[0] * clip[0] / clip[3] - jb.originX, syp = jb.offset[1] + jb.scale[1] * clip[1] / clip[3] - jb.originY;
+                            x0 = std::min(x0, sxp); x1 = std::max(x1, sxp); y0 = std::min(y0, syp); y1 = std::max(y1, syp);
+                        }
+                    }
+                    for (const scene::MeshVertex& mv : b.vertices) above += lumOf(mv.colour) > lo + 4.0 ? 1 : 0;
+                    const float area = x1 > x0 ? (std::min(x1, 640.0f) - std::max(x0, 0.0f)) * (std::min(y1, 448.0f) - std::max(y0, 0.0f)) : 0.0f;
+                    std::printf("N3 item: host texture %u vertices %zu above-base %u over-0x80 %u base %06x peak %06x lum %.1f..%.1f mean %.1f area %.0f\n",
+                                debugTextureIdOf(it.texture), b.vertices.size(), above, over, base & 0xFFFFFF, peak & 0xFFFFFF, lo, hi,
+                                b.vertices.empty() ? 0.0 : sum / double(b.vertices.size()), std::max(0.0f, area));
+                    double n3Share = 0, n3Width = 0, n3dPds = 0, n3dPdt = 0;   // (for the v4 judgement below)
+                    {   // LOCAL N3 DEBUG: the item's triangles in world space (row vectors: [p 1] * objectToWorld), area by |n| per axis
+                        const auto& M = instance.objectToWorld.m;
+                        double total = 0, axis[3] = {}, bins[3][10] = {};
+                        size_t tris = 0;
+                        for (size_t t = 0; t + 2 < b.triangles.size(); t += 3) {
+                            double w[3][3];
+                            for (int c = 0; c < 3; ++c) {
+                                const float* p = b.vertices[b.triangles[t + c]].position;
+                                for (int q = 0; q < 3; ++q) w[c][q] = p[0] * M[0][q] + p[1] * M[1][q] + p[2] * M[2][q] + M[3][q];
+                            }
+                            const double e1[3] = {w[1][0] - w[0][0], w[1][1] - w[0][1], w[1][2] - w[0][2]};
+                            const double e2[3] = {w[2][0] - w[0][0], w[2][1] - w[0][1], w[2][2] - w[0][2]};
+                            const double n[3] = {e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]};
+                            const double len = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+                            if (!(len > 0) || !std::isfinite(len)) continue;
+                            ++tris;
+                            total += len / 2;
+                            for (int q = 0; q < 3; ++q) {
+                                const double c = std::fabs(n[q]) / len;
+                                axis[q] += len / 2 * c;
+                                bins[q][std::min(9, int(c * 10))] += len / 2;
+                            }
+                        }
+                        double dev = 0, scl[3];
+                        for (int i = 0; i < 3; ++i) {
+                            scl[i] = std::sqrt(double(M[i][0]) * M[i][0] + double(M[i][1]) * M[i][1] + double(M[i][2]) * M[i][2]);
+                            for (int q = 0; q < 3; ++q) dev = std::max(dev, std::fabs((scl[i] > 0 ? M[i][q] / scl[i] : 0.0) - (i == q ? 1.0 : 0.0)));
+                        }
+                        const double inv = total > 0 ? 1.0 / total : 0.0;
+                        n3Share = bins[1][9] * inv;
+                        std::printf("N3 orient: host texture %u flags %04x rotdev %.3f scale %.3f,%.3f,%.3f triangles %zu area %.1f axis %.3f,%.3f,%.3f",
+                                    debugTextureIdOf(it.texture), unsigned(instance.flags), dev, scl[0], scl[1], scl[2], tris, total,
+                                    axis[0] * inv, axis[1] * inv, axis[2] * inv);
+                        for (int q = 0; q < 3; ++q) {
+                            std::printf(" bins%c", "xyz"[q]);
+                            for (int j = 0; j < 10; ++j) std::printf("%c%.3f", j ? ',' : ' ', bins[q][j] * inv);
+                        }
+                        std::printf("\n");
+                    }
+                    {   // LOCAL N3 DEBUG: the footprint of the item's up-facing triangles (|n.y| >= 0.9), world space
+                        const auto& M = instance.objectToWorld.m;
+                        const size_t nv = b.vertices.size();
+                        std::vector<std::array<double, 3>> P(nv);
+                        for (size_t i = 0; i < nv; ++i) {
+                            const float* p = b.vertices[i].position;
+                            for (int q = 0; q < 3; ++q) P[i][q] = p[0] * M[0][q] + p[1] * M[1][q] + p[2] * M[2][q] + M[3][q];
+                        }
+                        std::map<std::array<long long, 3>, uint32_t> weld;   // vertices at one position (1 mm) are one
+                        std::vector<uint32_t> rep(nv), parent(nv);
+                        for (size_t i = 0; i < nv; ++i) {
+                            const std::array<long long, 3> key{std::llround(P[i][0] * 1000), std::llround(P[i][1] * 1000), std::llround(P[i][2] * 1000)};
+                            rep[i] = weld.emplace(key, uint32_t(i)).first->second;
+                        }
+                        std::iota(parent.begin(), parent.end(), 0u);
+                        auto find = [&](uint32_t x) { while (parent[x] != x) x = parent[x] = parent[parent[x]]; return x; };
+                        struct UpTri { uint32_t v[3]; double area; };
+                        std::vector<UpTri> up;
+                        double sAcc = 0, tAcc = 0, uvArea = 0;
+                        for (size_t t = 0; t + 2 < b.triangles.size(); t += 3) {
+                            const uint32_t a0 = b.triangles[t], a1 = b.triangles[t + 1], a2 = b.triangles[t + 2];
+                            const double e1[3] = {P[a1][0] - P[a0][0], P[a1][1] - P[a0][1], P[a1][2] - P[a0][2]};
+                            const double e2[3] = {P[a2][0] - P[a0][0], P[a2][1] - P[a0][1], P[a2][2] - P[a0][2]};
+                            const double n[3] = {e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]};
+                            const double len = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+                            if (!(len > 0) || !std::isfinite(len) || std::fabs(n[1]) / len < 0.9) continue;
+                            up.push_back({{rep[a0], rep[a1], rep[a2]}, len / 2});
+                            parent[find(rep[a1])] = find(rep[a0]);
+                            parent[find(rep[a2])] = find(rep[a0]);
+                            const float* s0 = b.vertices[a0].st; const float* s1 = b.vertices[a1].st; const float* s2 = b.vertices[a2].st;
+                            const double ds1 = s1[0] - s0[0], dt1 = s1[1] - s0[1], ds2 = s2[0] - s0[0], dt2 = s2[1] - s0[1];
+                            const double det = ds1 * dt2 - ds2 * dt1;
+                            if (std::fabs(det) > 1e-12) {   // dP/ds and dP/dt: world units per unit of S and T
+                                double ps = 0, pt = 0;
+                                for (int q = 0; q < 3; ++q) {
+                                    const double gs = (dt2 * e1[q] - dt1 * e2[q]) / det, gt = (-ds2 * e1[q] + ds1 * e2[q]) / det;
+                                    ps += gs * gs;
+                                    pt += gt * gt;
+                                }
+                                sAcc += len / 2 * std::sqrt(ps);
+                                tAcc += len / 2 * std::sqrt(pt);
+                                uvArea += len / 2;
+                            }
+                        }
+                        std::map<std::pair<uint32_t, uint32_t>, int> edges;
+                        for (const UpTri& u : up)
+                            for (int k = 0; k < 3; ++k) {
+                                uint32_t x = u.v[k], y = u.v[(k + 1) % 3];
+                                if (x > y) std::swap(x, y);
+                                ++edges[{x, y}];
+                            }
+                        struct Comp { double area = 0, perimeter = 0; std::vector<uint32_t> verts; };
+                        std::map<uint32_t, Comp> comps;
+                        for (const UpTri& u : up) {
+                            Comp& c = comps[find(u.v[0])];
+                            c.area += u.area;
+                            for (uint32_t v : u.v) c.verts.push_back(v);
+                        }
+                        for (const auto& [e, count] : edges)
+                            if (count == 1) {
+                                const double dx = P[e.first][0] - P[e.second][0], dz = P[e.first][2] - P[e.second][2];
+                                comps[find(e.first)].perimeter += std::sqrt(dx * dx + dz * dz);
+                            }
+                        double area = 0, width = 0, pcaWidth = 0, longest = 0;
+                        for (auto& [root, c] : comps) {
+                            double mx = 0, mz = 0;
+                            for (uint32_t v : c.verts) mx += P[v][0], mz += P[v][2];
+                            mx /= double(c.verts.size()); mz /= double(c.verts.size());
+                            double sxx = 0, szz = 0, sxz = 0;
+                            for (uint32_t v : c.verts) {
+                                const double dx = P[v][0] - mx, dz = P[v][2] - mz;
+                                sxx += dx * dx; szz += dz * dz; sxz += dx * dz;
+                            }
+                            const double th = 0.5 * std::atan2(2 * sxz, sxx - szz);   // the major axis
+                            const double ux = std::cos(th), uz = std::sin(th);
+                            double a0 = 1e30, a1 = -1e30, b0 = 1e30, b1 = -1e30;
+                            for (uint32_t v : c.verts) {
+                                const double dx = P[v][0] - mx, dz = P[v][2] - mz;
+                                const double pa = dx * ux + dz * uz, pb = -dx * uz + dz * ux;
+                                a0 = std::min(a0, pa); a1 = std::max(a1, pa); b0 = std::min(b0, pb); b1 = std::max(b1, pb);
+                            }
+                            const double minor = std::min(a1 - a0, b1 - b0), major = std::max(a1 - a0, b1 - b0);
+                            area += c.area;
+                            width += c.area * (c.perimeter > 0 ? 2 * c.area / c.perimeter : 0.0);
+                            pcaWidth += c.area * minor;
+                            longest = std::max(longest, major);
+                        }
+                        const double inv = area > 0 ? 1.0 / area : 0.0, uvInv = uvArea > 0 ? 1.0 / uvArea : 0.0;
+                        std::printf("N3 footprint: host texture %u pieces %zu area %.3f width %.3f pcawidth %.3f longest %.2f dPds %.3f dPdt %.3f\n",
+                                    debugTextureIdOf(it.texture), comps.size(), area, width * inv, pcaWidth * inv, longest, sAcc * uvInv,
+                                    tAcc * uvInv);
+                        n3Width = width * inv;
+                        n3dPds = sAcc * uvInv;
+                        n3dPdt = tAcc * uvInv;
+                    }
+                    if (std::getenv("GT4_N3_V4SKIP")) {   // LOCAL N3 DEBUG: v4 judged per item at first sight; its texture skipped from then on
+                        double cs[4] = {};
+                        for (const scene::MeshVertex& mv : b.vertices)
+                            for (int k = 0; k < 4; ++k) cs[k] += double((mv.colour >> (8 * k)) & 0xFF);
+                        const double nv = b.vertices.empty() ? 1.0 : double(b.vertices.size());
+                        const double vcLum = (0.2126 * cs[0] + 0.7152 * cs[1] + 0.0722 * cs[2]) / nv, va = cs[3] / nv;
+                        scene::TextureSummary ts;
+                        const bool known = textureSummary(it.texture, ts) && ts.width && ts.height;
+                        const double texel = known ? std::max(n3dPds / ts.width, n3dPdt / ts.height) : 0.0;
+                        const bool v4 = vcLum > 16 && va >= 100 && known && ts.centreToRim < 3 && n3Share >= 0.9 && n3Width >= 0.9 &&
+                                        texel >= 0.03;
+                        // LOCAL N3 DEBUG (d): GT4_N3_V4NARROW=C keeps a v4 item whose texture is neutral (its mean colour's
+                        // max - min under C: the broad white layer), so only coloured pools are skipped
+                        static const double narrow = [] { const char* e = std::getenv("GT4_N3_V4NARROW"); return e ? std::atof(e) : -1.0; }();
+                        const int chroma = known ? std::max({ts.mean[0], ts.mean[1], ts.mean[2]}) - std::min({ts.mean[0], ts.mean[1], ts.mean[2]}) : 0;
+                        const bool neutralKept = v4 && narrow >= 0 && chroma < narrow;
+                        if (v4 && !neutralKept) n3SkipIdentities.insert(it.texture);
+                        std::printf("N3 v4: host texture %u identity %016llx vc %.1f a %.1f c/r %.2f share %.3f width %.3f texel %.4f -> %s\n",
+                                    debugTextureIdOf(it.texture), static_cast<unsigned long long>(it.texture), vcLum, va,
+                                    known ? ts.centreToRim : -1.0f, n3Share, n3Width, texel,
+                                    neutralKept ? "keep (neutral)" : (v4 ? "skip" : "keep"));
+                    }
+                }
+            }
             v.ids[k] = sceneCache_->assign(instance, sceneItems.data(), sceneItems.size(), v.materials, sceneCacheCounters);
             ++stats.sceneInstances;
             stats.sceneItems += sceneItems.size();
@@ -3001,6 +3298,186 @@ void GsFrontend::sceneFrame(std::unique_ptr<scene::SceneFrame> f) {
 }
 
 void GsFrontend::vsync(uint64_t vblank, FrameList& out) {
+    // R10 spike (local, not committed): GT4_R10_LOG=FILE writes one line per frame with the colour grading's weights
+    // and curve and each scene target's fog colour.
+    static FILE* r10 = [] { const char* p = std::getenv("GT4_R10_LOG"); return p ? std::fopen(p, "w") : nullptr; }();
+    if (r10) {
+        std::fprintf(r10, "%llu effects %zu", static_cast<unsigned long long>(vblank), frame.effects.size());
+        for (const auto& e : frame.effects) {
+            double ysum = 0;
+            uint64_t h = 1469598103934665603ull;
+            for (uint32_t c : e.curve) {
+                ysum += 0.2126 * (c & 0xFF) + 0.7152 * ((c >> 8) & 0xFF) + 0.0722 * ((c >> 16) & 0xFF);
+                h = (h ^ c) * 1099511628211ull;
+            }
+            std::fprintf(r10, " | w %06x %06x %06x curve %016llx meanY %.3f c64 %08x c128 %08x c192 %08x",
+                         e.weights[0] & 0xFFFFFF, e.weights[1] & 0xFFFFFF, e.weights[2] & 0xFFFFFF,
+                         static_cast<unsigned long long>(h), ysum / 256.0, e.curve[64], e.curve[128], e.curve[192]);
+        }
+        {   // the frame's 3D batches: how many, and a hash of their packets' identity (the first data word of each)
+            uint64_t h = 1469598103934665603ull;
+            std::vector<uint32_t> ids;
+            for (const auto& m : frame.models) ids.push_back(m.data < frame.modelData.size() ? frame.modelData[m.data] : 0u);
+            std::sort(ids.begin(), ids.end());
+            for (uint32_t id : ids) h = (h ^ id) * 1099511628211ull;
+            std::fprintf(r10, " ; batches %zu draws %zu set %016llx", frame.models.size(), frame.draws.size(),
+                         static_cast<unsigned long long>(h));
+        }
+        {   // GT4_R10_DRAWS=FIRST,LAST: the frame's draws that are not 3D batches, by state, texture and target
+            static unsigned long long dFirst = 0, dLast = 0;
+            static bool dRead = false;
+            if (!dRead) {
+                dRead = true;
+                if (const char* e = std::getenv("GT4_R10_DRAWS")) std::sscanf(e, "%llu,%llu", &dFirst, &dLast);
+            }
+            if (vblank >= dFirst && vblank <= dLast && dLast) {
+                struct Agg { uint32_t draws = 0, verts = 0; double r = 0, g = 0, b = 0, a = 0; uint64_t tex = 1469598103934665603ull; bool modeled = false; };
+                std::map<uint64_t, Agg> agg;
+                for (const auto& d : frame.draws) {
+                    uint64_t h = 1469598103934665603ull;
+                    const auto* p8 = reinterpret_cast<const uint8_t*>(&d.state);
+                    for (size_t i = 0; i < sizeof d.state; ++i) h = (h ^ p8[i]) * 1099511628211ull;
+                    h = (h ^ (uint64_t(d.texture.kind) << 56) ^ (uint64_t(d.modeled) << 48) ^ d.target) * 1099511628211ull;
+                    Agg& a = agg[h];
+                    ++a.draws;
+                    a.modeled = d.modeled;
+                    // the textures it used, in draw order: id and content version (a swap or a rewrite shows here)
+                    a.tex = (a.tex ^ ((uint64_t(d.texture.id) << 32) | d.texture.version)) * 1099511628211ull;
+                    for (uint32_t v = d.first; v < d.first + d.count && v < frame.vertices.size(); ++v) {
+                        const uint32_t c = frame.vertices[v].rgba;
+                        a.r += c & 0xFF; a.g += (c >> 8) & 0xFF; a.b += (c >> 16) & 0xFF; a.a += c >> 24;
+                        ++a.verts;
+                    }
+                }
+                std::fprintf(r10, " ; draws %zu", agg.size());
+                for (const auto& [h, a] : agg) {
+                    const double n = a.verts ? a.verts : 1;
+                    std::fprintf(r10, " %016llx:%u:%u:%.1f,%.1f,%.1f,%.1f:%016llx:%d", static_cast<unsigned long long>(h), a.draws,
+                                 a.verts, a.r / n, a.g / n, a.b / n, a.a / n, static_cast<unsigned long long>(a.tex), a.modeled ? 1 : 0);
+                }
+            }
+        }
+        {   // GT4_R10_TEXCOUNT=FILE (N3 step 0, local): per frame, each memory texture's Draw commands on the list
+            static FILE* tc = [] { const char* p = std::getenv("GT4_R10_TEXCOUNT"); return p ? std::fopen(p, "w") : nullptr; }();
+            static unsigned long long listNo = 0;
+            ++listNo;
+            if (tc) {
+                std::unordered_map<uint32_t, uint32_t> perTex;
+                for (const auto& cmd : frame.commands)
+                    if (cmd.kind == FrameList::Command::Kind::Draw && cmd.index < frame.draws.size() &&
+                        frame.draws[cmd.index].texture.kind == TextureSource::Kind::Memory)
+                        ++perTex[frame.draws[cmd.index].texture.id];
+                for (const auto& [id, n] : perTex) std::fprintf(tc, "%llu %u %u\n", listNo, id, n);
+                std::fflush(tc);
+            }
+        }
+        {   // GT4_R10_DRAWLIST=VB1,VB2,LO,HI: the Draw commands at positions LO..HI (as GT4_GSN_LIMIT counts them)
+            static unsigned long long l1 = 0, l2 = 0, lo = 0, hi = 0;
+            static FILE* lf = nullptr;
+            static bool lr = false;
+            if (!lr) {
+                lr = true;
+                if (const char* e = std::getenv("GT4_R10_DRAWLIST"))
+                    if (std::sscanf(e, "%llu,%llu,%llu,%llu", &l1, &l2, &lo, &hi) == 4) {
+                        const char* p = std::getenv("GT4_R10_LOG");
+                        std::string path = std::string(p ? p : "r10.log") + ".draws";
+                        lf = std::fopen(path.c_str(), "w");
+                    }
+            }
+            // (N4 notes: VB1..VB2 a range; only frames with a bracketed draw, the first three; the targets listed after)
+            static int bracketFrames = 0;
+            // the flare bracket's command span from the scene frame's markers (tagged or not)
+            std::vector<uint8_t> inFlare(frame.commands.size() + 1, 0);
+            if (frame.scene) {
+                const auto& mk = frame.scene->markers;
+                const auto& mc = frame.scene->markerCommands;
+                uint32_t open = UINT32_MAX;
+                for (size_t m = 0; m < mk.size() && m < mc.size(); ++m) {
+                    if (mk[m].marker == gfx::scene::kMarkFlareBegin) open = mc[m];
+                    if (mk[m].marker == gfx::scene::kMarkFlareEnd && open != UINT32_MAX) {
+                        for (uint32_t k = open; k < mc[m] && k < inFlare.size(); ++k) inFlare[k] = 1;
+                        open = UINT32_MAX;
+                    }
+                }
+            }
+            bool anyBracket = false;
+            for (size_t k = 0; k < frame.commands.size(); ++k)
+                anyBracket = anyBracket || (inFlare[k] && frame.commands[k].kind == FrameList::Command::Kind::Draw);
+            if (lf && vblank >= l1 && vblank <= l2 && anyBracket && bracketFrames < 3) {
+                ++bracketFrames;
+                for (const Target& t : targets)
+                    std::fprintf(lf, "%llu target %u bp %u bw %u psm %u height %u depth %d\n", static_cast<unsigned long long>(vblank),
+                                 t.id, t.bp, t.bw, t.psm, t.height, t.depth ? 1 : 0);
+                std::fprintf(lf, "%llu displayed %u targets %u %u\n", static_cast<unsigned long long>(vblank), frame.displayed ? 1u : 0u,
+                             frame.display.target1, frame.display.target2);
+                unsigned long long n = 0;
+                for (size_t ci = 0; ci < frame.commands.size(); ++ci) {
+                    const auto& cmd = frame.commands[ci];
+                    if (cmd.kind != FrameList::Command::Kind::Draw) continue;
+                    ++n;
+                    if (inFlare[ci]) std::fprintf(lf, "%llu   in flare: draw %llu\n", static_cast<unsigned long long>(vblank), n);
+                    if (n < lo || n > hi || cmd.index >= frame.draws.size()) continue;
+                    const Draw& d = frame.draws[cmd.index];
+                    const auto& c = d.state.c;
+                    double r = 0, g = 0, b = 0, a = 0;
+                    uint32_t mr = 0, mg = 0, mb = 0, ma = 0, nv = 0;
+                    for (uint32_t v = d.first; v < d.first + d.count && v < frame.vertices.size() && !d.modeled; ++v) {
+                        const uint32_t q = frame.vertices[v].rgba;
+                        const uint32_t cr = q & 0xFF, cg = (q >> 8) & 0xFF, cb = (q >> 16) & 0xFF, ca = q >> 24;
+                        r += cr; g += cg; b += cb; a += ca; ++nv;
+                        mr = std::max(mr, cr); mg = std::max(mg, cg); mb = std::max(mb, cb); ma = std::max(ma, ca);
+                    }
+                    const double k = nv ? nv : 1;
+                    std::fprintf(lf, "%llu draw %llu modeled %d prim %03x blend %u%u%u%u fix %u atst %u/%u/%u ztst %u/%u zw %u "
+                                     "tex %u:%u:%u target %u count %u rgba %.1f,%.1f,%.1f,%.1f max %u,%u,%u,%u br %u\n",
+                                 static_cast<unsigned long long>(vblank), n, d.modeled ? 1 : 0, d.state.prim,
+                                 c.blendA, c.blendB, c.blendC, c.blendD, c.blendFixed, c.alphaTest, c.alphaFunc, c.alphaRef,
+                                 c.depthTest, c.depthFunc, c.depthWrite, unsigned(d.texture.kind), d.texture.id,
+                                 d.texture.version, d.target, d.count, r / k, g / k, b / k, a / k, mr, mg, mb, ma, unsigned(d.bracket));
+                    if (d.modeled) {   // its model jobs: index in the frame (= the stream's batch run), renderer, body
+                        std::fprintf(lf, "%llu   jobs of draw %llu (first %u):", static_cast<unsigned long long>(vblank), n, d.first);
+                        for (size_t j = 0; j < frame.models.size(); ++j) {
+                            const uint64_t f = frame.models[j].first;   // both in the frame's model vertex space
+                            if (f >= d.first && f < uint64_t(d.first) + d.count) {
+                                std::fprintf(lf, " %zu:r%u:b%04x:n%u:t%u/%u", j, frame.models[j].renderer,
+                                             frame.models[j].chain >> 16, frame.models[j].count,
+                                             unsigned(frame.models[j].pad[0]), unsigned(frame.models[j].pad[1]));
+                                // its inputs, for a qword-by-qword compare: vblank, job, draw, the job, its words
+                                static FILE* wf = [] {
+                                    const char* p = std::getenv("GT4_R10_LOG");
+                                    return std::fopen((std::string(p ? p : "r10.log") + ".words").c_str(), "wb");
+                                }();
+                                const gfx::ModelJob& mj = frame.models[j];
+                                if (wf && mj.data + gfx::kModelWords <= frame.modelData.size()) {
+                                    const uint64_t hdr[3] = {static_cast<uint64_t>(vblank), j, n};
+                                    std::fwrite(hdr, sizeof hdr, 1, wf);
+                                    std::fwrite(&mj, sizeof mj, 1, wf);
+                                    std::fwrite(&frame.modelData[mj.data], 4, gfx::kModelWords, wf);
+                                    std::fflush(wf);
+                                }
+                            }
+                        }
+                        std::fputc('\n', lf);
+                    }
+                }
+                std::fflush(lf);
+            }
+        }
+        r10LastVb = vblank;
+        std::fprintf(r10, " ; lanes");
+        for (auto& lane : r10Lanes) {
+            if (lane.empty()) { std::fprintf(r10, " nan"); continue; }
+            std::nth_element(lane.begin(), lane.begin() + lane.size() / 2, lane.end());
+            std::fprintf(r10, " %.6g", lane[lane.size() / 2]);
+        }
+        std::fprintf(r10, " ; lights %zu", frame.lights.size());
+        for (const auto& l : frame.lights)
+            std::fprintf(r10, " | %ux%u fog %06x %d", l.width, l.height, l.fogColour & 0xFFFFFF, l.fogged ? 1 : 0);
+        std::fputc('\n', r10);
+        std::fflush(r10);
+    }
+    r10Constants.clear();
+    for (auto& lane : r10Lanes) lane.clear();
     packetsThisFrame = 0;
     lastModelView = 0;
     if (sceneOpen) sceneVsyncInFrame = true;   // (its markers' indices span two lists: not checked)

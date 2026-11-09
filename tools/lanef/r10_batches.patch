@@ -1,0 +1,178 @@
+diff --git a/platform/gs/stream.cpp b/platform/gs/stream.cpp
+index 35b6635..ae9ec25 100644
+--- a/platform/gs/stream.cpp
++++ b/platform/gs/stream.cpp
+@@ -6,6 +6,7 @@
+ #include <array>
+ #include <cstdio>
+ #include <cstdlib>
++#include <map>
+ #include <cstring>
+ #include <sstream>
+ 
+@@ -13,6 +14,73 @@
+ #include "vu1_reference.h"
+ #endif
+ 
++// R10 spike (local, never committed): GT4_R10_BATCHES=FILE,FIRST,LAST logs, for VBlanks FIRST..LAST, one line per
++// 3D batch: its constant writes (qword, count, FNV hash of the words) and its model packets (source, qwords, hash).
++namespace r10b {
++struct Log {
++    FILE* f = nullptr;
++    unsigned long long first = 0, last = 0, run = 0;
++    std::string items;
++    Log() {
++        const char* e = std::getenv("GT4_R10_BATCHES");
++        if (!e) return;
++        char path[512] = {};
++        if (std::sscanf(e, "%511[^,],%llu,%llu", path, &first, &last) == 3) f = std::fopen(path, "w");
++    }
++    bool on(uint64_t vblank) const { return f && vblank >= first && vblank <= last; }
++};
++inline Log& log() { static Log l; return l; }
++// GT4_R10_HOLD=FROM,TO,QLO,QHI (ablation): writes touching qwords QLO..QHI are applied at the batch's run instead
++// of at once; for VBlanks FROM..TO each batch (keyed by its model packets' sources, and its place among batches
++// with the same packets) gets the values it last had before FROM.
++struct Hold {
++    bool on = false;
++    unsigned long long from = 0, to = 0;
++    unsigned qlo = 0, qhi = 0;
++    struct W { uint16_t qword, count; uint32_t lanes; std::vector<uint32_t> words; };
++    std::vector<W> pending;                       // this batch's postponed writes
++    std::string key;                              // this batch's packet sources
++    std::map<std::string, unsigned> seen;         // this frame: batches per key so far
++    std::map<std::string, std::vector<W>> saved;  // key#n -> the writes it had before FROM
++    unsigned long long held = 0;
++    Hold() {
++        const char* e = std::getenv("GT4_R10_HOLD");
++        if (e && std::sscanf(e, "%llu,%llu,%u,%u", &from, &to, &qlo, &qhi) == 4) on = true;
++        if (const char* f = std::getenv("GT4_R10_HOLD_SOURCES")) {
++            std::string t(f);
++            size_t a = 0;
++            while (a < t.size()) {
++                size_t b = t.find(',', a);
++                if (b == std::string::npos) b = t.size();
++                if (b > a) only.push_back(std::to_string(std::strtoull(t.substr(a, b - a).c_str(), nullptr, 16)));
++                a = b + 1;
++            }
++        }
++    }
++    std::vector<std::string> only;                // decimal sources; empty = every batch
++    bool match(const std::string& k) const {
++        if (only.empty()) return true;
++        size_t a = 0;
++        while (a < k.size()) {
++            size_t b = k.find(',', a);
++            if (b == std::string::npos) b = k.size();
++            const std::string tok = k.substr(a, b - a);
++            for (const auto& o : only)
++                if (o == tok) return true;
++            a = b + 1;
++        }
++        return false;
++    }
++    bool touches(unsigned q, unsigned n) const { return on && q <= qhi && q + n > qlo; }
++};
++inline Hold& hold() { static Hold h; return h; }
++inline uint64_t fnv(const void* p, size_t n) {
++    uint64_t h = 1469598103934665603ull;
++    for (size_t i = 0; i < n; ++i) h = (h ^ static_cast<const uint8_t*>(p)[i]) * 1099511628211ull;
++    return h;
++}
++}  // namespace r10b
++
+ namespace gt4::ps2 {
+ 
+ #if GT4_VU1_INTERPRETER
+@@ -133,7 +201,27 @@ void GraphicsStream::records(const uint8_t* data, size_t bytes) {
+             }
+             std::vector<uint32_t> words(size_t(w.count) * 4);
+             if (w.count) std::memcpy(words.data(), payload + sizeof w, size_t(w.count) * 16);
+-            vif1.batchWrite(w.qword, words.data(), w.count, w.lanes);
++            if (r10b::hold().touches(w.qword, w.count))
++                r10b::hold().pending.push_back({w.qword, w.count, w.lanes, words});
++            else
++                vif1.batchWrite(w.qword, words.data(), w.count, w.lanes);
++            if (r10b::log().on(lastVblank + 1)) {
++                char b[96];
++                std::snprintf(b, sizeof b, " w%u+%u:%016llx", unsigned(w.qword), unsigned(w.count),
++                              static_cast<unsigned long long>(r10b::fnv(words.data(), words.size() * 4)));
++                r10b::log().items += b;
++                // the lighting and transform qwords as floats: q<first>=v,v,v,... (193..216)
++                if (w.qword + w.count > 193 && w.qword <= 216) {
++                    r10b::log().items += " q" + std::to_string(w.qword) + "=";
++                    for (size_t i = 0; i < words.size(); ++i) {
++                        float f;
++                        std::memcpy(&f, &words[i], 4);
++                        char v[24];
++                        std::snprintf(v, sizeof v, i ? ",%.5g" : "%.5g", f);
++                        r10b::log().items += v;
++                    }
++                }
++            }
+             break;
+         }
+         case gfx::kBatchModel: {
+@@ -147,6 +235,12 @@ void GraphicsStream::records(const uint8_t* data, size_t bytes) {
+             std::memcpy(&m, payload, std::min<size_t>(h.bytes(), sizeof m));
+             const bool legacy = h.bytes() < sizeof m;
+             const uint64_t hash = legacy ? 0 : (uint64_t(m.hashHigh) << 32) | m.hashLow;
++            if (r10b::hold().on) r10b::hold().key += std::to_string(m.source) + ",";
++            if (r10b::log().on(lastVblank + 1)) {
++                char b[96];
++                std::snprintf(b, sizeof b, " m%08x+%u:%016llx", m.source, m.qwords, static_cast<unsigned long long>(hash));
++                r10b::log().items += b;
++            }
+             const std::vector<uint8_t>* bytes = nullptr;
+             if (legacy || m.sent) {
+                 auto it = std::find_if(recordData.begin(), recordData.end(), [&](const RecordData& d) { return d.source == m.source; });
+@@ -209,6 +303,9 @@ void GraphicsStream::records(const uint8_t* data, size_t bytes) {
+                 break;
+             }
+             std::memcpy(&r, payload, sizeof r);
++            if (r10b::log().on(lastVblank + 1))
++                std::fprintf(r10b::log().f, "%llu T %u %08x%08x sent %u uploads %u\n",
++                             static_cast<unsigned long long>(lastVblank + 1), r.id, r.hashHigh, r.hashLow, r.sent, r.uploads);
+             // the record, then the uploads' bytes (GT4_REC_GFX_DATA ahead of the block) when the game sent them
+             std::vector<uint8_t>& blob = texSetBlob;
+             blob.assign(payload, payload + h.bytes());
+@@ -269,7 +366,27 @@ void GraphicsStream::records(const uint8_t* data, size_t bytes) {
+             }
+             std::memcpy(&r, payload, sizeof r);
+             if (sceneDecoder_.seen()) sceneDecoder_.batchRun();   // its jobs may belong to an instance (tagged in the sink)
++            if (r10b::hold().on) {
++                auto& H = r10b::hold();
++                const std::string k = H.key + "#" + std::to_string(H.seen[H.key]++);
++                const uint64_t vb = lastVblank + 1;
++                auto it = H.saved.find(k);
++                if (vb >= H.from && vb <= H.to && it != H.saved.end() && H.match(H.key)) {
++                    for (const auto& w : it->second) vif1.batchWrite(w.qword, w.words.data(), w.count, w.lanes);
++                    ++H.held;
++                } else {
++                    for (const auto& w : H.pending) vif1.batchWrite(w.qword, w.words.data(), w.count, w.lanes);
++                    if (vb < H.from && !H.pending.empty()) H.saved[k] = H.pending;
++                }
++                H.pending.clear();
++                H.key.clear();
++            }
+             vif1.batchRun(r.entry, r.itop);
++            if (r10b::log().on(lastVblank + 1)) {
++                std::fprintf(r10b::log().f, "%llu %llu %x%s\n", static_cast<unsigned long long>(lastVblank + 1),
++                             r10b::log().run++, r.entry, r10b::log().items.c_str());
++            }
++            r10b::log().items.clear();
+             if (sceneDecoder_.seen()) sceneDecoder_.runEnd();     // (a later MSCAL from VIF codes belongs to nobody)
+             break;
+         }
+@@ -731,6 +848,11 @@ void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload)
+         if (size >= 8) std::memcpy(&count, payload + 4, 4);
+         ++counters.vsyncs;
+         lastVblank = count;
++        r10b::log().run = 0;
++        r10b::log().items.clear();
++        r10b::hold().seen.clear();
++        if (r10b::hold().on && lastVblank == r10b::hold().to) std::fprintf(stderr, "R10 hold: %llu batches held\n", r10b::hold().held);
++        if (r10b::log().f) std::fflush(r10b::log().f);
+         if (!heldPath3.empty()) {   // still masked at the end of the frame: do not lose the data
+             ++counters.path3ForcedAtVsync;
+             releasePath3();

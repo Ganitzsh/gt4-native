@@ -26,6 +26,14 @@ LightListHeader gatherLights(const gfx::scene::Light* records, size_t count, uin
     out.clear();
     stats = {};
     std::vector<GpuLight> directional, local;
+    // LOCAL N3 DEBUG (a): GT4_N3_GLOW_SPOT=cosOuter makes the course lamps downward spots (inner 45 degrees); down
+    // is view-space y, its sign the opposite of where most lamp heads sit (above the camera)
+    static const float spotOuter = [] { const char* e = std::getenv("GT4_N3_GLOW_SPOT"); return e ? float(std::atof(e)) : -1.0f; }();
+    float lampY = 0.0f;
+    if (spotOuter > 0.0f)
+        for (size_t i = 0; i < count; ++i)
+            if (records[i].view == view && records[i].source == kSrcCourseGlow && finite3(records[i].position))
+                lampY += records[i].position[1] > 0.0f ? 1.0f : -1.0f;
     for (size_t i = 0; i < count; ++i) {
         const Light& r = records[i];
         if (r.view != view) continue;
@@ -74,6 +82,15 @@ LightListHeader gatherLights(const gfx::scene::Light* records, size_t count, uin
         g.range = isDirectional ? 0.0f : ((r.range > 0.0f && std::isfinite(r.range)) ? r.range : d.range);
         g.flags = (i < hostFrom ? kFromGame : 0u) | ((r.width > 0.0f || r.height > 0.0f) ? kGameGlow : 0u);
         g.sourceRadius = d.sourceRadius;
+        if (spotOuter > 0.0f && r.source == kSrcCourseGlow && !isDirectional) {   // LOCAL N3 DEBUG (a)
+            const float inner = spotOuter < 0.70710678f ? 0.70710678f : (1.0f + spotOuter) * 0.5f;
+            g.direction[0] = 0.0f;
+            g.direction[1] = lampY >= 0.0f ? -1.0f : 1.0f;
+            g.direction[2] = 0.0f;
+            g.type = kSpot;
+            g.spotScale = spotScale(inner, spotOuter);
+            g.spotOffset = spotOffset(inner, spotOuter);
+        }
         g.id = r.id;
         (isDirectional ? directional : local).push_back(g);
     }

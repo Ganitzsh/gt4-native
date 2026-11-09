@@ -3232,6 +3232,24 @@ bool GsnScene::Impl::nightFinish(const gsn::FrameList::Lighting& l, const SceneI
     const render::LightListHeader header = render::gatherLights(nightRecords.data(), nightRecords.size(), viewId, 0.5f,
                                                                 std::max(k.maxDistance, 1.0f), night, nightLights, nightStatsLast,
                                                                 nightHostFrom);
+    {   // LOCAL F2b DEBUG, never committed: the gather's stats per execution (GT4_F2B_DROPLOG=1), over the run
+        static const bool gatherLog = [] { const char* e = std::getenv("GT4_F2B_DROPLOG"); return e && *e == '1'; }();
+        static uint64_t runs = 0, dropped = 0, around = 0, kept = 0, maxKept = 0;
+        if (gatherLog) {
+            ++runs;
+            dropped += nightStatsLast.dropped;
+            around += nightStatsLast.droppedAround;
+            kept += nightStatsLast.kept;
+            maxKept = std::max<uint64_t>(maxKept, nightStatsLast.kept);
+            if (nightStatsLast.dropped) std::printf("F2b gather dropped: %u (around the camera %u), kept %u\n",
+                                                    nightStatsLast.dropped, nightStatsLast.droppedAround, nightStatsLast.kept);
+            if (runs % 1000 == 0)
+                std::printf("F2b gather totals: %llu executions, %llu lights kept (most in one %llu), %llu dropped, %llu around\n",
+                            static_cast<unsigned long long>(runs), static_cast<unsigned long long>(kept),
+                            static_cast<unsigned long long>(maxKept), static_cast<unsigned long long>(dropped),
+                            static_cast<unsigned long long>(around));
+        }
+    }
     if (header.count == 0) return false;
     // The buffers of this Light command: per ordinal in the list (nightOrdinal, reset by executeBegin), and within an
     // ordinal's ring per (list, slot) (Impl::buffer keys by listIndex too), so every list of a submission has its own.

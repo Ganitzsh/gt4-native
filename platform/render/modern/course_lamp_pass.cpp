@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>    // LOCAL F2b DEBUG
+#include <cstdlib>   // LOCAL F2b DEBUG
 
 namespace gt4::render {
 
@@ -44,6 +46,10 @@ void CourseLampPass::promote(const scene::SceneFrame& frame, uint16_t view,
         }
         if (!(bits & kMaterialGlow)) {
             ++s.dropped;
+            static const bool dropLog = [] { const char* e = std::getenv("GT4_F2B_DROPLOG"); return e && *e == '1'; }();
+            if (dropLog)   // LOCAL F2b DEBUG, never committed: each dropped candidate's frame and material
+                std::printf("F2b drop: frame %u vblank %u material %u\n", frame.frame, frame.vblank,
+                            unsigned(frame.materials[frame.instances[at->second].firstMaterial]));
             continue;
         }
         // one lamp with a game record (entries2[]) within the billboard's half size (Light's width and height are half

@@ -1,0 +1,250 @@
+diff --git a/platform/gsnative/gs_frontend.cpp b/platform/gsnative/gs_frontend.cpp
+index be20ea0..3332bf1 100644
+--- a/platform/gsnative/gs_frontend.cpp
++++ b/platform/gsnative/gs_frontend.cpp
+@@ -1,4 +1,5 @@
+ // The native renderer's front end (see gs_frontend.h). Register layouts from the public GS documentation.
++#include <map>   // R10 spike (local)
+ #include "gs_frontend.h"
+ #include "../gs/cpu_profile.h"
+ #include "texture_name.h"
+@@ -1812,8 +1813,85 @@ void GsFrontend::effect(const gfx::EffectRecord& r) {
+     frame.effects.push_back(e);
+ }
+ 
++// R10 spike (local): per frame, how many batches carry each value of qwords 201..216 (the lighting constants)
++static std::map<uint64_t, uint32_t> r10Constants;
++static std::vector<float> r10Lanes[64];   // per frame: each float of qwords 201..216, one entry per batch
++static uint64_t r10LastVb = 0;            // the VBlank of the last frame finished
++// GT4_R10_FREEZE=FROM,TO,QLO,QHI (ablation): each model job (keyed by its renderer, chain, counts, strip header and
++// its place among jobs with the same key) gets for qwords QLO..QHI the values it had in the last frame before FROM,
++// in the frames after FROM up to TO. Everything else (geometry, matrices) stays as sent.
++struct R10Freeze {
++    bool on = false;
++    unsigned long long from = 0, to = 0;
++    unsigned qlo = 0, qhi = 0;
++    uint64_t frameOf = ~0ull;
++    std::map<uint64_t, unsigned> seen;
++    std::map<uint64_t, std::vector<uint32_t>> saved;
++    unsigned long long frozen = 0, missed = 0;
++    R10Freeze() {
++        const char* e = std::getenv("GT4_R10_FREEZE");
++        on = e && std::sscanf(e, "%llu,%llu,%u,%u", &from, &to, &qlo, &qhi) == 4 && qhi < 256 && qlo <= qhi;
++    }
++};
++static R10Freeze r10Freeze;
++
+ void GsFrontend::model(const gfx::ModelJob& in, const uint32_t* words) {
+     GT4_CPU_SCOPE("front end: 3D batches");
++    static std::vector<uint32_t> r10Copy(gfx::kModelWords);
++    if (r10Freeze.on) {
++        R10Freeze& F = r10Freeze;
++        if (F.frameOf != r10LastVb) {
++            F.frameOf = r10LastVb;
++            F.seen.clear();
++            if (r10LastVb == F.to) std::fprintf(stderr, "R10 freeze: %llu jobs frozen, %llu without a saved key\n", F.frozen, F.missed);
++        }
++        uint64_t h = 1469598103934665603ull;
++        auto mix = [&](uint32_t v) { h = (h ^ v) * 1099511628211ull; };
++        mix(in.renderer), mix(in.chain), mix(in.count), mix(in.nloop);
++        const uint32_t strips = std::min<uint32_t>(words[64 * 4 + 3] & 0xFFFF, 60);
++        for (uint32_t k = 0; k <= strips; ++k) mix(words[(64 + k) * 4 + 3]);
++        const uint64_t key = h ^ (uint64_t(F.seen[h]++) << 48);
++        const uint32_t lo = F.qlo * 4, n = (F.qhi - F.qlo + 1) * 4;
++        if (r10LastVb < F.from) {
++            F.saved[key].assign(words + lo, words + lo + n);
++        } else if (r10LastVb <= F.to) {
++            auto it = F.saved.find(key);
++            if (it != F.saved.end()) {
++                std::copy(words, words + gfx::kModelWords, r10Copy.begin());
++                std::copy(it->second.begin(), it->second.end(), r10Copy.begin() + lo);
++                words = r10Copy.data();
++                ++F.frozen;
++            } else {
++                ++F.missed;
++            }
++        }
++    }
++    {
++        uint64_t h = 1469598103934665603ull;
++        for (uint32_t i = 201 * 4; i < 217 * 4; ++i) h = (h ^ words[i]) * 1099511628211ull;
++        ++r10Constants[h ^ (uint64_t(in.renderer) << 60)];
++        for (uint32_t i = 0; i < 64; ++i) {
++            float f;
++            std::memcpy(&f, &words[201 * 4 + i], 4);
++            if (std::isfinite(f)) r10Lanes[i].push_back(f);
++        }
++    }
++    // R10 ablation (local): GT4_R10_SKIPBODY=hex drops the model jobs with that lighting body (chain >> 16),
++    // GT4_R10_SKIPTEX=id the ones that sample that texture
++    static const long r10SkipBody = [] { const char* e = std::getenv("GT4_R10_SKIPBODY"); return e ? std::strtol(e, nullptr, 16) : -1L; }();
++    static const std::vector<long> r10SkipTex = [] {   // a comma list
++        std::vector<long> v;
++        if (const char* e = std::getenv("GT4_R10_SKIPTEX"))
++            for (char* p = const_cast<char*>(e); *p;) {
++                char* end = nullptr;
++                const long id = std::strtol(p, &end, 10);
++                if (end == p) break;
++                v.push_back(id);
++                p = *end ? end + 1 : end;
++            }
++        return v;
++    }();
++    if (r10SkipBody >= 0 && long(in.chain >> 16) == r10SkipBody) return;
+     setPrim(in.prim);
+     const uint32_t prim = primValue();
+     queued = 0;   // (the next batch starts its strips again: its first two vertices complete no triangle)
+@@ -1858,6 +1936,8 @@ void GsFrontend::model(const gfx::ModelJob& in, const uint32_t* words) {
+             lastTexture = {texture.kind == TextureSource::Kind::Memory, s, texture, uploads, ownerChanges, clutLoads};
+         }
+     }
++    if (!r10SkipTex.empty() && texture.kind == TextureSource::Kind::Memory &&
++        std::find(r10SkipTex.begin(), r10SkipTex.end(), long(texture.id)) != r10SkipTex.end()) return;
+     if (texture.kind == TextureSource::Kind::Target && texture.id != colour) sceneRead(texture.id);
+     noteDraw(colour, depth, texture);
+     const bool moving = (in.flags & 4) != 0;
+@@ -2578,6 +2658,144 @@ void GsFrontend::sceneFrame(std::unique_ptr<scene::SceneFrame> f) {
+ }
+ 
+ void GsFrontend::vsync(uint64_t vblank, FrameList& out) {
++    // R10 spike (local, not committed): GT4_R10_LOG=FILE writes one line per frame with the colour grading's weights
++    // and curve and each scene target's fog colour.
++    static FILE* r10 = [] { const char* p = std::getenv("GT4_R10_LOG"); return p ? std::fopen(p, "w") : nullptr; }();
++    if (r10) {
++        std::fprintf(r10, "%llu effects %zu", static_cast<unsigned long long>(vblank), frame.effects.size());
++        for (const auto& e : frame.effects) {
++            double ysum = 0;
++            uint64_t h = 1469598103934665603ull;
++            for (uint32_t c : e.curve) {
++                ysum += 0.2126 * (c & 0xFF) + 0.7152 * ((c >> 8) & 0xFF) + 0.0722 * ((c >> 16) & 0xFF);
++                h = (h ^ c) * 1099511628211ull;
++            }
++            std::fprintf(r10, " | w %06x %06x %06x curve %016llx meanY %.3f c64 %08x c128 %08x c192 %08x",
++                         e.weights[0] & 0xFFFFFF, e.weights[1] & 0xFFFFFF, e.weights[2] & 0xFFFFFF,
++                         static_cast<unsigned long long>(h), ysum / 256.0, e.curve[64], e.curve[128], e.curve[192]);
++        }
++        {   // the frame's 3D batches: how many, and a hash of their packets' identity (the first data word of each)
++            uint64_t h = 1469598103934665603ull;
++            std::vector<uint32_t> ids;
++            for (const auto& m : frame.models) ids.push_back(m.data < frame.modelData.size() ? frame.modelData[m.data] : 0u);
++            std::sort(ids.begin(), ids.end());
++            for (uint32_t id : ids) h = (h ^ id) * 1099511628211ull;
++            std::fprintf(r10, " ; batches %zu draws %zu set %016llx", frame.models.size(), frame.draws.size(),
++                         static_cast<unsigned long long>(h));
++        }
++        {   // GT4_R10_DRAWS=FIRST,LAST: the frame's draws that are not 3D batches, by state, texture and target
++            static unsigned long long dFirst = 0, dLast = 0;
++            static bool dRead = false;
++            if (!dRead) {
++                dRead = true;
++                if (const char* e = std::getenv("GT4_R10_DRAWS")) std::sscanf(e, "%llu,%llu", &dFirst, &dLast);
++            }
++            if (vblank >= dFirst && vblank <= dLast && dLast) {
++                struct Agg { uint32_t draws = 0, verts = 0; double r = 0, g = 0, b = 0, a = 0; uint64_t tex = 1469598103934665603ull; bool modeled = false; };
++                std::map<uint64_t, Agg> agg;
++                for (const auto& d : frame.draws) {
++                    uint64_t h = 1469598103934665603ull;
++                    const auto* p8 = reinterpret_cast<const uint8_t*>(&d.state);
++                    for (size_t i = 0; i < sizeof d.state; ++i) h = (h ^ p8[i]) * 1099511628211ull;
++                    h = (h ^ (uint64_t(d.texture.kind) << 56) ^ (uint64_t(d.modeled) << 48) ^ d.target) * 1099511628211ull;
++                    Agg& a = agg[h];
++                    ++a.draws;
++                    a.modeled = d.modeled;
++                    // the textures it used, in draw order: id and content version (a swap or a rewrite shows here)
++                    a.tex = (a.tex ^ ((uint64_t(d.texture.id) << 32) | d.texture.version)) * 1099511628211ull;
++                    for (uint32_t v = d.first; v < d.first + d.count && v < frame.vertices.size(); ++v) {
++                        const uint32_t c = frame.vertices[v].rgba;
++                        a.r += c & 0xFF; a.g += (c >> 8) & 0xFF; a.b += (c >> 16) & 0xFF; a.a += c >> 24;
++                        ++a.verts;
++                    }
++                }
++                std::fprintf(r10, " ; draws %zu", agg.size());
++                for (const auto& [h, a] : agg) {
++                    const double n = a.verts ? a.verts : 1;
++                    std::fprintf(r10, " %016llx:%u:%u:%.1f,%.1f,%.1f,%.1f:%016llx:%d", static_cast<unsigned long long>(h), a.draws,
++                                 a.verts, a.r / n, a.g / n, a.b / n, a.a / n, static_cast<unsigned long long>(a.tex), a.modeled ? 1 : 0);
++                }
++            }
++        }
++        {   // GT4_R10_DRAWLIST=VB1,VB2,LO,HI: the Draw commands at positions LO..HI (as GT4_GSN_LIMIT counts them)
++            static unsigned long long l1 = 0, l2 = 0, lo = 0, hi = 0;
++            static FILE* lf = nullptr;
++            static bool lr = false;
++            if (!lr) {
++                lr = true;
++                if (const char* e = std::getenv("GT4_R10_DRAWLIST"))
++                    if (std::sscanf(e, "%llu,%llu,%llu,%llu", &l1, &l2, &lo, &hi) == 4) {
++                        const char* p = std::getenv("GT4_R10_LOG");
++                        std::string path = std::string(p ? p : "r10.log") + ".draws";
++                        lf = std::fopen(path.c_str(), "w");
++                    }
++            }
++            if (lf && (vblank == l1 || vblank == l2)) {
++                unsigned long long n = 0;
++                for (const auto& cmd : frame.commands) {
++                    if (cmd.kind != FrameList::Command::Kind::Draw) continue;
++                    ++n;
++                    if (n < lo || n > hi || cmd.index >= frame.draws.size()) continue;
++                    const Draw& d = frame.draws[cmd.index];
++                    const auto& c = d.state.c;
++                    double r = 0, g = 0, b = 0, a = 0;
++                    uint32_t mr = 0, mg = 0, mb = 0, ma = 0, nv = 0;
++                    for (uint32_t v = d.first; v < d.first + d.count && v < frame.vertices.size() && !d.modeled; ++v) {
++                        const uint32_t q = frame.vertices[v].rgba;
++                        const uint32_t cr = q & 0xFF, cg = (q >> 8) & 0xFF, cb = (q >> 16) & 0xFF, ca = q >> 24;
++                        r += cr; g += cg; b += cb; a += ca; ++nv;
++                        mr = std::max(mr, cr); mg = std::max(mg, cg); mb = std::max(mb, cb); ma = std::max(ma, ca);
++                    }
++                    const double k = nv ? nv : 1;
++                    std::fprintf(lf, "%llu draw %llu modeled %d prim %03x blend %u%u%u%u fix %u atst %u/%u/%u ztst %u/%u zw %u "
++                                     "tex %u:%u:%u target %u count %u rgba %.1f,%.1f,%.1f,%.1f max %u,%u,%u,%u\n",
++                                 static_cast<unsigned long long>(vblank), n, d.modeled ? 1 : 0, d.state.prim,
++                                 c.blendA, c.blendB, c.blendC, c.blendD, c.blendFixed, c.alphaTest, c.alphaFunc, c.alphaRef,
++                                 c.depthTest, c.depthFunc, c.depthWrite, unsigned(d.texture.kind), d.texture.id,
++                                 d.texture.version, d.target, d.count, r / k, g / k, b / k, a / k, mr, mg, mb, ma);
++                    if (d.modeled) {   // its model jobs: index in the frame (= the stream's batch run), renderer, body
++                        std::fprintf(lf, "%llu   jobs of draw %llu (first %u):", static_cast<unsigned long long>(vblank), n, d.first);
++                        for (size_t j = 0; j < frame.models.size(); ++j) {
++                            const uint64_t f = frame.models[j].first;   // both in the frame's model vertex space
++                            if (f >= d.first && f < uint64_t(d.first) + d.count) {
++                                std::fprintf(lf, " %zu:r%u:b%04x:n%u", j, frame.models[j].renderer,
++                                             frame.models[j].chain >> 16, frame.models[j].count);
++                                // its inputs, for a qword-by-qword compare: vblank, job, draw, the job, its words
++                                static FILE* wf = [] {
++                                    const char* p = std::getenv("GT4_R10_LOG");
++                                    return std::fopen((std::string(p ? p : "r10.log") + ".words").c_str(), "wb");
++                                }();
++                                const gfx::ModelJob& mj = frame.models[j];
++                                if (wf && mj.data + gfx::kModelWords <= frame.modelData.size()) {
++                                    const uint64_t hdr[3] = {static_cast<uint64_t>(vblank), j, n};
++                                    std::fwrite(hdr, sizeof hdr, 1, wf);
++                                    std::fwrite(&mj, sizeof mj, 1, wf);
++                                    std::fwrite(&frame.modelData[mj.data], 4, gfx::kModelWords, wf);
++                                    std::fflush(wf);
++                                }
++                            }
++                        }
++                        std::fputc('\n', lf);
++                    }
++                }
++                std::fflush(lf);
++            }
++        }
++        r10LastVb = vblank;
++        std::fprintf(r10, " ; lanes");
++        for (auto& lane : r10Lanes) {
++            if (lane.empty()) { std::fprintf(r10, " nan"); continue; }
++            std::nth_element(lane.begin(), lane.begin() + lane.size() / 2, lane.end());
++            std::fprintf(r10, " %.6g", lane[lane.size() / 2]);
++        }
++        std::fprintf(r10, " ; lights %zu", frame.lights.size());
++        for (const auto& l : frame.lights)
++            std::fprintf(r10, " | %ux%u fog %06x %d", l.width, l.height, l.fogColour & 0xFFFFFF, l.fogged ? 1 : 0);
++        std::fputc('\n', r10);
++        std::fflush(r10);
++    }
++    r10Constants.clear();
++    for (auto& lane : r10Lanes) lane.clear();
+     packetsThisFrame = 0;
+     lastModelView = 0;
+     if (sceneOpen) sceneVsyncInFrame = true;   // (its markers' indices span two lists: not checked)

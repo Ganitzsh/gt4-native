@@ -353,6 +353,10 @@ public:
     // A texture id's identity (setTexture's key: content hash, fields, palette, TEXA; a texture pack image's name): what a
     // material keys on (B6), the same after the texture is dropped and decoded again under a new id. 0: unknown.
     uint64_t textureIdentity(uint32_t id) const;
+    uint32_t debugTextureIdOf(uint64_t identity) const {   // LOCAL N3 DEBUG, never committed
+        for (const auto& [id, ident] : textureIdentities) if (ident == identity) return id;
+        return 0;
+    }
     // Replaces the whole of GS memory (4 MiB in address order: a saved state restored); every page becomes
     // memory-owned and changed.
     void restoreMemory(const void* data);
