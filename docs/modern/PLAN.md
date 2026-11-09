@@ -822,33 +822,40 @@ a night frame and a HUD frame); on the Odin, the night replay with no band (the 
 levels on every pixel at `original` on the REF captures (above 1x: deterministic across devices within 2 levels, not
 GS-exact), after which section 2's strict rule replaces the interim one; `PERF` desktop and Odin (C6b); `VAL`.
 
-**B25: Depth buffers in the mid-run snapshot (M; lane B; lane A reviews the front end).** RISKS R7, named (lane B,
-2026-11-09, `debug/b-r7-trace`): a capture recorded mid-run differs from the same run recorded from game start because
-its snapshot carries no Z buffer. `GsFrontend::drawnTargets` skips every depth target, so `readVramWithTargets` reads
-back colour targets only, and a sub-capture starts with Z from GS memory, which the GPU-drawn Z never reaches. GT4
-inverts Z in place each frame rather than clearing it, so the stale Z survives wherever the scene keeps covering it:
-under the car ahead, whose depth-tested edges then come out differently (the Z buffer bp0000 differs on 21 values of
-the car's silhouette at VBlank 9,944, the 3D target on 109 pixels after the car's draws and 495 by the frame's end),
-and GT4's feedback buffers likely carry that on into the whole-picture difference lane C measured at VBlank 10,926. A
-sub-capture recorded from a lockstep replay reads back no targets at all (no read service). Found by limiting one
-VBlank's list (`GT4_GSN_LIMIT_AT`) with the history whole, the draw lists identical. The live game and captures from
-game start are right; the earlier leads stand as facts, not as the cause: pages written by several texture sets (our
-memory keeps the last set's blocks; reads by set don't see it), and stale 4-bit reads of drawn pages, ruled out on
-these pages. The fix has two halves (lane B, 2026-11-09). (1) The read-back: `drawnTargets` includes the Z buffers,
-and the read service reads them with a compute pass (`gsn_depth_read.comp`; a Z buffer is not a transfer source),
-turning the depth aspect into the GS's Z (floor(d x 2^32), at most the format's largest, largest - Z while the target
-is inverted), packed as Z32, Z24 or Z16 for `GsMemory`'s own Z swizzle, counted. It serves the snapshot's read only;
-the game's own reads are unchanged (lane B): `GT4_REC_GS_READ` goes through `GsFrontend::read`, which picks its target
-from the page table, not `drawnTargets`; a read of pages a Z buffer owns fails its depth test there and is served from
-the memory model as before (counted in `readMismatches`), and `GsnScene::copyRect` refuses a non-depth request on a Z
-buffer as it did. A counter of depth reads served per run shows 0 in a from-boot run. (2) The restore: `GsnScene`
-creates every new target cleared, so the snapshot's memory alone restores nothing. In a run that started from a
-restored state (`GsFrontend::restoreMemory`, a sub-capture), a Z buffer the front end creates for the first time takes
-its initial Z decoded from GS memory on the front end's thread, carried in the FrameList with the new target, and
-`GsnScene` loads it into the depth image (the depth aspect, each render pixel its GS pixel's Z, never filtered:
-expanded to the render scale before the copy, or by a nearest draw) instead of clearing it. A from-boot run never
-restores a state, so `ORIG` and every from-boot capture are unchanged by construction. Colour targets start the same
-way but stay out unless the 36 frames show they matter. A lockstep replay's recording reads its targets back too,
+**B25: Depth buffers in the mid-run snapshot (M; lane B; lane A reviews the front end). Parked** (lane B, 2026-11-09:
+`parked/b25-depth-start`, the Z start and the read-back; every gate passes but the acceptance, the sub-capture pair
+unchanged to the pixel). The fix as designed can't work: the 3D's Z buffer at bp0000 (640x448, pages 0-139) has its
+top half (pages 0-69) under the display buffer bp0 (640x224), which owns them in the page table, so the snapshot can't
+carry that half, and GS memory there holds the shown picture, not Z. On the PS2 the display copy overwrites that Z
+every frame and GT4's Z24 pass turns it round in place; our Z is a separate GPU image the display copy never touches,
+with a history no snapshot of GS memory carries. The cause stands; the fix it needs is B26. The design as it was:
+RISKS R7, named (lane B, 2026-11-09, `debug/b-r7-trace`): a capture recorded mid-run differs from the same run
+recorded from game start because its snapshot carries no Z buffer. `GsFrontend::drawnTargets` skips every depth
+target, so `readVramWithTargets` reads back colour targets only, and a sub-capture starts with Z from GS memory, which
+the GPU-drawn Z never reaches. GT4 inverts Z in place each frame rather than clearing it, so the stale Z survives
+wherever the scene keeps covering it: under the car ahead, whose depth-tested edges then come out differently (the Z
+buffer bp0000 differs on 21 values of the car's silhouette at VBlank 9,944, the 3D target on 109 pixels after the
+car's draws and 495 by the frame's end), and GT4's feedback buffers likely carry that on into the whole-picture
+difference lane C measured at VBlank 10,926. A sub-capture recorded from a lockstep replay reads back no targets at
+all (no read service). Found by limiting one VBlank's list (`GT4_GSN_LIMIT_AT`) with the history whole, the draw lists
+identical. The live game and captures from game start agree with each other; whether they agree with the PS2 where Z
+meets the display's pages is B26's question; the earlier leads stand as facts, not as the cause: pages written by
+several texture sets (our memory keeps the last set's blocks; reads by set don't see it), and stale 4-bit reads of
+drawn pages, ruled out on these pages. The fix has two halves (lane B, 2026-11-09). (1) The read-back: `drawnTargets`
+includes the Z buffers, and the read service reads them with a compute pass (`gsn_depth_read.comp`; a Z buffer is not
+a transfer source), turning the depth aspect into the GS's Z (floor(d x 2^32), at most the format's largest, largest -
+Z while the target is inverted), packed as Z32, Z24 or Z16 for `GsMemory`'s own Z swizzle, counted. It serves the
+snapshot's read only; the game's own reads are unchanged (lane B): `GT4_REC_GS_READ` goes through `GsFrontend::read`,
+which picks its target from the page table, not `drawnTargets`; a read of pages a Z buffer owns fails its depth test
+there and is served from the memory model as before (counted in `readMismatches`), and `GsnScene::copyRect` refuses a
+non-depth request on a Z buffer as it did. A counter of depth reads served per run shows 0 in a from-boot run. (2) The
+restore: `GsnScene` creates every new target cleared, so the snapshot's memory alone restores nothing. In a run that
+started from a restored state (`GsFrontend::restoreMemory`, a sub-capture), a Z buffer the front end creates for the
+first time takes its initial Z decoded from GS memory on the front end's thread, carried in the FrameList with the new
+target, and `GsnScene` loads it into the depth image (the depth aspect, each render pixel its GS pixel's Z, never
+filtered: expanded to the render scale before the copy, or by a nearest draw) instead of clearing it. A from-boot run
+never restores a state, so `ORIG` and every from-boot capture are unchanged by construction. Colour targets start the
+same way but stay out unless the 36 frames show they matter. A lockstep replay's recording reads its targets back too,
 without the deadlock the read service has there (gs_host.cpp withholds it on purpose), as a separate step after these.
 The two halves are two commits landed together (lane B): the restore first, gated on `restoreMemory`, then the
 read-back; the 36 frames need both, since without the read-back the snapshot's memory still holds stale Z for the
@@ -857,6 +864,22 @@ its sub-capture from VBlank 9,926, `subcap_night`'s 36 frames) identical; `ORIG`
 when a capture starts mid-run), with an assertion and a counter of new Z buffers loaded from memory, 0 in every `ORIG`
 run, since they prove the restore can't fire from boot; `CTEST` of the Z write-back's swizzle in each format. Until it
 lands, references come from captures recorded from game start, as CAPTURES says.
+
+**B26: Colour and Z sharing GS memory (M?; lane B; lane A reviews the front end).** B25's finding: GT4's 3D Z buffer
+shares GS memory with the display buffer, and on the PS2 the display copy overwrites that Z every frame before GT4's
+Z24 pass inverts it in place; our Z buffer is a separate GPU image the colour writes never reach. That is a fidelity
+question beyond mid-run captures: wherever GT4 depth-tests against Z the display copy wrote, our from-boot rendering
+may differ from the PS2. Step 0, no dependency, in two halves. (a) Lane A: the front end's count, from its page table,
+of GT4's depth-tested draws meeting pages a colour target wrote since the Z buffer's last depth write, split by
+whether a Z24 pass ran between, on the REF and race captures; it sizes B26 (only the 3D's first draws after the
+display copy, or everywhere). (b) Lane B, the coordinator's measure: on from-boot frames, each depth-tested draw run
+against our Z and against an aliased Z built from GS memory as the PS2 has it (the display copy, then GT4's Z24 pass
+applied), counting per frame the pixels whose test result differs; it says whether live play differs. Step 1, with
+C12's 3D step: the PCSX2 comparison on the frames step 0 flags (PCSX2's software GS models the shared memory). Then,
+only if they differ: an aliasing model, a Z buffer's GPU image taking the colour writes to its pages (and the
+reverse), which would move from-boot `ORIG`, so a re-baseline under section 2's rule. It also fixes R7's mid-run
+captures. Depends: nothing for step 0; C12's 3D step for step 1. Acceptance of step 0: both counts per frame on the
+REF captures, with the frames they flag listed; the model's acceptance is set from them and C12's confirmation.
 
 ### Lane C: platform, ARM64, tooling
 
