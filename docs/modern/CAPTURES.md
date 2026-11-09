@@ -266,11 +266,16 @@ these, each recorded in B-spec (the game drives) from a fresh copy of the approv
   2's lamp records), scene records, `original`, 1280 x 720. 183 of 184 frames sampled every 100 from 1,900 are lit
   (6,900, a load, is not); 13 live shots over the lap equal the replay's frames (mean difference 0.00; placed by
   the session's clock, VBlank = ms x 0.06 - 2 to 3). N3's v4 hunt on the forward layout. Heavy-both.
+- `lap_csr5r_boot.cap`: Clubman Stage Route 5 Reverse (`r_route5_club`), Beginner Events > Sunday Cup race 4 in
+  B-spec, recorded from game start the same way, 20,200 frames (7.3 GB): the race from about frame 7,430, both laps,
+  then the results. Release game and host from empty folders at 790c25c, scene records, `original`, 1280 x 720.
+  Lit on all 19 frames sampled every 1,000 from 2,000; 13 live shots over the race equal the replay's frames (mean
+  difference 0.00, placed by the session's clock). N3's v4 hunt on C.S. Reverse with true colours. Heavy-both.
 - `a5b_r5.cap` (lane A's): S.S. Route 5 Reverse, the same race; 1,200 VBlanks after 300 of driving, scene records,
   the A5b game (flare markers around the flare pass). The warning capture: the pit entry's warning lamps blink
   through it; N4 uses it. `glow_r5.cap` (the A7 step 1a game) is the same stretch.
 
-All seven, with `r5_ss_ab.notes.json`, are also kept in `C:/Users/julie/gt4-native-game/build/caps/`
+All eight, with `r5_ss_ab.notes.json`, are also kept in `C:/Users/julie/gt4-native-game/build/caps/`
 (the originals in lanes F and A's `build/caps/`).
 
 The routes above start from GT mode's map: Professional Events, the event, regulations OK, the race, Entry, Don't
