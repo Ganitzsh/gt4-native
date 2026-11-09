@@ -981,7 +981,10 @@ struct GsnScene::Impl {
             }
             g.replaced = t.replaced;
             g.version = t.version;
-            std::memcpy(static_cast<uint8_t*>(stage.mapped) + offset, t.pixels.data(), t.pixels.size() * 4);
+            {
+                GT4_CPU_SCOPE("render: texture copy to staging");
+                std::memcpy(static_cast<uint8_t*>(stage.mapped) + offset, t.pixels.data(), t.pixels.size() * 4);
+            }
             copies.emplace_back(&t, offset);
             b.image(g.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_WRITE_BIT, true);
             offset += VkDeviceSize(t.pixels.size()) * 4;
@@ -1002,6 +1005,7 @@ struct GsnScene::Impl {
             vkCmdCopyBufferToImage(command, stage.buffer, textures[t->id].image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                    std::min(t->levels, 7u), regions);
         }
+        GT4_CPU_SCOPE("render: texture mips");
         for (const auto& [t, at] : copies) {
             GpuTexture& g = textures[t->id];
             if (g.generated > 1) generateMips(command, g.image, g.generated);

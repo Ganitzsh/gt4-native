@@ -1743,6 +1743,7 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
     // levels cover.
     uint64_t contentKey = c.contentKey;
     if (fresh) {
+        GT4_CPU_SCOPE("front end: texture content key");
         contentKey = mix(key, content);
         for (uint32_t i = 0; i < levelCount; ++i) {
             const Level& l = levels[i];
@@ -1837,6 +1838,7 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
         image.width = w;
         image.height = h;
         image.levels = levelCount;
+        GT4_CPU_SCOPE("front end: texture decode");
         size_t texels = 0;
         for (uint32_t i = 0; i < levelCount; ++i) texels += size_t(levels[i].w) * levels[i].h;
         image.pixels.resize(texels);
