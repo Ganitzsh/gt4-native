@@ -233,6 +233,29 @@ std::string unusedReason(const Settings& settings, std::string_view key) {
     if (settings.gsRenderer == GsRenderer::Native &&
         (key == "effects.bloom" || key == "post.bloom_intensity" || key == "post.tonemapper" || key == "post.auto_exposure"))
         return "not used with render.gs = native: the game's frames carry its own glare and colour grade";
+    // The game's frames (GsnScene) bring no motion vectors yet and reach the display stages whole, drawn by one
+    // fullscreen pass; with aa = taa or upscaler = fsr2 the GS scene resolves them temporally itself (pipeline.cpp
+    // resolveConfig, renderer.cpp setTemporal; the passes each setting runs, measured on race7, 2026-11-09). aa = taa
+    // runs (as that resolve), so it is not listed. Until PLAN.md B16c gives the display side the GS path's velocity.
+    if (settings.gsRenderer == GsRenderer::Native) {
+        if (key == "render.msaa" && settings.msaa > 1)
+            return "not used with render.gs = native: the game's frames reach the display stages whole, with no "
+                   "edges to resolve";
+        if (key == "render.upscaler" && settings.upscaler == Upscaler::Fsr2)
+            return "FSR 2 does not run with render.gs = native (no motion vectors from the game's frames yet): the "
+                   "game's own temporal resolve instead, and FSR 1 when render.quality draws below the output";
+        if (key == "render.upscaler" && upscaleRatio(settings) <= 1.0f)
+            return "not used at this render.quality with render.gs = native: the game's frames are drawn at or "
+                   "above the output size, so nothing is upscaled";
+        if (key == "render.aa" && settings.upscaler == Upscaler::Fsr2 &&
+            (settings.aa == AntiAliasing::Fxaa || settings.aa == AntiAliasing::Smaa ||
+             settings.aa == AntiAliasing::SmaaT2x))
+            return "not used with render.upscaler = fsr2 and render.gs = native: the game's own temporal resolve "
+                   "replaces it";
+        if (key == "render.aa" && settings.aa == AntiAliasing::SmaaT2x)
+            return "runs as SMAA 1x with render.gs = native: its temporal part needs motion vectors the game's "
+                   "frames don't bring yet";
+    }
     // (platform/audio/host_mixer: only the host's mixer interpolates other than the original)
     if ((key == "audio.interpolation" || key == "audio.spatial") && settings.audioMixer == AudioMixer::Game)
         return "not used with audio.mixer = game: the game mixes its own sound";

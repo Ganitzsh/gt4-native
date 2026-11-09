@@ -58,6 +58,32 @@ int main() {
     check(setOption(s, "render.aa", "SMAA_T2X").empty() && s.aa == AntiAliasing::SmaaT2x, "enum option ignores case");
     check(!setOption(s, "render.aa", "dlss").empty(), "unknown enum value is rejected");
     check(!setOption(s, "render.msaa", "3").empty(), "msaa accepts only 1, 2, 4, 8");
+    {   // render.gs = native: the display settings the game's frames don't use, or use as something else
+        Settings g;
+        applyPreset(g, Preset::Ultra);   // native GS, TAA, FSR 2, native quality
+        check(g.gsRenderer == GsRenderer::Native, "ultra draws with the native GS");
+        check(!unusedReason(g, "render.upscaler").empty(), "fsr2 is listed: it doesn't run on the game's frames");
+        check(unusedReason(g, "render.aa").empty(), "taa is not listed: it runs, as the GS scene's own resolve");
+        check(unusedReason(g, "render.msaa").empty(), "msaa 1 is not listed");
+        check(setOption(g, "render.msaa", "4").empty() && !unusedReason(g, "render.msaa").empty(),
+              "msaa 4 is listed with render.gs = native");
+        check(setOption(g, "render.aa", "fxaa").empty() && !unusedReason(g, "render.aa").empty(),
+              "fxaa is listed while upscaler = fsr2");
+        check(setOption(g, "render.upscaler", "fsr1").empty() && unusedReason(g, "render.aa").empty(),
+              "fxaa is not listed with fsr1");
+        check(!unusedReason(g, "render.upscaler").empty(), "fsr1 at native quality is listed: nothing is upscaled");
+        check(setOption(g, "render.quality", "performance").empty() && unusedReason(g, "render.upscaler").empty(),
+              "fsr1 below native quality is not listed");
+        check(setOption(g, "render.aa", "smaa_t2x").empty() && !unusedReason(g, "render.aa").empty(),
+              "smaa_t2x is listed: it runs as SMAA 1x");
+        Settings o = g;
+        check(setOption(o, "render.gs", "original").empty() && unusedReason(o, "render.aa").empty() &&
+              unusedReason(o, "render.msaa").empty(), "nothing of these is listed with render.gs = original");
+        Settings b;
+        applyPreset(b, Preset::Original);
+        for (const char* key : {"render.aa", "render.upscaler", "render.msaa"})
+            check(unusedReason(b, key).empty(), "the original preset lists none of them");
+    }
     {   // audio.interpolation is the host mixer's: unused while the game mixes (audio.mixer = game, the default)
         Settings a;
         check(!unusedReason(a, "audio.interpolation").empty(), "audio.interpolation unused with audio.mixer = game");

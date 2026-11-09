@@ -16,15 +16,18 @@ void renderOptions(std::vector<Option>& o) {
     o.push_back(enumOption("render.upscaler", &Settings::upscaler, kUpscalers,
         "Upscaler from render to output resolution: bilinear, bicubic (Catmull-Rom), lanczos (2 lobes), "
         "fsr1 (AMD FSR 1 EASU, spatial) or fsr2 (AMD FSR 2, temporal; it also does the anti-aliasing and at "
-        "quality = native it is FSR Native AA)."));
+        "quality = native it is FSR Native AA). With render.gs = native the game's frames bring no motion vectors "
+        "yet, so fsr2 runs there as the GS scene's own temporal resolve and FSR 1 (PLAN.md B16c)."));
     o.push_back(floatOption("render.sharpness", &Settings::sharpness, 0.0f, 1.0f,
         "Contrast-adaptive sharpening strength (AMD RCAS) after upscaling; 0 = off."));
     o.push_back(enumOption("render.aa", &Settings::aa, kAa,
         "Post-process anti-aliasing: fxaa, smaa (SMAA 1x), smaa_t2x (SMAA with 2-frame temporal "
         "supersampling) or taa (temporal AA; it also upsamples when rendering below the output). Ignored "
-        "when render.upscaler = fsr2."));
+        "when render.upscaler = fsr2. With render.gs = native the game's frames bring no motion vectors yet: taa "
+        "runs there as the GS scene's own temporal resolve, and smaa_t2x as SMAA 1x."));
     o.push_back(intOption("render.msaa", &Settings::msaa, 1, 8,
-        "Multisample anti-aliasing samples for the 3D scene (clamped to the device).", {1, 2, 4, 8}));
+        "Multisample anti-aliasing samples for the 3D scene (clamped to the device). Not used on the game's frames "
+        "with render.gs = native: they reach the display stages whole.", {1, 2, 4, 8}));
 }
 
 void textureOptions(std::vector<Option>& o) {
