@@ -4,11 +4,14 @@
     py -I tools/slot.py --slot SLOT[+SLOT...] --what TEXT --log FILE [--cwd DIR] [--env K=V ...] [--min-gb N]
                         -- CMD ARGS [--- CMD ARGS ...]
 
-SLOT: game (gt4-decomp-release: game builds), heavy (heavy-1 or heavy-2: host builds, live games, replays),
-heavy-both (both: a replay over 2 GB), live-game (the console's focus: a windowed game or PCSX2);
-docs/modern/CAPTURES.md lists them. A slot is a folder under GT4_LOCKS (default: ~/locks), made with mkdir (atomic);
-owner.txt in it says who holds it, its first line for people, its second "pid=N start=T" (the holder and its start
-time) for the waiters.
+SLOT: game (gt4-decomp-release and one of heavy-1 and heavy-2: game builds), heavy (heavy-1 or heavy-2: host builds,
+live games, replays), heavy-both (both: a replay over 2 GB), live-game (the console's focus: a windowed game or
+PCSX2); docs/modern/CAPTURES.md lists them. A game build takes a heavy slot too, so at most two of the big jobs run
+at once: two heavy jobs, or a game build and one (2026-11-09: a game build, a host build and a live game started
+within 90 s, each past the floor before the others had grown, and the machine ran out of memory). The floor is
+looked at once, when a job starts; it can't see a job that started a moment before and hasn't reached its peak.
+A slot is a folder under GT4_LOCKS (default: ~/locks), made with mkdir (atomic); owner.txt in it says who holds it,
+its first line for people, its second "pid=N start=T" (the holder and its start time) for the waiters.
 
 Waits for its turn, until N GB are available (default 8) and every slot asked for is free, takes them together (a
 partial hold is given back, never kept while waiting), runs each command in turn (stops at the first failure), and
@@ -42,8 +45,8 @@ import threading
 import time
 
 WINDOWS = os.name == "nt"
-SLOTS = {"game": [["gt4-decomp-release"]], "heavy": [["heavy-1"], ["heavy-2"]], "heavy-both": [["heavy-1", "heavy-2"]],
-         "live-game": [["live-game"]]}
+SLOTS = {"game": [["gt4-decomp-release", "heavy-1"], ["gt4-decomp-release", "heavy-2"]],   # (a heavy slot too)
+         "heavy": [["heavy-1"], ["heavy-2"]], "heavy-both": [["heavy-1", "heavy-2"]], "live-game": [["live-game"]]}
 
 # Low memory: off. On only by the coordinator's word, while the machine's available memory sits under 7 GB (a kernel
 # leak only the owner's reboot clears; on from 2026-11-08 to the reboot of 2026-11-09). When on, the floors are capped
@@ -392,7 +395,15 @@ def kill_with_me():
     if not (k32.SetInformationJobObject(ctypes.c_void_p(job), 9, ctypes.byref(info), ctypes.sizeof(info)) and
             k32.AssignProcessToJobObject(ctypes.c_void_p(job), ctypes.c_void_p(k32.GetCurrentProcess()))):
         log_line("no job object (a parent's job forbids it?): the commands could outlive a kill of this runner")
+        return None
     # (the handle stays open for this process's life: closed by the OS at its end, which kills the job)
+
+    def peak_gb():
+        """The job's peak committed memory so far (every process it ran), in GB; None if Windows won't say."""
+        out = LIMITS()
+        ok = k32.QueryInformationJobObject(ctypes.c_void_p(job), 9, ctypes.byref(out), ctypes.sizeof(out), None)
+        return out.peak_job / 2**30 if ok else None
+    return peak_gb
 
 
 @contextlib.contextmanager
@@ -427,7 +438,7 @@ def run(args):
     for k in kinds:
         if k not in SLOTS:
             sys.exit(f"slot: unknown slot {k!r} (one of {', '.join(SLOTS)})")
-    kill_with_me()
+    peak_gb = kill_with_me()   # (Windows: the job's peak memory, logged at each exit for the floors' sake)
     rc = 0
     with held(kinds, args.what, args.min_gb) as names:
         names = "+".join(names)
@@ -440,7 +451,9 @@ def run(args):
                 log.flush()
                 rc = subprocess.run(c, cwd=args.cwd, env=env, stdout=log, stderr=subprocess.STDOUT,
                                     creationflags=flags).returncode
-                log.write(f"[exit {rc} after {time.time() - start:.0f} s, {time.strftime('%H:%M:%S')}]\n")
+                peak = peak_gb() if peak_gb else None
+                log.write(f"[exit {rc} after {time.time() - start:.0f} s, {time.strftime('%H:%M:%S')}"
+                          + (f", peak {peak:.2f} GB so far" if peak is not None else "") + "]\n")
                 log.flush()
                 if rc:
                     break
@@ -488,7 +501,18 @@ def self_test():
         got = try_take(["heavy"], "self-test")
         expect(bool(got) and os.path.basename(got[0]) == "heavy-2", "a take heals a stale slot and gets it")
         expect(try_take(["heavy"], "self-test") is None, "with both held by live holders, nothing is taken")
-        for n in ("heavy-1", "heavy-2"):
+        # a game build takes a heavy slot too: at most two of the big jobs at once
+        expect(try_take(["game"], "self-test") is None and
+               not os.path.exists(os.path.join(locks_dir(), "gt4-decomp-release")),
+               "no game build beside two heavy jobs, and nothing kept from the try")
+        shutil.rmtree(got[0])   # heavy-2 free again
+        game = try_take(["game"], "self-test")
+        expect(bool(game) and sorted(os.path.basename(p) for p in game) == ["gt4-decomp-release", "heavy-2"],
+               "a game build takes the free heavy slot with its own")
+        expect(try_take(["heavy"], "self-test") is None, "and no second heavy job runs beside it")
+        for p in game:
+            shutil.rmtree(p)
+        for n in ("heavy-1",):
             shutil.rmtree(os.path.join(locks_dir(), n))
 
         # the queue: an older live waiter for the same slots goes first; other slots' and gone waiters' don't count

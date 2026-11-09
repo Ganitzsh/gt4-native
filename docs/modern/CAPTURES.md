@@ -36,6 +36,11 @@ object), so a slot freed that way has no work left running. Waiters are served i
 ticket in `C:/Users/julie/locks/queue` and takes nothing while an older live ticket waits for one of the same slots,
 the memory floor included, so a job started later never passes one that is waiting (a ticket whose waiter is gone is
 removed). Only runners from main since the queue take tickets: run `tools/slot.py` from an up-to-date checkout.
+A game build takes a heavy slot as well as its own, so at most two big jobs run at once: two heavy jobs, or a game
+build and one. On 2026-11-09 at 22:47 a game build, a host build and a live game started within 90 s; each found its
+floor free before the others had grown, and the machine ran out of memory. The floor is looked at once, when a job
+starts. Each command's exit line now gives the job's peak memory so far (`peak N GB`), so the next floors can come
+from measured peaks.
 Two waits that are meant, not bugs. While a `heavy-both` waiter waits for the second heavy slot, the free one stays
 idle: the younger `heavy` waiters behind it don't take it, so the two-slot job is never starved. And the oldest
 waiter, held at its memory floor, holds back the younger ones for the same slots, even those with lower floors.
@@ -49,8 +54,8 @@ link 1.10, a replay 1.21) plus 1 GB, raised to the 4.5 GB minimum.
 
 | Slot | For | Limits |
 |---|---|---|
-| `C:/Users/julie/locks/gt4-decomp-release` | game builds (`tools/release_game.py`, `tools/game_cc.py`): one at a time | `--jobs 4` |
-| `C:/Users/julie/locks/heavy-1`, `heavy-2` | host builds, live game runs, replays: two at a time | `cmake --build --parallel 6` |
+| `C:/Users/julie/locks/gt4-decomp-release` | game builds (`tools/release_game.py`, `tools/game_cc.py`): one at a time, each with a heavy slot | `--jobs 4` |
+| `C:/Users/julie/locks/heavy-1`, `heavy-2` | host builds, live game runs, replays: two at a time, one beside a game build | `cmake --build --parallel 6` |
 | `C:/Users/julie/locks/live-game` | the console's focus: a windowed game, PCSX2 (with a heavy slot) | one at a time |
 
 A replay takes one heavy slot whatever its capture's size: `gt4_host --replay` reads the capture one frame at a time
