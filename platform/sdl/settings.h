@@ -59,10 +59,6 @@ enum class UiEntry : uint8_t { Hotkey, Integrated };
 enum class UiPause : uint8_t { Gt4, Native };
 // The pages' button prompts (ui.prompts, settings_ui.cpp; MENU_DESIGN M9): auto = the controller in use.
 enum class UiPrompts : uint8_t { Auto, Xbox, PlayStation, Keyboard };
-// Whether the host draws the settings pages (MENU_DESIGN M9 sets it): until then ui.entry = integrated and ui.pause =
-// native are taken only from --set (acceptance runs), never from the settings file, and are listed as unused
-// (settings_ui.cpp).
-inline constexpr bool kHostDrawsPages = false;
 
 struct Settings {
     static constexpr int kVersion = 1;

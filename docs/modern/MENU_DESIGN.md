@@ -329,9 +329,9 @@ Until M9 wires the host's page drawing, every preset and the default set `ui.ent
 setting never sends players into a page the host cannot draw (M6 first shipped `integrated` in low to ultra while the
 host still ignored the draw list: GT4's Options got an invisible hub). M9 switches low to ultra to `integrated` and
 `native`, one table line each (`settings.cpp` `presetFollowers`); until then M6's and M7's acceptance runs use
-`--set`, and `host_settings` checks that no preset sets `integrated` or `native`. The host also ignores them in the
-settings file (`kHostDrawsPages`: a file written between 44f286c and 6ab90b7 holds `integrated`), warns at load, and
-lists them as unused when `--set` gives them; M9 sets `kHostDrawsPages` and the file takes them again.
+`--set`, and `host_settings` checks that no preset sets `integrated` or `native`. Since M9c the host draws the
+pages, so the settings file takes `integrated` and `native` again (the opt-in of `docs/modern/settings-playtest.ini`,
+the coordinator, 2026-11-09), while the presets and the default stay `hotkey` and `gt4` until M9f.
 
 `applyPreset` sets the `ui.*` keys (as `input.response` already is in every preset), but `detectPreset` ignores
 them, so a player who sets `ui.pause = gt4` on High still reads "Preset: High", not "Custom", for a choice that is
