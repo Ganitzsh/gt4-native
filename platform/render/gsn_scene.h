@@ -108,6 +108,7 @@ public:
     SceneCamera camera() const override;
     bool drawsOriginalEffects() const override { return true; }   // the game draws its own glare and fog
     bool hasMotionVectors() const override { return false; }      // not yet (the GS stream has no history)
+    bool usesMultisampling() const override { return false; }     // its one fullscreen pass has no edges to resolve
 
 private:
     struct Impl;

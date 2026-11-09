@@ -71,6 +71,9 @@ public:
     // True when the scene resolves its own temporal anti-aliasing where it should (the game's frames: in the
     // 3D scene, before the game's post effects and HUD): the pipeline then adds none of its own for TAA.
     virtual bool antiAliasesItself() const { return false; }
+    // False when multisampling the scene targets would resolve nothing (the game's frames: one fullscreen pass copies
+    // the GS picture in): the pipeline then makes no multisampled targets, whatever render.msaa says.
+    virtual bool usesMultisampling() const { return true; }
 };
 
 }  // namespace gt4

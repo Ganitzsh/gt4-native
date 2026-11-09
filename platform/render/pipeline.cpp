@@ -108,8 +108,10 @@ struct FramePipeline::Impl {
         return vk::createImage(device, desc);
     }
 
-    // `selfResolved`: the scene does its own temporal anti-aliasing (SceneSource::antiAliasesItself).
-    Config resolveConfig(const Settings& s, VkExtent2D swapchain, bool motionVectors, bool selfResolved = false) {
+    // `selfResolved`: the scene does its own temporal anti-aliasing (SceneSource::antiAliasesItself); `multisampled`:
+    // its targets are worth multisampling (SceneSource::usesMultisampling).
+    Config resolveConfig(const Settings& s, VkExtent2D swapchain, bool motionVectors, bool selfResolved,
+                         bool multisampled) {
         Config c;
         c.swapchain = swapchain;
         const float target = aspectValue(s.aspect);
@@ -133,7 +135,7 @@ struct FramePipeline::Impl {
         c.taa = !c.fsr2 && aa == AntiAliasing::Taa;
         c.spatialAa = c.temporal() ? AntiAliasing::Off : aa;
         c.render = {roundSize(static_cast<float>(width) / ratio), roundSize(static_cast<float>(height) / ratio)};
-        c.msaa = device.maxSamples(static_cast<uint32_t>(std::max(1, s.msaa)));
+        c.msaa = multisampled ? device.maxSamples(static_cast<uint32_t>(std::max(1, s.msaa))) : 1u;
         c.post = c.temporal() ? c.output : c.render;
         return c;
     }
@@ -178,7 +180,8 @@ struct FramePipeline::Impl {
         // The display stages' targets: FSR 2 and its output, the work images' descriptions.
         if (!display.configure(displayConfig())) {
             fsr2Failed = true;
-            config = resolveConfig(settings, c.swapchain, scene.hasMotionVectors(), scene.antiAliasesItself());
+            config = resolveConfig(settings, c.swapchain, scene.hasMotionVectors(), scene.antiAliasesItself(),
+                                   scene.usesMultisampling());
             createTargets(scene);
             return;
         }
@@ -219,7 +222,8 @@ struct FramePipeline::Impl {
 
     void configure(const Settings& s, VkExtent2D swapchain, SceneSource& scene) {
         settings = s;
-        const Config next = resolveConfig(s, swapchain, scene.hasMotionVectors(), scene.antiAliasesItself());
+        const Config next = resolveConfig(s, swapchain, scene.hasMotionVectors(), scene.antiAliasesItself(),
+                                          scene.usesMultisampling());
         const bool rebuild = !configured || !(next == config);
         config = next;   // fields that need no new targets (e.g. the spatial upscaler) apply directly
         if (rebuild) {
