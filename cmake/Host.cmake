@@ -302,6 +302,19 @@ else()
   target_compile_options(gt4_fsr3 PRIVATE -w PUBLIC "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include ${GT4_FSR3_COMPAT}>")
 endif()
 
+# The FSR 3.1 backend of upscale::Upscaler (platform/render/upscale/fsr3.h; PLAN.md B17 step 2): the one library that
+# links gt4_fsr3, PRIVATE, so the SDK's forced header and types stay in its own files and gt4_host sees only the
+# interface (lanes B and D). Our code, with our warnings; the SDK's headers are system headers here.
+add_library(gt4_fsr3_backend STATIC platform/render/upscale/fsr3.cpp)
+target_include_directories(gt4_fsr3_backend PRIVATE platform/render platform/render/upscale)
+target_include_directories(gt4_fsr3_backend SYSTEM PRIVATE ${GT4_FSR3_DIR}/include)
+target_link_libraries(gt4_fsr3_backend PRIVATE gt4_fsr3 Vulkan::Headers ${GT4_VOLK_HEADERS})
+if(MSVC)
+  target_compile_options(gt4_fsr3_backend PRIVATE /W4)
+else()
+  target_compile_options(gt4_fsr3_backend PRIVATE -Wall -Wextra)
+endif()
+
 # PS2 graphics (docs/GS_BACKEND.md). gt4_ps2gfx is plain C++ (no GPU): the game link and capture
 # replay, the graphics stream, VIF1 decoding into batches and GT4's 3D renderers (platform/gs/renderers3d.cpp:
 # native code giving primitives to the front end; no VU1 model, docs/NATIVE_ONLY.md). gt4_gs adds the host that
