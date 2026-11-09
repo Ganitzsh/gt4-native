@@ -111,6 +111,10 @@ struct SceneCounters {
     // ... and those never substituted, so never decoded: a car's light map (kInstLightMap) and the road reflection
     // (kInstReflection), out of the binding (CONTRACTS.md a.5.7); their materials are still made (F2b's classifier)
     uint64_t meshesOutOfBinding = 0;
+    // N3 (PLAN.md): items judged for the lit-road layer this frame (new keys only), items flagged to skip, flagged items
+    // of an instance at another rotation than the first (kept), and candidate items in views where the skip is off
+    uint64_t n3Judged = 0, n3Skipped = 0, n3LaterFail = 0, n3SkipGatedOff = 0;
+    uint64_t n3Misaligned = 0;   // views whose verdicts did not line up with their materials: none given (never expected)
     void add(const SceneCounters& o);   // running totals
     // the gates of CONTRACTS.md a.7 that hold on any stream (not the ones that need the front end)
     bool errorFree() const {
@@ -193,6 +197,7 @@ struct SceneFrame {
 // frame allocates none.
 struct SceneView {
     ViewData view;                                // view.valid: the verdict at ViewEnd
+    uint32_t frameFlags = 0;                      // its frame's FrameBegin flags (kFrameLampsOn: N3's skip, ...)
     std::vector<InstanceData> instances;          // copies, in arrival order
     std::vector<ProjectionData> projections;      // the ones the view and its instances name
     std::vector<gfx::scene::Light> lights;        // the view's, as far as its ViewEnd (later ones: a.5 rule 4)

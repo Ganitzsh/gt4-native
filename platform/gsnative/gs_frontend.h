@@ -262,13 +262,15 @@ struct FrameList {
         std::vector<ItemRef> items;
         // N3 step 1 (PLAN N3; lane F fills it from the verdict map in GsFrontend::sceneView): per item, parallel to
         // `materials`, 1 = the lit-road layer, whose draws the back end skips in a kViewMain view on a kFrameLampsOn
-        // frame with lighting.night = enhanced. Empty: no verdicts, nothing skipped.
+        // frame with lighting.night = enhanced. Empty: no verdicts, nothing skipped. Filled only while the verdicts are
+        // on (GsFrontend::setLitRoad).
         std::vector<uint8_t> skip;
     };
     // (B6: the views' ids and materials vectors, emptied by clear() with their capacity, for the next views on this list)
     std::vector<std::vector<scene::InstanceIds>> spareIds;
     std::vector<std::vector<scene::MaterialId>> spareMaterials;
     std::vector<std::vector<ViewOnList::ItemRef>> spareItems;
+    std::vector<std::vector<uint8_t>> spareSkips;
     std::vector<ViewOnList> views;
     void clear();
 };
@@ -436,6 +438,7 @@ public:
         uint64_t sceneInstances = 0, sceneItems = 0;
         uint64_t meshesNew = 0, meshesPending = 0, materialsNew = 0, meshesSkinned = 0, meshesPerFrame = 0;   // totals
         uint64_t meshesOutOfBinding = 0;   // (light maps, the road reflection: never decoded)
+        uint64_t n3Judged = 0, n3Skipped = 0, n3LaterFail = 0, n3SkipGatedOff = 0, n3Misaligned = 0;   // N3 (SceneCounters), totals
         double sceneCacheMicroseconds = 0.0;
         double sceneCacheCpuMicroseconds = 0.0;   // the same span in the thread's CPU time (scene::threadCpuMicroseconds)
         // F2b: texture summaries made at decode (textureSummary), and their time on the front end
@@ -450,6 +453,9 @@ public:
         sceneClassifier = std::move(classify);
         if (sceneCache_) sceneCache_->setClassifier(sceneClassifier);
     }
+    // N3: the lit-road verdicts on the views' lists (ViewOnList::skip) while the scene split is on; off by default
+    // (GT4_N3_VERDICTS=1 turns it on for testing until its setting lands); on the front-end thread, between frames.
+    void setLitRoad(bool on) { litRoad = on; }
     // F2b: a decoded texture's summary (computed once from level 0 at decode: scene/texture_summary.h) by its identity;
     // false when it has none (not decoded, retired, or a texture pack's image, whose game texture is not decoded).
     bool textureSummary(uint64_t identity, scene::TextureSummary& out) const {
@@ -728,6 +734,7 @@ private:
     void clearSceneJobs();
     std::shared_ptr<scene::SceneCache> sceneCache_;   // (shared with the lists that carry it: FrameList::sceneCache)
     std::function<uint32_t(const scene::ItemSource&)> sceneClassifier;   // setSceneClassifier
+    bool litRoad = false;   // setLitRoad (or GT4_N3_VERDICTS=1, read in sceneView)
     // F2b: each decoded texture's summary by its identity (textureIdentity), retired with it (textureSummary)
     std::unordered_map<uint64_t, scene::TextureSummary> textureSummaries;
     void summarize(uint64_t identity, const TextureImage& image);

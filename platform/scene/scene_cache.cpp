@@ -1,7 +1,15 @@
 // The scene cache (scene_cache.h).
 #include "scene_cache.h"
 
+#include "lit_road.h"
+
+#include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <iterator>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -151,6 +159,95 @@ InstanceIds SceneCache::assign(const InstanceData& instance, const ItemSource* i
 void SceneCache::endFrame() {
     meshCache.endFrame();
     materialTable.endFrame();
+    ++frames;
+    if (frames % kLitRoadPruneFrames == 0)   // (pruned every 600 frames of the verdicts unseen for kLitRoadFrames)
+        for (auto it = litRoadVerdicts.begin(); it != litRoadVerdicts.end();)
+            it = frames - it->second.lastFrame >= kLitRoadFrames ? litRoadVerdicts.erase(it) : std::next(it);
+}
+
+namespace {
+
+// The rotation part of objectToWorld, each row made unit (a scale is not a rotation).
+void rotationOf(const float (&m)[4][4], float (&r)[3][3]) {
+    for (int i = 0; i < 3; ++i) {
+        const float s = std::sqrt(m[i][0] * m[i][0] + m[i][1] * m[i][1] + m[i][2] * m[i][2]);
+        for (int q = 0; q < 3; ++q) r[i][q] = s > 0.0f ? m[i][q] / s : 0.0f;
+    }
+}
+
+}  // namespace
+
+void SceneCache::litRoad(const InstanceData& instance, const ItemSource* items, size_t count, const MaterialId* materials,
+                         const std::function<bool(uint64_t, TextureSummary&)>& summaries, uint8_t* out,
+                         SceneCounters& counters) {
+    std::fill(out, out + count, uint8_t(0));
+    // The cheap tests first, per material and remembered: the layer's draw state, and a texture that is no glow.
+    litRoadCandidate.assign(count, 0);
+    if (litRoadMaterials.size() > kLitRoadMaterialsMax) litRoadMaterials.clear();
+    bool any = false;
+    for (size_t i = 0; i < count; ++i) {
+        auto [it, fresh] = litRoadMaterials.try_emplace(materials[i], uint8_t(1));
+        if (fresh) {
+            TextureSummary ts;
+            const bool known = summaries && summaries(items[i].texture, ts) && ts.known && ts.width && ts.height;
+            it->second = litRoadState(items[i]) && known && ts.centreToRim < 3.0f ? 2 : 1;
+        }
+        litRoadCandidate[i] = it->second == 2;
+        any |= litRoadCandidate[i] != 0;
+    }
+    if (!any) return;
+    // The geometry, per (texture, mesh, item): judged once, through the instance it is first seen with.
+    refs.resize(count);
+    for (size_t i = 0; i < count; ++i) refs[i] = items[i].batch;
+    const MeshKey mesh = meshKey(refs.data(), refs.size());
+    float rotation[3][3];
+    rotationOf(instance.objectToWorld.m, rotation);
+    for (size_t i = 0; i < count; ++i) {
+        if (!litRoadCandidate[i]) continue;
+        const LitRoadKey key{items[i].texture, mesh, uint32_t(i)};
+        auto it = litRoadVerdicts.find(key);
+        if (it == litRoadVerdicts.end()) {
+            LitRoadEntry e;
+            TextureSummary ts;
+            const bool known = summaries && summaries(items[i].texture, ts);
+            const DecodedBatch batch = decodeBatch(*items[i].batch.job, items[i].batch.words);
+            const LitRoadMeasure measure = measureLitRoad(batch, instance.objectToWorld.m, known ? &ts : nullptr);
+            e.skip = litRoadVerdict(measure) ? 1 : 0;
+            // GT4_N3_LOG=1 (N3's acceptance): each new verdict with its measures, once per key
+            static const bool log = [] { const char* v = std::getenv("GT4_N3_LOG"); return v && *v == '1'; }();
+            if (log)
+                std::printf("n3 verdict: texture %016llx material %u item %u vc %.1f a %.1f c/r %.2f share %.3f width %.3f "
+                            "texel %.4f -> %s\n", static_cast<unsigned long long>(items[i].texture), materials[i], unsigned(i),
+                            measure.vertexLuminance, measure.vertexAlpha, measure.centreToRim, measure.upShare, measure.width,
+                            measure.texel, e.skip ? "skip" : "keep");
+            std::memcpy(e.rotation, rotation, sizeof rotation);
+            it = litRoadVerdicts.emplace(key, e).first;
+            ++counters.n3Judged;
+        }
+        LitRoadEntry& e = it->second;
+        e.lastFrame = frames;
+        uint8_t skip = e.skip;
+        if (skip) {
+            float worst = 0.0f;
+            for (int r = 0; r < 3; ++r)
+                for (int q = 0; q < 3; ++q) worst = std::max(worst, std::fabs(rotation[r][q] - e.rotation[r][q]));
+            if (worst > 1e-3f) {   // another rotation than its verdict's: kept, counted
+                skip = 0;
+                ++counters.n3LaterFail;
+            }
+        }
+        counters.n3Skipped += skip;
+        out[i] = skip;
+    }
+}
+
+size_t SceneCache::litRoadCandidates(const MaterialId* materials, size_t count) const {
+    size_t n = 0;
+    for (size_t i = 0; i < count; ++i) {
+        const auto it = litRoadMaterials.find(materials[i]);
+        n += it != litRoadMaterials.end() && it->second == 2;
+    }
+    return n;
 }
 
 }  // namespace gt4::scene

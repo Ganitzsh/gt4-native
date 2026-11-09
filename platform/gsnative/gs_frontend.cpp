@@ -102,6 +102,10 @@ void FrameList::clear() {
             v.items.clear();
             spareItems.push_back(std::move(v.items));
         }
+        if (v.skip.capacity()) {
+            v.skip.clear();
+            spareSkips.push_back(std::move(v.skip));
+        }
     }
     views.clear();
 }
@@ -2772,6 +2776,18 @@ void GsFrontend::sceneView(std::shared_ptr<const scene::SceneView> view) {
             v.items = std::move(frame.spareItems.back());
             frame.spareItems.pop_back();
         }
+        // N3: the lit-road verdicts, for the main view of a frame GT4 lights its lamps in (the back end skips by them).
+        static const bool litRoadFromEnvironment = [] { const char* e = std::getenv("GT4_N3_VERDICTS"); return e && *e == '1'; }();
+        const bool litRoadOn = litRoad || litRoadFromEnvironment;
+        const bool litRoadView = litRoadOn && view->view.role == gfx::scene::kViewMain &&
+                                 (view->frameFlags & gfx::scene::kFrameLampsOn);
+        if (litRoadView && !frame.spareSkips.empty()) {
+            v.skip = std::move(frame.spareSkips.back());
+            frame.spareSkips.pop_back();
+        }
+        const std::function<bool(uint64_t, scene::TextureSummary&)> summaries =
+            [this](uint64_t identity, scene::TextureSummary& out) { return textureSummary(identity, out); };
+        bool litRoadMisaligned = false;
         v.ids.resize(view->instances.size());
         for (size_t k = 0; k < view->instances.size(); ++k) {
             const scene::InstanceData& instance = view->instances[k];
@@ -2804,8 +2820,30 @@ void GsFrontend::sceneView(std::shared_ptr<const scene::SceneView> view) {
                 v.items.push_back({sj.job, sj.draw, sj.firstVertex, sj.vertexCount});   // (parallel to the materials assign makes)
             }
             v.ids[k] = sceneCache_->assign(instance, sceneItems.data(), sceneItems.size(), v.materials, sceneCacheCounters);
+            // N3: the verdicts at the same index as the materials (the back end reads skip[firstMaterial + j] as item j):
+            // the list sized to the materials, each instance's written at its own firstMaterial.
+            if (litRoadView && !litRoadMisaligned) {
+                v.skip.resize(v.materials.size(), 0);
+                if (!sceneItems.empty()) {
+                    if (v.ids[k].materialCount == sceneItems.size() && v.ids[k].firstMaterial + sceneItems.size() <= v.skip.size())
+                        sceneCache_->litRoad(instance, sceneItems.data(), sceneItems.size(), v.materials.data() + v.ids[k].firstMaterial,
+                                             summaries, v.skip.data() + v.ids[k].firstMaterial, sceneCacheCounters);
+                    else
+                        litRoadMisaligned = true;   // (never expected: assign gives each item a material)
+                }
+            } else if (litRoadOn && !litRoadView && !sceneItems.empty() && v.ids[k].materialCount == sceneItems.size()) {
+                sceneCacheCounters.n3SkipGatedOff +=
+                    sceneCache_->litRoadCandidates(v.materials.data() + v.ids[k].firstMaterial, sceneItems.size());
+            }
             ++stats.sceneInstances;
             stats.sceneItems += sceneItems.size();
+        }
+        if (litRoadView) {   // (the view's end: the flags must cover its materials exactly, else none: nothing skipped)
+            if (!litRoadMisaligned) v.skip.resize(v.materials.size(), 0);
+            if (litRoadMisaligned || v.skip.size() != v.materials.size()) {
+                ++sceneCacheCounters.n3Misaligned;
+                v.skip.clear();
+            }
         }
         stats.sceneCacheMicroseconds += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - started).count();
         stats.sceneCacheCpuMicroseconds += scene::threadCpuMicroseconds() - cpuStarted;
@@ -2993,6 +3031,16 @@ void GsFrontend::sceneFrame(std::unique_ptr<scene::SceneFrame> f) {
     c.meshesSkinned += sceneCacheCounters.meshesSkinned;
     c.meshesPerFrame += sceneCacheCounters.meshesPerFrame;
     c.meshesOutOfBinding += sceneCacheCounters.meshesOutOfBinding;
+    c.n3Judged += sceneCacheCounters.n3Judged;
+    c.n3Skipped += sceneCacheCounters.n3Skipped;
+    c.n3LaterFail += sceneCacheCounters.n3LaterFail;
+    c.n3SkipGatedOff += sceneCacheCounters.n3SkipGatedOff;
+    c.n3Misaligned += sceneCacheCounters.n3Misaligned;
+    stats.n3Misaligned += sceneCacheCounters.n3Misaligned;
+    stats.n3Judged += sceneCacheCounters.n3Judged;
+    stats.n3Skipped += sceneCacheCounters.n3Skipped;
+    stats.n3LaterFail += sceneCacheCounters.n3LaterFail;
+    stats.n3SkipGatedOff += sceneCacheCounters.n3SkipGatedOff;
     stats.meshesNew += sceneCacheCounters.meshesNew;   // (the decoder totals its frames before these are filled)
     stats.meshesPending += sceneCacheCounters.meshesPending;
     stats.materialsNew += sceneCacheCounters.materialsNew;
@@ -3011,12 +3059,16 @@ void GsFrontend::sceneFrame(std::unique_ptr<scene::SceneFrame> f) {
         size_t meshes = 0;
         for (const scene::InstanceData& in : f->instances) meshes += in.mesh != 0;
         std::printf("scene cache: vblank %u: %llu instances (%zu with a mesh), %llu items, %zu materials; meshes new %llu, pending %llu, "
-                    "skinned %llu, per-frame %llu; materials new %llu; %.0f us (cpu %.0f us)\n",
+                    "skinned %llu, per-frame %llu; materials new %llu; n3 judged %llu, skipped %llu, later fail %llu, gated off %llu; "
+                    "%.0f us (cpu %.0f us)\n",
                     f->vblank, static_cast<unsigned long long>(stats.sceneInstances - lastInstances), meshes,
                     static_cast<unsigned long long>(stats.sceneItems - lastItems), distinct.size(),
                     static_cast<unsigned long long>(sceneCacheCounters.meshesNew), static_cast<unsigned long long>(sceneCacheCounters.meshesPending),
                     static_cast<unsigned long long>(sceneCacheCounters.meshesSkinned), static_cast<unsigned long long>(sceneCacheCounters.meshesPerFrame),
-                    static_cast<unsigned long long>(sceneCacheCounters.materialsNew), stats.sceneCacheMicroseconds - lastMicroseconds,
+                    static_cast<unsigned long long>(sceneCacheCounters.materialsNew),
+                    static_cast<unsigned long long>(sceneCacheCounters.n3Judged), static_cast<unsigned long long>(sceneCacheCounters.n3Skipped),
+                    static_cast<unsigned long long>(sceneCacheCounters.n3LaterFail),
+                    static_cast<unsigned long long>(sceneCacheCounters.n3SkipGatedOff), stats.sceneCacheMicroseconds - lastMicroseconds,
                     stats.sceneCacheCpuMicroseconds - lastCpuMicroseconds);
         lastInstances = stats.sceneInstances;
         lastItems = stats.sceneItems;

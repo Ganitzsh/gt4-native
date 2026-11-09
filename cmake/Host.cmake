@@ -409,10 +409,12 @@ endif()
 # Saves from a PS2 memory card or export into the native save folder (docs/SAVES.md): plain C++, no GPU.
 # The scene cache (platform/scene, docs/modern/ARCHITECTURE.md 3.1): GT4's model batches decoded into object-space
 # meshes on worker threads (ticket B5). Plain C++, no GPU.
-add_library(gt4_mesh_cache STATIC platform/scene/mesh_cache.cpp platform/scene/material_table.cpp platform/scene/scene_cache.cpp)
+add_library(gt4_mesh_cache STATIC platform/scene/mesh_cache.cpp platform/scene/material_table.cpp platform/scene/scene_cache.cpp
+    platform/scene/lit_road.cpp)
 target_include_directories(gt4_mesh_cache PUBLIC platform/scene include PRIVATE third_party)
 target_compile_features(gt4_mesh_cache PUBLIC cxx_std_20)
 target_link_libraries(gt4_mesh_cache PUBLIC Threads::Threads)
+target_compile_definitions(gt4_mesh_cache PRIVATE $<$<BOOL:${WIN32}>:_CRT_SECURE_NO_WARNINGS>)   # (getenv: N3's log)
 if(MSVC)
   target_compile_options(gt4_mesh_cache PRIVATE /W4)
 else()
@@ -658,6 +660,10 @@ add_test(NAME gs_sprite_runs COMMAND gt4_gs_sprite_runs_test)
 add_executable(gt4_material_table_test tests/material_table.cpp)
 target_link_libraries(gt4_material_table_test PRIVATE gt4_mesh_cache)
 add_test(NAME material_table COMMAND gt4_material_table_test)
+# N3's lit-road rule (platform/scene/lit_road.h): the layer's state, and v4's measures and verdict on made-up items.
+add_executable(gt4_lit_road_test tests/lit_road.cpp)
+target_link_libraries(gt4_lit_road_test PRIVATE gt4_mesh_cache)
+add_test(NAME lit_road COMMAND gt4_lit_road_test)
   set_tests_properties(mesh_cache PROPERTIES SKIP_RETURN_CODE 77)
 
   # The scene records (docs/modern/CONTRACTS.md (a)): gfx.h's layouts against the game's C copy (compat/game/
