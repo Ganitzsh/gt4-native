@@ -709,11 +709,12 @@ line waits for B7, which adds the log.
 AYN Odin 3 (C6's setup: aarch64 Linux, Adreno 830 under Mesa Turnip, the game under FEX, 1280 x 800) with the latest
 Odin build, and reported in one run report: the build's hash, the device's Mesa and FEX versions, and each item's
 number against its pass line. Tickets that need an Odin number point here instead of saying 'the Odin run'; an item
-leaves the list when its ticket is closed. Two kinds: **build** items run unattended from one script
-(`tools/device_run.py`, lane C, to write: replays of the REF captures and the test scene with `--profile-json`, the
-logs collected into the report), so the owner only starts it and sends the folder back; **device** items need a person
-at the Odin (a live game, the pad, a judgement on screen). Captures and saves stay on the device, never committed or
-served, as on the desktop: the report carries numbers and logs, never frames of the game.
+leaves the list when its ticket is closed. Two kinds: **build** items run unattended from one command on the desktop
+or the Mac, `tools/device_run.py --ssh HOST` (replays of the REF captures and scripted routes over ssh, the report
+copied back by itself; the coordinator copies its inputs to the device: the captures, the reference hashes and the
+save folders, about 6.6 GB, and it refuses to start under 3 GB free); **device** items need a person at the Odin (a
+live game, the pad, a judgement on screen). Captures and saves stay on the device, never committed or served, as on
+the desktop: the report carries numbers and logs, never frames of the game.
 
 | Item | Measured | Waiting | Gates | Pass line | Kind |
 |---|---|---|---|---|---|
