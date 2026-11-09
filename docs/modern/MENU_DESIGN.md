@@ -278,6 +278,13 @@ content): M1 lists it in `protocol.h`'s comment beside 6 and 7.
   opened.
 - **One way to the game.** A gameplay option changed in the menu reaches the game as `HOST_CMD` 4, the existing
   path, like every other setting the game reads.
+- **Canvas.** The host scales a list's canvas (1080 units high, `canvasWidth` wide) by the content rectangle's
+  height / 1080 and centres it there (M3, lane C's point). So at an aspect ratio narrower than the window the page
+  stays inside the pillarbox, over the game's picture, never over the black bars, at every ratio alike. The page
+  engine lays out for the content's own aspect (`LayoutOptions::canvasWidth`), which M9 gives the game.
+- **Text.** One line in its box, or wrapped by the host at spaces when the box's height holds more than one of the
+  face's lines; what still does not fit is cut at a code point with an ellipsis (the pages' Latin text: not
+  grapheme-aware). The game has no font metrics, so wrapping is the host's (`draw_list.h`).
 
 ### 3.7 Settings bridge and apply classes
 
@@ -503,10 +510,16 @@ coordinator, 2026-11-09): M3 draws in SDR on E5's overlay primitives (its SDF te
 wait for E6. In HDR output until M3b, the UI draws at the player's `display.hdr_paper_white` (200 cd/m2 by default,
 lane C's key), as the overlay already does (`Overlay::setHdr`), so the integrated entry behaves the same on SDR and
 HDR displays. No asset is packed yet: asset 0 is flat colour, and an unknown asset draws flat and is logged once;
-the packer and atlas (`tools/ui_assets.py`, the manifest) come with M10's first asset set. Depends: E5 (SDF font).
-Acceptance: `VAL`; the test scene draws the hub from a recorded draw list at 720p, 1440p and 4K (these images are
-our own art only: committed as goldens); in HDR output the hub's white at `display.hdr_paper_white`, measured
-headless as the overlay's PQ code (no HDR display on the desktop or the Odin).
+the packer and atlas (`tools/ui_assets.py`, the manifest) come with M10's first asset set. Until then the layout
+names no asset at all (`kUiAssetsPacked`, which M10 sets) and draws its own stand-ins, so the owner never sees a
+white square (the coordinator and the architect, 2026-11-09): the tabs as text chips, the controller prompts as key
+caps with the button's name as text (Xbox letters; PlayStation's as words, Cross, Circle, Square, L1, R1, never a
+button symbol; the keyboard's default keys). The style follows the controller in use (M9 gives it to the game).
+Depends: E5 (SDF font). Acceptance: `VAL`; the host draws the hub from a recorded draw list at 720p, 1440p and 4K
+over a plain backdrop, so the goldens stay small and do not move with the test scene (`tests/ui_page_goldens.py`;
+these images are our own art only: committed as goldens); in HDR output the hub at `display.hdr_paper_white`,
+measured headless as the overlay's PQ code (no HDR display on the desktop or the Odin): a flat colour of the hub
+read in all three channels against the overlay's encode, which gives white at 200 cd/m2 as 148 of 255.
 
 **M3b: The UI on E6's layer, HDR at paper white (S).** M3's renderer moved onto E6's output-resolution 2D layer
 (`layer2d`), composed after the tone map with the HUD. Depends: M3, E6. Acceptance: `VAL`; the hub's goldens
@@ -565,9 +578,11 @@ the host for replay and the test scene. The tests that go with the old menu move
 `settings_menu.cpp` and drives the chord (`cmake/Host.cmake:313`): its chord cases (`tests/host_settings.cpp:29-45`)
 stay, its menu cases are replaced by M2's golden draw lists; `GT4_HOST_KEYS` (docs/RENDERING.md:70, `scriptedKeys`),
 how menu checks run unattended today, sends command 6 and the page's keys, and a session command `open_settings`
-does the same. M9 also switches presets low to ultra to `ui.entry = integrated` and `ui.pause = native` (3.8; the
-default too), and `host_settings`' check that no preset sets them turns into the table's values. Depends: M3, M4,
-M5. Acceptance: `CTEST`; `ORIG`; Guide and the chord in a race pause through GT4
+does the same. The host gives the game the layout's inputs: the content's canvas width, and the prompt style of
+the controller in use (SDL's gamepad type: Xbox or PlayStation names; the keyboard's when it was used last; the
+coordinator, 2026-11-09). M9 also switches presets low to ultra to `ui.entry = integrated` and `ui.pause = native`
+(3.8; the default too), and `host_settings`' check that no preset sets them turns into the table's values.
+Depends: M3, M4, M5. Acceptance: `CTEST`; `ORIG`; Guide and the chord in a race pause through GT4
 and open Settings, a short Start alone still pauses GT4; the replay and test scene open the host-run hub; the pages'
 sounds heard (moved from M5: in the game's own mix, `GT4_AUDIO_WAV`, the map's sequenced music hides a menu sound,
 GT4's own included), by an A/B of two runs with the same inputs, one moving a page's cursor and one not.
