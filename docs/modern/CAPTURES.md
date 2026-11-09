@@ -261,10 +261,12 @@ sessions boot from game start, but the recording starts at a trigger once the ra
 snapshot. Some textures the live game drew are not right in it: in `lap_ssr5r` the lane markings and the edge
 line are green (frame 3,500) and the left kerb is cyan and garbled (frame 1,000), at every setting, even
 `--preset original` with the HD pack off; live shots at the same race times show white markings and a red and
-white kerb. Lane C is tracing which textures (RISKS R7). N3's proof holds, since v4 decides from geometry and each
-hunt compared both runs on the same replay; don't judge colours from these replays, and record new references from
-game start (C10). The captures recorded from boot (`race_boot`, `race_grid43_r6`, `garage_r6`) are the ones to
-judge colours on.
+white kerb. Lane C is tracing which textures (RISKS R7). N3's hunts compared both runs on the same replay, so they
+agree with themselves, but v4 also reads the texture (its centre/rim ratio): on `lap_ssr5r`, some textures it judged
+have means that look wrong (256 x 256 at (0, 0, 0) beside the right (127, 127, 127)), while `lap_csr5` has almost
+none. Whether v4 decides the same live is checked on a live run, not on these replays. Don't judge colours from
+these replays, and record new references from game start (C10). The captures recorded from boot (`race_boot`,
+`race_grid43_r6`, `garage_r6`) are the ones to judge colours on.
 
 The Arcade route below is the one the first, throttle-only sections captures used (`r5_sections*.cap`, no scene
 records; not references).
