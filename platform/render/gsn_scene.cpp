@@ -316,6 +316,31 @@ struct GsnScene::Impl {
     // GS -> host reads (GsnScene::read): how many, the frames skipped ahead of them, and GT4_READ_SKIP_TEST's frames
     // held back (the newest lists, drawn only at the next read: a backlog for a lockstep replay's reads).
     uint64_t reads = 0, readSkips = 0;
+    // DIAG (B16c's mask measurement, GT4_B16C_LIT=1): each scene target's picture right after its Light's last stage,
+    // dumped beside the shown target (id + 10000) to count what is drawn over the scene stage afterwards.
+    std::unordered_map<uint32_t, vk::Image> keptLit;
+    void keepLit(VkCommandBuffer command, uint32_t target, vk::Image& colour) {
+        static const bool on = [] { const char* e = std::getenv("GT4_B16C_LIT"); return e && *e == '1'; }();
+        if (!on) return;
+        vk::Image& k = keptLit[target];
+        if (!k.valid() || k.extent.width != colour.extent.width || k.extent.height != colour.extent.height) {
+            if (k.valid()) { vkDeviceWaitIdle(device.device); vk::destroy(device, k); }
+            vk::ImageDesc desc;
+            desc.format = colour.format;
+            desc.extent = colour.extent;
+            desc.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+            desc.name = "gsn kept lit (DIAG)";
+            k = vk::createImage(device, desc);
+        }
+        vk::Barriers b;
+        b.image(colour, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_READ_BIT);
+        b.image(k, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_WRITE_BIT, true);
+        b.flush(command);
+        VkImageCopy region{};
+        region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.extent = {colour.extent.width, colour.extent.height, 1};
+        vkCmdCopyImage(command, colour.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, k.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    }
     // A rectangle of a target copied into a host buffer (GsnScene::read, FrameList::readbacks), packed as the GS keeps
     // it once the GPU has done the copy.
     struct Copied {
@@ -578,6 +603,7 @@ struct GsnScene::Impl {
         if (stagesOnTransients || stagesOnMembers)
             std::printf("Scene stages run on the members: %llu (the build's plan was wrong); on the render graph's transients: %llu\n",
                         static_cast<unsigned long long>(stagesOnMembers), static_cast<unsigned long long>(stagesOnTransients));
+        for (auto& [id, k] : keptLit) vk::destroy(device, k);   // DIAG
         if (readSkips) std::printf("... of them ahead of GS reads: %llu (of %llu reads)\n", static_cast<unsigned long long>(readSkips),
                                    static_cast<unsigned long long>(reads));
         if (profile.pool) vkDestroyQueryPool(device.device, profile.pool, nullptr);
@@ -1756,6 +1782,7 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
             b.image(colour, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_WRITE_BIT);
             b.flush(command);
             copyBack(lit, colour, e, l, si.sx, si.sy);
+            keepLit(command, l.target, colour);   // DIAG
         }
     };
 
@@ -1904,6 +1931,7 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
             b.image(colour, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_WRITE_BIT);
             b.flush(command);
             copyBack(lit, colour, e, l, si.sx, si.sy);
+            keepLit(command, l.target, colour);   // DIAG
         }
     };
     constexpr float kZScale = 1.6e6f;   // GT4's 3D Z = 1.6e6 / view distance (docs/LIGHTING.md)
@@ -3978,6 +4006,21 @@ void GsnScene::Impl::pendingListEnd(VkCommandBuffer command) {
             b.flush(command);
             dump.images.emplace_back(id, buffer);
             dump.extents.push_back(t.image.extent);
+            dump.bps.push_back(0);
+            dump.depth.push_back(0);
+        }
+        for (auto& [keptId, k] : keptLit) {   // DIAG (GT4_B16C_LIT): every scene target's kept picture, id + 10000
+            if (!k.valid()) continue;
+            vk::Buffer buffer = vk::createBuffer(device, VkDeviceSize(k.extent.width) * k.extent.height * 8,
+                                                 VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, true);
+            b.image(k, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_READ_BIT);
+            b.flush(command);
+            VkBufferImageCopy copy{};
+            copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            copy.imageExtent = {k.extent.width, k.extent.height, 1};
+            vkCmdCopyImageToBuffer(command, k.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer.buffer, 1, &copy);
+            dump.images.emplace_back(keptId + 10000, buffer);
+            dump.extents.push_back(k.extent);
             dump.bps.push_back(0);
             dump.depth.push_back(0);
         }
