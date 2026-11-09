@@ -577,6 +577,31 @@ void GsFrontend::readTransfer(void* out, uint32_t qwc) {
     readPos += want;
 }
 
+
+namespace {
+// DEBUG (R7 / B25 step 0, never for main): GT4_PAGE_LOG=P,Q,... logs every write to those pages (a draw's claim, a
+// transfer, a texture set's load) with the front end's frame count; GT4_PAGE_LOG_FROM=N from frame N.
+bool pageLogged(uint32_t page) {
+    static const std::vector<uint32_t> list = [] {
+        std::vector<uint32_t> v;
+        if (const char* e = std::getenv("GT4_PAGE_LOG"))
+            for (const char* s = e; *s;) {
+                char* end = nullptr;
+                const unsigned long n = std::strtoul(s, &end, 10);
+                if (end == s) break;
+                v.push_back(uint32_t(n));
+                s = *end ? end + 1 : end;
+            }
+        return v;
+    }();
+    return std::find(list.begin(), list.end(), page & 511) != list.end();
+}
+uint64_t pageLogFrom() {
+    static const uint64_t from = std::getenv("GT4_PAGE_LOG_FROM") ? std::strtoull(std::getenv("GT4_PAGE_LOG_FROM"), nullptr, 10) : 0;
+    return from;
+}
+}  // namespace
+
 void GsFrontend::restoreMemory(const void* data) {
     lastTexture.valid = false;
     std::memcpy(mem.data(), data, GsMemory::kBytes);
@@ -614,6 +639,10 @@ void GsFrontend::memoryWritten(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t 
                 } else {
                     uploadPages.push_back(page);
                 }
+                if (pageLogged(page) && frameCount >= pageLogFrom())   // DEBUG
+                    std::printf("pagelog: frame %llu page %u transfer (bp %X bw %u psm %X rect %u,%u %ux%u)%s
+",
+                                (unsigned long long)frameCount, page, bp, bw, psm, x, y, w, h, changed ? "" : " (unchanged)");
                 pages[page] = {0, ++serial};
                 memorySerial[page] = serial;
             }
@@ -1012,6 +1041,10 @@ void GsFrontend::markWritten(uint32_t targetId, uint32_t bp, uint32_t bw, uint32
             // (no set page into memory: a draw changes the page's owner, not memory, where the set's content stays
             // valid for whatever reads or writes memory there later, P2a)
             PageOwner& p = pages[(bp / 32 + py * perRow + px) & 511];
+            if (pageLogged(bp / 32 + py * perRow + px) && frameCount >= pageLogFrom())   // DEBUG
+                std::printf("pagelog: frame %llu page %u draw t%u (bp %X bw %u psm %X rect %u-%u,%u-%u)
+", (unsigned long long)frameCount,
+                            (bp / 32 + py * perRow + px) & 511, targetId, bp, bw, psm, x0, x1, y0, y1);
             if (p.target != targetId) ++ownerChanges;
             p = {targetId, ++serial};
         }
@@ -1094,6 +1127,9 @@ void GsFrontend::texSet(const uint8_t* payload, size_t bytes) {
                     for (uint32_t extra = 0; extra < 2; ++extra) {
                         if (extra && !(bp % 32)) break;
                         const uint32_t page = (bp / 32 + py * perRow + px + extra) & 511;
+                        if (pageLogged(page) && frameCount >= pageLogFrom())   // DEBUG
+                            std::printf("pagelog: frame %llu page %u set %u loaded
+", (unsigned long long)frameCount, page, slot.id);
                         pages[page] = {0, ++serial};
                         memorySerial[page] = serial;
                         ++pageGeneration[page];
