@@ -273,6 +273,7 @@ struct GsnScene::Impl {
         uint64_t frames = 0, candidates = 0, kept = 0, dropped = 0, noInstance = 0, merged = 0, mergedAgain = 0;
         double microseconds = 0.0;   // the pass's time on the render thread
     } lampTotals;
+    uint64_t nightSplitSkipped = 0;   // Lights not relit: their target holds more than one main view (split screen)
     // gsn_light.comp's push constants from `night` on (offset 40): mirrored field for field.
     struct NightPush {
         float night = 0.0f, pad0 = 0.0f;
@@ -597,6 +598,10 @@ struct GsnScene::Impl {
                         static_cast<unsigned long long>(t.merged), static_cast<unsigned long long>(t.mergedAgain),
                         t.microseconds / double(t.frames));
         }
+        if (nightSplitSkipped)
+            std::printf("Night relight: %llu Lights without our lamps, their target holding more than one main view "
+                        "(split screen: one light pass per half not yet)\n",
+                        static_cast<unsigned long long>(nightSplitSkipped));
         if (counters.flareDrawsSkipped || counters.glareDrawsSkipped)
             std::printf("N4 draws skipped onto the picture: flare %llu, glare %llu\n",
                         static_cast<unsigned long long>(counters.flareDrawsSkipped), static_cast<unsigned long long>(counters.glareDrawsSkipped));
@@ -3336,6 +3341,17 @@ bool GsnScene::Impl::nightPrepare(const gsn::FrameList::Lighting& l, const Scene
         return nightFinish(l, si, colourView, depthOnly, 0, k, out);
     }
     const scene::SceneFrame& sf = *frame.scene;
+    // Split screen (A12: each half a kViewMain into the one target, with its own scissor and camera): one light pass
+    // over the target would light both halves with one half's projection and lamps, so the Light gets no lamps (GT4's
+    // night look; the rest of its light pass as before), counted, until a pass per half (scissored to its rectangle)
+    // exists.
+    uint32_t mains = 0;
+    for (const scene::ViewData& v : sf.views)
+        if (v.target == l.target && v.role == gfx::scene::kViewMain) ++mains;
+    if (mains > 1) {
+        ++nightSplitSkipped;
+        return false;
+    }
     // The main view drawn into this scene's target: the largest scissor (the mirror's is the smaller one).
     const scene::ViewData* view = nullptr;
     uint32_t bestArea = 0;
