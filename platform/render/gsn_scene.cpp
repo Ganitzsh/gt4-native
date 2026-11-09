@@ -156,10 +156,14 @@ struct GsnScene::Impl {
         uint32_t version = 0, width = 0, height = 0, levels = 1;
         uint32_t generated = 1;   // mip levels made from level 0 for a texture without GS mipmaps (3D draws)
         bool replaced = false;    // a texture pack's image (gsn::TextureImage::replaced)
+        bool stream = false;      // a stream's frame (gsn::TextureImage::stream): no generated mips
     };
     std::unordered_map<uint32_t, GpuTexture> textures;
     // Retired textures, destroyed once the frames that may still sample them are done.
     std::vector<std::pair<uint64_t, vk::Image>> graveyard;
+    // Staging and upload buffers outgrown, destroyed the same way (growing one used to wait for the device idle: a
+    // movie's first frames stalled once per frame slot, 111 ms on the desktop).
+    std::vector<std::pair<uint64_t, vk::Buffer>> bufferGraveyard;
     // Retired texture images, reused by later textures of the same size and levels once the frames that may still
     // sample them are done: a race decodes 6 to 12 textures a frame (palettes the game animates), and an image made
     // and its memory allocated each time took 4 of the render thread's 6.5 ms a frame (0.4 ms an image).
@@ -618,6 +622,7 @@ struct GsnScene::Impl {
         for (auto& [id, t] : targets) vk::destroy(device, t.image);
         for (auto& [id, t] : textures) vk::destroy(device, t.image);
         for (auto& [when, image] : graveyard) vk::destroy(device, image);
+        for (auto& [when, buf] : bufferGraveyard) vk::destroy(device, buf);
         for (auto& [when, image] : textureGraveyard) vk::destroy(device, image);
         for (auto& [key, images] : texturePool)
             for (vk::Image& image : images) vk::destroy(device, image);
@@ -874,10 +879,7 @@ struct GsnScene::Impl {
         if (ring.size() <= index) ring.resize(index + 1);
         vk::Buffer& b = ring[index];
         if (b.size < bytes) {
-            if (b.buffer) {
-                vkDeviceWaitIdle(device.device);
-                vk::destroy(device, b);
-            }
+            if (b.buffer) bufferGraveyard.emplace_back(uploads, b);   // (a frame in flight may still read it)
             b = vk::createBuffer(device, std::max<VkDeviceSize>(bytes + bytes / 2, 1 << 20), usage, true);
         }
         return b;
@@ -898,6 +900,14 @@ struct GsnScene::Impl {
             if (it->first + kSlots + 1 <= uploads) {
                 vk::destroy(device, it->second);
                 it = graveyard.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        for (auto it = bufferGraveyard.begin(); it != bufferGraveyard.end();) {
+            if (it->first + kSlots + 1 <= uploads) {
+                vk::destroy(device, it->second);
+                it = bufferGraveyard.erase(it);
             } else {
                 ++it;
             }
@@ -955,13 +965,19 @@ struct GsnScene::Impl {
             auto& t = frame.textures[i];
             if (uploadLast[t.id] != i) continue;
             GpuTexture& g = textures[t.id];
-            if (!g.image.valid() || g.width != t.width || g.height != t.height || g.levels != t.levels) {
+            if (!g.image.valid() || g.width != t.width || g.height != t.height || g.levels != t.levels ||
+                g.stream != t.stream) {
                 GT4_STAGE_SCOPE("render: texture images made (pooled or new)");
                 retireTexture(g.image);
                 vk::ImageDesc desc;
                 desc.format = VK_FORMAT_R8G8B8A8_UNORM;
                 desc.extent = {t.width, t.height};
-                g.generated = t.levels == 1 && std::max(t.width, t.height) >= 8 ? std::bit_width(std::max(t.width, t.height)) : 1;
+                // A stream's frames (a movie, each frame new) get no chain: only perspective draws read generated
+                // levels (see `made` in the draws), and a movie under the menus is drawn flat, so a chain blitted from
+                // every frame went unread.
+                g.generated = t.levels == 1 && !t.stream && std::max(t.width, t.height) >= 8
+                                  ? std::bit_width(std::max(t.width, t.height)) : 1;
+                g.stream = t.stream;
                 desc.mips = t.levels > 1 ? t.levels : g.generated;
                 desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
                 desc.name = "gsn texture";

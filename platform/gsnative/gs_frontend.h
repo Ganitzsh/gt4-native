@@ -105,6 +105,8 @@ struct TextureImage {
     uint32_t id = 0, version = 0, width = 0, height = 0;
     uint32_t levels = 1;             // mipmap levels, each half the size of the one before (at least 1 x 1)
     bool replaced = false;           // a texture pack's image (any size; the GS texture's shape): sampled normalised
+    bool stream = false;             // a stream's frame (the menus' movie backgrounds) decoded into the texture the
+                                     // last frame had: the back end makes no mip chain for it (2D draws read level 0)
     std::vector<uint32_t> pixels;    // level 0, then each further level
 };
 
@@ -368,6 +370,7 @@ public:
         uint64_t named = 0, found = 0;   // textures looked up in the texture pack, and those it has
         uint64_t reused = 0;             // textures whose content was decoded before (GsFrontend::decoded)
         uint64_t streamed = 0;           // new contents of a stream decoded into its texture (textureFor)
+        uint64_t streamedBytes = 0;      // their pixels' bytes (the movie path's load: PERF before and after)
         uint64_t setTextures = 0, setMisses = 0, setDecodes = 0;   // textures named by their set; not held now; decodes
         uint64_t setPagesWritten = 0;   // pages of sets written into graphics memory (materializePage)
         // P2's metric (docs/modern/PLAN.md P2): what goes into the GS memory model. The set pages above by what made them

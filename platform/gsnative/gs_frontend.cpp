@@ -1835,6 +1835,7 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
         TextureImage image;
         image.id = c.id;
         image.version = 1;
+        image.stream = id != 0;   // (decoded into the stream's own texture: no mip chain made for it)
         image.width = w;
         image.height = h;
         image.levels = levelCount;
@@ -1842,6 +1843,7 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
         size_t texels = 0;
         for (uint32_t i = 0; i < levelCount; ++i) texels += size_t(levels[i].w) * levels[i].h;
         image.pixels.resize(texels);
+        if (image.stream) stats.streamedBytes += uint64_t(texels) * 4;
         Texa texa;
         texa.ta0 = s.texAlpha0;
         texa.aem = s.texBlackTransparent;
