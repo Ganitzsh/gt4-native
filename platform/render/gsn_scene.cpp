@@ -1485,6 +1485,22 @@ vk::Pipeline& GsnScene::Impl::parityPipeline(uint32_t blendKey, uint32_t mask, b
 // frame shown, whole. Copied as it stands into `heldPicture` before the list draws over it (once: a second cut before the
 // frame's displayed list finds it held), so the present shows that frame, not the next one half drawn.
 void GsnScene::Impl::holdShownPicture(VkCommandBuffer command) {
+    static const bool holdTrace = [] { const char* e = std::getenv("GT4_HOLD_TRACE"); return e && *e == '1'; }();
+    if (holdTrace && reading && !frame.displayed) {   // DIAG: the cut list's targets, against the present's two
+        std::string drawn;
+        std::vector<uint32_t> seen;
+        for (const auto& cmd : frame.commands)
+            if (cmd.kind == gsn::FrameList::Command::Kind::Draw) {
+                const uint32_t t = frame.draws[cmd.index].target;
+                if (std::find(seen.begin(), seen.end(), t) == seen.end()) {
+                    seen.push_back(t);
+                    drawn += ' ' + std::to_string(t);
+                }
+            }
+        std::printf("[hold] read %llu cut: shown %u blend %u (%.1f) lastField %u held %d/%u; draws into%s\n",
+                    static_cast<unsigned long long>(reads), displayTarget, blendTarget, fieldBlend, lastFieldTarget,
+                    heldShown ? 1 : 0, heldTarget, drawn.c_str());
+    }
     if (!reading || frame.displayed || !displayTarget) return;
     bool drawsIntoShown = false;
     for (const auto& cmd : frame.commands)
@@ -3421,6 +3437,11 @@ void GsnScene::Impl::executeFinish(VkCommandBuffer command, uint32_t /*slot*/) {
         if (!backBuffer && shownByGame == gameShown && targets.count(shownBefore)) displayTarget = shownBefore;
     }
     gameShown = shownByGame;
+    static const bool holdTrace = [] { const char* e = std::getenv("GT4_HOLD_TRACE"); return e && *e == '1'; }();
+    if (holdTrace)   // DIAG
+        std::printf("[hold] displayed vblank %llu: circuits %u/%u shown %u (before %u) lastField %u held %d/%u%s\n",
+                    static_cast<unsigned long long>(frame.vblank), frame.display.target1, frame.display.target2, displayTarget,
+                    shownBefore, lastFieldTarget, heldShown ? 1 : 0, heldTarget, reading ? " (in a read)" : "");
     if (heldShown) {   // a displayed list drawn whole: the live buffer is shown again (another buffer: the screen changed)
         heldShown = false;
         ++(displayTarget == heldTarget ? heldCounts.releasedByFrame : heldCounts.releasedByDisplayChange);
@@ -4697,6 +4718,10 @@ void GsnScene::recordMain(VkCommandBuffer command, const SceneView& view) {
     const bool held = s.heldShown && s.heldTarget == s.displayTarget && s.heldPicture.valid();
     // (displayTarget changes only where a displayed list is drawn, executeFinish, which releases the copy: a display
     // change can't leave it shown over another screen; a stall repeats the frame before, whole, counted)
+    static const bool holdTrace = [] { const char* e = std::getenv("GT4_HOLD_TRACE"); return e && *e == '1'; }();
+    if (holdTrace)   // DIAG
+        std::printf("[hold] present: shown %u blend %u (%.1f) held %d/%u -> %s\n", s.displayTarget, s.blendTarget, s.fieldBlend,
+                    s.heldShown ? 1 : 0, s.heldTarget, held ? "copy" : "live");
     if (held) {
         ++s.heldCounts.presents;
         if (++s.heldPresented == 2) ++s.heldCounts.repeated;
