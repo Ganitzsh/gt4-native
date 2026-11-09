@@ -82,6 +82,7 @@ gt4_shader(gsn_ao_comp ${S}/gsn_ao.comp comp)
 gt4_shader(gsn_light_comp ${S}/gsn_light.comp comp)
 # Night lighting on the GS path (PLAN.md F2): the albedo estimate's local luminance and the cluster build (F1).
 gt4_shader(gsn_night_lum_comp ${S}/gsn_night_lum.comp comp)
+gt4_shader(gsn_depth_read_comp ${S}/gsn_depth_read.comp comp)
 gt4_shader(lights_cluster_comp ${S}/lights_cluster.comp comp)
 gt4_shader(gsn_velocity_vert ${S}/gsn_velocity.vert vert)
 gt4_shader(gsn_velocity_frag ${S}/gsn_velocity.frag frag)

@@ -171,6 +171,9 @@ struct Display {
 struct ReadRequest {
     uint32_t target = 0, x = 0, y = 0, width = 0, height = 0, psm = 0;
     bool async = false;   // the game does not wait for it (gfx::kReadAsync)
+    // B25: a Z buffer's read (a mid-run snapshot's: drawnTargets), its Z as the GS keeps it, in its Z format; inverted:
+    // the game has the buffer inverted in place (Target::inverted), so the back end holds largest - Z
+    bool depth = false, inverted = false;
 };
 
 // One frame: commands in the game's order.

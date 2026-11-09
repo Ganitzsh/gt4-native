@@ -1138,10 +1138,12 @@ void GsFrontend::texSet(const uint8_t* payload, size_t bytes) {
 
 std::vector<GsFrontend::DrawnTarget> GsFrontend::drawnTargets() const {
     // (a target the game drew before a recording that starts mid-run, then only samples: a night sky drawn at the
-    // race load. Without its pixels in the state the replay samples whatever the memory model held there)
+    // race load. Without its pixels in the state the replay samples whatever the memory model held there. Z buffers
+    // too (B25): GT4 inverts Z in place instead of clearing it, so a Z buffer left as memory held it keeps the stale Z
+    // wherever the scene covers it, the car ahead's edges then tested against it)
     std::vector<DrawnTarget> out;
     for (const Target& t : targets) {
-        if (t.depth || !t.id || !t.height) continue;
+        if (!t.id || !t.height) continue;
         uint32_t pw, ph;
         pageSize(t.psm, pw, ph);
         const uint32_t perRow = std::max<uint32_t>(1, t.bw), rows = (t.height + ph - 1) / ph;
@@ -1155,6 +1157,8 @@ std::vector<GsFrontend::DrawnTarget> GsFrontend::drawnTargets() const {
         d.read.width = perRow * 64;
         d.read.height = t.height;
         d.read.psm = t.psm;
+        d.read.depth = t.depth;
+        d.read.inverted = t.depth && t.inverted;
         d.bp = t.bp;
         d.bw = t.bw;
         out.push_back(d);

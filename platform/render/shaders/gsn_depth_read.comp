@@ -1,0 +1,25 @@
+#version 460
+// B25: a Z buffer's GS pixels read back for a mid-run snapshot (GsnScene::copyRect's depth path): each GS pixel's Z from
+// the render pixel at its own sample point (the first of its scale x scale, as the colour read takes it), as the GS
+// keeps it: floor(depth x 2^32) at most the format's largest, turned round (largest - Z) while the game has the buffer
+// inverted in place (Target::inverted). One uint per GS pixel, row by row; the CPU packs it in the Z format's bytes.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D depth;   // GS Z / 2^32 (the depth aspect)
+layout(std430, set = 0, binding = 1) writeonly buffer Out { uint z[]; };
+layout(push_constant) uniform Read {
+    ivec2 origin;     // GS pixels
+    ivec2 size;       // GS pixels
+    ivec2 scale;      // render pixels per GS pixel
+    uint most;        // the Z format's largest value
+    uint inverted;    // 1: the buffer holds largest - Z
+} p;
+
+void main() {
+    const ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(q, p.size))) return;
+    const ivec2 at = min((p.origin + q) * p.scale, textureSize(depth, 0) - 1);
+    const float d = texelFetch(depth, at, 0).r * 4294967296.0;   // (a power of two: exact)
+    uint value = d >= float(p.most) ? p.most : uint(floor(d));
+    if (p.inverted != 0u) value = p.most - value;
+    z[q.y * p.size.x + q.x] = value;
+}

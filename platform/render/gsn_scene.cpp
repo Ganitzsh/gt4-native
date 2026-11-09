@@ -263,6 +263,7 @@ struct GsnScene::Impl {
     void runSide(const SideBound& bound);
     vk::Pipeline& parityPipeline(uint32_t blendKey, uint32_t mask, bool depth, bool exports);
     vk::Pipeline nightLumPass;
+    vk::Pipeline depthReadPass;   // B25: a Z buffer's GS Z for a snapshot (gsn_depth_read.comp), made at its first use
     render::LightClusters clusters;
     vk::Image nightLocal;                      // (sum of log luminance, count) per 8 x 8 block
     vk::Buffer nightCells, nightIndices, nightStats;   // written by the cluster build, read by gsn_light.comp
@@ -365,6 +366,7 @@ struct GsnScene::Impl {
         gsn::FrameList::Readback readback;   // (an asynchronous read's: who asked)
     };
     bool copyRect(VkCommandBuffer command, const gsn::ReadRequest& request, Copied& c);
+    bool copyDepth(VkCommandBuffer command, const gsn::ReadRequest& request, Copied& c);   // (B25: a Z buffer's)
     void pack(Copied& c, std::vector<uint8_t>& out);   // (frees the buffer)
     // Asynchronous reads (FrameList::readbacks): copied in the frame being recorded, then in flight with its slot, then
     // packed for GsHost::answerRead once that slot's fence is signalled (GsnScene::slotDone).
@@ -669,6 +671,7 @@ struct GsnScene::Impl {
         vk::destroy(device, aoImage);
         vk::destroy(device, litImage);
         vk::destroy(device, nightLumPass);
+        vk::destroy(device, depthReadPass);
         clusters.destroy(device);
         vk::destroy(device, nightLocal);
         vk::destroy(device, nightCells);
@@ -4367,9 +4370,55 @@ void GsnScene::recordPrepass(VkCommandBuffer command, const SceneView& view) {
 void GsnScene::setInterpolation(bool on) { impl->interpolate = on; }
 void GsnScene::setFixedClock(bool on) { impl->fixedClock = on; }
 
+// B25: a Z buffer read for a mid-run snapshot (GsFrontend::drawnTargets): its GS Z per GS pixel, by a compute pass that
+// samples the depth aspect (Z buffers are not transfer sources), into a host buffer pack() turns into the Z format.
+bool GsnScene::Impl::copyDepth(VkCommandBuffer command, const gsn::ReadRequest& request, Copied& c) {
+    auto it = targets.find(request.target);
+    if (it == targets.end() || !it->second.image.valid() || !request.width || !request.height) return false;
+    vk::Image& image = it->second.image;
+    ++depthReadsServed;
+    if (!depthReadPass.valid())
+        depthReadPass = vk::createCompute(device, shaders::gsn_depth_read_comp(),
+                                          {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER}, 32,
+                                          "gsn depth read");
+    const VkDeviceSize bytes = VkDeviceSize(request.width) * request.height * 4;
+    vk::Buffer values = vk::createBuffer(device, bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, true, true);
+    vk::Barriers b;
+    vk::toSampled(b, image, vk::kCompute);
+    b.flush(command);
+    vk::bind(command, depthReadPass);
+    vk::Descriptors().sampled(0, depthView(image), samplers[0]).storageBuffer(1, values.buffer, 0, bytes).push(command, depthReadPass);
+    const uint32_t zpsm = request.psm & 0xFu;   // (Z32 0x30, Z24 0x31, Z16 0x32 / 0x3A)
+    struct {
+        int32_t origin[2], size[2], scale[2];
+        uint32_t most, inverted;
+    } k{{int32_t(request.x), int32_t(request.y)}, {int32_t(request.width), int32_t(request.height)},
+        {int32_t(it->second.scaleX), int32_t(it->second.scaleY)}, zpsm == 0 ? 0xFFFFFFFFu : zpsm == 1 ? 0xFFFFFFu : 0xFFFFu,
+        request.inverted ? 1u : 0u};
+    static_assert(sizeof(k) == 32);
+    vk::pushConstants(command, depthReadPass, k);
+    vk::dispatch2D(command, request.width, request.height);
+    VkMemoryBarrier2 host{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+    host.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    host.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+    host.dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT;
+    host.dstAccessMask = VK_ACCESS_2_HOST_READ_BIT;
+    VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    dependency.memoryBarrierCount = 1;
+    dependency.pMemoryBarriers = &host;
+    vkCmdPipelineBarrier2(command, &dependency);
+    c.request = request;
+    c.pixels = values;
+    c.w = request.width;
+    c.h = request.height;
+    c.scaleX = c.scaleY = 1;
+    return true;
+}
+
 bool GsnScene::Impl::copyRect(VkCommandBuffer command, const gsn::ReadRequest& request, Copied& c) {
     auto it = targets.find(request.target);
-    if (it == targets.end() || !it->second.image.valid() || it->second.depth) return false;
+    if (it != targets.end() && it->second.depth) return request.depth && copyDepth(command, request, c);
+    if (it == targets.end() || !it->second.image.valid()) return false;
     vk::Image& image = it->second.image;
     const uint32_t scaleX = it->second.scaleX, scaleY = it->second.scaleY;
     const uint32_t x0 = std::min(request.x * scaleX, image.extent.width), y0 = std::min(request.y * scaleY, image.extent.height);
@@ -4414,6 +4463,15 @@ void GsnScene::Impl::pack(Copied& c, std::vector<uint8_t>& out) {
                                  : std::ldexp(static_cast<float>(mantissa), -24);
         return sign ? -f : f;
     };
+    if (c.request.depth) {   // B25: one uint of GS Z per pixel (copyDepth), in the Z format's bytes (Z24 three)
+        const uint32_t zpsm = c.request.psm & 0xFu, bytes = zpsm == 0 ? 4 : zpsm == 1 ? 3 : 2;
+        const auto* z = static_cast<const uint32_t*>(c.pixels.mapped);
+        out.assign(size_t(c.request.width) * c.request.height * bytes, 0);
+        for (size_t i = 0; i < size_t(c.request.width) * c.request.height; ++i)
+            for (uint32_t k = 0; k < bytes; ++k) out[i * bytes + k] = static_cast<uint8_t>(z[i] >> (8 * k));
+        vk::destroy(device, c.pixels);
+        return;
+    }
     const auto* half = static_cast<const uint16_t*>(c.pixels.mapped);
     const gsn::ReadRequest& request = c.request;
     const uint32_t w = c.w, h = c.h, scaleX = c.scaleX, scaleY = c.scaleY;
