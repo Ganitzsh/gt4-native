@@ -629,19 +629,35 @@ GS pixels divided by the target's extent (b.11's fraction of R), depth in b.11's
 `hasMotionVectors()` true when they are, and a temporal upscaler then taking over from the GS scene's own resolve
 (`resolveConfig`'s `selfResolved` follows). Also delivered, since the game's frames reach the pipeline whole: a
 reactive or transparency mask over the 2D draws (a constant Z per sprite: the HUD, the speedometer, menu text) and the
-sky, whose depth is arbitrary (b.11), so FSR 2 doesn't smear them; and `DisplaySceneState::reset`, so a cut doesn't
-ghost: always on a change of the displayed target's size or format and on the GS scene's own history resets (its TAA
-already resets on those), since a preset with `upscaler = fsr2` doesn't always want scene records; and on the camera
-cuts (`kViewCut`, the race's and the replay's) and scene switches when records are on. The scene stage's jitter then
-follows the selected upscaler's sequence (B16 (3)) instead of its own Halton phase, or the two disagree; and FSR 2's
-disocclusion is trusted only where b.11's depth convention has been checked for the view's role (race views so far).
-Depends: B16 (1), B8. Acceptance: `ORIG` (`original` never uses it); motion vectors exact on `race7` (the velocity
-debug view); FSR 2 running on the game's frames (its passes in `--profile-json`), reviewed against the GS scene's own
-resolve for ghosting; the HUD and a menu screen held still through FSR 2 under camera motion (a race capture with the
-HUD, and `menus_boot`'s title window with the field-blended menus); the frame after a camera cut clean against the GS
-scene's own resolve (a `race7` or `race_boot` cut), run at `ultra` as shipped, scene records off, so it measures what
-a player sees: if FSR 2 ghosts there and the resolve doesn't, B16c needs a cut signal that doesn't need records;
-`PERF`; `PRESETS` identical except where `upscaler = fsr2`, by design.
+sky, whose depth is arbitrary (b.11), so FSR 2 doesn't smear them. GT4 draws the 3D into its scene target and its post
+pass copies and grades that into the shown one, so the mask's reference and the velocity and depth's mapping come from
+one anchor: the last draw into the picture the list makes (the back buffer, shown at the next flip) that covers the
+displayed rectangle (98 % of it) and samples a target, followed back through such draws to a target a Light drew into
+this list (at most 4 steps; lane B, 2026-11-09: one step on every progressive list measured). The coverage condition
+keeps a small sprite that samples the scene target after the copy (the flare's and the luminance probe's samples) from
+becoming the anchor. The picture right after it is the reference, and velocity and depth are kept with that picture; a
+pixel is reactive where it differs from the reference by more than 2 levels on any channel; anything drawn later (the
+HUD, text, menus) is reactive; a list without an anchor (transitions, menus with no Light) and every fields-mode frame
+is reactive everywhere with velocity 0, counted; and `DisplaySceneState::reset`, so a cut doesn't ghost: always on a
+change of the displayed target's size or format and on the GS scene's own history resets (its TAA already resets on
+those), since a preset with `upscaler = fsr2` doesn't always want scene records; and on the camera cuts (`kViewCut`,
+the race's and the replay's) and scene switches when records are on. The scene stage's jitter then follows the
+selected upscaler's sequence (B16 (3)) instead of its own Halton phase, or the two disagree; and FSR 2's disocclusion
+is trusted only where b.11's depth convention has been checked for the view's role (race views so far). Depends: B16
+(1), B8. Acceptance: `ORIG` (`original` never uses it); motion vectors exact on `race_pe2_prog` (the velocity debug
+view; the REF race captures before it are fields mode, reactive everywhere); FSR 2 running on the game's frames (its
+passes in `--profile-json`), reviewed against the GS scene's own resolve for ghosting; the mask on `race_pe2_prog` and
+a progressive night lap at `ultra`: every progressive list with GT4's post copy chains to a Light (none ending
+elsewhere, the cap never hit), the reactive share (pixels differing by more than 2 levels on any channel) on every
+sampled race frame within its view's bound, each view's measured maximum plus 2 points (measured flyover 2.4-2.7 %,
+chase 4.8 %, bumper 11.0-14.8 %, the B-spec panel 14.7-18.0 %; bounds 5, 7, 17 and 20 %, and 20 % overall; a view not
+listed gets its own measurement and visual check before it counts, so a view with more HUD reads as that view, not as
+a leak), the mask the HUD and nothing else on a frame per view (bumper, chase, the B-spec panel), lists without an
+anchor only at transitions and fields-mode screens; the HUD and a menu screen held still through FSR 2 under camera
+motion (that race, and `menus_boot`'s title window with the field-blended menus); the frame after a camera cut clean
+against the GS scene's own resolve (a cut on `race_pe2_prog`), run at `ultra` as shipped, scene records off, so it
+measures what a player sees: if FSR 2 ghosts there and the resolve doesn't, B16c needs a cut signal that doesn't need
+records; `PERF`; `PRESETS` identical except where `upscaler = fsr2`, by design.
 
 **B17: FSR 3.1 (M; lane C, moved from lane B on 2026-11-08, lane B reviewing).** A backend of B16's interface:
 FSR 3.1 only, from FidelityFX SDK v1.1.4 (MIT), vendored unmodified with our glslang and our own Vulkan glue, at
