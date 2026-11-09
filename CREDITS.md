@@ -15,5 +15,9 @@
 - Bill Gardner and Keith Martin, "HRTF Measurements of a KEMAR Dummy-Head Microphone", MIT Media Lab Perceptual
   Computing Technical Report #280, 1994: the head-related impulse responses behind `audio.spatial = hrtf`.
 
+## Fonts
+- Saira and Saira Semi Expanded, The Saira Project Authors (Omnibus-Type), and Libre Caslon Text, The Libre Caslon
+  Text Project Authors (Pablo Impallari and others): the user interface's text, SIL Open Font License 1.1.
+
 ## Distribution policy
 Public builds should expose About/Credits and preserve all required third-party notices. Names must reflect actual contributions.

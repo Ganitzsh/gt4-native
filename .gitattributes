@@ -18,6 +18,9 @@ compat/abi/** text eol=lf
 *.sh text eol=lf
 *.ps1 text eol=lf
 *.cmake text eol=lf
+
+# The UI fonts (assets/ui/fonts, SIL OFL): kept byte for byte as published.
+*.ttf binary
 *.json text eol=lf
 *.yml text eol=lf
 *.comp text eol=lf

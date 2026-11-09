@@ -15,13 +15,16 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <limits>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
+#include <utility>
 
 using gt4::vk::check;
 
@@ -643,35 +646,59 @@ struct Renderer::Impl {
         composeMenu();
     }
 
-    // Integer text scale for the content height (the 8 x 8 font is point-sampled).
-    float textScale(float lines) const {
-        return std::max(1.0f, std::floor(static_cast<float>(pipeline->contentRect().extent.height) / lines));
+    // GT4_UI_TEXT_TEST=FRAME:TEXT (diagnostic, E5): from frame FRAME the message box shows TEXT, UTF-8 with \xHH
+    // escapes for its bytes (the environment is ANSI on Windows), so a run draws characters the text atlas did not
+    // have at start-up (its mid-session upload, checked under validation).
+    void textProbe() {
+        static const auto probe = []() -> std::pair<uint32_t, std::string> {
+            const char* e = std::getenv("GT4_UI_TEXT_TEST");
+            const char* colon = e ? std::strchr(e, ':') : nullptr;
+            if (!colon) return {0, std::string()};
+            std::string text;
+            for (const char* c = colon + 1; *c; ++c) {
+                if (c[0] == '\\' && c[1] == 'x' && std::isxdigit(static_cast<unsigned char>(c[2])) &&
+                    std::isxdigit(static_cast<unsigned char>(c[3]))) {
+                    const char hex[3] = {c[2], c[3], 0};
+                    text.push_back(static_cast<char>(std::strtoul(hex, nullptr, 16)));
+                    c += 3;
+                } else {
+                    text.push_back(*c);
+                }
+            }
+            return {static_cast<uint32_t>(std::strtoul(e, nullptr, 10)), text};
+        }();
+        if (!probe.second.empty() && frameCounter >= probe.first) {
+            message = probe.second;
+            messageUntil = SDL_GetTicks() + 1000;
+        }
     }
 
     void composeMessage() {
         if (message.empty() || SDL_GetTicks() >= messageUntil || menu) return;
         const auto content = pipeline->contentRect();
-        const float scale = textScale(360.0f);
-        const float w = 8.0f * scale * static_cast<float>(message.size()) + 16.0f * scale;
-        const float h = 8.0f * scale + 12.0f * scale;
+        const float unit = std::max(1.0f, static_cast<float>(content.extent.height) / 360.0f);
+        const float em = 9.6f * unit, pad = 8.0f * unit;
+        const float w = overlay->uiTextWidth(gt4::ui::FontFace::Row, em, message) + 2.0f * pad;
+        const float h = overlay->uiLineHeight(gt4::ui::FontFace::Row, em) + 2.0f * pad;
         const float x = static_cast<float>(content.offset.x) + (static_cast<float>(content.extent.width) - w) * 0.5f;
-        const float y = static_cast<float>(content.offset.y + content.extent.height) - h - 24.0f * scale;
+        const float y = static_cast<float>(content.offset.y + content.extent.height) - h - 24.0f * unit;
         overlay->pixelRect(x, y, w, h, {10, 14, 22, 200});
-        overlay->pixelText(x + 8.0f * scale, y + 6.0f * scale, scale, message, {235, 238, 242, 255});
+        overlay->uiText(x + pad, y + pad, em, gt4::ui::FontFace::Row, message, {235, 238, 242, 255});
     }
 
     // The settings menu: a panel in the middle of the content, a scrolling list of rows, the selected row's
-    // description and the controls underneath.
+    // description and the controls underneath. Text in the UI fonts (E5): titles and section names in the title
+    // face, rows in the row face, the description in the help face, laid out by measured widths.
     void composeMenu() {
         if (!menu) return;
+        using gt4::ui::FontFace;
         const auto content = pipeline->contentRect();
         const float cx = static_cast<float>(content.offset.x), cy = static_cast<float>(content.offset.y);
         const float cw = static_cast<float>(content.extent.width), ch = static_cast<float>(content.extent.height);
         overlay->pixelRect(cx, cy, cw, ch, {0, 0, 0, 150});
-        const float scale = textScale(400.0f);
-        const float glyph = 8.0f * scale, rowHeight = 13.0f * scale, pad = 12.0f * scale;
-        const size_t columns = 72;
-        const float panelW = std::min(cw - 2.0f * pad, glyph * static_cast<float>(columns) + 2.0f * pad);
+        const float unit = std::max(1.0f, ch / 400.0f);   // the old 8 x 8 menu's scale, now continuous
+        const float em = 9.6f * unit, rowHeight = 13.0f * unit, pad = 12.0f * unit;
+        const float panelW = std::min(cw - 2.0f * pad, 8.0f * unit * 72.0f + 2.0f * pad);
         const size_t fit = static_cast<size_t>(std::max(4.0f, (ch - 2.0f * pad - 8.0f * rowHeight) / rowHeight));
         const size_t shown = std::min(fit, menu->rows.size());
         const float panelH = rowHeight * static_cast<float>(shown) + 7.0f * rowHeight + 2.0f * pad;
@@ -679,9 +706,9 @@ struct Renderer::Impl {
         const gt4::Color8 panel{12, 16, 26, 235}, text{225, 230, 238, 255}, dim{140, 150, 165, 255},
             accent{255, 196, 48, 255}, bar{48, 80, 140, 255}, ink{255, 255, 255, 255};
         overlay->pixelRect(px, py, panelW, panelH, panel);
-        overlay->pixelRect(px, py, panelW, 2.0f * scale, accent);
+        overlay->pixelRect(px, py, panelW, 2.0f * unit, accent);
         float y = py + pad;
-        overlay->pixelText(px + pad, y, scale * 2.0f, menu->title, ink);
+        overlay->uiText(px + pad, y - 2.0f * unit, 2.0f * em, FontFace::Title, menu->title, ink);
         y += 2.0f * rowHeight;
         // Scroll so that the selected row (and its section title) is visible.
         size_t selected = 0;
@@ -692,45 +719,62 @@ struct Renderer::Impl {
             first = static_cast<size_t>(std::clamp(want - static_cast<long>(shown / 2), 0L, static_cast<long>(menu->rows.size() - shown)));
         }
         const float listTop = y;
-        const size_t width = static_cast<size_t>((panelW - 2.0f * pad) / glyph);
+        const float right = px + panelW - pad;   // values end here
         for (size_t i = first; i < first + shown; ++i) {
             const auto& row = menu->rows[i];
             const float x = px + pad;
             if (row.header) {
-                if (!row.label.empty()) overlay->pixelText(x, y + 2.0f * scale, scale, row.label, accent);
+                if (!row.label.empty()) overlay->uiText(x, y, em, FontFace::Title, row.label, accent);
                 y += rowHeight;
                 continue;
             }
-            if (row.selected) overlay->pixelRect(px + pad * 0.5f, y - 2.0f * scale, panelW - pad, rowHeight, bar);
-            const std::string label = "  " + row.label + (row.restart ? " *" : row.nextRace ? " +" : "");
-            overlay->pixelText(x, y + 1.0f * scale, scale, label, row.selected ? ink : text);
+            if (row.selected) overlay->pixelRect(px + pad * 0.5f, y - 2.0f * unit, panelW - pad, rowHeight, bar);
+            const std::string label = row.label + (row.restart ? " *" : row.nextRace ? " +" : "");
+            overlay->uiText(x + 2.0f * em * 0.5f, y, em, FontFace::Row, label, row.selected ? ink : text);
             if (row.adjustable) {
-                const std::string value = row.selected ? "< " + row.value + " >" : row.value + "  ";
-                overlay->pixelText(x + glyph * static_cast<float>(width - std::min(width, value.size())), y + 1.0f * scale, scale,
-                                   value, row.selected ? ink : accent);
+                const std::string value = row.selected ? "<  " + row.value + "  >" : row.value;
+                overlay->uiText(right - overlay->uiTextWidth(FontFace::Row, em, value), y, em, FontFace::Row, value,
+                                row.selected ? ink : accent);
             }
             y += rowHeight;
         }
-        if (first > 0) overlay->pixelText(px + panelW - pad - glyph, listTop - rowHeight, scale, "^", dim);
-        if (first + shown < menu->rows.size()) overlay->pixelText(px + panelW - pad - glyph, y, scale, "v", dim);
-        // The description, word-wrapped over three lines at most, then the controls.
+        const float mark = overlay->uiTextWidth(FontFace::Row, em, "^");
+        if (first > 0) overlay->uiText(right - mark, listTop - rowHeight, em, FontFace::Row, "^", dim);
+        if (first + shown < menu->rows.size()) overlay->uiText(right - mark, y, em, FontFace::Row, "v", dim);
+        // The description, word-wrapped by its measured width over three lines at most, then the controls.
         y += rowHeight;
-        overlay->pixelRect(px + pad, y - 4.0f * scale, panelW - 2.0f * pad, 1.0f * scale, dim);
-        std::string line, help = menu->help;
+        overlay->pixelRect(px + pad, y - 4.0f * unit, panelW - 2.0f * pad, 1.0f * unit, dim);
+        const float width = panelW - 2.0f * pad;
+        const std::string& help = menu->help;
         int lines = 0;
         size_t start = 0;
         while (start < help.size() && lines < 3) {
-            size_t end = std::min(help.size(), start + width);
-            if (end < help.size()) {
-                const size_t space = help.rfind(' ', end);
-                if (space != std::string::npos && space > start) end = space;
+            size_t end = start, fits = start;
+            while (end < help.size()) {
+                size_t next = help.find(' ', end + 1);
+                if (next == std::string::npos) next = help.size();
+                const auto candidate = std::string_view(help).substr(start, next - start);
+                if (overlay->uiTextWidth(FontFace::Help, em, candidate) > width && fits > start) break;
+                fits = next;
+                end = next;
             }
-            overlay->pixelText(px + pad, y + rowHeight * static_cast<float>(lines), scale, help.substr(start, end - start), text);
-            start = end + (end < help.size() && help[end] == ' ' ? 1 : 0);
+            if (fits == start) {   // one word wider than the panel: that word alone, the rest wraps after it
+                fits = help.find(' ', start + 1);
+                if (fits == std::string::npos) fits = help.size();
+            }
+            overlay->uiText(px + pad, y + rowHeight * static_cast<float>(lines), em, FontFace::Help,
+                            std::string_view(help).substr(start, fits - start), text);
+            start = fits + (fits < help.size() && help[fits] == ' ' ? 1 : 0);
             ++lines;
         }
         y += rowHeight * 3.5f;
-        overlay->pixelText(px + pad, y, scale, menu->footer.substr(0, width), dim);
+        std::string footer = menu->footer;
+        // Trimmed a whole code point at a time (its continuation bytes, then its lead), never inside a character.
+        while (!footer.empty() && overlay->uiTextWidth(FontFace::Help, em, footer) > width) {
+            while (footer.size() > 1 && (static_cast<unsigned char>(footer.back()) & 0xC0) == 0x80) footer.pop_back();
+            footer.pop_back();
+        }
+        overlay->uiText(px + pad, y, em, FontFace::Help, footer, dim);
     }
 
     void composeReadout() {
@@ -950,7 +994,9 @@ struct Renderer::Impl {
         {
             GT4_STAGE_SCOPE("render: frame begin and overlay");
             view = pipeline->beginFrame(slot, frameCounter);
+            textProbe();
             composeOverlay(slot);
+            overlay->uploadGlyphs();   // characters not drawn before (E5's text atlas)
         }
         check(vkResetCommandBuffer(frame.command, 0), "vkResetCommandBuffer");
         VkCommandBufferBeginInfo begin{};

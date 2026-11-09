@@ -6,12 +6,14 @@
 // coordinates, see docs/WIDESCREEN.md). Canvas2D maps it into the content rectangle for any aspect ratio:
 // anchored (each element keeps to its edge, as GT4's own 16:9 mode does with its +-96 offsets), centred
 // 4:3, or stretched. The R1 renderer will push the game's 2D GS primitives through the same mapping.
+#include "sdf_font.h"
 #include "settings.h"
 #include "vk.h"
 
 #include <array>
 #include <memory>
 #include <string>
+#include <string_view>
 
 namespace gt4 {
 
@@ -46,10 +48,22 @@ public:
     // Building a frame: canvas-space (anchored) and pixel-space primitives.
     void begin(uint32_t slot, VkExtent2D target, const Canvas2D& canvas);
     void canvasRect(float x, float y, float w, float h, Color8 color, Anchor anchor);
-    void canvasText(float x, float y, float size, const std::string& text, Color8 color, Anchor anchor);
+    // Text in the UI fonts (SDF, E5): `size` is the line's height in canvas units as the 8 x 8 font's cell was, (x, y)
+    // its top; the anchor applies to the whole line.
+    void canvasText(float x, float y, float size, const std::string& text, Color8 color, Anchor anchor,
+                    ui::FontFace face = ui::FontFace::Row);
     void canvasSprite(float x, float y, float size, char glyph, Color8 color, Anchor anchor);  // pixel-art test sprite
     void pixelRect(float x, float y, float w, float h, Color8 color);
-    void pixelText(float x, float y, float scale, const std::string& text, Color8 color);  // always point-sampled
+    // The 8 x 8 bitmap font, point-sampled: the debug readout's fixed-width text only (E5).
+    void pixelText(float x, float y, float scale, const std::string& text, Color8 color);
+    // UI-font text in output pixels: `em` pixels, (x, top) the line's top-left; returns its width.
+    float uiText(float x, float top, float em, ui::FontFace face, std::string_view text, Color8 color);
+    float uiTextWidth(ui::FontFace face, float em, std::string_view text);
+    float uiLineHeight(ui::FontFace face, float em) const;
+    // Uploads glyphs added while composing (call after composing, before record; waits for the device when the
+    // atlas changed, which happens only for a character not drawn before).
+    void uploadGlyphs();
+    const ui::SdfFontStats& fontStats() const;
     const Canvas2D& canvas() const { return currentCanvas; }
     // Records the draws into the currently bound swapchain rendering (viewport = whole target).
     void record(VkCommandBuffer command);
