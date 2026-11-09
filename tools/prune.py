@@ -20,6 +20,10 @@ gustavocanepa/gt4-native) and the worktrees of gt4-native-game and gt4-decomp; o
 5. build/sessions/* and stray .ppm/.png files in build/ (three levels down, outside the trees above): idle 3 days.
 6. Build trees, per checkout: game, game_*, *_game and host-*, *-host, each family's newest 2 stay, older ones go
    when idle 3 days.
+7. Claude session scratchpads (the temp folder's claude/*/*/scratchpad): a scratchpad with a file changed in the
+   last 24 h is skipped whole (its session may be alive); in the others, folders (frame dumps, session folders) and
+   loose .ppm/.png files idle 3 days go. Scripts, notes and logs at a scratchpad's top stay. Nothing else in the temp
+   folder is looked at (DiagOutputDir and Windows' files are the owner's).
 Never: gt4-native-game's or gt4-decomp's own files, C:/Users/julie/locks, gt4-native-sprite, an item with a
 saves*, *_saves, caps, captures or refs (REF stills) folder in its top two levels (in a checkout, among the files
 git doesn't track), any .iso/.elf/.ps2/.tgz/.mcd/.mc2 or BIOS file, a file named in docs/CAPTURES.md, a path or
@@ -36,6 +40,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 
 DAY = 86400
@@ -118,8 +123,10 @@ def gib(n):
 
 
 class Pruner:
-    def __init__(self, home, objcache, now=None, cap=10 << 30, in_use=None, origin=ORIGIN, log=None):
+    def __init__(self, home, objcache, now=None, cap=10 << 30, in_use=None, origin=ORIGIN, log=None, scratch=None):
         self.home, self.objcache, self.now, self.cap = home, objcache, now or time.time(), cap
+        # rule 7's root: Claude Code's session folders in the temp folder (claude/<project hash>/<session>/scratchpad)
+        self.scratch = scratch if scratch is not None else os.path.join(tempfile.gettempdir(), "claude")
         self.origin = origin
         self.log_path = log or os.path.join(home, "prune.log")
         self.plan, self.kept, self.errors = [], [], []
@@ -194,7 +201,7 @@ class Pruner:
 
     def refusal(self, path, scan=None):
         """Why path may not go, or None."""
-        if not under(path, self.home) and not under(path, self.objcache):
+        if not under(path, self.home) and not under(path, self.objcache) and not under(path, self.scratch):
             return "outside the folders this tool prunes"
         for n in self.never:
             if under(path, n) or under(n, path):
@@ -411,6 +418,32 @@ class Pruner:
             freed += size
         self.objcache_total, self.objcache_drop, self.objcache_freed = total, drop, freed
 
+    def scratch_rule(self):
+        """Rule 7: idle Claude session scratchpads' old folders and image dumps."""
+        if not os.path.isdir(self.scratch) or is_link(self.scratch):
+            return
+        for project in sorted(os.listdir(self.scratch)):
+            pdir = os.path.join(self.scratch, project)
+            if not os.path.isdir(pdir) or is_link(pdir):
+                continue
+            for session in sorted(os.listdir(pdir)):
+                pad = os.path.join(pdir, session, "scratchpad")
+                if not os.path.isdir(pad) or is_link(pad):
+                    continue
+                scan = Scan(pad, self.keep_names, names=False)
+                if self.now - scan.newest < DAY:
+                    self.kept.append(("7 scratchpad", pad, scan.size,
+                                      "a file changed in the last 24 h (live session)"))
+                    continue
+                for e in os.scandir(long_path(pad)):
+                    full = os.path.join(pad, e.name)
+                    if is_link(e):
+                        continue
+                    if e.is_dir(follow_symlinks=False):
+                        self.tree("7 scratchpad folder", full, 3)
+                    elif os.path.splitext(e.name)[1].lower() in DUMP_EXT:
+                        self.small_file("7 scratchpad dump", full, 3)
+
     def find(self):
         self.objcache_drop, self.objcache_freed, self.objcache_total = [], 0, 0
         try:
@@ -425,6 +458,7 @@ class Pruner:
                 if not any(under(path, n) for n in self.never):
                     self.build_rules(path)
             self.objcache_rule()
+            self.scratch_rule()
         except (OSError, RuntimeError, ValueError) as e:
             self.errors.append(f"{type(e).__name__}: {e}")
 
@@ -491,7 +525,7 @@ class Pruner:
             print(f"GO    {rule:22} {gib(size):>10}  {show(path)}" + ("  (git worktree remove)" if owner else ""))
         recent = {}   # sessions and dumps kept only for their age: counted, not listed
         for rule, path, size, why in self.kept:
-            if rule.startswith("5") and why.startswith("changed"):
+            if rule.startswith(("5", "7")) and why.startswith("changed"):
                 n, s = recent.get(rule, (0, 0))
                 recent[rule] = (n + 1, s + size)
                 continue
@@ -650,17 +684,34 @@ def self_test():
         age(old_wt, 3)
         age(dirty_wt, 3)
 
-        pr = Pruner(home, cache, cap=2500, in_use=[])
+        scratch = os.path.join(tmp, "claude")   # rule 7: a live session's scratchpad and an idle one
+        live = os.path.join(scratch, "p1", "live", "scratchpad")
+        os.makedirs(os.path.join(live, "frames"))
+        open(os.path.join(live, "frames", "f.ppm"), "w").write("p")
+        age(os.path.join(live, "frames"), 5)
+        open(os.path.join(live, "notes.txt"), "w").write("today")   # a fresh file: the whole scratchpad stays
+        idle = os.path.join(scratch, "p1", "idle", "scratchpad")
+        for d in ("frames", "caps", "recent"):
+            os.makedirs(os.path.join(idle, d))
+            open(os.path.join(idle, d, "x.ppm"), "w").write("p")
+        open(os.path.join(idle, "notes.py"), "w").write("print()")
+        open(os.path.join(idle, "shot.png"), "w").write("p")
+        age(idle, 5)
+        age(os.path.join(idle, "recent"), 2)   # idle 2 days: under rule 7's 3
+        pr = Pruner(home, cache, cap=2500, in_use=[], scratch=scratch)
         pr.find()
         expect(not pr.errors, f"no errors ({pr.errors})")
-        go = {os.path.relpath(p[1], home).replace("\\", "/") for p in pr.plan}
+        go = {os.path.relpath(p[1], home).replace("\\", "/") for p in pr.plan if not under(p[1], scratch)}
+        sgo = {os.path.relpath(p[1], scratch).replace("\\", "/") for p in pr.plan if under(p[1], scratch)}
+        expect(sgo == {"p1/idle/scratchpad/frames", "p1/idle/scratchpad/shot.png"},
+               f"rule 7: the idle scratchpad's old frames folder and image go, nothing else ({sorted(sgo)})")
         want = {"old-wt", "gt4-lane-Z/build/packages/p0", "gt4-lane-Z/build/packages/p1", "gt4-lane-Z/build/game_a",
                 "gt4-lane-Z/build/game_b", "gt4-lane-Z/build/game_f", "gt4-lane-Z/build/sessions/s_old",
                 "gt4-lane-Z/build/shot.ppm",
                 "gt4-lane-Z/build/rel-old"}
         expect(go == want, f"the plan: extra {sorted(go - want)}, missing {sorted(want - go)}")
         expect(len(pr.objcache_drop) == 2, f"objcache: the 2 oldest of 4 go for the cap ({len(pr.objcache_drop)})")
-        busy = Pruner(home, cache, in_use=[norm(os.path.join(build, "game_a"))])
+        busy = Pruner(home, cache, in_use=[norm(os.path.join(build, "game_a"))], scratch=scratch)
         busy.find()
         expect(not any(p[1].endswith("game_a") for p in busy.plan), "a tree a process names stays")
         if not failed:
@@ -678,6 +729,11 @@ def self_test():
             expect(os.path.exists(os.path.join(build, "kept.ppm")), "a name in prune-keep.txt stays")
             expect(os.path.exists(os.path.join(build, "tool", "icon.png")), "a program folder's image stays")
             expect(os.path.exists(os.path.join(build, "refs", "x", "old.png")), "a REF still stays")
+            expect(not any(os.path.exists(os.path.join(idle, n)) for n in ("frames", "shot.png")),
+                   "rule 7: an idle scratchpad's old frames go")
+            expect(all(os.path.exists(os.path.join(idle, n)) for n in ("caps", "recent", "notes.py")),
+                   "rule 7: its caps folder, a 2-day folder and its scripts stay")
+            expect(os.path.exists(os.path.join(live, "frames", "f.ppm")), "rule 7: a live scratchpad is untouched")
             expect("removed 1 worktree or clone" in open(os.path.join(home, "prune.log")).read(), "the log")
         try:
             pr.rmtree(os.path.join(home, "gt4-native-game", "x"))
