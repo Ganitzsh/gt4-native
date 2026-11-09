@@ -9,7 +9,8 @@ Sizes: **S** = 1-3 days, **M** = 1-3 weeks, **L** = 1-3 months, for one agent. R
 
 ## 1. Rules
 
-1. **main only.** No branches. Rebase on `origin/main` before every push; never force-push.
+1. **main only.** No branches on origin but rule 10's three kinds. Rebase on `origin/main` before every push; never
+   force-push.
 2. **Small commits.** One ticket is one to five commits. Each commit builds, passes ctest and does one thing.
 3. **Review before push, by someone other than the author.** The author commits locally, runs the ticket's
    acceptance, and sends the reviewer the commit hashes and the clone path over arc. The reviewer fetches from the
@@ -35,6 +36,17 @@ Sizes: **S** = 1-3 days, **M** = 1-3 weeks, **L** = 1-3 months, for one agent. R
    fails anything else as not provable. Reading `git diff -w` line by line is not enough: a `//` comment ending
    in a backslash swallows the unchanged line below it, and a `/*` and a `*/` on two changed lines comment out
    the unchanged code between them.
+10. **Land continuously** (the owner, through the coordinator, 2026-11-09). Push each step as soon as its gates and
+    its review pass: no batching, and no finished commit held locally for a later step. Work that isn't finished goes
+    to main in small steps behind a setting or switch that is off by default (as `render.scene = hybrid`,
+    `lighting.night` and `ui.entry = integrated` went), with its gates; a feature that shows nothing yet stays off in
+    every preset until the ticket that makes it visible. Nothing stays local-only for more than a day. Three kinds of
+    branch go to origin, and no others: work that failed its acceptance and is parked, as `parked/<ticket>-<what>`,
+    which the ticket's PLAN entry names with its hash; debug or measurement code that must never reach main, as
+    `debug/<lane>-<what>`, kept until its ticket closes and then deleted; and a backup of work on its way to main, as
+    `wip/<lane>-<what>`, deleted when it lands and never older than a day. A branch is deleted only after its commits
+    are checked reachable from main or a `parked/` branch, unless it is `debug/`. Main stays green: a step that fails
+    its gates never goes to main.
 
 ---
 
