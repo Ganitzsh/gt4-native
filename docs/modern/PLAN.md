@@ -990,6 +990,27 @@ publishes nothing. Depends: C2, C4, C6. Acceptance:
   linux-arm64 package is untested on the device until the owner's test (R4's eleven points);
 - no Sony or Polyphony asset in either (docs/RELEASE_POLICY.md).
 
+**C12: GS dumps for PCSX2, frame-exact (M; lane C the format and the player run, lane B the front end's side).** Rule
+6's PCSX2 check today pairs our replay with a separate PCSX2 run by content, which gives only a statistical match. C12
+makes it exact: the host writes a frame as a PCSX2 `.gs` dump (the starting GS memory and registers, then the frame's
+packets), and PCSX2's GS dump player renders the same input in its software renderer, compared pixel for pixel at 1x.
+The front end already holds the frame in GS terms (lane B, 2026-11-09): its vertices are the GS's values (XY as (XYZ -
+XYOFFSET) / 16, ST and Q the registers' floats, UV / 16, Z, RGBAQ and fog integers), the drawing state is per draw,
+uploads and texture sets are bytes, and the starting memory is `readVramWithTargets`. GT4's 3D batches are the
+exception: `gsn_models.comp` makes their vertices on the GPU from the model jobs, so 3D needs that buffer read back
+after the frame (a stall, acceptable for a debug dump) or the jobs run on the CPU. Steps (lane C's scope): the writer
+(`platform/gs/gsdump_writer`, no GPU; the state's 425-byte register part laid out from PCSX2's `GSState::Freeze` for
+that version, filled with our registers) and its round trip, in parallel with B25; after B25 (the snapshot's depth
+buffers, and its read-back in a lockstep replay), the front end's dump (`GT4_GSDUMP=PATH,FROM,COUNT`: the state, then
+per draw the changed registers as A+D with the vertices recovered by the rules above, uploads as transfers, the
+display as privileged packets, the game's own GIF as it came), 2D first (enough for B24's sprites and the HUD);
+`tools/pcsx2_gsdump.py` playing it in PCSX2's player at 1x with a side-by-side compare; 3D through the read-back last.
+A dump holds game content (GS memory, textures), so it stays on the owner's machines like a capture, never committed
+or served. The `.gs` format is the version PCSX2's player reads (lane C has read state version 9). Depends: B25.
+Acceptance: `CTEST` round trip on a synthetic frame (written, parsed back, every register and vertex equal); a HUD
+frame and, after the 3D step, a race frame rendered by PCSX2's software GS from our dump, against our renderer at
+`original` 1x, with the differences listed by draw; B24's exact mode then judged on it.
+
 ### Lane D: systems
 
 **D1: Input action map (M).** `platform/input/input_map.{h,cpp}` replaces `readPad` (`main.cpp:394-443`); both
