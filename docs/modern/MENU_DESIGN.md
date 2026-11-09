@@ -203,30 +203,31 @@ Each hook is a `game_src` copy of a matched function with one added call, guarde
    or in Home). L3 + R3 is not a menu chord: held, it is the problem-dump key (`DumpChord`), and a host test keeps the
    two chords' buttons apart. `ChordGuard`'s rule stays: the chord's buttons never reach GT4, a short Start alone
    still does. Each of the three makes the host send `GT4_REC_HOST_CMD` 6 (open settings). The game opens the hub at
-   the next safe point: at once in a menu project; in a race, a `game_src` copy of `RaceBasic::updatePlayCheckPause`
-   (0038B0E0, matched; M9d2, from lane M's spike) acts on a pending command 6 as if Start (`RaceInput` 0x40) were
-   down, only where GT4's own branch would reach `pauseStart(R + 0xE400)`: not in visual mode (`R + 0xCD0` 0), in play
-   (`R + 0xCC8` 0: not B-spec, a replay or the demo), `R + 0xCDC` 0, no end delay (`org + 0xD4` < 0, `org` = `*(R +
-   0x6C)`), and past the start (`R + 0xD4C` 1 at the green light, or `org + 0xBC` 0 without a countdown). GT4's own
-   code then pauses exactly where Start would, with no pad bit and no remapping question; without a command the copy
-   is GT4's function (`DIFFTEST`). Otherwise the command waits and is logged once. Every single-player class uses that
-   function as it is (GT mode, arcade, championship, free practice, license, machine test, mission, free run), so
-   Settings are reachable mid-race in all of them, time trials and single races included. B-spec races and replays
-   pause through the `SimplePause` (bit 0x80; the spike corrects M0, which had it before the start), which has no
-   menu: M9d3 brings B-spec in (below), and until then a command 6 there waits for the race's end. LAN, net and photo
-   have their own handlers and wait for the next menu. The pause it opens shows our pause page with Settings, under
-   `ui.pause = gt4` too: a pause opened by command 6 takes the native branch of the `RacePause::update` copy for that
-   pause only, while a Start the player presses still gives GT4's `pause.strb`. That is a deliberate exception for
-   `original` (the architect, 2026-11-09): GT4's own pause stays GT4's, and the host's Settings stay reachable in a
-   race, as the old host menu had them. While the game waits (loading, movies, saves, the opening, a race before its
-   start) the host says so, once, if no page arrives within a second: "Settings open at the next menu screen" until
-   M9d2 (M9d1 can't tell a load from a race, so a command 6 in a race waits for the next menu too), then, from M9d2,
-   the reason the game gives: when command 6 has to wait, the game sends a `GT4_REC_SETTINGS_SET` action, key
-   `page.waiting`, value the reason (`load`, `race-start`, `race-end` for B-spec until M9d3, `menu`); the bridge
-   answers it without touching a setting, and the host shows one line per reason: "Settings open when loading ends",
-   "... when the race starts", "... when the race ends", "... at the next menu screen". No new record and no link
-   version: an older host refuses an unknown action, which the game ignores. Without a game (replay, test scene) the
-   host runs the engine itself.
+   the next safe point: at once in a menu project, except `"boot"` (the opening and the mode select, one project),
+   where it waits for the next project, GT mode or Arcade, with reason `menu` (lane M, 51e96c3; M8b makes the mode
+   select its own way in); in a race, a `game_src` copy of `RaceBasic::updatePlayCheckPause` (0038B0E0, matched; M9d2,
+   from lane M's spike) acts on a pending command 6 as if Start (`RaceInput` 0x40) were down, only where GT4's own
+   branch would reach `pauseStart(R + 0xE400)`: not in visual mode (`R + 0xCD0` 0), in play (`R + 0xCC8` 0: not
+   B-spec, a replay or the demo), `R + 0xCDC` 0, no end delay (`org + 0xD4` < 0, `org` = `*(R + 0x6C)`), and past the
+   start (`R + 0xD4C` 1 at the green light, or `org + 0xBC` 0 without a countdown). GT4's own code then pauses exactly
+   where Start would, with no pad bit and no remapping question; without a command the copy is GT4's function
+   (`DIFFTEST`). Otherwise the command waits and is logged once. Every single-player class uses that function as it is
+   (GT mode, arcade, championship, free practice, license, machine test, mission, free run), so Settings are reachable
+   mid-race in all of them, time trials and single races included. B-spec races and replays pause through the
+   `SimplePause` (bit 0x80; the spike corrects M0, which had it before the start), which has no menu: M9d3 brings
+   B-spec in (below), and until then a command 6 there waits for the race's end. LAN, net and photo have their own
+   handlers and wait for the next menu. The pause it opens shows our pause page with Settings, under `ui.pause = gt4`
+   too: a pause opened by command 6 takes the native branch of the `RacePause::update` copy for that pause only, while
+   a Start the player presses still gives GT4's `pause.strb`. That is a deliberate exception for `original` (the
+   architect, 2026-11-09): GT4's own pause stays GT4's, and the host's Settings stay reachable in a race, as the old
+   host menu had them. While the game waits (loading, movies, saves, the opening, a race before its start) the host
+   says so, once, if no page arrives within a second: "Settings open at the next menu screen" until M9d2 (M9d1 can't
+   tell a load from a race, so a command 6 in a race waits for the next menu too), then, from M9d2, the reason the
+   game gives: when command 6 has to wait, the game sends a `GT4_REC_SETTINGS_SET` action, key `page.waiting`, value
+   the reason (`load`, `race-start`, `race-end` for B-spec until M9d3, `menu`); the bridge answers it without touching
+   a setting, and the host shows one line per reason: "Settings open when loading ends", "... when the race starts",
+   "... when the race ends", "... at the next menu screen". No new record and no link version: an older host refuses
+   an unknown action, which the game ignores. Without a game (replay, test scene) the host runs the engine itself.
 
 No hook touches `RacePause::callFunction` (0 % matched) or the corrected draft 0022BC20.
 
