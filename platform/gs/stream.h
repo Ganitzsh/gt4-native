@@ -88,6 +88,9 @@ public:
     void setRumbleWriter(std::function<void(uint32_t port, uint32_t small, uint32_t large)> writer) {
         rumbleWriter = std::move(writer);
     }
+    // GT4_REC_WHEEL_FX: the wheel's force effects as GT4 set them (Gt4WheelFx, PLAN.md D7), on the stream's thread.
+    // Set only for a live game: a replay has none, so a capture's effects never reach a wheel.
+    void setWheelFxWriter(std::function<void(const Gt4WheelFx&)> writer) { wheelFxWriter = std::move(writer); }
     // GT4_REC_UI and GT4_REC_SETTINGS_SET (the settings pages, include/gt4/ui.h): the payload, on the stream's thread.
     void setUiWriter(std::function<void(const uint8_t*, size_t)> writer) { uiWriter = std::move(writer); }
     void setSettingsSetWriter(std::function<void(const uint8_t*, size_t)> writer) {
@@ -106,6 +109,7 @@ public:
         uint64_t records = 0, rendererPackets = 0, displays = 0;   // rendererPackets: the game's packets the 3D renderers pass on
         uint64_t vsyncs = 0, reads = 0, logs = 0, audio = 0, unknown = 0;
         uint64_t ui = 0;   // the settings pages' records (GT4_REC_UI, GT4_REC_SETTINGS_SET)
+        uint64_t wheelFx = 0;   // GT4_REC_WHEEL_FX (PLAN.md D7): 0 without a wheel
         uint64_t primitiveRuns = 0, primitiveVertices = 0;   // from the 3D renderers
         uint64_t texSets = 0;   // native texture set records (docs/NATIVE_V2.md)
         uint64_t modelBatches = 0;   // 3D batches drawn on the GPU (docs/NATIVE_V2.md, step 2)
@@ -265,6 +269,7 @@ private:
     std::deque<bool> readsAsync;   // the read records not yet asked for by GT4_REC_GS_READ: gfx::kReadAsync each
     AudioWriter audioWriter;
     std::function<void(uint32_t, uint32_t, uint32_t)> rumbleWriter;
+    std::function<void(const Gt4WheelFx&)> wheelFxWriter;
     std::function<void(const uint8_t*, size_t)> uiWriter, settingsSetWriter;
     std::function<void(uint32_t, const uint8_t*, uint32_t)> spuWriter;
     Stats counters;

@@ -2,6 +2,8 @@
 // The game side of the link to gt4_host (include/gt4/link/protocol.h): records to the host,
 // pad state and GS events from it. Without --link the records can go to a capture file (--capture)
 // for gt4_host --replay, or nowhere.
+#include "gt4/link/protocol.h"
+
 #include <cstdint>
 #include <vector>
 
@@ -52,6 +54,8 @@ void frame_forget_sent_contents();
 
 // The pad state the host sent (18 bytes, libpad2 layout); false if none yet.
 bool link_pad(int port, uint8_t out[18]);
+// The wheel the host sent (GT4_REC_WHEEL index 0, PLAN.md D7): its newest state; false while none is connected.
+bool link_wheel(Gt4LinkWheel &out);
 
 // The settings pages (docs/modern/MENU_DESIGN.md 3.6). The host's GT4_REC_SETTINGS payloads, oldest first, copied into
 // `out`; false when none is waiting. They are kept in a fixed 256 KiB buffer (link_poll may not allocate); one that

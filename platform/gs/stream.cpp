@@ -764,6 +764,14 @@ void GraphicsStream::record(const Gt4LinkRecord& header, const uint8_t* payload)
             rumbleWriter(v[0], v[1], v[2]);
         }
         break;
+    case GT4_REC_WHEEL_FX:   // the wheel's force effects (PLAN.md D7): the host's wheel, live games only
+        ++counters.wheelFx;
+        if (wheelFxWriter && size >= sizeof(Gt4WheelFx)) {
+            Gt4WheelFx fx;
+            std::memcpy(&fx, payload, sizeof fx);
+            wheelFxWriter(fx);
+        }
+        break;
     case GT4_REC_UI:             // a settings page's draw list (MENU_DESIGN.md 3.6)
         ++counters.ui;
         if (uiWriter) uiWriter(payload, size);
@@ -792,7 +800,8 @@ std::string GraphicsStream::describe() const {
         << r.matched << " seen the frame before), " << v.unknownCodes << " unknown codes; "
         << counters.gfxRecords << " native records (" << counters.uploads << " uploads, " << counters.uploadsWithoutData
          << " without data, " << counters.draws << " draws, " << counters.sceneRecords << " scene, " << counters.originParts << " origin parts, " << counters.badRecords << " bad); " << counters.displays << " displays, " << counters.reads
-        << " GS reads; model packets: " << vif1.modelStats.decoded << " decoded, " << vif1.modelStats.replayed << " replayed, "
+        << " GS reads, " << counters.wheelFx << " wheel effect records"
+        << "; model packets: " << vif1.modelStats.decoded << " decoded, " << vif1.modelStats.replayed << " replayed, "
         << vif1.modelStats.uncacheable << " not kept; 3D batches on the GPU: " << counters.modelBatches;
     if (sceneDecoder_.seen()) {   // the scene records' counters (CONTRACTS.md a.7), totals of the finished frames
         const scene::SceneCounters& s = sceneDecoder_.totals();

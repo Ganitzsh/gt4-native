@@ -19,11 +19,12 @@
 #include <stdint.h>
 
 #define GT4_LINK_MAGIC 0x4B4E4C34u /* "4LNK" */
-#define GT4_LINK_VERSION 5u /* 2: GT4_REC_GFX_DATA references to set uploads the host keeps (gfx::kDataReference);
+#define GT4_LINK_VERSION 6u /* 2: GT4_REC_GFX_DATA references to set uploads the host keeps (gfx::kDataReference);
                                 3: the graphics stream may carry scene records (gfx::kScene, docs/modern/CONTRACTS.md (a));
                                 4: the settings pages' records (GT4_REC_UI, _SETTINGS_SET, _SETTINGS; host commands
                                    6, 7);
-                                5: the graphics stream carries the origin's parts (gfx::kOriginParts, R6) */
+                                5: the graphics stream carries the origin's parts (gfx::kOriginParts, R6);
+                                6: the wheel (GT4_REC_WHEEL, GT4_REC_WHEEL_FX; PLAN.md D7) */
 #define GT4_LINK_SIZE (128u << 20)
 #define GT4_LINK_G2H_SIZE (96u << 20) /* game -> host ring */
 #define GT4_LINK_H2G_SIZE (8u << 20)  /* host -> game ring */
@@ -49,6 +50,7 @@ enum Gt4LinkRecordType {
     GT4_REC_RUMBLE = 15,    /* the pad's motors from now on: u32 port, u32 small (0 / 1), u32 large (0-255) */
     GT4_REC_UI = 16,        /* a settings page's draw list (include/gt4/ui.h wire::UiHeader...); empty at close */
     GT4_REC_SETTINGS_SET = 17, /* a settings page's request (include/gt4/ui.h wire::SetHeader, key, value) */
+    GT4_REC_WHEEL_FX = 18,  /* the wheel's force effects as GT4 set them: Gt4WheelFx (version 6) */
     /* host -> game */
     GT4_REC_PAD = 64,       /* u32 port, u32 connected, 18 bytes libpad2 data (DualShock 2 layout) */
     GT4_REC_GS_EVENT = 65,  /* u32 kind (0 FINISH, 1 SIGNAL, 2 LABEL), u32 id, u64 value */
@@ -56,6 +58,7 @@ enum Gt4LinkRecordType {
     GT4_REC_HOST_CMD = 67,  /* u32 command (1 quit, 2 pause, 3 resume, 4 gameplay option: u32 id, u32 value,
                                5 texture contents lost, 6 open settings, 7 close settings) */
     GT4_REC_SETTINGS = 68,  /* the settings' schema, values or a request's result (include/gt4/ui.h wire::SettingsHeader) */
+    GT4_REC_WHEEL = 69,     /* the wheel GT4 sees through LGDEV: Gt4LinkWheel (version 6) */
 };
 
 /* Payload details as gt4_host consumes and produces them (docs/GS_BACKEND.md, "Link protocol"):
@@ -95,7 +98,14 @@ enum Gt4LinkRecordType {
  *                     frame's BGM and movie sound, the same count of samples, for the host to add to its mix.
  *                     GT4_SPU2_TAGS (value 48, then 48 x 16 bytes: runtime/audio_tags.h VoiceTag per hardware voice,
  *                     D9) after each image: the car each voice belongs to and its sound group's direction. An older
- *                     host ignores the kind (no link version change). */
+ *                     host ignores the kind (no link version change).
+ *   GT4_REC_WHEEL     host -> game every host frame while input.wheel.mode = dfp (PLAN.md D7), and once disconnected
+ *                     when the wheel leaves: the Driving Force Pro the game's LGDEV stub reports (runtime/iop.cpp).
+ *                     The game links only at its own version (runtime/link.cpp), so the host never meets a game
+ *                     without it.
+ *   GT4_REC_WHEEL_FX  game -> host when an effect's state or block changes (at most once a VBlank): GT4's three
+ *                     effects (docs/modern/spikes/R15-lgdev-effects.md), in its download order. The host applies them
+ *                     only with a live game, never from a replay. */
 
 /* The gameplay options GT4_REC_HOST_CMD 4 carries (runtime/runtime.h GameOption): ids below GT4_GAME_OPTION_COUNT. */
 #define GT4_GAME_OPTION_COUNT 13u
@@ -110,6 +120,45 @@ typedef struct Gt4Spu2Tag {
     float direction[3];
 } Gt4Spu2Tag;
 #define GT4_SPU2_TAG_VOICES 48u
+
+/* GT4_REC_WHEEL (20 bytes): the wheel in the DFP's terms (spikes/R15-lgdev-effects.md "Input").
+ *   +0  u32 index      LGDEV's device index (0: the one wheel D7 has; D15's second wheel 1)
+ *   +4  u32 connected  0: none (GT4 rescans and finds no wheel)
+ *   +8  s16 steering   full lock left -32768 to right 32767
+ *   +10 u16 pedal[2]   0 released to 65535 fully pressed (the host normalises each pedal's rest, travel and inversion
+ *                      through the device's profile)
+ *   +14 u8  hat        0-7 from up clockwise, 8 none
+ *   +15 u8  0
+ *   +16 u32 buttons    in the DFP's bits 16-29, the bits func_005665E8 reads */
+typedef struct Gt4LinkWheel {
+    uint32_t index, connected;
+    int16_t steering;
+    uint16_t pedal[2];
+    uint8_t hat, pad;
+    uint32_t buttons;
+} Gt4LinkWheel;
+
+/* GT4_REC_WHEEL_FX (200 bytes): the wheel's index (+0), the count (+4, GT4_WHEEL_FX_EFFECTS), then per effect (+8 +
+ * 64 i) its state and the 60-byte block GT4 last downloaded or updated for it. */
+enum Gt4WheelFxState { GT4_WHEEL_FX_NONE = 0, GT4_WHEEL_FX_STOPPED = 1, GT4_WHEEL_FX_RUNNING = 2 };
+#define GT4_WHEEL_FX_BLOCK 60u
+#define GT4_WHEEL_FX_EFFECTS 3u
+typedef struct Gt4WheelEffect {
+    uint32_t state;
+    uint8_t block[GT4_WHEEL_FX_BLOCK];
+} Gt4WheelEffect;
+typedef struct Gt4WheelFx {
+    uint32_t index, count;
+    Gt4WheelEffect effects[GT4_WHEEL_FX_EFFECTS];
+} Gt4WheelFx;
+/* The game (i686) and the hosts (x64, arm64) compile this header separately: the two layouts are checked. */
+#ifdef __cplusplus
+static_assert(sizeof(Gt4LinkWheel) == 20, "GT4_REC_WHEEL is 20 bytes");
+static_assert(sizeof(Gt4WheelFx) == 200, "GT4_REC_WHEEL_FX is 200 bytes");
+#else
+_Static_assert(sizeof(Gt4LinkWheel) == 20, "GT4_REC_WHEEL is 20 bytes");
+_Static_assert(sizeof(Gt4WheelFx) == 200, "GT4_REC_WHEEL_FX is 200 bytes");
+#endif
 
 typedef struct Gt4LinkRecord {
     uint32_t type;

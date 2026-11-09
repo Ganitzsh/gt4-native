@@ -25,6 +25,7 @@ std::mutex g_send_mutex;
 uint64_t g_seq = 0;
 uint8_t g_pad[2][18];
 bool g_pad_valid[2];
+Gt4LinkWheel g_wheel;   // GT4_REC_WHEEL index 0, under g_pad_mutex (PLAN.md D7); connected 0 until the host says
 std::mutex g_pad_mutex;
 // The settings pages' host records (GT4_REC_SETTINGS): a byte ring of [u32 size][payload] entries, fixed so link_poll
 // never allocates; and the newest open / close command (GT4_REC_HOST_CMD 6 / 7).
@@ -368,6 +369,13 @@ void link_poll() {
                 std::memcpy(g_pad[port], payload + 8, 18);
                 g_pad_valid[port] = connected != 0;
             }
+        } else if (rec.type == GT4_REC_WHEEL && n >= sizeof(Gt4LinkWheel)) {
+            Gt4LinkWheel w;
+            std::memcpy(&w, payload, sizeof w);
+            if (w.index == 0) {   // one wheel (D7); D15's second has index 1
+                std::lock_guard<std::mutex> lock(g_pad_mutex);
+                g_wheel = w;
+            }
         } else if (rec.type == GT4_REC_GS_IMAGE && n >= 8) {
             uint32_t id, qwc;
             std::memcpy(&id, payload, 4);
@@ -621,6 +629,13 @@ bool link_take_settings(std::vector<uint8_t> &out) {
 }
 
 uint32_t link_take_menu_command() { return g_menu_command.exchange(0); }
+
+bool link_wheel(Gt4LinkWheel &out) {
+    KernelScope ks;   // (as link_pad)
+    std::lock_guard<std::mutex> lock(g_pad_mutex);
+    out = g_wheel;
+    return g_wheel.connected != 0;
+}
 
 bool link_pad(int port, uint8_t out[18]) {
     {

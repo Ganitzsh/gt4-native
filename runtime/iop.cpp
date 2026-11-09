@@ -19,6 +19,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -302,45 +303,132 @@ void spup(uint32_t fno, uint8_t *send, uint32_t, uint8_t *recv, uint32_t rsize) 
     if ((fno == 4 || fno == 3) && recv && rsize >= 0x68) spu_status(recv);
 }
 
-// ---- Logitech wheel: version 0x010B2400, no device
+// ---- Logitech wheel (LGDEV): version 0x010B2400; a Driving Force Pro while the host has a wheel (PLAN.md D7)
 
-// GT4_FAKE_DFP=1 (debugging, RISKS.md R15): the stub reports one Logitech Driving Force Pro, so GT4 opens it and drives
-// its force effects, and every effect call is logged ("lgdev:"). GT4's client (docs/IOP_SERVICES.md 5.8; the map in
-// spikes/R15-lgdev-effects.md): device info (fno 1) index 0 found, index 1 not; open (2) a handle; property 0x10005
-// (4) the signature 0x046DC298; downloads (7) get an effect handle at +0x18; the input read (6) gives pad 1's state as
-// the wheel's (GT4 drives the effects only for the controller in use), so the pad still drives. Off: no device, as
-// always. One GT4 thread makes every LGDEV call (the VBlank thread 005552B8; the asynchronous wrappers have no
-// caller), so fake_dfp's statics need no lock.
+// GT4's LGDEV client (docs/IOP_SERVICES.md 5.8; the map in spikes/R15-lgdev-effects.md) sees one Driving Force Pro
+// while the host sends a connected wheel (GT4_REC_WHEEL, input.wheel.mode = dfp), or always with GT4_FAKE_DFP=1
+// (debugging: D7's bench, pad 1's state as the wheel's). With neither, every call but init and the state save and
+// restore answers "no device", as before D7.
+//   Discovery: device info (fno 1) index 0 found, index 1 not; open (2) handle 1; property 0x10005 (4) the
+//   signature 0x046DC298. GT4 rescans every VBlank while it has no wheel open (func_005552B8), so a plug is found
+//   there. At an unplug the read fails and the notify area's first word (the EE address fno 12 gives at +0x5C) is set
+//   to 1: GT4 reads and clears it (func_00560A88), unloads the effects, closes the wheel and rescans.
+//   The input read (6): the wheel's steering at +0x72, its pedals at +0x7E and +0x80, the hat at +0x82, the
+//   buttons at +0x84. GT4 drives the effects only for the controller in use, so a wheel that isn't read gets none.
+//   Effects: each open's downloads (7) get handles 0x100-0x102, in GT4's order (A, B, C). Their blocks (7, 13) and
+//   states (8 start, 9 stop, 10 unload, 15 / 16 the sets) go to the host as GT4_REC_WHEEL_FX when one changes, at most
+//   once a VBlank: a change in a VBlank already sent goes with the next call, and GT4 reads the wheel every VBlank
+//   while it has it open. The host decides what the wheel plays (its stops are its own: PLAN.md D7).
+// One GT4 thread makes every LGDEV call (the VBlank thread 005552B8; the asynchronous wrappers have no caller), so the
+// state needs no lock. Logged ("lgdev:"): opens, closes, properties, unplugs; with GT4_FAKE_DFP=1 or
+// GT4_TRACE_LGDEV=1, every effect call and a call count every 600 VBlanks too.
 bool ds2_buttons(int port, int8_t out[16]);   // (below: GT4's DualShock 2 assignment)
 
-const bool g_fake_dfp = [] {
-    const char *e = std::getenv("GT4_FAKE_DFP");
+bool env_on(const char *name) {
+    const char *e = std::getenv(name);
     return e && *e && *e != '0';
-}();
+}
+const bool g_fake_dfp = env_on("GT4_FAKE_DFP");
+const bool g_lgdev_trace = g_fake_dfp || env_on("GT4_TRACE_LGDEV");
 
-void fake_dfp(uint32_t fno, uint8_t *b) {
-    static uint32_t next_effect = 0x100;
-    static uint8_t last[0x200][60];   // the last block logged per effect handle (0x100 + n)
-    static uint64_t calls[19] = {};
-    if (fno < 19) ++calls[fno];
-    auto hex = [](const uint8_t *p, int n) {
-        static char s[3 * 64 + 1];
-        for (int i = 0; i < n && i < 64; ++i) std::snprintf(s + 3 * i, 4, "%02x ", p[i]);
-        s[3 * std::min(n, 64) - 1] = 0;
-        return s;
-    };
-    const uint32_t frame = kernel_frame_count();
+struct Lgdev {
+    uint32_t notify = 0;              // GT4's notify area (fno 12)
+    bool open = false;                // GT4 has the wheel open (2) and hasn't closed it (3)
+    bool unplugged = false;           // the read failed and GT4 was told; logged once
+    uint32_t next_effect = 0x100;
+    Gt4WheelFx fx{};                  // what GT4_REC_WHEEL_FX sends
+    bool fx_pending = false;
+    uint32_t fx_sent_frame = ~0u;
+    uint64_t calls[19] = {};
+    uint32_t summary = 0;
+};
+Lgdev g_lgdev;
+
+// The wheel now: the host's, or pad 1's under GT4_FAKE_DFP. False: no wheel.
+bool wheel_now(Gt4LinkWheel &w) {
+    if (!g_fake_dfp) return link_wheel(w);
+    w = Gt4LinkWheel{};
+    w.connected = 1;
+    uint8_t p[18];
+    if (!link_pad(0, p)) {
+        std::memset(p, 0, sizeof p);
+        p[4] = 0x80;
+    }
+    // the steering from the left stick; the pedals, the pressures of the buttons GT4 has accelerate and brake on (its
+    // assignment); no buttons and no hat: the pad keeps the menus
+    int8_t buttons[16];
+    uint8_t accelerate = 0, brake = 0;
+    if (ds2_buttons(0, buttons))
+        for (int key = 0; key < 16; ++key) {
+            const int k = pad::kPressureOf[key];
+            if (k < 0) continue;
+            if (buttons[key] == pad::kAccelerate) accelerate = std::max(accelerate, p[6 + k]);
+            if (buttons[key] == pad::kBrake) brake = std::max(brake, p[6 + k]);
+        }
+    w.steering = static_cast<int16_t>(std::clamp((static_cast<int>(p[4]) - 128) * 256, -32767, 32767));
+    w.pedal[0] = static_cast<uint16_t>(accelerate << 8);
+    w.pedal[1] = static_cast<uint16_t>(brake << 8);
+    w.hat = 8;
+    return true;
+}
+
+void lgdev_fx_send(uint32_t frame) {
+    if (!g_lgdev.fx_pending || frame == g_lgdev.fx_sent_frame) return;
+    g_lgdev.fx_pending = false;
+    g_lgdev.fx_sent_frame = frame;
+    g_lgdev.fx.index = 0;
+    g_lgdev.fx.count = GT4_WHEEL_FX_EFFECTS;
+    link_send(GT4_REC_WHEEL_FX, &g_lgdev.fx, sizeof g_lgdev.fx);
+}
+
+Gt4WheelEffect *lgdev_effect(uint32_t handle) {
+    const uint32_t i = handle - 0x100;
+    return i < GT4_WHEEL_FX_EFFECTS ? &g_lgdev.fx.effects[i] : nullptr;
+}
+
+// A downloaded effect's new state (start, stop; unload is NONE from any state).
+void lgdev_effect_state(uint32_t handle, uint32_t state) {
+    Gt4WheelEffect *e = lgdev_effect(handle);
+    if (!e || e->state == state || (e->state == GT4_WHEEL_FX_NONE && state != GT4_WHEEL_FX_NONE)) return;
+    e->state = state;
+    g_lgdev.fx_pending = true;
+}
+
+void lgdev_forget_effects() {
+    for (Gt4WheelEffect &e : g_lgdev.fx.effects)
+        if (e.state != GT4_WHEEL_FX_NONE) {
+            e.state = GT4_WHEEL_FX_NONE;
+            g_lgdev.fx_pending = true;
+        }
+}
+
+const char *hex(const uint8_t *p, int n) {
+    static char s[3 * 64 + 1];
+    for (int i = 0; i < n && i < 64; ++i) std::snprintf(s + 3 * i, 4, "%02x ", p[i]);
+    s[3 * std::min(n, 64) - 1] = 0;
+    return s;
+}
+
+// fno 1-16 with a wheel, or with GT4 still holding the one that left.
+void lgdev(uint32_t fno, uint8_t *b, const Gt4LinkWheel &w, bool wheel, uint32_t frame) {
+    Lgdev &g = g_lgdev;
     wr32(b, 0);
     switch (fno) {
     case 1:   // device info: index 0 is the wheel (slot 0: the info's byte +0xC, at +0x7C, 0)
-        if (rd32(b + 4) == 0) std::memset(b + 0x70, 0, 0x18);
+        if (rd32(b + 4) == 0 && wheel) std::memset(b + 0x70, 0, 0x18);
         else wr32(b, 0x80000002);
         break;
-    case 2:   // open
+    case 2:   // open: a new set of effects follows
+        g.open = true;
+        g.unplugged = false;
+        g.next_effect = 0x100;
+        lgdev_forget_effects();
         wr32(b + 8, 1);
-        log_info("lgdev: %u open index %u -> handle 1", frame, rd32(b + 4));
+        log_info("lgdev: %u open index %u -> handle 1%s", frame, rd32(b + 4), g_fake_dfp ? " (GT4_FAKE_DFP)" : "");
         break;
     case 3:
+        g.open = false;
+        lgdev_forget_effects();
         log_info("lgdev: %u close handle %u", frame, rd32(b + 8));
         break;
     case 4:   // get property: 0x10005 the signature, VID << 16 | PID
@@ -350,57 +438,60 @@ void fake_dfp(uint32_t fno, uint8_t *b) {
     case 5:
         log_info("lgdev: %u set property %x = %d", frame, rd32(b + 0x58), static_cast<int32_t>(rd32(b + 0x5C)));
         break;
-    case 6: {   // the input read: pad 1's state as the wheel's, so the race is driven through the wheel and GT4 sends
-                // the wheel its force effects (it sends them only to the controller in use: none with the read failing)
-        uint8_t p[18];
-        if (!link_pad(0, p)) {
-            std::memset(p, 0, sizeof p);
-            p[4] = 0x80;
+    case 6:   // the input read (spikes/R15-lgdev-effects.md "Input"): +0x70 type 0
+        if (!wheel) {   // unplugged: GT4 is told to rescan (it unloads, closes, and finds none)
+            wr32(b, 0x80000006);
+            if (g.notify) wr32(gp(g.notify), 1);
+            if (!g.unplugged) log_info("lgdev: %u the wheel left; GT4 told to rescan", frame);
+            g.unplugged = true;
+            break;
         }
-        // the pedals: the pressures of the buttons GT4 has accelerate and brake on (its assignment)
-        int8_t buttons[16];
-        uint8_t accelerate = 0, brake = 0;
-        if (ds2_buttons(0, buttons))
-            for (int key = 0; key < 16; ++key) {
-                const int k = pad::kPressureOf[key];
-                if (k < 0) continue;
-                if (buttons[key] == pad::kAccelerate) accelerate = std::max(accelerate, p[6 + k]);
-                if (buttons[key] == pad::kBrake) brake = std::max(brake, p[6 + k]);
-            }
-        // the reply (spikes/R15-lgdev-effects.md): +0x70 type 0, +0x72 the steering (s16), +0x7E / +0x80 the two
-        // pedal axes (u16, read >> 8), +0x82 the hat (8: none), +0x84 the buttons (none: the pad keeps the menus)
         std::memset(b + 0x70, 0, 0x18);
-        const int16_t steer = static_cast<int16_t>(std::clamp((static_cast<int>(p[4]) - 128) * 256, -32767, 32767));
-        const uint16_t axis1 = static_cast<uint16_t>(accelerate << 8), axis2 = static_cast<uint16_t>(brake << 8);
-        std::memcpy(b + 0x72, &steer, 2);
-        std::memcpy(b + 0x7E, &axis1, 2);
-        std::memcpy(b + 0x80, &axis2, 2);
-        b[0x82] = 8;
+        std::memcpy(b + 0x72, &w.steering, 2);
+        std::memcpy(b + 0x7E, &w.pedal[0], 2);
+        std::memcpy(b + 0x80, &w.pedal[1], 2);
+        b[0x82] = w.hat;
+        std::memcpy(b + 0x84, &w.buttons, 4);
         break;
-    }
-    case 7:   // download an effect: its 60-byte block at +0x70, the new handle at +0x18
+    case 7:      // download an effect: its 60-byte block at +0x70, the new handle at +0x18
     case 13: {   // update an effect
         uint32_t h = rd32(b + 0x18);
         if (fno == 7) {
-            h = next_effect++;
+            h = g.next_effect++;
             wr32(b + 0x18, h);
         }
-        const uint32_t slot = (h - 0x100) & 0x1FF;
-        if (fno == 7 || std::memcmp(last[slot], b + 0x70, 60)) {
-            std::memcpy(last[slot], b + 0x70, 60);
-            log_info("lgdev: %u %s effect %x: %s", frame, fno == 7 ? "download" : "update", h, hex(b + 0x70, 60));
+        Gt4WheelEffect *e = lgdev_effect(h);
+        if (!e) {
+            log_warn("lgdev: %u %s of effect %x: past GT4's three", frame, fno == 7 ? "download" : "update", h);
+            break;
+        }
+        const bool changed = std::memcmp(e->block, b + 0x70, GT4_WHEEL_FX_BLOCK) != 0;
+        if (fno == 7 || changed) {
+            std::memcpy(e->block, b + 0x70, GT4_WHEEL_FX_BLOCK);
+            if (fno == 7) e->state = GT4_WHEEL_FX_STOPPED;
+            g.fx_pending = true;
+            if (g_lgdev_trace)
+                log_info("lgdev: %u %s effect %x: %s", frame, fno == 7 ? "download" : "update", h,
+                         hex(b + 0x70, GT4_WHEEL_FX_BLOCK));
         }
         break;
     }
-    case 8: case 9: case 10:
-        log_info("lgdev: %u %s effect %x", frame, fno == 8 ? "start" : fno == 9 ? "stop" : "unload", rd32(b + 0x18));
+    case 8: case 9: case 10: {
+        const uint32_t h = rd32(b + 0x18);
+        lgdev_effect_state(h, fno == 8 ? GT4_WHEEL_FX_RUNNING : fno == 9 ? GT4_WHEEL_FX_STOPPED : GT4_WHEEL_FX_NONE);
+        if (g_lgdev_trace)
+            log_info("lgdev: %u %s effect %x", frame, fno == 8 ? "start" : fno == 9 ? "stop" : "unload", h);
         break;
+    }
     case 15: case 16: {   // start / stop several: the count at +0x5C, the handles from +0x18
         const uint32_t n = std::min<uint32_t>(rd32(b + 0x5C), 16);
         static uint32_t lastSet[2][17] = {};
         uint32_t now[17] = {n};
-        for (uint32_t i = 0; i < n; ++i) now[1 + i] = rd32(b + 0x18 + 4 * i);
-        if (std::memcmp(lastSet[fno - 15], now, sizeof now)) {   // (once a VBlank: logged when the set changes)
+        for (uint32_t i = 0; i < n; ++i) {
+            now[1 + i] = rd32(b + 0x18 + 4 * i);
+            lgdev_effect_state(now[1 + i], fno == 15 ? GT4_WHEEL_FX_RUNNING : GT4_WHEEL_FX_STOPPED);
+        }
+        if (g_lgdev_trace && std::memcmp(lastSet[fno - 15], now, sizeof now)) {   // (once a VBlank: when it changes)
             std::memcpy(lastSet[fno - 15], now, sizeof now);
             char list[16 * 9 + 1] = {};
             for (uint32_t i = 0; i < n; ++i) std::snprintf(list + 9 * i, 10, "%08x ", now[1 + i]);
@@ -411,33 +502,39 @@ void fake_dfp(uint32_t fno, uint8_t *b) {
     default:
         break;
     }
-    static uint32_t summary = 0;
-    if (frame - summary >= 600) {
-        summary = frame;
-        auto c = [&](int f) { return static_cast<unsigned long long>(calls[f]); };
-        log_info("lgdev: %u calls: info %llu open %llu prop %llu/%llu read %llu download %llu update %llu start %llu "
-                 "stop %llu unload %llu set %llu/%llu", frame, c(1), c(2), c(4), c(5), c(6), c(7), c(13), c(8), c(9),
-                 c(10), c(15), c(16));
-    }
 }
 
 void logitech(uint32_t fno, uint8_t *send, uint32_t, uint8_t *, uint32_t) {
     // send and receive share one buffer, processed in place; result code at +0
-    if (g_fake_dfp && fno != 12 && fno != 17 && fno != 18) {
-        fake_dfp(fno, send);
-        return;
-    }
+    Lgdev &g = g_lgdev;
+    const uint32_t frame = kernel_frame_count();
     if (fno == 12) {
-        const uint32_t notify = rd32(send + 0x5C);
-        if (notify) {
-            std::memset(gp(notify), 0, 64);
-            gp(notify)[0] = 1;
+        g.notify = rd32(send + 0x5C);
+        if (g.notify) {
+            std::memset(gp(g.notify), 0, 64);
+            gp(g.notify)[0] = 1;
         }
         wr32(send, 0);
         wr32(send + 4, 0x010B2400);
         return;
     }
-    wr32(send, fno == 17 || fno == 18 ? 0 : 0x80000006);  // no device
+    if (fno == 17 || fno == 18) {
+        wr32(send, 0);
+        return;
+    }
+    if (fno < 19) ++g.calls[fno];
+    Gt4LinkWheel w{};
+    const bool wheel = wheel_now(w);
+    if (wheel || g.open) lgdev(fno, send, w, wheel, frame);
+    else wr32(send, 0x80000006);   // no device
+    lgdev_fx_send(frame);
+    if (g_lgdev_trace && frame - g.summary >= 600) {
+        g.summary = frame;
+        auto c = [&](int f) { return static_cast<unsigned long long>(g.calls[f]); };
+        log_info("lgdev: %u calls: info %llu open %llu prop %llu/%llu read %llu download %llu update %llu start %llu "
+                 "stop %llu unload %llu set %llu/%llu", frame, c(1), c(2), c(4), c(5), c(6), c(7), c(13), c(8), c(9),
+                 c(10), c(15), c(16));
+    }
 }
 
 // ---- everything else bound at boot: acknowledge with zeros

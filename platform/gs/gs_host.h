@@ -3,6 +3,7 @@
 // paths, privileged registers) into the native renderer's front end on a worker thread, and its frame lists
 // handed to the renderer. See docs/GS_BACKEND.md and docs/NATIVE_RENDERER.md.
 #include "gs_frontend.h"
+#include "gt4/link/protocol.h"
 
 #include <cstdint>
 #include <functional>
@@ -29,6 +30,9 @@ public:
         std::function<void(uint32_t rate, const int16_t* frames, size_t count)> audio;
         // The game's pad motors (GT4_REC_RUMBLE): port, small (0 / 1), large (0-255); called on the stream's thread.
         std::function<void(uint32_t port, uint32_t small, uint32_t large)> rumble;
+        // The wheel's force effects as GT4 set them (GT4_REC_WHEEL_FX, PLAN.md D7); called on the stream's thread.
+        // Both are installed for a live game only: a replay's records never reach the pads' motors or a wheel.
+        std::function<void(const Gt4WheelFx& effects)> wheelFx;
         // The settings pages (docs/modern/MENU_DESIGN.md 3.6), called on the stream's thread with the record's
         // payload: a page's draw list (GT4_REC_UI) and its requests (GT4_REC_SETTINGS_SET); platform/ui/ui_records.h
         // decodes them.
@@ -63,6 +67,9 @@ public:
     void sendRequests();
     // Host -> game pad state (libpad2 layout, 18 bytes). Ignored without a live game.
     void sendPad(uint32_t port, bool connected, const uint8_t data[18]);
+    // The wheel GT4 sees through LGDEV (GT4_REC_WHEEL, PLAN.md D7): every host frame while one is in dfp mode, and
+    // once disconnected when it leaves.
+    void sendWheel(const Gt4LinkWheel& wheel);
     // Stops or restarts the game's clock (its VBlanks, alarms and timers): the in-game settings menu.
     void setPaused(bool paused);
     // The settings pages: a GT4_REC_SETTINGS payload (schema, values, a request's result: ui_records.h), and host

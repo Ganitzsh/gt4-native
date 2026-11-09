@@ -1071,7 +1071,6 @@ std::unique_ptr<GsHost> GsHost::create(const Options& options, std::string& erro
             m->record(type, payload, size);
         });
     }
-    if (options.rumble) h.stream->setRumbleWriter(options.rumble);
     if (options.ui) h.stream->setUiWriter(options.ui);
     if (options.settingsSet) h.stream->setSettingsSetWriter(options.settingsSet);
     if (!options.gamePath.empty()) {
@@ -1082,6 +1081,9 @@ std::unique_ptr<GsHost> GsHost::create(const Options& options, std::string& erro
         if (!h.link) return nullptr;
         ps2::GameLink* link = h.link.get();
         h.stream->setHostWriter([link](uint32_t type, const void* payload, uint32_t size) { link->write(type, payload, size); });
+        // the motors and the wheel: a live game's only (lane A: a replay drove a connected pad's motors before)
+        if (options.rumble) h.stream->setRumbleWriter(options.rumble);
+        if (options.wheelFx) h.stream->setWheelFxWriter(options.wheelFx);
         h.target->setReadLater([raw](gsn::FrameList& partial) { raw->queueReadLater(partial); },
                                [link](uint32_t id, uint32_t qwc, const uint8_t* pixels) {
                                    std::vector<uint8_t> record(8 + size_t(qwc) * 16);
@@ -1184,6 +1186,11 @@ void GsHost::sendPad(uint32_t port, bool connected, const uint8_t data[18]) {
     std::memcpy(payload + 4, &c, 4);
     std::memcpy(payload + 8, data, 18);
     impl->link->write(GT4_REC_PAD, payload, sizeof(payload));
+}
+
+void GsHost::sendWheel(const Gt4LinkWheel& wheel) {
+    if (!impl->link || !impl->link->running()) return;
+    impl->link->write(GT4_REC_WHEEL, &wheel, sizeof wheel);
 }
 
 void GsHost::setPaused(bool paused) {
