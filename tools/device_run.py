@@ -35,6 +35,12 @@ in the data folder yet is 'missing' and doesn't fail the run. The items:
     mixer           audio.mixer = host, audio.interpolation = sinc, at audio.spatial original, stereo and hrtf: the
                     host summary's mix time (and hrtf's buses) on a replay of race_mixer_host.cap (lane D's REF capture
                     recorded with the host's mixer; D5, D9); underruns are a device item
+    mixer_cpu       the game's own audio cost under each mixer (PLAN.md D5's default): the route to PE race 2 live,
+                    then 40 s of the race, once with audio.mixer = game and once with host, GT4_TRACE_AUDIO_CPU=1:
+                    the game's SPU2 voices and BGM a frame in the race (the trace's last windows) and the whole game
+                    process's CPU a frame (the host's GS line), both over the race alone. Desktop, race only (lane D,
+                    2026-11-09, two runs each): voices 352-362 against 213-218 us, the game process 2.33-2.53
+                    against 2.34-2.37 ms
     load_times      GT4_LOAD_STATS=1 on the route to PE race 2 (docs/modern/routes/race_gt_pe2.txt) with a copy of
                     saves-pe-race2: each load's blocked VBlanks and time; the race load against 0.2 s (D10 (c))
     photo_travel    tools/photo_check.py with a copy of r5_saves: the shot's reads and time (lane A's CT24 fix)
@@ -106,7 +112,7 @@ ORIG_BASELINES = {"aarch64": {}}
 ORIG_FLAGS = ["--size", "1280x960", "--preset", "original", "--set", "texture.hd_pack=off", "--set",
               "display.frame_interpolation=off", "--set", "debug.overlay=off"]
 ITEMS = ("env", "provoking", "c6_orig", "c6_race7", "b6_span", "night", "hybrid", "pipeline_cache", "mixer",
-         "load_times", "photo_travel", "night_bands")
+         "mixer_cpu", "load_times", "photo_travel", "night_bands")
 PENDING = {
     "b16c_memory": "B16c (lane B): its kept images' memory, with the freed MSAA targets beside it",
     "b16c_gpu": "B16c (lane B): FSR 2 on the game's frames against the GS scene's own resolve",
@@ -241,7 +247,8 @@ class Device:
     def preflight(self, items):
         needs = {"c6_race7": ("race7.cap", "orig_r6_race7.sha256"), "b6_span": ("race_boot.cap",),
                  "night": ("lap_csr5.cap",), "hybrid": ("race_grid43.cap",), "pipeline_cache": ("race7.cap",),
-                 "load_times": ("saves-pe-race2",), "photo_travel": ("r5_saves",),
+                 "load_times": ("saves-pe-race2",), "mixer_cpu": ("saves-pe-race2",),
+                 "photo_travel": ("r5_saves",),
                  "mixer": (MIXER_CAP,), "night_bands": tuple(cap for cap, _ in NIGHT_LAPS),
                  # (race_pe2_prog and its desktop list are optional: the item says 'missing' for them)
                  "c6_orig": ("race7.cap", "orig_r6_race7.sha256", "race_grid43.cap", "orig_r6_race_grid43.sha256")}
@@ -742,6 +749,62 @@ class Device:
         log = os.path.join(self.package, "game.log")
         return ["--game", exe, "--game-args",
                 f'--elf "{wine(elf)}" --iso "{wine(isos[0])}" --log "{wine(log)}"'], ""
+
+    def item_mixer_cpu(self):
+        """The game's audio cost with each mixer: the route to the race live, 40 s of the race, twice. The game's
+        "audio cpu:" lines (GT4_TRACE_AUDIO_CPU, from game.log only) over the race's four windows, and the host's
+        'CPU a frame (from GT4_CPU_FROM): game' from the race's start (the route's VBlanks, plus 120): both cover the
+        race alone, as the desktop's numbers do. The game mixer runs first, then the host's (a warming device would
+        favour the second; one report, so noted rather than alternated)."""
+        route_file = os.path.join(ROOT, ROUTE)
+        if not os.path.isfile(route_file):
+            return {"status": "error", "note": f"no route {route_file}"}
+        live, why = self.live_game_args()
+        if not live:
+            return {"status": "error", "note": why}
+        route = [l.strip() for l in open(route_file) if l.strip() and not l.startswith("#")]
+        to_race = route[:route.index("capture bumper")] if "capture bumper" in route else route   # (the race's view)
+        race_from = sum(int(c.split()[1]) for c in to_race if c.startswith("vwait ")) + 120
+        numbers = {}
+        for mixer in ("game", "host"):
+            saves = self.save_copy("saves-pe-race2")
+            session = os.path.join(self.work, f"mixer_cpu_{mixer}")
+            shutil.rmtree(session, ignore_errors=True)
+            os.makedirs(os.path.join(session, "commands"))
+            # (the route's own quit dropped, so the race runs on for 40 s)
+            cmds = [c for c in route if not c.startswith("capture ") and c != "quit"] + ["vwait 2400", "quit"]
+            for k, c in enumerate(cmds):
+                open(os.path.join(session, "commands", f"{k:020d}-route.cmd"), "w").write(c + "\n")
+            glog, before = self.game_log()
+            sets = ["--set", f"audio.mixer={mixer}"] + (["--set", "audio.spatial=stereo"] if mixer == "host" else [])
+            cmd = [self.launcher, "--headless", "--no-audio", "--size", "640x448", "--session-dir", session, "--saves",
+                   saves, "--preset", "original"] + FIXED + live + sets
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, cwd=self.package, timeout=1800,
+                                   env=dict(os.environ, GT4_TRACE_AUDIO_CPU="1", GT4_CPU_FROM=str(race_from)),
+                                   errors="replace")
+                out, code = r.stdout + r.stderr, r.returncode
+            except subprocess.TimeoutExpired as x:
+                out, code = (x.stdout or "") + "\n(timed out)", -1
+            game = self.game_log_since(glog, before)
+            self.log(f"mixer_cpu_{mixer}.log",
+                     f"$ {' '.join(cmd)}\nexit {code}\n{out}\n--- game.log (this run)\n{game}")
+            shutil.rmtree(saves, ignore_errors=True)
+            shutil.rmtree(session, ignore_errors=True)   # (no captures asked; never keep its frames folder)
+            windows = [(float(m.group(1)), float(m.group(2))) for m in re.finditer(
+                r"audio cpu: \w+ mixer: SPU2 voices ([\d.]+) us a frame \([^)]*\), BGM and movies ([\d.]+) us", game)]
+            cpu = re.search(r"CPU a frame(?: \(from GT4_CPU_FROM\))?: game ([\d.]+) ms", out)
+            race = windows[-4:]   # (the race's last 40 s: four 600-frame windows)
+            numbers[mixer] = {
+                "voices_us": round(sum(v for v, _ in race) / len(race), 1) if race else None,
+                "bgm_us": round(sum(b for _, b in race) / len(race), 1) if race else None,
+                "game_cpu_ms": float(cpu.group(1)) if cpu else None, "windows": len(windows), "exit": code}
+        ok = all(numbers[m]["voices_us"] is not None and numbers[m]["game_cpu_ms"] is not None for m in numbers)
+        return {"status": "reported" if ok else "error", "numbers": numbers,
+                "pass_line": "reported against the desktop's, race only (voices 352-362 / 213-218 us; game "
+                             "2.33-2.53 / 2.34-2.37 ms): the coordinator's call on audio.mixer's default (D5)",
+                "note": "" if ok else "no 'audio cpu:' lines or no 'CPU a frame' line: a build without "
+                                      "GT4_TRACE_AUDIO_CPU (bcbf691)?"}
 
     def item_load_times(self):
         route_file = os.path.join(ROOT, ROUTE)
