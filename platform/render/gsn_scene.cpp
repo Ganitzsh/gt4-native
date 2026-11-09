@@ -10,6 +10,7 @@
 #include "lights_gather.h"
 #include "course_lamp_pass.h"   // (F2b)
 #include "parity_view.h"
+#include "seam_anchor.h"   // (B16c)
 
 #include <algorithm>
 #include <cassert>
@@ -354,6 +355,25 @@ struct GsnScene::Impl {
              anchorFields = 0;
     void findAnchor();
     void keepRef(VkCommandBuffer command);
+    // B16c's display seam (GsnScene::setDisplaySeam; gsn::findSeamAnchor, gsn_seam.comp). Each list's plan is made at
+    // executeBegin; the plan's Light keeps its motion vectors past its scene stage (keepSeamVelocity, at the end of the
+    // motion vectors' pass), and right after the anchor runSeam maps them and the Z buffer onto the made picture: one
+    // velocity and one depth image per made target, valid while its latest picture had an anchor.
+    bool seamOn = [] { const char* e = std::getenv("GT4_B16C_SEAM"); return e && *e == '1'; }();
+    gsn::SeamAnchor seamPlan;
+    bool seamVelocityKept = false, seamDone = false;
+    float displayedGs[2] = {640.0f, 448.0f};   // the displayed rectangle's size, GS pixels (executeFinish)
+    vk::Image seamLightVelocity;
+    struct Seam {
+        vk::Image velocity, depth;
+        bool valid = false;
+    };
+    std::unordered_map<uint32_t, Seam> seams;
+    vk::Pipeline seamPass, displaySeam;
+    uint64_t seamOutcomes[6] = {};   // displayed lists by gsn::SeamAnchor::Outcome
+    uint64_t seamRuns = 0;
+    void keepSeamVelocity(VkCommandBuffer command, vk::Image& velocity);
+    void runSeam(VkCommandBuffer command);
     // A rectangle of a target copied into a host buffer (GsnScene::read, FrameList::readbacks), packed as the GS keeps
     // it once the GPU has done the copy.
     struct Copied {
@@ -618,6 +638,17 @@ struct GsnScene::Impl {
                         static_cast<unsigned long long>(stagesOnMembers), static_cast<unsigned long long>(stagesOnTransients));
         for (auto& [id, k] : keptLit) vk::destroy(device, k);   // DIAG
         for (auto& [id, k] : keptRef) vk::destroy(device, k);   // DIAG
+        vk::destroy(device, seamLightVelocity);
+        for (auto& [id, seam] : seams)
+            for (vk::Image* i : {&seam.velocity, &seam.depth}) vk::destroy(device, *i);
+        vk::destroy(device, seamPass);
+        vk::destroy(device, displaySeam);
+        if (seamOn)
+            std::printf("Display seam (B16c): %llu displayed lists; chained to a Light %llu (seams made %llu), fields mode %llu, no "
+                        "anchor %llu, ending at no Light %llu, capped %llu\n",
+                        (unsigned long long)(seamOutcomes[0] + seamOutcomes[1] + seamOutcomes[3] + seamOutcomes[4] + seamOutcomes[5]),
+                        (unsigned long long)seamOutcomes[0], (unsigned long long)seamRuns, (unsigned long long)seamOutcomes[1],
+                        (unsigned long long)seamOutcomes[3], (unsigned long long)seamOutcomes[4], (unsigned long long)seamOutcomes[5]);
         if (anchorLists)
             std::printf("B16c anchor (DIAG): %llu displayed lists; chain to a Light %llu, ends at no Light %llu, cap hit %llu, no "
                         "anchor %llu; the anchor not the last covering pass %llu; fields mode %llu\n",
@@ -1191,7 +1222,7 @@ struct GsnScene::Impl {
     // has a scene).
     bool stepRuns(int step, const gsn::FrameList::Lighting& l, bool records) const {
         switch (step) {
-            case kStepMotionVectors: return temporal || effects.shutter > 0.0f;
+            case kStepMotionVectors: return temporal || effects.shutter > 0.0f || seamOn;   // (B16c: the seam's motion vectors)
             case kStepLighting:   // lighting.night needs the list's lamps and views (or the test lamps)
                 return lighting.occlusion > 0.0f || lighting.grade > 0.0f || (night > 0.0f && (records || render::testLightCount()));
             case kStepReflections: return effects.reflections > 0.0f;
@@ -1505,6 +1536,15 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
     nightOrdinal = 0;
     snapSprites();
     findAnchor();   // DIAG
+    if (seamOn) {   // B16c: this list's display seam
+        seamPlan = gsn::findSeamAnchor(frame);
+        seamVelocityKept = seamDone = false;
+        if (seamPlan.outcome != gsn::SeamAnchor::Outcome::NotShown) {
+            ++seamOutcomes[static_cast<int>(seamPlan.outcome)];
+            if (!seamPlan.found())
+                if (auto it = seams.find(seamPlan.made); it != seams.end()) it->second.valid = false;
+        }
+    }
     const VkDeviceSize vertexBytes = std::max<VkDeviceSize>((frame.vertices.size() + frame.modelVertices) * sizeof(gsn::Vertex), 64);
     ex.vertices = &buffer(vertexBuffers, slot, vertexBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     vk::Buffer& vertices = *ex.vertices;
@@ -1912,6 +1952,7 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
             vkCmdDraw(command, d.count, 1, d.modeled ? modelBase + d.first : d.first, 0);
         }
         vkCmdEndRendering(command);
+        if (seamOn && seamPlan.found() && seamPlan.lightAt == lightAt) keepSeamVelocity(command, velocity);   // (B16c)
         return true;
     };
     // A pass of the scene stage over the scene's area: the scene (binding 0, linear), its Z (1), the motion
@@ -2341,6 +2382,7 @@ void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t
     }
     for (size_t at = from; at < to; ++at) {
         if (anchor.at != SIZE_MAX && at == anchor.at + 1) keepRef(command);   // DIAG
+        if (seamOn && seamPlan.found() && !seamDone && at == seamPlan.at + 1) runSeam(command);   // (B16c: right after the anchor)
         const auto& cmd = frame.commands[at];
         // B8 step 2: a side-channel pass before a substituted view's Z clear or Light (planSides)
         while (sideNext < sideBounds.size() && sideBounds[sideNext].command <= at) runSide(sideBounds[sideNext++]);
@@ -2799,6 +2841,7 @@ void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t
     while (sideNext < sideBounds.size() && sideBounds[sideNext].command <= to) runSide(sideBounds[sideNext++]);
     end();
     if (anchor.at != SIZE_MAX && anchor.at + 1 == to && !ex.limited) keepRef(command);   // DIAG (the range's last command)
+    if (seamOn && seamPlan.found() && !seamDone && seamPlan.at + 1 == to && !ex.limited) runSeam(command);   // (B16c: ... the anchor last)
 }
 
 // DIAG (B16c's anchor): see Impl::Anchor.
@@ -3008,6 +3051,98 @@ void GsnScene::Impl::keepRef(VkCommandBuffer command) {
     vkCmdCopyImage(command, colour.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, k.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 }
 
+// B16c: the seam plan's Light keeps its motion vectors past its scene stage (at the end of the motion vectors' pass,
+// the image still the stage's: the members' work image or the graph's transient, given back as it was found).
+void GsnScene::Impl::keepSeamVelocity(VkCommandBuffer command, vk::Image& velocity) {
+    vk::Barriers& b = ex.b;
+    if (!seamLightVelocity.valid() || seamLightVelocity.extent.width != velocity.extent.width ||
+        seamLightVelocity.extent.height != velocity.extent.height) {
+        if (seamLightVelocity.valid()) retire(seamLightVelocity);
+        vk::ImageDesc desc;
+        desc.format = kVelocity;
+        desc.extent = velocity.extent;
+        desc.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        desc.name = "gsn seam: the Light's motion vectors";
+        seamLightVelocity = vk::createImage(device, desc);
+    }
+    b.image(velocity, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_READ_BIT);
+    b.image(seamLightVelocity, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_WRITE_BIT, true);
+    b.flush(command);
+    VkImageCopy region{};
+    region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.extent = {velocity.extent.width, velocity.extent.height, 1};
+    vkCmdCopyImage(command, velocity.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, seamLightVelocity.image,
+                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    // (as the pass left it: a colour attachment written, which the graph's next use of its transient expects)
+    b.image(velocity, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, vk::kColorOut, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+    b.flush(command);
+    seamVelocityKept = true;
+}
+
+// B16c: right after the anchor, the made picture's motion vectors and depth over its displayed rectangle
+// (gsn_seam.comp), sampled by the display pass while that picture is shown.
+void GsnScene::Impl::runSeam(VkCommandBuffer command) {
+    seamDone = true;
+    const gsn::SeamAnchor& a = seamPlan;
+    Seam& seam = seams[a.made];
+    seam.valid = false;
+    auto made = targets.find(a.made), zbuffer = targets.find(a.lightDepth), lit = targets.find(a.light);
+    if (!seamVelocityKept || made == targets.end() || zbuffer == targets.end() || lit == targets.end() ||
+        !made->second.image.valid() || !zbuffer->second.image.valid() || !zbuffer->second.depth || !seamPass.valid())
+        return;
+    ex.end();
+    vk::Barriers& b = ex.b;
+    const VkExtent2D e = made->second.image.extent;
+    for (auto [image, format, name] : {std::tuple{&seam.velocity, kVelocity, "gsn seam: motion vectors"},
+                                       std::tuple{&seam.depth, VK_FORMAT_R32_SFLOAT, "gsn seam: depth"}}) {
+        if (image->valid() && image->extent.width == e.width && image->extent.height == e.height) continue;
+        if (image->valid()) retire(*image);
+        vk::ImageDesc desc;
+        desc.format = format;
+        desc.extent = e;
+        desc.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        desc.name = name;
+        *image = vk::createImage(device, desc);
+    }
+    GpuTarget& m = made->second;
+    GpuTarget& z = zbuffer->second;
+    const uint32_t x0 = std::min(uint32_t(std::max(a.rect[0], 0.0f)) * m.scaleX, e.width);
+    const uint32_t y0 = std::min(uint32_t(std::max(a.rect[1], 0.0f)) * m.scaleY, e.height);
+    const uint32_t x1 = std::min(uint32_t(std::max(a.rect[2], 0.0f)) * m.scaleX, e.width);
+    const uint32_t y1 = std::min(uint32_t(std::max(a.rect[3], 0.0f)) * m.scaleY, e.height);
+    if (x1 <= x0 || y1 <= y0) return;
+    vk::toSampled(b, seamLightVelocity, vk::kCompute);
+    vk::toSampled(b, z.image, vk::kCompute);
+    vk::toStorage(b, seam.velocity, true);
+    vk::toStorage(b, seam.depth, true);
+    b.flush(command);
+    vk::bind(command, seamPass);
+    vk::Descriptors()
+        .sampled(0, seamLightVelocity.view, samplers[0])
+        .sampled(1, depthView(z.image), samplers[0])
+        .storage(2, seam.velocity.view)
+        .storage(3, seam.depth.view)
+        .push(command, seamPass);
+    // The Z format's largest value over 2^32 (an inverted buffer holds it less Z: GsFrontend's Z24 pass)
+    const uint32_t zpsm = z.psm & 0xFu;   // (Z32 0x30, Z24 0x31, Z16 0x32 / 0x3A)
+    const float most = zpsm == 0 ? 4294967295.0f : zpsm == 1 ? 16777215.0f : 65535.0f;
+    struct {
+        int32_t origin[2], size[2];
+        float madeScale[2], lightScale[2], depthScale[2], mapScale[2], mapOffset[2], lightSize[2];
+        float depthMost, inverted;
+    } k{{int32_t(x0), int32_t(y0)}, {int32_t(x1 - x0), int32_t(y1 - y0)},
+        {float(m.scaleX), float(m.scaleY)}, {float(lit->second.scaleX), float(lit->second.scaleY)},
+        {float(z.scaleX), float(z.scaleY)}, {a.scale[0], a.scale[1]}, {a.offset[0], a.offset[1]},
+        {float(seamLightVelocity.extent.width) / float(lit->second.scaleX), float(seamLightVelocity.extent.height) / float(lit->second.scaleY)},
+        most / 4294967296.0f, a.depthInverted ? 1.0f : 0.0f};
+    vk::pushConstants(command, seamPass, &k, sizeof k);
+    vk::dispatch2D(command, x1 - x0, y1 - y0);
+    vk::toSampled(b, seam.velocity, vk::kFragment);
+    vk::toSampled(b, seam.depth, vk::kFragment);
+    b.flush(command);
+    seam.valid = true;
+    ++seamRuns;
+}
 // B8 step 2: one side-channel pass (planSides' bound): the partition's reset, then its items with the depth test EQUAL.
 void GsnScene::Impl::runSide(const SideBound& bound) {
     if (bound.view >= frame.views.size() || !sideItems) return;
@@ -3590,6 +3725,7 @@ void GsnScene::Impl::executeFinish(VkCommandBuffer command, uint32_t /*slot*/) {
         const uint32_t dbx = c.x, dby = c.y;
         uint32_t w, h;
         displayedSize(frame.display, w, h);
+        displayedGs[0] = float(w ? w : 640), displayedGs[1] = float(h ? h : 448);
         const float tw = static_cast<float>(shown->second.image.extent.width) / shown->second.scaleX,
                     th = static_cast<float>(shown->second.image.extent.height) / shown->second.scaleY;
         displayRect[0] = dbx / tw;
@@ -3963,6 +4099,10 @@ void GsnScene::setLighting(float occlusion, uint32_t directions, float grade, fl
 }
 
 void GsnScene::setNightLighting(float strength) { impl->night = std::max(strength, 0.0f); }
+void GsnScene::setDisplaySeam(bool on) {
+    static const bool fromEnv = [] { const char* e = std::getenv("GT4_B16C_SEAM"); return e && *e == '1'; }();
+    impl->seamOn = on || fromEnv;
+}
 void GsnScene::setSkippedBrackets(bool flare, bool glare) {
     impl->skippedBrackets = static_cast<uint8_t>((flare ? 1u << gsn::kBracketFlare : 0u) | (glare ? 1u << gsn::kBracketGlare : 0u));
 }
@@ -3971,6 +4111,7 @@ void GsnScene::prepare(const SceneFormats& formats) {
     Impl& s = *impl;
     vkDeviceWaitIdle(s.device.device);
     vk::destroy(s.device, s.display);
+    vk::destroy(s.device, s.displaySeam);
     vk::destroy(s.device, s.stencilPrep);
     s.formats = formats;
     vk::GraphicsDesc desc;
@@ -3983,6 +4124,21 @@ void GsnScene::prepare(const SceneFormats& formats) {
     desc.pushSize = 48;
     desc.name = "gsn display";
     s.display = vk::createGraphics(s.device, desc);
+    // B16c's display seam: the same pass, also writing the shown picture's motion vectors and its depth (always).
+    vk::GraphicsDesc seamDesc = desc;
+    seamDesc.fragment = shaders::gsn_display_seam_frag();
+    seamDesc.types = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                      VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER};
+    seamDesc.pushSize = 64;
+    seamDesc.depthTest = seamDesc.depthWrite = true;
+    seamDesc.depthCompare = VK_COMPARE_OP_ALWAYS;
+    seamDesc.name = "gsn display (seam)";
+    s.displaySeam = vk::createGraphics(s.device, seamDesc);
+    if (!s.seamPass.valid())
+        s.seamPass = vk::createCompute(s.device, shaders::gsn_seam_comp(),
+                                       {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                        VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE},
+                                       72, "gsn display seam");
     vk::GraphicsDesc stencil;
     stencil.vertex = shaders::fullscreen_vert();
     stencil.fragment = shaders::gsn_stencil_frag();
@@ -4809,17 +4965,36 @@ void GsnScene::recordMain(VkCommandBuffer command, const SceneView& view) {
     VkRect2D scissor{{0, 0}, view.renderExtent};
     vkCmdSetViewport(command, 0, 1, &viewport);
     vkCmdSetScissor(command, 0, 1, &scissor);
-    vk::bind(command, s.display);
+    // B16c: with the seam on, the pass that also writes motion vectors and depth (the shown picture's seam, else none)
+    const bool seamed = s.seamOn && s.displaySeam.valid();
+    vk::Pipeline& pass = seamed ? s.displaySeam : s.display;
+    vk::bind(command, pass);
     auto other = s.fieldBlend > 0.0f ? s.targets.find(s.blendTarget) : s.targets.end();
     const VkImageView otherView = other != s.targets.end() ? other->second.image.view : shown->second.image.view;
-    vk::Descriptors().sampled(0, shown->second.image.view, s.samplers[2]).sampled(1, otherView, s.samplers[2]).push(command, s.display);
-    float constants[12] = {};
+    vk::Descriptors descriptors;
+    descriptors.sampled(0, shown->second.image.view, s.samplers[2]).sampled(1, otherView, s.samplers[2]);
+    const Impl::Seam* seam = nullptr;
+    if (seamed) {
+        auto it = s.seams.find(s.displayTarget);
+        if (it != s.seams.end() && it->second.valid && it->second.velocity.extent.width == shown->second.image.extent.width &&
+            it->second.velocity.extent.height == shown->second.image.extent.height)
+            seam = &it->second;
+        descriptors.sampled(2, seam ? seam->velocity.view : s.blank.view, s.samplers[0])
+            .sampled(3, seam ? seam->depth.view : s.blank.view, s.samplers[0]);
+    }
+    descriptors.push(command, pass);
+    float constants[16] = {};
     std::copy(s.displayRect, s.displayRect + 4, constants);
     std::copy(s.otherFieldRect, s.otherFieldRect + 4, constants + 4);
     constants[8] = other != s.targets.end() ? s.fieldBlend : 0.0f;
     constants[9] = s.fieldClean ? 1.0f : 0.0f;
     constants[10] = s.fieldLine;
-    vk::pushConstants(command, s.display, constants, sizeof constants);
+    constants[12] = 1.0f / s.displayedGs[0];   // (b.11's velocity: a fraction of the displayed rectangle)
+    constants[13] = 1.0f / s.displayedGs[1];
+    constants[14] = seam ? 1.0f : 0.0f;
+    static const bool seamView = [] { const char* e = std::getenv("GT4_SEAM_VIEW"); return e && *e == '1'; }();
+    constants[15] = seamView ? float(shown->second.scaleX) : 0.0f;   // (debugging: the seam's motion vectors shown)
+    vk::pushConstants(command, pass, constants, seamed ? 64 : 48);
     vkCmdDraw(command, 3, 1, 0, 0);
 }
 

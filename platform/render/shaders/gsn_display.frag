@@ -2,10 +2,16 @@
 // The native renderer's displayed buffer as the scene: the part of the target the display circuit reads
 // (DISPFB / DISPLAY), stretched over the render area. Targets hold the GS's display-encoded colour / 255; as
 // for the GS back end's frame (an sRGB texture), it is decoded to linear for the pipeline, so the
-// "original"-like settings give the 8-bit values back. No motion vectors yet. In field mode the field shown
-// before is mixed in (`blend`), so the two fields of an interlaced screen do not bob (gsn_scene.cpp).
+// "original"-like settings give the 8-bit values back. Motion vectors and depth: B16c's seam variant (GSN_SEAM, its
+// own pipeline; this one writes velocity 0 and no depth). In field mode the field shown before is mixed in (`blend`),
+// so the two fields of an interlaced screen do not bob (gsn_scene.cpp).
 layout(set = 0, binding = 0) uniform sampler2D frame;
 layout(set = 0, binding = 1) uniform sampler2D otherField;
+#ifdef GSN_SEAM
+// B16c (gsn_seam.comp): the shown picture's motion vectors (its GS pixels) and depth (b.11's), kept at GT4's post copy.
+layout(set = 0, binding = 2) uniform sampler2D seamVelocity;
+layout(set = 0, binding = 3) uniform sampler2D seamDepth;
+#endif
 layout(push_constant) uniform Display {
     vec2 offset;   // the displayed rectangle in the target, normalised
     vec2 size;
@@ -14,6 +20,11 @@ layout(push_constant) uniform Display {
     float blend;   // how much of the other field
     float clean;   // display.field_mode = clean (1) or blend (0)
     float line;    // one GS line of the displayed rectangle, normalised
+#ifdef GSN_SEAM
+    vec2 velocityScale;   // 1 / the displayed rectangle's size in GS pixels (b.11: a fraction of R)
+    float seamValid;      // 0: a picture without an anchor (reactive everywhere): no motion, the far plane
+    float seamView;       // GT4_SEAM_VIEW=1 (debugging): the made target's render pixels per GS pixel; 0 off
+#endif
 } display;
 layout(location = 0) in vec2 inUv;
 layout(location = 0) out vec4 outColor;
@@ -64,6 +75,22 @@ float fieldsDiffer(bool currentLower, bool otherLower) {
     return moved;
 }
 
+// The display seam's outputs (B16c): with no seam the velocity stays 0 and no depth is written.
+void seamOutputs() {
+#ifdef GSN_SEAM
+    if (display.seamValid > 0.5) {
+        const vec2 p = display.offset + inUv * display.size;
+        outVelocity = textureLod(seamVelocity, p, 0.0).xy * display.velocityScale;
+        gl_FragDepth = textureLod(seamDepth, p, 0.0).r;
+    } else {
+        outVelocity = vec2(0.0);
+        gl_FragDepth = 0.0;
+    }
+#else
+    outVelocity = vec2(0.0);
+#endif
+}
+
 void main() {
     const bool blended = display.blend > 0.0;
     const bool currentLower = blended && display.offset.y > display.otherOffset.y;
@@ -74,7 +101,7 @@ void main() {
     // all (docs/modern/spikes/E4-fields-vs-pcsx2.md).
     if (display.clean > 0.5 && blended && inUv.y > 1.0 - display.line / display.size.y) {
         outColor = vec4(0.0, 0.0, 0.0, 1.0);
-        outVelocity = vec2(0.0);
+        seamOutputs();
         return;
     }
     vec3 c = clamp(textureLod(frame, fieldPoint(frame, display.offset, display.size, currentLower, inUv), 0.0).rgb, 0.0, 1.0);
@@ -91,5 +118,13 @@ void main() {
         c = mix(c, o, w);
     }
     outColor = vec4(linearFromSrgb(c), 1.0);
-    outVelocity = vec2(0.0);
+    seamOutputs();
+#ifdef GSN_SEAM
+    // GT4_SEAM_VIEW=1: the seam's motion vectors in place of the picture, as gsn_taa.comp's view shows the scene's (grey:
+    // still, 32 render pixels a full tone), so the two compare pixel for pixel where the copy is one to one.
+    if (display.seamView > 0.0 && display.seamValid > 0.5) {
+        const vec2 m = textureLod(seamVelocity, display.offset + inUv * display.size, 0.0).xy * display.seamView;
+        outColor = vec4(linearFromSrgb(vec3(clamp(0.5 + m / 64.0, 0.0, 1.0), 0.5)), 1.0);
+    }
+#endif
 }
