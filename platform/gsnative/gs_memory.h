@@ -97,6 +97,9 @@ public:
 private:
     std::vector<uint8_t> mem;
     uint8_t clut[1024] = {};   // the CLUT buffer: 256 x 32-bit, or 512 x 16-bit entries
+public:
+    uint64_t clutLoads = 0;    // (DEBUG lane C: replay colours)
+private:
     uint32_t cbp0 = ~0u, cbp1 = ~0u;
     // The host-to-local transfer in progress.
     Transfer xfer;

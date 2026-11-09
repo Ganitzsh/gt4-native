@@ -432,6 +432,7 @@ bool GsMemory::tex0Written(const Tex0& t) {
     default: break;
     }
     if (load) loadClut(t);
+    if (load) ++clutLoads;   // (DEBUG lane C: replay colours)
     return load;
 }
 
