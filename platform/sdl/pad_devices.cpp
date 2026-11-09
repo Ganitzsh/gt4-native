@@ -158,6 +158,7 @@ PadDevices::PadDevices(std::string profilesPath, bool virtualOnly) : path_(std::
 }
 
 PadDevices::~PadDevices() {   // (before SDL_Quit: main's SdlRuntime outlives it)
+    xinputRumbleStop();   // (a rumble test's direct pulse under way: it has no duration of its own)
     for (auto& p : port_)
         if (p.gamepad) {
             calm(p.gamepad, p.ds5Sent);
@@ -614,14 +615,26 @@ void PadDevices::rumbleTest(uint64_t nowMs, const char* why) {
 
 void PadDevices::rumbleTestStep(uint64_t nowMs) {
     const uint64_t t = nowMs - testAt_;
+    // The direct pulse sets every XInput slot at once: the first port under test sends it, the others say so. With
+    // no port under test any more (its pad left mid-test), a direct pulse on is stopped here.
+    int directPort = -1;
+    for (int port = 0; port < input::Ports::kPorts && directPort < 0; ++port)
+        if (port_[port].testPhase != Port::kTestDone && port_[port].gamepad) directPort = port;
+    if (directPort < 0) {
+        xinputRumbleStop();
+        return;
+    }
     for (int port = 0; port < input::Ports::kPorts; ++port) {
         Port& p = port_[port];
         if (p.testPhase == Port::kTestDone || !p.gamepad) continue;
         // every step now due, in order (a long frame takes more than one)
         while (p.testPhase + 1 < kTestStepCount && t >= kTestSteps[p.testPhase + 1].at) {
             const TestStep& s = kTestSteps[++p.testPhase];
+            const std::string result = !s.direct || port == directPort
+                                           ? testStep(p.gamepad, s)
+                                           : "sent with port " + std::to_string(directPort + 1) + "'s";
             std::printf("Input: port %d: rumble test at %.1f s, %s: %s\n", port + 1, static_cast<double>(t) / 1000.0,
-                        s.what, testStep(p.gamepad, s).c_str());
+                        s.what, result.c_str());
         }
         if (p.testPhase + 1 == kTestStepCount) {   // (its last step stops the motors)
             std::printf("Input: port %d: rumble test done\n", port + 1);
@@ -675,6 +688,7 @@ int rumbleTestOnly() {
             if (!s.direct && result != "ok") ok = false;
         }
         failed += !ok;
+        xinputRumbleStop();   // (the table ends with the motors off already: a safety net)
         SDL_CloseGamepad(pad);
     }
     SDL_free(ids);

@@ -15,7 +15,16 @@
 
 namespace gt4 {
 
+namespace {
+bool g_on = false;   // the last xinputRumbleAll asked for the motors (main thread only)
+}  // namespace
+
+void xinputRumbleStop() {
+    if (g_on) xinputRumbleAll(0, 0);
+}
+
 std::string xinputRumbleAll(uint16_t low, uint16_t high) {
+    g_on = low || high;
 #ifdef _WIN32
     // loaded as SDL loads it (the newest the system has), nothing linked: a build without the library still starts
     using GetState = DWORD(WINAPI*)(DWORD, XINPUT_STATE*);
