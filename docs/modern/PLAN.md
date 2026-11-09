@@ -165,31 +165,42 @@ start's flyover to the grid is caught only when the view drops out for a frame, 
 Both sources, each logged by which one fired: (a) the game's own signals, read where our copies already hold the race
 camera (`cam` = method 0xD0 right before the main view's `ViewBegin` in 0033EAB8's copy, which Photo Travel's preview
 reaches through 0033E368 with role `kViewPhoto` keeping its own history, and A12's 0033FD88 copy): the camera object's
-address changing, and the current camera entry (`cam + 0x9BC`) changing, through a hook `gt4_scene_main_camera(cam,
-entry)` before the view begins; (b) a safety net in the runtime's `ViewBegin`, which has `worldToView` and the
-Projection: per (role, `pass`), kept across frames, the camera predicted from its last two per VBlank (`FrameBegin`'s
-vblank, so a 30 fps race frame, a hitch or a dropped frame isn't read as a jump; those counted apart), a cut when the
-residual exceeds a distance, the view direction turns by more than an angle, or the field of view changes by more than
-a few percent; a view absent last frame counts as a cut, as the host does now. Hunting every switch alone would miss
-some (replay cuts, the flyover, the pause and photo cameras); a geometric test alone misses short cuts (bumper to
-cockpit is about a metre, to be measured in step 0) and needs tuning against speed. Step 0 (measurement): a debug game
-logging per frame the camera object, its entry, position, view direction and field of view, over a race with every
-view selected in turn (chase, bumper, cockpit, roof, TV), the start's flyover, a replay with its track-side cuts, a
-pause and resume, and Photo Mode's camera (photo shots from a replay) and Photo Travel's preview (001BD438, a path to
-observe, not a place to hook); it says which signal shows each visible cut and gives the residual distribution on
-continuous frames at speed for the thresholds. Step 1: the hook in the two copies (0033EAB8's, which Photo Travel's
-preview reaches through 0033E368, and 0033FD88's), the runtime test, `kViewCut` on `ViewBegin`, a counter per cause
-(camera object, entry, residual, angle, field of view, absent), and CONTRACTS' line saying who sets it. The flag fixes
-nothing until each consumer reads it, so step 1 also has (lane B): `GsnScene` resets the TAA history of a Light's
-target when any main view drawing into that target has `kViewCut` (in split screen either half's cut resets both, one
-frame of the other half's history, the safe side, until TAA keeps history per view as A12 asks); the night level does
-the same per (target, role, `pass`); B16c's `DisplaySceneState::reset` follows the anchor's Light. Consumers read the
-flag from `FrameList::scene`, which only the list carrying `FrameEnd` has, so a Light in a list cut before it (a.8:
-the flare's asynchronous read) sees no flag; those are counted. Depends: A3, A12 (it touches 0033EAB8's and 0033FD88's
-copies, so it follows A12). Acceptance: `REL`; `DIFFTEST`; `ORIG` and `STREAM` unchanged with records off; on step 0's
-sessions every visible cut flagged, and no flag on continuous frames at speed over a lap (target 0: a false flag costs
-one frame of history, a missed cut a ghost), and none on resuming from a pause whose camera didn't change; no TAA
-ghost on the first frame after a view change, on a capture with one. Ahead of B16c's part 4, which needs it.
+mode fields and cut pulses (lane A's step 0, a night B-spec race: the object is the same all session and `cam + 0x9BC`
+stays 0, so neither was a signal). `+0x1A0` (1 and 2, `+0x138` following it) and `+0x1A8` (0 and 1) step through
+B-spec's three-view cycle, `+0x1A8` rising being the rear view, a 180-degree turn with almost no move; `+0xAC8` and
+`+0xAEC` pulse for one frame on every trackside TV cut; `+0x140` steps through the start sequence's camera changes.
+Every one of the 43 jumps had one of these, and each of these landed on a jump. The remaining sessions complete the
+list. Read through a hook `gt4_scene_main_camera` before the view begins; (b) a safety net in the runtime's
+`ViewBegin`, which has `worldToView` and the Projection: per (role, `pass`), kept across frames, the camera predicted
+from its last two per VBlank (`FrameBegin`'s vblank, so a 30 fps race frame, a hitch or a dropped frame isn't read as
+a jump; those counted apart), a cut when the residual exceeds 1 m per VBlank, the view direction turns by more than 20
+degrees, or the field of view changes by more than 3 % (step 0's margins: on frames with no signal the residual's
+99.9th percentile is 0.081 m and its maximum 0.43, the turn at most 9.5 degrees with the TV camera panning, the field
+of view at most 1.5 %; cuts are 3 to 240 m, 4 to 180 degrees, or 10 to 850 %), the net's history reset when it flags,
+since a cut shows on two consecutive frames. `kViewCut` is set once per cut, on the first frame of the new camera: the
+frame after a flag isn't tested by the net (one sample since the reset), so the consumers' just-rebuilt history isn't
+thrown away again (a cut on that very frame is left to the game signals), and the game signals and the net firing on
+the same frame are one flag, its causes counted per cut (lane B); a view absent last frame counts as a cut, as the
+host does now. Hunting every switch alone would miss some (replay cuts, the flyover, the pause and photo cameras); a
+geometric test alone misses short cuts (bumper to cockpit is about a metre, to be measured in step 0) and needs tuning
+against speed. Step 0 (measurement): a debug game logging per frame the camera object, its entry, position, view
+direction and field of view, over a race with every view selected in turn (chase, bumper, cockpit, roof, TV), the
+start's flyover, a replay with its track-side cuts, a pause and resume, and Photo Mode's camera (photo shots from a
+replay) and Photo Travel's preview (001BD438, a path to observe, not a place to hook); it says which signal shows each
+visible cut and gives the residual distribution on continuous frames at speed for the thresholds. Step 1: the hook in
+the two copies (0033EAB8's, which Photo Travel's preview reaches through 0033E368, and 0033FD88's), the runtime test,
+`kViewCut` on `ViewBegin`, a counter per cause (camera object, entry, residual, angle, field of view, absent), and
+CONTRACTS' line saying who sets it. The flag fixes nothing until each consumer reads it, so step 1 also has (lane B):
+`GsnScene` resets the TAA history of a Light's target when any main view drawing into that target has `kViewCut` (in
+split screen either half's cut resets both, one frame of the other half's history, the safe side, until TAA keeps
+history per view as A12 asks); the night level does the same per (target, role, `pass`); B16c's
+`DisplaySceneState::reset` follows the anchor's Light. Consumers read the flag from `FrameList::scene`, which only the
+list carrying `FrameEnd` has, so a Light in a list cut before it (a.8: the flare's asynchronous read) sees no flag;
+those are counted. Depends: A3, A12 (it touches 0033EAB8's and 0033FD88's copies, so it follows A12). Acceptance:
+`REL`; `DIFFTEST`; `ORIG` and `STREAM` unchanged with records off; on step 0's sessions every visible cut flagged, and
+no flag on continuous frames at speed over a lap (target 0: a false flag costs one frame of history, a missed cut a
+ghost), and none on resuming from a pause whose camera didn't change; no TAA ghost on the first frame after a view
+change, on a capture with one. Ahead of B16c's part 4, which needs it.
 
 **A4: Object identity from 00455708 (S-M).** `game_src/func_00455708.cpp` (draft) sets a runtime-global model
 context (set, model index, level) that A2 reads (`kInstObjectKnown`). Depends: A2, RISKS R2 verdict on 00455708.
