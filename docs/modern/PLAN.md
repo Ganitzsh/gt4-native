@@ -1568,8 +1568,9 @@ in a modern vertex stage (shadow maps needn't match GT4's Z). Receivers: B10's d
 pass; F2's night relight in `hybrid` samples them too. Filtering as B11's (PCF, contact-hardening optional),
 normal-offset bias. Depends: B11 (the atlas and filtering), F3, A7 step 2 (the headlight cones), F2b (the lamps),
 B6/B7 (meshes). Acceptance: `ORIG`; `VAL`; `PERF(<= 1.5 ms)` desktop at `near`, Odin budget at `player`; review images
-on both night courses: the car ahead's shadow in the player's headlights, cars' shadows under the street lamps, no
-acne or detached shadows; temporal stability as above, as lights enter and leave the budget.
+on both night courses: the player's headlights on the road (F6 turns `kSrcHeadlight` on in the gather, which A7 step 2
+left off; moved from A7 step 2), the car ahead's shadow in the player's headlights, cars' shadows under the street
+lamps, no acne or detached shadows; temporal stability as above, as lights enter and leave the budget.
 
 **F7: Light profiles (S-M, lane F; lane B reviews).** Headlight beams and street lamps get shapes. A profile is
 an angular intensity table (IES-style: intensity against vertical and horizontal angle) baked into a small 2D
@@ -1602,26 +1603,32 @@ so (no double glow). Setting part of `lighting.materials = pbr`. Depends: B10, A
 `VAL`; `PERF`; the brake lamps follow the brake state day and night, as in modern racing games (the coordinator for
 the owner, 2026-11-09), while `original` keeps GT4's way (brake glow only with the lamp switch on). By day a brake
 lamp's glow lights only the lamp itself and feeds bloom; it lights the car behind only above a small level threshold.
-Review: brake lamps brighten under braking on the car ahead, by day and at night; headlights and tail lamps glow only
-with the switch on; on the warning capture the tint stays below N4's bar.
+Review: brake lamps brighten under braking on the car ahead, by day and at night; under braking the car behind lit red
+(F9 turns `kSrcBrakeLight` and `kSrcTailLight` on in the gather, which A7 step 2 left off, and decides whether step
+1a's `kSrcCarLamp` stays; moved from A7 step 2); headlights and tail lamps glow only with the switch on; on the
+warning capture the tint stays below N4's bar.
 
 Additions to existing tickets, with the same rules:
-- **A7 step 2**: headlights, tail and brake lights sent as lights with their state, so they light the road and the car
-  behind (F3). Step 0 done (lane A, 2026-11-09, a night B-spec race): `RaceCarModel` virtual 35's groups are group 0
-  the headlights (count at +0x18; usually 4 elements, two a side, each with a model-space point and a beam point ahead
-  of it (0.15-0.45 m on the two cars seen), and a size), group 1 the brake lamps (+0x28; the rear pair), group 2 the
-  tail lamps (+0x20; the same pair). The state: on is the course flag 0x8000 (`kFrameLampsOn`); the brake state is car
-  + 0x590, exactly 0 or 1; the brake lamps' intensity is k (RaceCarModel + 0x54), which GT4 ramps 0.25 a frame up from
-  the brake's start and down after its release, so it fades them over 4 frames. Each element goes out as
-  `kSrcHeadlight`, `kSrcBrakeLight` or `kSrcTailLight` by group, its points through the car instance's
-  `objectToWorld`. Every car with lamps sends them, whether or not virtual 35 draws that frame: in an Arcade time
-  trial at night the player's car logged no call (in an Arcade time trial only, cause unknown; not in an A-spec race,
-  where the player's lamps run in the bumper view too), and the player's headlights matter most (F6), so the elements
-  are read from the car model itself. The brake state and intensity are sent every frame, day and night (F9's day
-  brake glow); where virtual 35 doesn't run (by day), the intensity ramps from car + 0x590 as GT4's k does. 0x3F0's
-  'on' matched 0x8000 on every logged call; a call-by-call proof is not needed, since the lights read 0x8000 itself.
-  Acceptance adds: under braking, the car behind lit red (review); the player's headlights present in a time trial at
-  night.
+- **A7 step 2** (done: lane A, fab0402, 2026-11-09): headlights, tail and brake lamps sent as lights with their state.
+  Step 0 (a night B-spec race): `RaceCarModel` virtual 35's lamp groups, at `*(*(model + 0x18) + 0x10)`, are group 0
+  the headlights (count at +0x18; usually 4 elements, two a side, each with a model-space point, a beam point
+  0.15-0.45 m ahead of it, and a size), group 1 the brake lamps (+0x28; the rear pair), group 2 the tail lamps (+0x20;
+  the same pair). The state: on is the course flag 0x8000 (`kFrameLampsOn`); the brake state is car + 0x590, 0 or 1;
+  the brake lamps' intensity is k (RaceCarModel + 0x54), which GT4 ramps 0.25 a frame up from the brake's start and
+  down after its release. Every car's elements go out every frame, read from the car model, since virtual 35 doesn't
+  draw every car every frame (by day, and the player's car in an Arcade time trial at night), as spot Lights of the
+  main view: `kSrcHeadlight` along its beam, `kSrcTailLight` and `kSrcBrakeLight` pointing backwards, range and cones
+  0 (F7's profiles decide), id `entrant << 8 | group << 5 | index`. Placement: each model point through CONTRACTS'
+  Vehicle mapping (body = (-z, x, y), d0ad4a3) plus a per-car offset along row 0, calibrated from GT4's own draw
+  transform the first time it draws the car's lamps (per car, 0 to -0.39 m on the night run's six, each 0.000 off row
+  0; a default of -0.31 m until then, counted), then the Vehicle's `bodyToWorld` and the main view. Intensity:
+  headlights and tail lamps 1 with the switch on, else 0 (still sent); brake lamps k with the switch on, else a ramp
+  of 0.25 a frame from car + 0x590 (GT4's own ramp), day and night (F9's day brake glow). They light nothing yet: the
+  three sources have `lights = false` in the gather until F6 (headlights) and F9 (brake and tail lamps) tune them, so
+  `lighting.night = enhanced` shows step 1a's `kSrcCarLamp` glows as before. Acceptance, met: at night 56 lamps a
+  frame for 6 cars, on step 1a's glow points within 0.0002 m, 6 calibrations and none rejected; by day headlights and
+  tail lamps 0 and the brake ramp 0.25 a frame. Its two lit reviews (the car behind lit red under braking, the
+  player's headlights on the road) moved to F9 and F6. Open: the 2 Player Battle check, its own report.
 - **F4**: lens flares and streaks from real lights: from the light list's brightest sources (occlusion from the depth
   buffer), replacing GT4's flare pass in `modern` (N4 suppresses it there); acceptance adds the flare's occlusion
   behind a car (review), no flare from a light outside the view, and on the warning capture the tint stays below N4's
