@@ -339,12 +339,41 @@ template <bool kMix> int32_t Spu2::voiceSample(Core& c, int n, Voice& v) {
 // the pitch counter and the sample index, the 8-sample history, the envelope's wait. Those calls are taken in one
 // step; each event call is made exactly as before, so a block's flags, ENDX, a phase change and a voice going off
 // happen where they did. The game reads the status only under its audio lock, between whole advance() calls.
+// A sustain held at its clamp (increasing at 0x7FFF, decreasing at 0: a race's engines, about 20,000 calls a frame)
+// steps without moving: its level and phase stay, and only its wait cycles (W, then the step's `cycles` again and
+// again). Its steps aren't events: the wait after k calls has a closed form (heldWait), and the bulk runs to the
+// next block.
+namespace {
+
+// The sustain's step period (envelope()'s `cycles`) when the sustain is held at its clamp, else 0.
+int32_t heldCycles(const Voice& v) {
+    if (v.phase != kSustain) return 0;
+    const bool exp = v.adsr2 >> 15, dec = (v.adsr2 >> 14) & 1;
+    if (dec ? v.env > 0 : v.env < 0x7FFF) return 0;
+    const int shift = (v.adsr2 >> 8) & 31;
+    int32_t cycles = 1 << std::max(0, shift - 11);
+    if (exp && !dec && v.env > 0x6000) cycles *= 4;
+    return cycles;
+}
+
+// envelope()'s wait after k calls on a held sustain from wait w: the first step comes on call max(w, 1), each step
+// sets the wait to `cycles`, and the wait counts down a call at a time between steps.
+int32_t heldWait(int32_t w, int32_t cycles, int64_t k) {
+    const int64_t first = std::max<int64_t>(w, 1);
+    if (k < first) return static_cast<int32_t>(w - k);
+    return static_cast<int32_t>(cycles - (k - first) % cycles);
+}
+
+}  // namespace
+
 void Spu2::advanceVoice(Core& c, int n, Voice& v, int count) {
     constexpr int64_t kNever = INT64_MAX;
     while (count > 0 && v.phase != kOff) {
-        // calls up to and including the envelope's next step (envelope(): a wait W > 0 steps on its W-th call)
+        // calls up to and including the envelope's next step (envelope(): a wait W > 0 steps on its W-th call); a
+        // held sustain's steps change nothing but the wait, so they don't end a bulk
+        const int32_t held = heldCycles(v);
         int64_t toStep = kNever;
-        if (v.phase == kAttack || v.phase == kDecay || v.phase == kSustain || v.phase == kRelease)
+        if (!held && (v.phase == kAttack || v.phase == kDecay || v.phase == kSustain || v.phase == kRelease))
             toStep = std::max<int64_t>(v.env_wait, 1);
         // calls up to and including the one whose advances reach the block's end (index 28)
         const int64_t p = std::min<uint32_t>(v.pitch, 0x3FFF);
@@ -355,8 +384,9 @@ void Spu2::advanceVoice(Core& c, int n, Voice& v, int count) {
         }
         const int64_t bulk = std::min<int64_t>({static_cast<int64_t>(count) - 1, toStep - 1, toBlock - 1});
         if (bulk > 0) {
-            // the envelope only counts down
-            if (toStep != kNever) v.env_wait -= static_cast<int32_t>(bulk);
+            // the envelope only counts down (or, held, cycles)
+            if (held) v.env_wait = heldWait(v.env_wait, held, bulk);
+            else if (toStep != kNever) v.env_wait -= static_cast<int32_t>(bulk);
             // the sample position moves within the block; the history takes the samples passed
             const int64_t total = static_cast<int64_t>(v.counter) + p * bulk;
             const int adv = static_cast<int>(total >> 12);

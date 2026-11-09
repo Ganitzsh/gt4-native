@@ -5,9 +5,9 @@
 // Voice field and ENDX, for every n from 1 to 160 (so at every sample) and at 400, 800 and 1600. The states cover the
 // envelope's whole space (attack, decay, sustain and release; linear and exponential; increase and decrease; every
 // shift and step from random ADSR registers; start levels at the edges, 0x6000 included where the exponential
-// increase slows; waits from 0 up) and the voice's (pitch 0, below, at and above one sample a call, past 0x3FFF's
-// clamp; any index and counter; blocks with no flag, loop start, loop end with repeat, end without repeat, in random
-// ADPCM). Key-on and key-off come from apply() between calls, so their states are among these (attack from level 0,
+// increase slows; a sustain held at its clamp, which steps without moving; waits from 0 up) and the voice's (pitch
+// 0, below, at and above one sample a call, past 0x3FFF's clamp; any index and counter; blocks with no flag, loop
+// start, loop end with repeat, end without repeat, in random ADPCM). Key-on and key-off come from apply() between calls, so their states are among these (attack from level 0,
 // release from any level).
 #include "spu/spu2.h"
 
@@ -76,6 +76,9 @@ int main() {
         v.adsr2 = static_cast<uint16_t>(pick(0, 0xFFFF));
         v.phase = phases[c % 4];
         v.env = pick(0, 1) ? levels[pick(0, 10)] : static_cast<int32_t>(pick(0, 0x7FFF));
+        if (v.phase == kSustain && c % 8 == 2) {   // a sustain held at its clamp (a race's engines), every rate
+            v.env = (v.adsr2 >> 14) & 1 ? 0 : 0x7FFF;
+        }
         const uint32_t w = pick(0, 9);
         v.env_wait = w < 4 ? static_cast<int32_t>(w) : w < 8 ? static_cast<int32_t>(pick(0, 300))
                                                               : static_cast<int32_t>(pick(0, 1u << 20));
