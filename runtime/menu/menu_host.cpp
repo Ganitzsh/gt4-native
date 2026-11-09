@@ -9,6 +9,7 @@
 
 #include "menu_layout.h"
 #include "menu_model.h"
+#include "pause_page.h"
 #include "ui_records.h"
 
 #include <algorithm>
@@ -160,10 +161,6 @@ const char *const kKeyContinue = "pause.continue", *const kKeyRetry = "pause.ret
                   *const kKeyBrightness = "pause.brightness", *const kKeyContrast = "pause.contrast";
 // The strobe's brightness and contrast steps: GT4's Screen Settings stops at -5 and 5 (measured, M7).
 constexpr int kScreenMin = -5, kScreenMax = 5;
-
-bool is_pause_page(const ui::Page *page) {
-    return page && (page->id == kPauseTab || page->id.compare(0, 6, "pause.") == 0);
-}
 
 // What the page shows: the host's schema, and with GT4's Options under the hub, the Game tab first with the GT4
 // options row on top (the tab is made when the host's schema has none yet).
@@ -352,6 +349,15 @@ int take_settings(Page &p) {
                 continue;
             }
             for (const auto &v : values) p.menu.setValue(v.key, v.value, v.unused, v.pending);
+            if (trace()) {
+                // GT4_TRACE_MENU: what the host sent back (M4's session checks the page's values through it).
+                std::string list;
+                for (size_t i = 0; i < values.size() && i < 8; ++i)
+                    list += (i ? ", " : "") + values[i].key + " = " + values[i].value +
+                            (values[i].pending ? " (pending)" : "");
+                log_info("menu: %u value(s) from the host: %s%s", static_cast<unsigned>(values.size()), list.c_str(),
+                         values.size() > 8 ? ", ..." : "");
+            }
         } else if (!header.ok) {
             log_info("menu: request %u refused: %s", header.request, body.c_str());
             sound = kSoundDisable;
@@ -700,7 +706,7 @@ extern "C" int gt4_pause_tick(uint32_t pause, int items, int *screen) {
         if (answer) return true;
         if (input != ui::Input::Back && input != ui::Input::Close) return false;
         if (p.menu.confirming() || p.menu.previewing()) return false;
-        if (is_pause_page(p.menu.page())) {
+        if (ui::isPausePage(p.menu.page())) {
             answer = 3;
         } else if (input == ui::Input::Close || !p.menu.inSubPage()) {
             p.menu.selectTab(kPauseTab);
@@ -738,6 +744,6 @@ extern "C" int gt4_pause_tick(uint32_t pause, int items, int *screen) {
         return answer | sound << 8;
     }
     send_list(p, false);
-    const bool settings_shown = !is_pause_page(p.menu.page());
-    return (edges || settings_shown ? 1 : 0) | sound << 8;
+    // 0 lets GT4's time limit count (the pause's own pages, no input), 1 clears it (pause_page.h).
+    return (ui::pauseTimeLimitCounts(p.menu, edges != 0) ? 0 : 1) | sound << 8;
 }

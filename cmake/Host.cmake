@@ -370,6 +370,9 @@ add_executable(gt4_host
     platform/render/modern/lights_cluster.cpp
     platform/render/modern/parity_view.cpp
     platform/render/overlay.cpp
+    platform/ui/host/settings_schema.cpp
+    platform/ui/ui_records.cpp
+    platform/ui/draw_list.cpp
     platform/render/upscale/fsr2.cpp
     platform/render/smaa_textures.cpp
     ${GT4_SHADER_OUT}/gt4_shaders.cpp
@@ -425,6 +428,19 @@ if(BUILD_TESTING)
     target_compile_options(gt4_ui_menu_test PRIVATE -Wall -Wextra -Wpedantic)
   endif()
   add_test(NAME ui_menu COMMAND gt4_ui_menu_test ${CMAKE_CURRENT_SOURCE_DIR}/tests/ui)
+
+  # The settings bridge (M4): every option on a page or hidden, sets through setOption, apply classes, the save rule
+  # on a real settings file.
+  add_executable(gt4_ui_settings_schema_test tests/ui_settings_schema.cpp platform/ui/host/settings_schema.cpp
+                 platform/ui/ui_records.cpp platform/ui/draw_list.cpp ${GT4_SETTINGS_SOURCES})
+  target_include_directories(gt4_ui_settings_schema_test PRIVATE platform/ui platform/ui/host platform/sdl platform/render platform/gs
+                             include tests)
+  if(MSVC)
+    target_compile_options(gt4_ui_settings_schema_test PRIVATE /W4)
+  else()
+    target_compile_options(gt4_ui_settings_schema_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  add_test(NAME ui_settings_schema COMMAND gt4_ui_settings_schema_test)
 
   # The host UI's SDF text (E5): the fonts load, layout and measure agree, UTF-8, a missing codepoint is a box.
   add_executable(gt4_ui_sdf_font_test tests/ui_sdf_font.cpp)

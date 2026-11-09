@@ -235,6 +235,7 @@ Output Menu::press(Input input) {
     // The keep-or-revert dialog takes every input while it is up.
     if (confirm_.active) {
         if (input == Input::Confirm) {
+            out.requests.push_back(Request{Request::Kind::Action, kConfirmKeep, confirm_.key});
             confirm_ = Confirm();
             out.sound = Sound::Ok;
         } else if (input == Input::Back || input == Input::Close) {

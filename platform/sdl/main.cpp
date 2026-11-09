@@ -20,6 +20,7 @@
 #include "session.h"
 #include "settings.h"
 #include "settings_menu.h"
+#include "settings_schema.h"
 #include "test_scene.h"
 
 #include <algorithm>
@@ -31,8 +32,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -574,6 +577,17 @@ int run(const Options& options) {
         if (!error.empty()) throw std::invalid_argument("--set " + key + "=" + value + ": " + error);
     }
     if (!options.gpu.empty()) settings.gpu = options.gpu;
+    // The settings pages' bridge (MENU_DESIGN.md M4): its next-race and restart baseline is the settings as the game
+    // starts, --set included (a --set value is not pending).
+    gt4::ui::SettingsBridge settingsBridge(settings);
+    // The pages' requests (GT4_REC_SETTINGS_SET), pushed by the GS host's stream thread, which never touches settings;
+    // the main loop drains them once a frame. Bounded: a page sends one request a press.
+    struct SettingsRequests {
+        std::mutex mutex;
+        std::deque<std::vector<uint8_t>> queue;
+        uint64_t dropped = 0;
+    };
+    auto settingsRequests = std::make_shared<SettingsRequests>();
     if (options.listOptions) {
         for (const auto& o : gt4::describe(settings)) {
             std::printf("%s = %s\n    %s\n    %s\n", o.key.c_str(), o.value.c_str(), o.allowed.c_str(), o.help.c_str());
@@ -657,6 +671,14 @@ int run(const Options& options) {
             // under their text (the status page, Home).
             gsOptions.gameArgs.push_back(settings.hud == gt4::HudLayout::Centered ? "centered" : "stretched");
         }
+        gsOptions.settingsSet = [requests = settingsRequests](const uint8_t* payload, size_t size) {
+            std::lock_guard<std::mutex> lock(requests->mutex);
+            if (requests->queue.size() >= 64) {
+                if (requests->dropped++ == 0) std::fprintf(stderr, "settings: a page's request dropped (64 waiting)\n");
+                return;
+            }
+            requests->queue.emplace_back(payload, payload + size);
+        };
         gsOptions.rumble = [](uint32_t port, uint32_t small, uint32_t large) {
             if (port < 2) g_rumble[port] = 0x80000000u | (small ? 0x100u : 0u) | (large & 0xFFu);
         };
@@ -702,16 +724,19 @@ int run(const Options& options) {
         if (window) SDL_SetWindowTitle(window->window, options.game.empty() ? "GT4 native host - replay" : "GT4 native host");
     }
 
+    // One apply path for every writer of settings (a session's set, the pages' bridge, the keys, the Esc menu): what
+    // the renderer and the display take from them.
+    auto applySettings = [&] {
+        renderer->apply(settings);
+        if (display) display->apply(settings);
+    };
     std::unique_ptr<Session> session;
     if (!options.sessionDirectory.empty()) {
         session = std::make_unique<Session>(options.sessionDirectory, options.audio, true);
         if (gs) session->onGameClock([&gs] { return gs->vblanks(); });
         session->onSetting([&](const std::string& key, const std::string& value) {
             const std::string error = gt4::setOption(settings, key, value);
-            if (error.empty()) {
-                renderer->apply(settings);
-                if (display) display->apply(settings);
-            }
+            if (error.empty()) applySettings();
             return error;
         });
         const auto& gpu = renderer->gpu();
@@ -750,7 +775,8 @@ int run(const Options& options) {
     uint8_t padRecorded[2][18] = {};   // each pad's bytes as a session last recorded them
     auto save = [&] {
         if (interactive && !settingsPath.empty()) {
-            try { gt4::saveSettings(settings, settingsPath); }
+            // A confirm-class value a page set and has not kept yet is saved as it was before (MENU_DESIGN M4).
+            try { gt4::saveSettings(settingsBridge.savable(settings), settingsPath); }
             catch (const std::exception& error) { std::fprintf(stderr, "%s\n", error.what()); }
         }
     };
@@ -779,8 +805,7 @@ int run(const Options& options) {
     auto menuInput = [&](gt4::SettingsMenu::Input input) {
         const auto result = menu.input(input, settings);
         if (result.changed) {
-            renderer->apply(settings);
-            if (display) display->apply(settings);
+            applySettings();
             save();
         }
         if (result.closed) openMenu(false);
@@ -1020,8 +1045,7 @@ int run(const Options& options) {
                     if (!change.empty()) {
                         std::printf("%s\n", change.c_str());
                         renderer->showMessage(change);
-                        renderer->apply(settings);
-                        if (display) display->apply(settings);
+                        applySettings();
                         save();
                     }
                 }
@@ -1034,6 +1058,30 @@ int run(const Options& options) {
             }
         }
         if (!running) break;
+        // The settings pages' requests (M4), drained once a frame at this one point, before the session's commands (so a
+        // session's set and a page's set keep one order): all of the frame's requests go through the bridge
+        // (setOption), then one apply (a preset moves twenty values, an apply can rebuild the pipeline), then a save
+        // when the bridge says so. Then the rows another writer changed (a key, a session, the Esc menu), once a page
+        // has asked for the schema. With no page ever opened this is the empty queue's check and nothing else.
+        if (gs) {
+            std::deque<std::vector<uint8_t>> requests;
+            {
+                std::lock_guard<std::mutex> lock(settingsRequests->mutex);
+                requests.swap(settingsRequests->queue);
+            }
+            bool changed = false, saveNow = false;
+            for (const auto& request : requests) {
+                const auto reply = settingsBridge.handle(settings, request.data(), request.size());
+                if (!reply.summary.empty()) std::printf("settings page: %s\n", reply.summary.c_str());
+                changed = changed || reply.changed;
+                saveNow = saveNow || reply.save;
+                for (const auto& payload : reply.payloads) gs->sendSettings(payload);
+            }
+            if (changed) applySettings();
+            if (saveNow) save();
+            if (settingsBridge.schemaSent())
+                if (const auto values = settingsBridge.refresh(settings); !values.empty()) gs->sendSettings(values);
+        }
         if (session) {
             running &= session->tick(*renderer, sdlWindow, frames);
             if (!running) break;

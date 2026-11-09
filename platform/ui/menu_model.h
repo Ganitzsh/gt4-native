@@ -54,6 +54,9 @@ struct Schema {
 enum class Input : uint8_t { Up, Down, Left, Right, Confirm, Back, TabLeft, TabRight, Reset, Close };
 enum class Sound : uint8_t { None, Cursor, Ok, Cancel, Disable };
 
+// The Action a kept confirm-class change sends, its value the row's key (M4: the host saves the value only then).
+inline constexpr const char* kConfirmKeep = "confirm.keep";
+
 struct Request {
     enum class Kind : uint8_t { Set, Revert, Action } kind = Kind::Set;
     std::string key, value;   // Revert: key back to value (the confirm dialog ran out or was refused)

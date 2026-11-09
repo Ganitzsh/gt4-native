@@ -5,6 +5,7 @@
 #include "draw_list.h"
 #include "menu_layout.h"
 #include "menu_model.h"
+#include "pause_page.h"
 
 #include <cmath>
 #include <cstdio>
@@ -219,6 +220,42 @@ int main(int argc, char** argv) {
         check(closed.closed && !menu.isOpen() && closed.sound == Sound::Cancel, "Back on a tab closes the menu");
     }
 
+    // The race pause's time limit (pause_page.h; M7, M4): it counts on the pause's own pages without input, never on
+    // a Settings tab, and again once back on the pause tab. (GT4's PauseBase::setTimeLimit has one caller,
+    // RaceBasic::pauseStart, and RaceInformation's pause limit is 0 but in race information read from a stream: no
+    // mode measured has one, so this rule is checked here.)
+    {
+        Schema s;
+        Page pause;
+        pause.id = "pause";
+        Row cont;
+        cont.kind = RowKind::Action;
+        cont.key = "pause.continue";
+        pause.rows.push_back(cont);
+        Page settings;
+        settings.id = "graphics";
+        Row aa;
+        aa.kind = RowKind::Choice;
+        aa.key = "render.aa";
+        aa.choices = {{"off", "Off"}, {"taa", "TAA"}};
+        aa.value = "off";
+        settings.rows.push_back(aa);
+        Page screen;
+        screen.id = "pause.screen";
+        s.pages = {pause, settings, screen};
+        s.tabs = {"pause", "graphics"};
+        Menu menu;
+        menu.setSchema(s);
+        menu.open();
+        check(isPausePage(menu.page()) && pauseTimeLimitCounts(menu, false), "the limit counts on the pause tab");
+        check(!pauseTimeLimitCounts(menu, true), "input clears it there, as GT4's strobe does");
+        menu.selectTab("graphics");
+        check(!isPausePage(menu.page()) && !pauseTimeLimitCounts(menu, false),
+              "never while a Settings tab is shown, input or not");
+        menu.selectTab("pause");
+        check(pauseTimeLimitCounts(menu, false), "and it counts again back on the pause tab");
+    }
+
     // selectTab: a tab by id, from its root, its row kept (the pause page's Settings and Back, M7).
     {
         Menu menu;
@@ -266,7 +303,9 @@ int main(int argc, char** argv) {
               menu.page()->rows[1].value == "windowed", "it reverts when the time runs out");
         menu.press(Input::Right);
         out = menu.press(Input::Confirm);
-        check(!menu.confirming() && out.requests.empty() && out.sound == Sound::Ok, "Confirm keeps the new value");
+        check(!menu.confirming() && out.requests.size() == 1 && out.sound == Sound::Ok &&
+                  hasRequest(out, Request::Kind::Action, gt4::ui::kConfirmKeep, "display.mode"),
+              "Confirm keeps the new value, and tells the host which key it kept (M4: saved then)");
         menu.press(Input::Right);
         out = menu.press(Input::Back);
         check(!menu.confirming() && hasRequest(out, Request::Kind::Revert, "display.mode", "borderless"),
