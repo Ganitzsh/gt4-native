@@ -50,6 +50,8 @@ struct Test {
     std::uint32_t double_addr = 0, double_size = 0;   // a region of doubles (8-byte steps from double_addr), compared
                                                       // as doubles: within 1e-12 relative is rounding, 1e-6 drift,
                                                       // when `floats` (the EE's soft-float against x87 doubles)
+    void (*teardown)() = nullptr;   // run once after the test's trials (difftest.cpp run()): a test that patched game
+                                    // code for its trials (difftest_m.cpp: jumps to recorders) puts it back here
 };
 
 // t with its packet compared as what it delivers (Test::stream, Test::stream_mask)

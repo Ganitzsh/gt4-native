@@ -692,6 +692,7 @@ bool run(const Test &t, int trials) {
                               t.name, n, args[0], args[1], args[2], args[3], static_cast<unsigned long long>(native_ret),
                               static_cast<unsigned long long>(orig_ret), where, at, na, oa, stream_note.c_str());
     }
+    if (t.teardown) t.teardown();
     gt4::rt::log_info("difftest %s: %d trials, %d differ (%d words within float rounding, %d within 1e-3)", t.name, trials,
                       differ, rounding, drifted);
     return differ == 0;
