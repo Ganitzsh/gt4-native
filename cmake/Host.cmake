@@ -282,6 +282,7 @@ add_library(gt4_fsr3 STATIC
     ${GT4_FSR3_DIR}/src/shared/ffx_object_management.cpp
     ${GT4_FSR3_DIR}/src/shared/ffx_breadcrumbs_list.cpp
     platform/render/upscale/fsr3_shaders.cpp
+    platform/render/upscale/fsr3_no_framegen.cpp
     ${GT4_SHADER_OUT}/gt4_fsr3_shaders.cpp
     ${GT4_FSR3_SHADER_HEADERS})
 target_include_directories(gt4_fsr3 PUBLIC ${GT4_FSR3_DIR}/include)
@@ -721,6 +722,17 @@ add_test(NAME material_table COMMAND gt4_material_table_test)
   add_executable(gt4_input_wheel_physics_test tests/input_wheel_physics.cpp)
   target_link_libraries(gt4_input_wheel_physics_test PRIVATE gt4_input)
   add_test(NAME input_wheel_physics COMMAND gt4_input_wheel_physics_test)
+
+  # FSR 3.1's library links, and our shader provider serves every pass the SDK asks for, in both FFX_HALF variants,
+  # with its bindings named as the SDK binds them; the jitter sequence against FSR 2's formula (PLAN.md B17; no GPU).
+  add_executable(gt4_fsr3_provider_test tests/fsr3_provider.cpp)
+  target_include_directories(gt4_fsr3_provider_test PRIVATE ${GT4_FSR3_DIR}/src/components/fsr3upscaler
+      ${GT4_FSR3_DIR}/src/backends/shared ${GT4_FSR3_DIR}/src/shared)
+  target_link_libraries(gt4_fsr3_provider_test PRIVATE gt4_fsr3 ${GT4_VOLK})
+  if(UNIX AND NOT APPLE)
+    target_link_libraries(gt4_fsr3_provider_test PRIVATE ${CMAKE_DL_LIBS})
+  endif()
+  add_test(NAME fsr3_provider COMMAND gt4_fsr3_provider_test)
 
   # The cards behind the game's libmc calls (runtime/save_folder.cpp, built here on its own): cut writes,
   # hidden copies and backups, backup rotation, the second slot. Works in the build folder.

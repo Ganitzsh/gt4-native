@@ -19,6 +19,7 @@
 #include "ffx_fsr3upscaler_private.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <mutex>
@@ -155,18 +156,33 @@ extern "C" FfxErrorCode ffxGetPermutationBlobByIndex(FfxEffect effectId, FfxPass
     const uint32_t forbidden = FSR3UPSCALER_SHADER_PERMUTATION_JITTER_MOTION_VECTORS;
     if ((permutationOptions & required) != required || (permutationOptions & forbidden)) return FFX_ERROR_INVALID_ARGUMENT;
     const bool sharpen = (permutationOptions & FSR3UPSCALER_SHADER_PERMUTATION_ENABLE_SHARPENING) != 0;
-    const bool half = (permutationOptions & FSR3UPSCALER_SHADER_PERMUTATION_ALLOW_FP16) != 0 &&
-                      passId != FFX_FSR3UPSCALER_PASS_RCAS;
+    const bool allowed = (permutationOptions & FSR3UPSCALER_SHADER_PERMUTATION_ALLOW_FP16) != 0 &&
+                         passId != FFX_FSR3UPSCALER_PASS_RCAS;
+    // GT4_FSR3_HALF=0 or 1 forces a variant, so VAL can run each on one device; 1 only where the component allowed
+    // 16-bit arithmetic (the device has it), else ignored and said.
+    static const int forced = [] {
+        const char* e = std::getenv("GT4_FSR3_HALF");
+        return e && (e[0] == '0' || e[0] == '1') && !e[1] ? e[0] - '0' : -1;
+    }();
+    const bool half = forced == 0 ? false : allowed;
     const gt4::vk::ShaderCode code = passCode(passId, sharpen, half);
     if (!code.words) return FFX_ERROR_INVALID_ARGUMENT;
     static std::mutex lock;
     static std::map<uint32_t, Reflection> cache;
-    static bool said[2] = {false, false};
+    static bool said[2] = {false, false}, saidIgnored = false;
     std::lock_guard<std::mutex> guard(lock);
     if (passId != FFX_FSR3UPSCALER_PASS_RCAS && !said[half]) {   // (which variant this device runs: C6b's Odin report)
         said[half] = true;
-        std::printf("FSR 3: %s passes (the device %s 16-bit shader arithmetic)\n", half ? "16-bit" : "32-bit",
-                    half ? "has" : "lacks");
+        if (forced >= 0)
+            std::printf("FSR 3: %s passes (GT4_FSR3_HALF=%d)\n", half ? "16-bit" : "32-bit", forced);
+        else
+            std::printf("FSR 3: %s passes (the device %s 16-bit shader arithmetic)\n", half ? "16-bit" : "32-bit",
+                        half ? "has" : "lacks");
+        std::fflush(stdout);
+    }
+    if (forced == 1 && !allowed && passId != FFX_FSR3UPSCALER_PASS_RCAS && !saidIgnored) {
+        saidIgnored = true;
+        std::printf("FSR 3: GT4_FSR3_HALF=1 ignored: the device lacks 16-bit shader arithmetic\n");
         std::fflush(stdout);
     }
     const uint32_t key = passId * 4u + (sharpen ? 2u : 0u) + (half ? 1u : 0u);

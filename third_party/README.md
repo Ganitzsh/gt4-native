@@ -32,8 +32,13 @@ flow, its swapchain) is here, not even unused.
 - The files are unmodified. `MANIFEST.txt` lists each with its upstream git blob hash and SHA-256: `git hash-object
   FILE` equals the first column. They are LF as upstream has them, and `.gitattributes`' `third_party/** -text`
   keeps git from converting them.
-- Not yet built (B17 step 1's next piece): the passes will be compiled with glslang and the SDK's shader blobs
-  (`ffx_shader_blobs.cpp`, not vendored) replaced by our own, as for FSR 2 above.
+- Built as `gt4_fsr3` (`cmake/Host.cmake`): the passes are compiled with glslang, and the SDK's shader blobs
+  (`ffx_shader_blobs.cpp`, not vendored) are replaced by our own (`platform/render/upscale/fsr3_shaders.cpp`), as for
+  FSR 2 above.
+- One frame-generation symbol is defined outside this folder, as a refusal:
+  `ffxSetFrameGenerationConfigToSwapchainVK` (`platform/render/upscale/fsr3_no_framegen.cpp`). `ffx_vk.cpp` stores
+  its address in the backend interface, and its definition is in the frame-interpolation swapchain, which isn't
+  here, so nothing would link without it. It returns an error and logs once. The upscaler never calls it.
 
 ## stb/
 
