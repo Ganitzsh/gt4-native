@@ -341,6 +341,19 @@ struct GsnScene::Impl {
         region.extent = {colour.extent.width, colour.extent.height, 1};
         vkCmdCopyImage(command, colour.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, k.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
     }
+    // DIAG (B16c's anchor, GT4_B16C_ANCHOR=1, 2 with a line per list): the last draw (or grade) into the target this list
+    // makes for the display that covers the displayed rectangle and samples a target, followed back through such
+    // passes (at most 4) to a target a Light drew into this list. The target's picture right after it is kept
+    // (keptRef, dumped as id + 20000): what differs from it later is the reactive mask's area.
+    struct Anchor {
+        size_t at = SIZE_MAX;        // the command after which the reference is kept
+        uint32_t target = 0;
+    } anchor;
+    std::unordered_map<uint32_t, vk::Image> keptRef;
+    uint64_t anchorLists = 0, anchorFound = 0, anchorNoLight = 0, anchorCapped = 0, anchorNone = 0, anchorDisagree = 0,
+             anchorFields = 0;
+    void findAnchor();
+    void keepRef(VkCommandBuffer command);
     // A rectangle of a target copied into a host buffer (GsnScene::read, FrameList::readbacks), packed as the GS keeps
     // it once the GPU has done the copy.
     struct Copied {
@@ -604,6 +617,13 @@ struct GsnScene::Impl {
             std::printf("Scene stages run on the members: %llu (the build's plan was wrong); on the render graph's transients: %llu\n",
                         static_cast<unsigned long long>(stagesOnMembers), static_cast<unsigned long long>(stagesOnTransients));
         for (auto& [id, k] : keptLit) vk::destroy(device, k);   // DIAG
+        for (auto& [id, k] : keptRef) vk::destroy(device, k);   // DIAG
+        if (anchorLists)
+            std::printf("B16c anchor (DIAG): %llu displayed lists; chain to a Light %llu, ends at no Light %llu, cap hit %llu, no "
+                        "anchor %llu; the anchor not the last covering pass %llu; fields mode %llu\n",
+                        (unsigned long long)anchorLists, (unsigned long long)anchorFound, (unsigned long long)anchorNoLight,
+                        (unsigned long long)anchorCapped, (unsigned long long)anchorNone, (unsigned long long)anchorDisagree,
+                        (unsigned long long)anchorFields);
         if (readSkips) std::printf("... of them ahead of GS reads: %llu (of %llu reads)\n", static_cast<unsigned long long>(readSkips),
                                    static_cast<unsigned long long>(reads));
         if (profile.pool) vkDestroyQueryPool(device.device, profile.pool, nullptr);
@@ -1484,6 +1504,7 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
     ex.slot = slot;
     nightOrdinal = 0;
     snapSprites();
+    findAnchor();   // DIAG
     const VkDeviceSize vertexBytes = std::max<VkDeviceSize>((frame.vertices.size() + frame.modelVertices) * sizeof(gsn::Vertex), 64);
     ex.vertices = &buffer(vertexBuffers, slot, vertexBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     vk::Buffer& vertices = *ex.vertices;
@@ -2319,6 +2340,7 @@ void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t
         return;
     }
     for (size_t at = from; at < to; ++at) {
+        if (anchor.at != SIZE_MAX && at == anchor.at + 1) keepRef(command);   // DIAG
         const auto& cmd = frame.commands[at];
         // B8 step 2: a side-channel pass before a substituted view's Z clear or Light (planSides)
         while (sideNext < sideBounds.size() && sideBounds[sideNext].command <= at) runSide(sideBounds[sideNext++]);
@@ -2776,6 +2798,197 @@ void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t
     // (B8 step 2: the pass before a Light that follows this range, as the Light is its own segment)
     while (sideNext < sideBounds.size() && sideBounds[sideNext].command <= to) runSide(sideBounds[sideNext++]);
     end();
+    if (anchor.at != SIZE_MAX && anchor.at + 1 == to && !ex.limited) keepRef(command);   // DIAG (the range's last command)
+}
+
+// DIAG (B16c's anchor): see Impl::Anchor.
+void GsnScene::Impl::findAnchor() {
+    static const int on = [] { const char* e = std::getenv("GT4_B16C_ANCHOR"); return e ? std::atoi(e) : 0; }();
+    anchor = {};
+    if (!on || !frame.displayed) return;
+    ++anchorLists;
+    auto info = [&](uint32_t id) -> const gsn::Target* {
+        for (const gsn::Target& t : frame.targets)
+            if (t.id == id) return &t;
+        return nullptr;
+    };
+    // The target this list makes for the display: its last draw into a target of the shown one's size and format
+    // (double buffering: the game draws into the back buffer), else the shown one.
+    const uint32_t shown = frame.display.target2 ? frame.display.target2 : frame.display.target1;
+    uint32_t made = shown;
+    if (const gsn::Target* s = info(shown))
+        for (size_t at = frame.commands.size(); at-- > 0;) {
+            const auto& cmd = frame.commands[at];
+            if (cmd.kind != gsn::FrameList::Command::Kind::Draw) continue;
+            const gsn::Target* t = info(frame.draws[cmd.index].target);
+            if (t && !t->depth && t->bw == s->bw && t->height == s->height && (t->psm == s->psm || (t->psm <= 1 && s->psm <= 1))) {
+                made = t->id;
+                break;
+            }
+        }
+    const bool fields = frame.display.record.interlaced && frame.display.record.fieldMode;
+    if (fields) ++anchorFields;
+    // Passes: runs of draws into one target sampling one source (consecutive among that target's draws), and grades.
+    struct Pass {
+        size_t first = 0, last = 0;
+        uint32_t dest = 0, source = 0;   // source: the target sampled (0 none)
+        int kind = 0;                    // 0 untextured or memory, 1 target, 2 reinterpreted, 3 grade, 4 3D
+        float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;   // into dest, GS pixels
+        float u0 = 1e9f, v0 = 1e9f, u1 = -1e9f, v1 = -1e9f;   // from source, its GS pixels
+    };
+    std::vector<Pass> passes;
+    std::unordered_map<uint32_t, size_t> open;   // dest -> its open pass
+    for (size_t at = 0; at < frame.commands.size(); ++at) {
+        const auto& cmd = frame.commands[at];
+        if (cmd.kind == gsn::FrameList::Command::Kind::Effect && cmd.index < frame.effects.size()) {
+            const auto& e = frame.effects[cmd.index];
+            Pass p{at, at, e.destination, e.source, 3, float(e.x0), float(e.y0), float(e.x1 + 1), float(e.y1 + 1),
+                   float(e.x0), float(e.y0), float(e.x1 + 1), float(e.y1 + 1)};
+            passes.push_back(p);
+            open.erase(e.destination);
+            continue;
+        }
+        if (cmd.kind != gsn::FrameList::Command::Kind::Draw) continue;
+        const gsn::Draw& d = frame.draws[cmd.index];
+        int kind = 0;
+        uint32_t source = 0;
+        const bool textured = (d.state.prim >> 4) & 1;
+        if (d.modeled) kind = 4;
+        else if (textured && d.texture.kind == gsn::TextureSource::Kind::Target) kind = 1, source = d.texture.id;
+        else if (textured && d.texture.kind == gsn::TextureSource::Kind::Reinterpreted && d.texture.id < frame.reinterpretations.size() &&
+                 frame.reinterpretations[d.texture.id].target)
+            kind = 2, source = frame.reinterpretations[d.texture.id].target;
+        auto o = open.find(d.target);
+        if (o == open.end() || passes[o->second].kind != kind || passes[o->second].source != source) {
+            passes.push_back(Pass{at, at, d.target, source, kind});
+            open[d.target] = passes.size() - 1;
+            o = open.find(d.target);
+        }
+        Pass& p = passes[o->second];
+        p.last = at;
+        if (kind == 4) continue;
+        const gfx::Texture& tx = d.state.c.texture;
+        const float tw = float(1u << std::min<uint32_t>(tx.log2Width, 10u)), th = float(1u << std::min<uint32_t>(tx.log2Height, 10u));
+        const bool uv = (d.state.prim >> 8) & 1;
+        for (uint32_t i = 0; i < d.count && d.first + i < frame.vertices.size(); ++i) {
+            const gsn::Vertex& v = frame.vertices[d.first + i];
+            if (v.w != 0) continue;
+            p.x0 = std::min(p.x0, v.x), p.y0 = std::min(p.y0, v.y), p.x1 = std::max(p.x1, v.x), p.y1 = std::max(p.y1, v.y);
+            if (!source) continue;
+            float u = uv ? v.u : (v.q ? v.s / v.q * tw : 0), w = uv ? v.v : (v.q ? v.t / v.q * th : 0);
+            if (kind == 1) u += float(d.texture.offsetX), w += float(d.texture.offsetY);
+            p.u0 = std::min(p.u0, u), p.v0 = std::min(p.v0, w), p.u1 = std::max(p.u1, u), p.v1 = std::max(p.v1, w);
+        }
+    }
+    auto covers = [](const Pass& p, float x0, float y0, float x1, float y1, float share) {
+        const float ix = std::max(0.0f, std::min(p.x1, x1) - std::max(p.x0, x0)), iy = std::max(0.0f, std::min(p.y1, y1) - std::max(p.y0, y0));
+        const float area = (x1 - x0) * (y1 - y0);
+        return area > 0 && ix * iy >= share * area;
+    };
+    uint32_t w, h;
+    displayedSize(frame.display, w, h);
+    const gfx::DisplayCircuit& c = frame.display.record.circuit[frame.display.target2 ? 1 : 0];
+    const float rx0 = float(c.x), ry0 = float(c.y), rx1 = rx0 + float(w), ry1 = ry0 + float(h);
+    // The anchor, and the last covering pass of any kind (the two rules' disagreement).
+    long found = -1, lastCovering = -1;
+    for (size_t i = passes.size(); i-- > 0;) {
+        const Pass& p = passes[i];
+        if (p.dest != made || p.kind == 4 || !covers(p, rx0, ry0, rx1, ry1, 0.98f)) continue;
+        if (lastCovering < 0) lastCovering = long(i);
+        if (p.source) {
+            found = long(i);
+            break;
+        }
+    }
+    char chain[256] = "";
+    int hops = 0;
+    bool light = false, capped = false;
+    if (found >= 0) {
+        if (found != lastCovering) ++anchorDisagree;
+        // Back through the sources: a Light into the source before the pass ends the chain.
+        const Pass* p = &passes[size_t(found)];
+        int n = 0;
+        for (;;) {
+            n += std::snprintf(chain + n, sizeof chain - n, "%s%u", hops ? "<" : "", p->source);
+            bool lit = false;
+            for (size_t at = 0; at < p->first; ++at)
+                if (frame.commands[at].kind == gsn::FrameList::Command::Kind::Light && frame.commands[at].index < frame.lights.size() &&
+                    frame.lights[frame.commands[at].index].target == p->source)
+                    lit = true;
+            if (lit) {
+                light = true;
+                break;
+            }
+            if (++hops >= 4) {
+                capped = true;
+                break;
+            }
+            const Pass* next = nullptr;
+            for (size_t i = passes.size(); i-- > 0;) {
+                const Pass& q = passes[i];
+                if (q.dest != p->source || q.last >= p->first || q.kind == 4 || !q.source) continue;
+                if (covers(q, p->u0, p->v0, p->u1, p->v1, 0.9f)) next = &q;
+                break;   // (only the last pass into the source before this one)
+            }
+            if (!next) break;
+            p = next;
+        }
+        if (light) ++anchorFound;
+        else if (capped) ++anchorCapped;
+        else ++anchorNoLight;
+        anchor.at = passes[size_t(found)].last;
+        anchor.target = made;
+    } else {
+        ++anchorNone;
+    }
+    if (found < 0 || !light) {   // (reactive everywhere: no reference kept for this picture)
+        if (auto k = keptRef.find(made); k != keptRef.end()) {
+            retire(k->second);
+            keptRef.erase(k);
+        }
+        anchor = {};
+    }
+    if (on >= 2) {
+        if (found >= 0) {
+            const Pass& p = passes[size_t(found)];
+            std::printf("b16c anchor: vblank %llu shown %u made %u%s: pass %zu-%zu kind %d from %u (%.0f,%.0f)-(%.0f,%.0f) <- "
+                        "(%.0f,%.0f)-(%.0f,%.0f); chain %s: %s%s; last covering pass %s\n",
+                        (unsigned long long)frame.vblank, shown, made, fields ? " (fields)" : "", p.first, p.last, p.kind, p.source,
+                        p.x0, p.y0, p.x1, p.y1, p.u0, p.v0, p.u1, p.v1, chain, light ? "Light" : capped ? "cap" : "no Light",
+                        "", found == lastCovering ? "same" : "other");
+        } else {
+            std::printf("b16c anchor: vblank %llu shown %u made %u%s: none (%zu passes into it)\n", (unsigned long long)frame.vblank,
+                        shown, made, fields ? " (fields)" : "",
+                        size_t(std::count_if(passes.begin(), passes.end(), [&](const Pass& p) { return p.dest == made; })));
+        }
+    }
+}
+
+void GsnScene::Impl::keepRef(VkCommandBuffer command) {
+    const uint32_t id = anchor.target;
+    anchor = {};
+    auto t = targets.find(id);
+    if (t == targets.end() || !t->second.image.valid()) return;
+    ex.end();
+    vk::Image& colour = t->second.image;
+    vk::Image& k = keptRef[id];
+    if (!k.valid() || k.extent.width != colour.extent.width || k.extent.height != colour.extent.height) {
+        if (k.valid()) retire(k);
+        vk::ImageDesc desc;
+        desc.format = colour.format;
+        desc.extent = colour.extent;
+        desc.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        desc.name = "gsn kept reference (DIAG)";
+        k = vk::createImage(device, desc);
+    }
+    vk::Barriers& b = ex.b;
+    b.image(colour, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_READ_BIT);
+    b.image(k, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_WRITE_BIT, true);
+    b.flush(command);
+    VkImageCopy region{};
+    region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.extent = {colour.extent.width, colour.extent.height, 1};
+    vkCmdCopyImage(command, colour.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, k.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 }
 
 // B8 step 2: one side-channel pass (planSides' bound): the partition's reset, then its items with the depth test EQUAL.
@@ -4009,7 +4222,11 @@ void GsnScene::Impl::pendingListEnd(VkCommandBuffer command) {
             dump.bps.push_back(0);
             dump.depth.push_back(0);
         }
-        for (auto& [keptId, k] : keptLit) {   // DIAG (GT4_B16C_LIT): every scene target's kept picture, id + 10000
+        std::vector<std::pair<uint32_t, vk::Image*>> kept;   // DIAG: the kept Light pictures (id + 10000), references (+ 20000)
+        for (auto& [keptId, k] : keptLit) kept.emplace_back(keptId + 10000, &k);
+        for (auto& [keptId, k] : keptRef) kept.emplace_back(keptId + 20000, &k);
+        for (auto& [keptId, kp] : kept) {
+            vk::Image& k = *kp;
             if (!k.valid()) continue;
             vk::Buffer buffer = vk::createBuffer(device, VkDeviceSize(k.extent.width) * k.extent.height * 8,
                                                  VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, true);
@@ -4019,7 +4236,7 @@ void GsnScene::Impl::pendingListEnd(VkCommandBuffer command) {
             copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
             copy.imageExtent = {k.extent.width, k.extent.height, 1};
             vkCmdCopyImageToBuffer(command, k.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer.buffer, 1, &copy);
-            dump.images.emplace_back(keptId + 10000, buffer);
+            dump.images.emplace_back(keptId, buffer);
             dump.extents.push_back(k.extent);
             dump.bps.push_back(0);
             dump.depth.push_back(0);
