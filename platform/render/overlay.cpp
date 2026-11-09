@@ -6,6 +6,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
+#include <iterator>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace gt4 {
@@ -92,7 +96,6 @@ struct Overlay::Impl : ui::PageSink {
     vk::Image textAtlas;
     vk::Pipeline textPipeline;
     std::vector<OverlayVertex> canvasTextVertices, pixelTextVertices;
-    std::vector<ui::GlyphQuad> glyphs;
     uint32_t slot = 0;
     VkExtent2D target{};
     bool srgbTarget = false;
@@ -180,14 +183,44 @@ struct Overlay::Impl : ui::PageSink {
         upload.submit();
     }
 
+    // Laid-out texts (M9a): a text's glyph quads at the origin (its line's top-left), per face and em, offset when
+    // drawn, so a page or readout drawn again each frame is not laid out again. Glyphs keep their atlas place once
+    // added, so an entry stays valid; entries unused for kTextKeepFrames go once the cache is over kTextCacheSize.
+    struct LaidOut {
+        std::vector<ui::GlyphQuad> quads;
+        float width = 0.0f;
+        uint32_t used = 0;
+    };
+    static constexpr size_t kTextCacheSize = 1024;
+    static constexpr uint32_t kTextKeepFrames = 120;
+    std::unordered_map<std::string, LaidOut> laidOut;
+    uint32_t textFrame = 0;
+
+    const LaidOut& layoutText(float em, ui::FontFace face, std::string_view string) {
+        std::string key(sizeof(float) + 1, '\0');
+        key[0] = static_cast<char>(face);
+        std::memcpy(&key[1], &em, sizeof(float));
+        key.append(string);
+        auto [it, added] = laidOut.try_emplace(std::move(key));
+        if (added) it->second.width = font.layout(face, em, string, 0.0f, font.ascent(face, em), it->second.quads);
+        it->second.used = textFrame;
+        return it->second;
+    }
+
+    void forgetOldTexts() {
+        ++textFrame;
+        if (laidOut.size() <= kTextCacheSize) return;
+        for (auto it = laidOut.begin(); it != laidOut.end();)
+            it = textFrame - it->second.used > kTextKeepFrames ? laidOut.erase(it) : std::next(it);
+    }
+
     // UI-font text at (x, top) in output pixels, `em` pixels: quads into `out`; returns the width.
     float text(std::vector<OverlayVertex>& out, float x, float top, float em, ui::FontFace face,
                std::string_view string, Color8 c) {
-        glyphs.clear();
-        const float width = font.layout(face, em, string, x, top + font.ascent(face, em), glyphs);
-        for (const auto& g : glyphs)
-            quad(out, g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0, g.u0, g.v0, g.u1, g.v1, c);
-        return width;
+        const LaidOut& text = layoutText(em, face, string);
+        for (const auto& g : text.quads)
+            quad(out, x + g.x0, top + g.y0, g.x1 - g.x0, g.y1 - g.y0, g.u0, g.v0, g.u1, g.v1, c);
+        return text.width;
     }
 
     static void quad(std::vector<OverlayVertex>& out, float x, float y, float w, float h, float u0, float v0, float u1, float v1, Color8 c) {
@@ -235,7 +268,7 @@ struct Overlay::Impl : ui::PageSink {
         pageRun(false, start);
     }
     float textWidth(ui::FontFace face, float em, std::string_view string) override {
-        return font.measure(face, em, string);
+        return font.measure(face, em, string);   // (no glyph cache entry: fitText measures many prefixes)
     }
     float lineHeight(ui::FontFace face, float em) override { return font.lineHeight(face, em); }
     void text(float x, float top, float em, ui::FontFace face, std::string_view string, ui::PageColor c) override {
@@ -294,6 +327,7 @@ void Overlay::begin(uint32_t slot, VkExtent2D target, const Canvas2D& canvas) {
     impl->pageVertices.clear();
     impl->pageRuns.clear();
     impl->pageScissor = {{0, 0}, target};
+    impl->forgetOldTexts();
     currentCanvas = canvas;
 }
 

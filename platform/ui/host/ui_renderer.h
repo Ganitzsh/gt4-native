@@ -19,6 +19,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -73,10 +74,25 @@ public:
     // an item kind this renderer does not know); printed as they come, kept for the tests.
     const std::vector<std::string> &notes() const { return notes_; }
 
+    // Wrapped texts kept (M9a): a page drawn every frame is wrapped and measured once per text, face, em, width and
+    // line count. Entries unused for kKeepDraws draws go once there are more than kCacheSize. The measurements come
+    // from the sink, so a renderer draws for one sink (the overlay's) only.
+    static constexpr size_t kCacheSize = 512;
+    static constexpr uint32_t kKeepDraws = 120;
+    size_t cached() const { return wrapped_.size(); }
+
 private:
+    struct Wrapped {
+        std::vector<std::string> lines;
+        std::vector<float> widths;
+        uint32_t used = 0;
+    };
+    const Wrapped &wrap(PageSink &sink, FontFace face, float em, const std::string &text, float width, int lines);
     void note(const std::string &text);
     std::set<std::string> noted_;
     std::vector<std::string> notes_;
+    std::unordered_map<std::string, Wrapped> wrapped_;
+    uint32_t draws_ = 0;
 };
 
 }  // namespace gt4::ui

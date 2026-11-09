@@ -49,7 +49,11 @@ struct Recorder : PageSink {
         call.bottom = bottom;
         calls.push_back(call);
     }
-    float textWidth(FontFace, float em, std::string_view text) override { return widthOf(em, text); }
+    int measures = 0;
+    float textWidth(FontFace, float em, std::string_view text) override {
+        ++measures;
+        return widthOf(em, text);
+    }
     float lineHeight(FontFace, float em) override { return em * 1.5f; }
     void text(float x, float top, float em, FontFace face, std::string_view text, PageColor color) override {
         Call call;
@@ -328,6 +332,19 @@ int main() {
                 ++texts;
             }
             for (const auto &c : sink.calls) clipDepth = c.kind == 'c' ? clipDepth + 1 : c.kind == 'n' ? 0 : clipDepth;
+            // The wrap cache (M9a): the same list drawn again makes the same calls and measures nothing.
+            {
+                renderer.draw(list, content, sink);   // (the first sink: the cache's measurements are its)
+                const size_t first = sink.calls.size() / 2;
+                bool same = sink.calls.size() == first * 2;
+                for (size_t i = 0; same && i < first; ++i)
+                    same = sink.calls[i].kind == sink.calls[first + i].kind &&
+                           sink.calls[i].text == sink.calls[first + i].text && sink.calls[i].x == sink.calls[first + i].x;
+                const int before = sink.measures;
+                renderer.draw(list, content, sink);
+                check(same && sink.measures == before && renderer.cached() > 0,
+                      "drawn again from the cache: the same calls, no measuring");
+            }
             check(texts > 10 && inside, "the hub's texts inside their boxes at canvas width " +
                                             std::to_string(int(width)) + " (" + std::to_string(texts) + " boxed, " +
                                             std::to_string(list.items.size()) + " items)");

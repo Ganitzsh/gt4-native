@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
+#include <iterator>
 
 namespace gt4::ui {
 
@@ -116,6 +118,24 @@ std::vector<std::string> wrapText(PageSink &sink, FontFace face, float em, std::
     return lines;
 }
 
+const PageRenderer::Wrapped &PageRenderer::wrap(PageSink &sink, FontFace face, float em, const std::string &text,
+                                                float width, int lines) {
+    std::string key(1 + 2 * sizeof(float) + sizeof(int), '\0');
+    key[0] = static_cast<char>(face);
+    std::memcpy(&key[1], &em, sizeof(float));
+    std::memcpy(&key[1 + sizeof(float)], &width, sizeof(float));
+    std::memcpy(&key[1 + 2 * sizeof(float)], &lines, sizeof(int));
+    key += text;
+    auto [it, added] = wrapped_.try_emplace(std::move(key));
+    Wrapped &w = it->second;
+    if (added) {
+        w.lines = wrapText(sink, face, em, text, width, lines);
+        for (const std::string &line : w.lines) w.widths.push_back(sink.textWidth(face, em, line));
+    }
+    w.used = draws_;
+    return w;
+}
+
 void PageRenderer::note(const std::string &text) {
     if (!noted_.insert(text).second) return;
     notes_.push_back(text);
@@ -124,6 +144,10 @@ void PageRenderer::note(const std::string &text) {
 
 void PageRenderer::draw(const DrawList &list, const PageRect &content, PageSink &sink) {
     if (list.items.empty() || content.w <= 0.0f || content.h <= 0.0f) return;
+    ++draws_;
+    if (wrapped_.size() > kCacheSize)
+        for (auto it = wrapped_.begin(); it != wrapped_.end();)
+            it = draws_ - it->second.used > kKeepDraws ? wrapped_.erase(it) : std::next(it);
     const float scale = content.h / kCanvasHeight;
     const float originX = content.x + (content.w - list.canvasWidth * scale) * 0.5f, originY = content.y;
     auto toPixels = [&](const Item &item) {
@@ -156,8 +180,10 @@ void PageRenderer::draw(const DrawList &list, const PageRect &content, PageSink 
             // line height).
             const int lines = line > 0.0f ? std::max(1, static_cast<int>(std::floor(box.h / line + 0.01f))) : 1;
             float top = box.y;
-            for (const std::string &text : wrapText(sink, face, em, item.text, box.w, lines)) {
-                const float width = sink.textWidth(face, em, text);
+            const Wrapped &wrapped = wrap(sink, face, em, item.text, box.w, lines);
+            for (size_t i = 0; i < wrapped.lines.size(); ++i) {
+                const std::string &text = wrapped.lines[i];
+                const float width = wrapped.widths[i];
                 float x = box.x;
                 if (item.align == Align::Center)
                     x = box.w > 0.0f ? box.x + (box.w - width) * 0.5f : box.x - width * 0.5f;
