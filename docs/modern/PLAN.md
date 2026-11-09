@@ -1307,6 +1307,12 @@ entries, game-side, with exact centres and sizes, and the host keeps those whose
   - the per-frame cost reported, and `PERF` with night enhanced against
     night off in a night race: the split now runs there, so B6's front-end cost lands there too (lane A), measured;
   - `ORIG` unchanged; with scene records off nothing runs.
+- **Done** (lane F, `spikes/R11.md`, 94ce8e0): both night courses, full B-spec laps, 0 misses and 0 lights over the
+  cap (drops only in a replay's re-upload window); `PERF` night enhanced against off on Clubman's lap: GPU +5.0 %
+  mean, the front-end thread's wall clock +30.6 %, of which B6's own thread CPU is p95 359 us, 141 us under B6's 0.5
+  ms budget; `ORIG` identical to the R6 hash lists on race7, race_grid43 and race_boot; with records off the scene
+  cache is never created and the lamp pass runs 0 times. Before `lighting.night = enhanced` enters a preset: the
+  Odin's measurement of B6's span (B6c, lane C's device run), as for hybrid.
 
 **F3: Clustered lighting in the deferred and forward passes (M).** Depends: F1, B10, B22. Acceptance: `VAL`;
 `PERF`; the same lights as F2 in `modern`, with G-buffer normals.
