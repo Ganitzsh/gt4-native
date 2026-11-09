@@ -1295,6 +1295,14 @@ int run(const Options& options) {
         // and wait a refresh for it with vsync, while the rest of the game's frame is on its way (the Odin's race with
         // the flare pass's read every frame: 88 presents a second, 53 of them new).
         if (followGame && servedRead && !freshPending) continue;
+        // A synchronous read drew part of the game's frame into the buffer on screen (Photo Travel's shooting screen and
+        // its focus probe): no present shows it half drawn, the picture before stays until the rest of that frame is
+        // here (at most 50 ms; GsnScene::holdPresent). Live only: a lockstep replay presents every VBlank as before.
+        // (waiting for that list, not spinning: a headless session's only pacing is the frame-cap wait this skips)
+        if (gs && gs->live() && !lockstep && renderer->holdGsPresent()) {
+            gs->waitNativeFrames(1);
+            continue;
+        }
 
         // The simulation clock: fixed 60 Hz ticks. Rendering only observes the result and interpolates.
         const Uint64 now = SDL_GetPerformanceCounter();

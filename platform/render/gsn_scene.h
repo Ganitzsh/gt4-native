@@ -49,6 +49,12 @@ public:
     // A GS -> host read of drawn pixels: executes the pending lists at once (waiting for the GPU) and packs
     // the target's rectangle as `request.psm`. False when it cannot (nothing prepared yet, no such target).
     bool read(const gsn::ReadRequest& request, std::vector<uint8_t>& out);
+    // True while a present would show the displayed buffer half drawn: a synchronous read's list (read above) drew into
+    // the buffer on screen (a screen drawn into its shown buffer: Photo Travel's shooting screen, its focus probe) and
+    // the rest of that frame, its displayed list, is not here yet. Then the picture before stays; released after 50 ms
+    // all the same (a screen that reads every frame into its shown buffer can't freeze the picture). Counted once a
+    // frame held (printed at exit).
+    bool holdPresent();
     // The game's asynchronous reads (gsn::FrameList::readbacks): copied when their list is drawn; slotDone(slot), once
     // that frame slot's fence is signalled, packs them, and takeReadAnswers hands them over (for GsHost::answerRead).
     struct ReadAnswer {

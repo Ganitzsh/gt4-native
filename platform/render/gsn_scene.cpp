@@ -317,6 +317,10 @@ struct GsnScene::Impl {
     // GS -> host reads (GsnScene::read): how many, the frames skipped ahead of them, and GT4_READ_SKIP_TEST's frames
     // held back (the newest lists, drawn only at the next read: a backlog for a lockstep replay's reads).
     uint64_t reads = 0, readSkips = 0;
+    // A synchronous read's list drew into the displayed buffer: mid-frame until the next displayed list (holdPresent).
+    bool midFrame = false, midFrameCounted = false, midFramePastVBlank = false;
+    std::chrono::steady_clock::time_point midFrameSince{};
+    uint64_t framesHeldMidFrame = 0, holdsPastVBlank = 0, holdsReleased = 0;   // (each counted once a frame)
     // A rectangle of a target copied into a host buffer (GsnScene::read, FrameList::readbacks), packed as the GS keeps
     // it once the GPU has done the copy.
     struct Copied {
@@ -581,6 +585,10 @@ struct GsnScene::Impl {
                         static_cast<unsigned long long>(stagesOnMembers), static_cast<unsigned long long>(stagesOnTransients));
         if (readSkips) std::printf("... of them ahead of GS reads: %llu (of %llu reads)\n", static_cast<unsigned long long>(readSkips),
                                    static_cast<unsigned long long>(reads));
+        if (framesHeldMidFrame || holdsReleased)
+            std::printf("Frames whose present was held while a synchronous read left the shown buffer mid-frame: %llu (past a "
+                        "VBlank %llu, released after 50 ms %llu)\n", static_cast<unsigned long long>(framesHeldMidFrame),
+                        static_cast<unsigned long long>(holdsPastVBlank), static_cast<unsigned long long>(holdsReleased));
         if (profile.pool) vkDestroyQueryPool(device.device, profile.pool, nullptr);
         if (readGraph) readGraph->destroy();
         for (auto& [id, t] : targets) vk::destroy(device, t.image);
@@ -3294,7 +3302,21 @@ void GsnScene::Impl::executeFinish(VkCommandBuffer command, uint32_t /*slot*/) {
     end();
     mark(command, "draws");
     // The displayed buffer, for recordMain (a list cut for a GS -> host read displays nothing).
-    if (!frame.displayed) return;
+    if (!frame.displayed) {
+        // Cut for a synchronous read (GsnScene::read) and drawn into the buffer on screen: that buffer is mid-frame, the
+        // rest of the game's frame not drawn yet (holdPresent).
+        if (reading && !midFrame && displayTarget)
+            for (const auto& cmd : frame.commands)
+                if (cmd.kind == gsn::FrameList::Command::Kind::Draw && frame.draws[cmd.index].target == displayTarget) {
+                    midFrame = true;
+                    midFrameCounted = false;
+                    midFramePastVBlank = false;
+                    midFrameSince = std::chrono::steady_clock::now();
+                    break;
+                }
+        return;
+    }
+    midFrame = false;   // (a displayed list drawn: the frame is whole again)
     ++displayedFrames;
     const uint32_t shownByGame = frame.display.target2 ? frame.display.target2 : frame.display.target1;
     const uint32_t shownBefore = displayTarget;
@@ -4210,6 +4232,28 @@ void GsnScene::slotDone(uint32_t slot) { impl->finishReadbacks(impl->readbacksIn
 void GsnScene::takeReadAnswers(std::vector<ReadAnswer>& out) {
     for (auto& a : impl->readAnswers) out.push_back(std::move(a));
     impl->readAnswers.clear();
+}
+
+bool GsnScene::holdPresent() {
+    Impl& s = *impl;
+    if (!s.midFrame) return false;
+    for (const gsn::FrameList& list : s.pending)
+        if (list.displayed) return false;   // the rest of the frame is here: this present draws it whole first
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - s.midFrameSince).count();
+    if (ms > 50.0) {   // (a screen whose frame never completes: shown as it is, counted)
+        s.midFrame = false;
+        ++s.holdsReleased;
+        return false;
+    }
+    if (ms > 1000.0 / 60.0 && !s.midFramePastVBlank) {   // the hold cost a VBlank's present
+        s.midFramePastVBlank = true;
+        ++s.holdsPastVBlank;
+    }
+    if (!s.midFrameCounted) {
+        s.midFrameCounted = true;
+        ++s.framesHeldMidFrame;
+    }
+    return true;
 }
 
 bool GsnScene::read(const gsn::ReadRequest& request, std::vector<uint8_t>& out) {

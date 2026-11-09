@@ -1078,6 +1078,7 @@ void Renderer::addNativeFrames(std::vector<gt4::gsn::FrameList>& lists) { impl->
 bool Renderer::readGsTarget(const gt4::gsn::ReadRequest& request, std::vector<uint8_t>& out) {
     return impl->gsnScene->read(request, out);
 }
+bool Renderer::holdGsPresent() { return impl->gsnScene && impl->gsnScene->holdPresent(); }
 void Renderer::abandonReadbacks() {
     if (impl->gsnScene) impl->gsnScene->abandonReadbacks();
 }
