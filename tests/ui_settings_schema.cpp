@@ -4,6 +4,7 @@
 // and the architect's save rule checked on a real settings file (lane C: save() is a no-op in session runs, so the file
 // check is here): a live set saves, a confirm set saves only when kept, a reverted confirm leaves the file byte for
 // byte.
+#include "prompt_style.h"
 #include "settings_schema.h"
 #include "temp_path.h"
 
@@ -130,6 +131,30 @@ int main() {
         check(applyClass("aspect.ratio", a) && a == ApplyClass::Restart, "aspect ratio is restart");
         check(applyClass("render.aa", a) && a == ApplyClass::Live, "anti-aliasing is live");
         check(!applyClass("display.window_width", a) && !applyClass("no.such", a), "hidden and unknown keys: no class");
+    }
+
+    // ui.prompts (M9): auto follows the input used last and the pad's type; a fixed choice wins over both (a
+    // PlayStation player under Steam Input, whose pad reports itself as an Xbox one). Values as kOptionPromptStyle.
+    {
+        check(promptStyle(UiPrompts::Auto, false, false) == PromptStyle::Xbox &&
+                  promptStyle(UiPrompts::Auto, true, false) == PromptStyle::PlayStation &&
+                  promptStyle(UiPrompts::Auto, true, true) == PromptStyle::Keyboard,
+              "auto: Xbox, PlayStation on a PlayStation pad, the keyboard when used last");
+        check(promptStyle(UiPrompts::PlayStation, false, true) == PromptStyle::PlayStation &&
+                  promptStyle(UiPrompts::Xbox, true, true) == PromptStyle::Xbox &&
+                  promptStyle(UiPrompts::Keyboard, true, false) == PromptStyle::Keyboard,
+              "a fixed choice wins");
+        check(static_cast<int>(PromptStyle::Xbox) == 0 && static_cast<int>(PromptStyle::PlayStation) == 1 &&
+                  static_cast<int>(PromptStyle::Keyboard) == 2,
+              "PromptStyle's values are kOptionPromptStyle's (runtime.h)");
+        Settings s = start;
+        check(getOption(s, "ui.prompts") == "auto" && setOption(s, "ui.prompts", "playstation").empty() &&
+                  s.uiPrompts == UiPrompts::PlayStation,
+              "ui.prompts defaults to auto and takes playstation");
+        for (Preset preset : {Preset::Original, Preset::Low, Preset::Ultra}) {
+            applyPreset(s, preset);
+            check(s.uiPrompts == UiPrompts::PlayStation, "no preset sets ui.prompts (a player's choice)");
+        }
     }
 
     // No confirm-class key is a preset member (lane C's note): savable() puts an unkept confirm value back with

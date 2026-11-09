@@ -98,7 +98,7 @@ enum Gt4LinkRecordType {
  *                     host ignores the kind (no link version change). */
 
 /* The gameplay options GT4_REC_HOST_CMD 4 carries (runtime/runtime.h GameOption): ids below GT4_GAME_OPTION_COUNT. */
-#define GT4_GAME_OPTION_COUNT 11u
+#define GT4_GAME_OPTION_COUNT 13u
 
 enum Gt4Spu2Kind { GT4_SPU2_STATE = 0, GT4_SPU2_IMAGE = 1, GT4_SPU2_RUN = 2, GT4_SPU2_TAGS = 3 };   /* SPU2_REGS' kinds */
 

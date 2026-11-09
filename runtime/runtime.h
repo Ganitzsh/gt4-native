@@ -40,10 +40,15 @@ void profile_start();
 // the settings hub (runtime/menu/menu_host.cpp; lane M, docs/modern/MENU_DESIGN.md 3.2).
 // kOptionUiPause: ui.pause, 0 gt4 (original, and before the host sends it), 1 native: the race pause shows the native
 // pause page instead of GT4's pause.strb (game_src/func_003C3820.cpp, runtime/menu/menu_host.cpp; lane M, M7).
+// kOptionCanvasWidth: the pages' canvas width in units (1080 high: 1920 at 16:9, 1440 at 4:3), from the content's
+// aspect; 0 before the host sends it (1920 then). kOptionPromptStyle: the prompts' controller, 0 Xbox, 1 PlayStation,
+// 2 keyboard (platform/ui/menu_layout.h PromptStyle; the host's ui.prompts). Both lay the settings pages out
+// (runtime/menu/menu_host.cpp; lane M, MENU_DESIGN M9).
 enum GameOption : uint32_t { kOptionAiCatchUp = 0, kOptionMirrorDetail = 1, kOptionModelDetail = 2, kOptionRaceFrames = 3, kOptionAspect = 4,
                              kOptionSceneRecords = 5, kOptionTriggerTravel = 6, kOptionSteerBand = 7,
                              kOptionHostMixer = 8, kOptionUiEntry = 9, kOptionUiPause = 10,
-                             kGameOptionCount = 11 };
+                             kOptionCanvasWidth = 11, kOptionPromptStyle = 12,
+                             kGameOptionCount = 13 };
 static_assert(kGameOptionCount == GT4_GAME_OPTION_COUNT, "the options the host sends: include/gt4/link/protocol.h");
 void set_game_option(uint32_t id, uint32_t value);   // GT4_REC_HOST_CMD 4 (runtime/link.cpp)
 

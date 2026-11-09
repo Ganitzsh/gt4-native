@@ -17,6 +17,10 @@ void uiOptions(std::vector<Option>& o) {
         "GT4's order: Continue, Retry where the race allows it, Exit, Screen (GT4's brightness and contrast), then "
         "Settings (from M4), with the race held as GT4's pause holds it. Until the host draws the settings pages "
         "(MENU_DESIGN M9), native is taken only from --set, never from this file."));
+    o.push_back(enumOption("ui.prompts", &Settings::uiPrompts, {"auto", "xbox", "playstation", "keyboard"},
+        "The button names the settings pages show. auto = the controller in use: the keyboard's keys when it was "
+        "used last, else PlayStation's names on a PlayStation pad and Xbox's on others. Under Steam Input every pad "
+        "reports itself as an Xbox one, so a PlayStation player there picks playstation."));
 }
 
 }  // namespace gt4::settings_table

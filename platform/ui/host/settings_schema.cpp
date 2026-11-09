@@ -108,6 +108,8 @@ const std::vector<PageSpec> &pages() {
             {"post.dither", "Dither", kLive},
         }},
         {"controls", "Controls", "tab.controls", false, {
+            {"ui.prompts", "Button prompts", kLive, 0, false, "",
+             "auto=Controller in use|xbox=Xbox|playstation=PlayStation|keyboard=Keyboard"},
             {"input.response", "Steering and pedal response", kLive},
             {"input.trigger_travel", "Trigger travel", kLive},
             header("Steering"),

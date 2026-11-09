@@ -57,6 +57,8 @@ enum class UiEntry : uint8_t { Hotkey, Integrated };
 // The race pause (ui.pause, settings_ui.cpp; MENU_DESIGN 3.2 point 4, M7): gt4 = GT4's own pause.strb, native = the
 // native pause page (the game's copy of RacePause::update, game_src/func_003C3820.cpp).
 enum class UiPause : uint8_t { Gt4, Native };
+// The pages' button prompts (ui.prompts, settings_ui.cpp; MENU_DESIGN M9): auto = the controller in use.
+enum class UiPrompts : uint8_t { Auto, Xbox, PlayStation, Keyboard };
 // Whether the host draws the settings pages (MENU_DESIGN M9 sets it): until then ui.entry = integrated and ui.pause =
 // native are taken only from --set (acceptance runs), never from the settings file, and are listed as unused
 // (settings_ui.cpp).
@@ -150,6 +152,7 @@ struct Settings {
 
     // [ui] (settings_ui.cpp, lane M; set by every preset, but not part of what makes one: MENU_DESIGN 3.8)
     UiEntry uiEntry = UiEntry::Hotkey;   // sent to the game (kOptionUiEntry); integrated in low to ultra from M9
+    UiPrompts uiPrompts = UiPrompts::Auto;   // sent to the game as kOptionPromptStyle (platform/ui/host/prompt_style.h)
     UiPause uiPause = UiPause::Gt4;      // sent to the game (kOptionUiPause); native in low to ultra from M9
 
     // [input] (settings_input.cpp; not part of the graphics presets but for input.response)

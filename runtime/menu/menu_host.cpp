@@ -309,7 +309,15 @@ void send_set(Page &p, uint32_t kind, const std::string &key, const std::string 
 void send_list(Page &p, bool empty) {
     ui::DrawList list;
     if (!empty) {
-        list = ui::layout(p.menu, ui::LayoutOptions());
+        // The host's layout inputs (M9): the content's canvas width, and the controller in use for the prompts.
+        ui::LayoutOptions options;
+        const int width = gt4_game_option(static_cast<int>(kOptionCanvasWidth));
+        if (width >= 1000 && width <= 6000) options.canvasWidth = static_cast<float>(width);
+        const int style = gt4_game_option(static_cast<int>(kOptionPromptStyle));
+        options.prompts = style == 1 ? ui::PromptStyle::PlayStation
+                        : style == 2 ? ui::PromptStyle::Keyboard
+                                     : ui::PromptStyle::Xbox;
+        list = ui::layout(p.menu, options);
         list.flags = ui::kDimGame | ui::kBlockHud;
     }
     std::vector<uint8_t> bytes;

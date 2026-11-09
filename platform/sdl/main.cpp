@@ -21,6 +21,7 @@
 #include "session.h"
 #include "settings.h"
 #include "settings_menu.h"
+#include "prompt_style.h"
 #include "settings_schema.h"
 #include "test_scene.h"
 
@@ -826,6 +827,7 @@ int run(const Options& options) {
     gt4::SettingsMenu menu(gsMode);
     menu.setStartValues(settings);
     bool padHeldBack = false;
+    bool keyboardLast = false;   // the pages' prompts follow the input used last (ui.prompts = auto, M9)
     gt4::ChordGuard chordGuard;   // Select + Start, the menu's chord: neither reaches the game (chord_guard.h)
     // The dump key (PLAN.md C6b, the night bands): L3 + R3 on a pad (DumpChord), Ctrl + F12 on a keyboard. Each press
     // writes dumps/<date-time>/ beside the host: the presented frame and the next (PNG), the frame's GS draw list and
@@ -1046,6 +1048,7 @@ int run(const Options& options) {
                 pads.removed(event.gdevice.which);
                 break;
             case SDL_EVENT_GAMEPAD_BUTTON_DOWN: {
+                keyboardLast = false;
                 SDL_Gamepad* gamepad = pads.gamepad(0);
                 if (!menuEnabled || !gamepad || SDL_GetGamepadID(gamepad) != event.gbutton.which) break;
                 const auto button = static_cast<SDL_GamepadButton>(event.gbutton.button);
@@ -1062,12 +1065,22 @@ int run(const Options& options) {
             case SDL_EVENT_GAMEPAD_BUTTON_UP:
                 if (menuHeld == static_cast<SDL_GamepadButton>(event.gbutton.button)) menuHeld = SDL_GAMEPAD_BUTTON_INVALID;
                 break;
+            case SDL_EVENT_GAMEPAD_AXIS_MOTION:
+                // A stick or trigger past half counts as the pad for the prompts (lane C: a player steering only)
+                if (event.gaxis.value > 16384 || event.gaxis.value < -16384) keyboardLast = false;
+                break;
             case SDL_EVENT_KEY_DOWN:
                 // the dump key (F12 alone is Steam's screenshot)
                 if (event.key.key == SDLK_F12 && (event.key.mod & SDL_KMOD_CTRL)) {
                     if (!event.key.repeat) dumpWanted = true;
                     break;
                 }
+                // The prompts follow the keyboard only for keys that reach the game or a page: not the host's F-key
+                // toggles, Alt + Enter, Ctrl + F12's dump or a modifier alone (lane C)
+                if (!(event.key.key >= SDLK_F1 && event.key.key <= SDLK_F12) &&
+                    !(event.key.mod & (SDL_KMOD_ALT | SDL_KMOD_CTRL | SDL_KMOD_GUI)) &&
+                    !(event.key.key >= SDLK_LCTRL && event.key.key <= SDLK_RGUI))
+                    keyboardLast = true;
                 if (event.key.key == SDLK_ESCAPE && menuEnabled) {
                     if (!event.key.repeat) openMenu(!menu.isOpen());
                     break;
@@ -1296,6 +1309,8 @@ int run(const Options& options) {
                     const float a = settings.aspect == gt4::AspectRatio::Window ? (e.height ? float(e.width) / float(e.height) : 0.0f)
                                                                                : gt4::aspectValue(settings.aspect);
                     gs->setGameOption(4, a > 0.0f ? static_cast<uint32_t>(a * 1000.0f + 0.5f) : 0u);
+                    // kOptionCanvasWidth: the pages' canvas for that shape, 1080 units high (MENU_DESIGN 3.6, M9)
+                    gs->setGameOption(11, a > 0.0f ? static_cast<uint32_t>(std::lround(1080.0f * a)) : 0u);
                 }
                 gs->setGameOption(6, static_cast<uint32_t>(settings.triggerTravel)); // kOptionTriggerTravel
                 // kOptionSteerBand: GT4's steering band, compensated game-side while a race runs (runtime/pad_steer.h); per
@@ -1306,6 +1321,14 @@ int run(const Options& options) {
                 gs->setGameOption(8, settings.audioMixer == gt4::AudioMixer::Host ? 1u : 0u);
                 gs->setGameOption(9, static_cast<uint32_t>(settings.uiEntry));   // kOptionUiEntry (MENU_DESIGN 3.2)
                 gs->setGameOption(10, static_cast<uint32_t>(settings.uiPause));  // kOptionUiPause (MENU_DESIGN M7)
+                {   // kOptionPromptStyle: the pages' prompts (ui.prompts; sent on a change only, as every option)
+                    SDL_Gamepad* pad = pads.gamepad(0);
+                    const SDL_GamepadType type = pad ? SDL_GetGamepadType(pad) : SDL_GAMEPAD_TYPE_UNKNOWN;
+                    const bool playstation = type == SDL_GAMEPAD_TYPE_PS3 || type == SDL_GAMEPAD_TYPE_PS4 ||
+                                             type == SDL_GAMEPAD_TYPE_PS5;
+                    gs->setGameOption(12, static_cast<uint32_t>(gt4::ui::promptStyle(settings.uiPrompts, playstation,
+                                                                                     keyboardLast)));
+                }
                 sendPads(false);
                 // The pads' motors and triggers: GT4's own rumble (its Options > Vibration decides whether it sends any;
                 // D2) and, with input.haptics = physics, what the player's car does (D14, platform/input/haptics.h),
