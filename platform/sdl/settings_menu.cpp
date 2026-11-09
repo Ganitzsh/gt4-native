@@ -91,14 +91,16 @@ std::vector<Item> buildItems(bool game) {
         {{"bilinear", "Bilinear"}, {"bicubic", "Bicubic"}, {"lanczos", "Lanczos"}, {"fsr1", "AMD FSR 1"},
          {"fsr2", "AMD FSR 2"}},
         game ? "From the render to the output resolution. FSR 2 needs motion vectors, which the game's frames "
-               "do not have yet: it runs as FSR 1."
+               "do not have yet: it upscales as FSR 1, and with render.gs = native it also turns on the native "
+               "renderer's own temporal anti-aliasing."
              : "From the render to the output resolution. FSR 2 is temporal and also anti-aliases."));
     items.push_back(step("Sharpening", "render.sharpness", 0.05f, 0.0f, 1.0f, true,
         "AMD RCAS contrast-adaptive sharpening after upscaling."));
     items.push_back(choice("Anti-aliasing", "render.aa",
         {{"off", "Off"}, {"fxaa", "FXAA"}, {"smaa", "SMAA"}, {"smaa_t2x", "SMAA T2x"}, {"taa", "TAA"}},
-        game ? "Post-process anti-aliasing. Without motion vectors (the game's frames), TAA and SMAA T2x run "
-               "as SMAA."
+        game ? "Post-process anti-aliasing. The game's frames have no motion vectors: SMAA T2x runs as SMAA, "
+               "and so does TAA with render.gs = original; with render.gs = native, TAA is the native renderer's "
+               "own temporal anti-aliasing (and FSR 2 turns it on too)."
              : "Post-process anti-aliasing (ignored with FSR 2, which anti-aliases itself)."));
     items.push_back(choice("Anisotropic filtering", "texture.anisotropy",
         {{"1", "Off"}, {"2", "2x"}, {"4", "4x"}, {"8", "8x"}, {"16", "16x"}},
