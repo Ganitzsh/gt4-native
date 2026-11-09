@@ -198,11 +198,12 @@ frames first. Other places the port looks, and how matching works: [docs/TEXTURE
 Report problems on the [issue tracker](https://github.com/Ganitzsh/gt4-native/issues) with `game.log` and `host.log`
 from the GT4-Native folder.
 
-To show what the screen looks like when something goes wrong, press **L3 + R3** together (both sticks clicked, on
-pad 1 in a game) and hold them for a quarter second, or press **Ctrl + F12**: the host writes `dumps/<date-time>/` in its folder with that frame and the next as
-PNG, the frame's drawing commands (`draws.txt`), the graphics memory (`gs_memory.bin`), your settings and the
-display's details (`info.txt`). A one-line message on screen confirms it. The frames and the memory are pictures from
-your own game: keep them to yourself, or share only the folder with whoever is fixing the problem.
+To show what the screen looks like when something goes wrong, press **L3 + R3** together (both sticks clicked, on pad
+1 in a game) and hold them for a quarter second, or press **Ctrl + F12**: the host writes `dumps/<date-time>/` in its
+folder with that frame and the next as PNG, the frame's drawing commands (`draws.txt`), the graphics memory
+(`gs_memory.bin`), your settings and the display's details (`info.txt`). A one-line message on screen confirms it. The
+frames and the memory are pictures from your own game: keep them to yourself, or share only the folder with whoever is
+fixing the problem.
 
 ## Versions
 
