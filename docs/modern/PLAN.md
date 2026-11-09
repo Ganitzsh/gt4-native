@@ -709,9 +709,10 @@ vectors kept (`gsn_seam_keep.comp`), the seam (`gsn_seam.comp`) and the display 
 race_grid43 and race_boot. With it on over `race_pe2_prog` at `ultra`, there are 0 validation messages, and all 1,024
 progressive lists chain to a Light (3,255 fields-mode lists, 21 without an anchor, the cap never hit). Open before
 part 4: the bumper view's near-road motion vectors are wrong (a constant band with the camera still), to be fixed in
-the scene stage; and lane A's two review points on the anchor, each with a test in `tests/seam_anchor.cpp`: the
-made-target search counts a grade's destination, not only draws; and at each step back, a Light counts only if no
-covering pass sampling a target wrote that source after it. The diagnostics are on origin as `debug/b-b16c-diag`.
+the scene stage. Lane A's two review points on the anchor are fixed (3e0bd81, b50174f), each with a test in
+`tests/seam_anchor.cpp`: the made-target search counts a grade's destination, not only draws; and at each step back, a
+Light counts only if no covering pass sampling a target wrote that source after it, glows in between not hiding that
+pass; `ORIG` identical and the seam's run unchanged after them. The diagnostics are on origin as `debug/b-b16c-diag`.
 
 **B17: FSR 3.1 (M; lane C, moved from lane B on 2026-11-08, lane B reviewing).** A backend of B16's interface:
 FSR 3.1 only, from FidelityFX SDK v1.1.4 (MIT), vendored unmodified with our glslang and our own Vulkan glue, at
