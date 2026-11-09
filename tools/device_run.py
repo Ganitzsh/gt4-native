@@ -713,10 +713,32 @@ class Device:
         p = os.path.join(self.package, "game.log")
         return p, (os.path.getsize(p) if os.path.isfile(p) else 0)
 
+    def live_game_args(self):
+        """The host's arguments that start the package's game in a session: with --session-dir the host doesn't
+        look for a packaged game itself (main.cpp's usePackagedGame: a session is the test scene unless --game says
+        otherwise). The game folder's files are passed as the game sees them: under Proton's Wine (Linux) as Z:\\
+        paths, as the host's gamePathArgument makes them. (None, why) when the package lacks one."""
+        game_dir = os.path.join(self.package, "game")
+        isos = sorted(glob.glob(os.path.join(game_dir, "*.iso")))
+        elf = os.path.join(game_dir, "CORE.GT4.elf")
+        exe = os.path.join(self.package, "gt4_game.exe")
+        missing = [n for n, ok in (("an .iso in game/", isos), ("game/CORE.GT4.elf (made at the first start)",
+                                                                 os.path.isfile(elf)),
+                                   ("gt4_game.exe", os.path.isfile(exe))) if not ok]
+        if missing:
+            return None, "the package lacks " + ", ".join(missing)
+        wine = (lambda p: p) if os.name == "nt" else (lambda p: "Z:" + p.replace("/", "\\"))
+        log = os.path.join(self.package, "game.log")
+        return ["--game", exe, "--game-args",
+                f'--elf "{wine(elf)}" --iso "{wine(isos[0])}" --log "{wine(log)}"'], ""
+
     def item_load_times(self):
         route_file = os.path.join(ROOT, ROUTE)
         if not os.path.isfile(route_file):
             return {"status": "error", "note": f"no route {route_file}"}
+        live, why = self.live_game_args()
+        if not live:
+            return {"status": "error", "note": why}
         saves = self.save_copy("saves-pe-race2")
         session = os.path.join(self.work, "load_session")
         shutil.rmtree(session, ignore_errors=True)
@@ -728,7 +750,7 @@ class Device:
         glog, offset = self.game_log()
         env = dict(os.environ, GT4_LOAD_STATS="1")
         cmd = [self.launcher, "--headless", "--no-audio", "--size", "640x448", "--session-dir", session, "--saves",
-               saves, "--preset", "original"] + FIXED
+               saves, "--preset", "original"] + FIXED + live
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=self.package, timeout=1800,
                                errors="replace")
