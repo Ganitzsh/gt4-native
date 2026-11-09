@@ -223,11 +223,30 @@ a screenshot after each tap (below: the course's length line), not by counting p
 
 ## Route 5 at night (ticket N0)
 
-Three captures on S.S. Route 5 at night show the three night artefacts of ARCHITECTURE.md section 8: **sections**
-(the brightness step at section boundaries), **lamps** (the lamps that throw bands on the road), **warning**
-(the blinking yellow warning lights tinting the frame). 300 to 600 frames each, in `build/caps/`, each with a
-notes file beside it (`r5_<name>.notes.json`, the format of `tools/frame_metrics.py`) giving the frame of every
-section crossing and blink. Re-recorded with scene records (`GT4_HOST_RECORD_SCENE=1`) after A3 and R7.
+N0 planned three captures for the three night artefacts of ARCHITECTURE.md section 8: **sections** (the
+brightness step at section boundaries), **lamps** (the lamps that throw bands on the road), **warning** (the
+blinking yellow warning lights tinting the frame). The names `r5_lamps` and `r5_warning` were never recorded: R11
+found no bands in any capture, and N4 worked on lane A's captures. The night references (2026-11-07 to 09) are
+these, each recorded in B-spec (the game drives) from a fresh copy of the approved save `saves-ss-r5`:
+
+- `r5_ss_ab.cap` with `r5_ss_ab.notes.json`: S.S. Route 5 Reverse, Professional Events > Race of NA Sports race 4;
+  3,600 frames; game 80177ce8, host e8fd29e. The sections capture (crossings at frames 507, 1049, 2514, 2859); R11
+  and F2b step 0 use it.
+- `lap_ssr5r.cap`: the same race, a full lap plus the start stretch; 10,200 frames; game and host a75a6c2, scene
+  records. The lamps capture in practice: N3's proof and its step 1 acceptance.
+- `lap_csr5.cap`: Clubman Stage Route 5, Professional Events > Clubman Cup race 4; 9,000 frames; a75a6c2, scene
+  records. N3's second layout and F2b's second course.
+- `a5b_r5.cap` (lane A's): S.S. Route 5 Reverse, the same race; 1,200 VBlanks after 300 of driving, scene records,
+  the A5b game (flare markers around the flare pass). The warning capture: the pit entry's warning lamps blink
+  through it; N4 uses it. `glow_r5.cap` (the A7 step 1a game) is the same stretch.
+
+The routes above start from GT mode's map: Professional Events, the event, regulations OK, the race, Entry, Don't
+Clear, then B-spec. C.S. Route 5 Reverse is Beginner Events > Sunday Cup race 4 (or Reverse at step 10 below); S.S.
+Route 5 forward is in the Arcade City row. A replay's first 300 to 500 frames show textures not yet uploaded again
+(a mid-session recording); counts leave them out.
+
+The Arcade route below is the one the first, throttle-only sections captures used (`r5_sections*.cap`, no scene
+records; not references).
 
 ### Game and save
 
@@ -273,5 +292,5 @@ The recording starts at the VBlank at which `<session>/rec_go` appears (the host
 Driving: hold Cross (the accelerator). With automatic and the aids the car rides along the walls but keeps going:
 in 20 s it covers about a third of the lap.
 
-The frames of each capture's section crossings, lamp bands and blinks follow in the notes files when the three
-captures are recorded.
+Section crossings are in `r5_ss_ab.notes.json`; no capture shows lamp bands. `a5b_r5.cap` has no notes file: its
+flare markers bracket each frame the warning lamps' flares draw.
