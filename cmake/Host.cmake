@@ -489,6 +489,7 @@ add_executable(gt4_host
     platform/sdl/recorder.cpp
     platform/sdl/session.cpp
     platform/sdl/pad_devices.cpp
+    platform/sdl/xinput_direct.cpp
     platform/sdl/wheel_haptics.cpp
     platform/sdl/device_settings.cpp
     ${GT4_SETTINGS_SOURCES}

@@ -48,11 +48,13 @@ public:
     // one) and the physics' haptics (D14), the larger per motor; sent when they change and every second while on
     // (SDL's rumble lasts as long as asked). Triggers: an Xbox pad's impulse triggers, or a DualSense's adaptive ones.
     void feel(int port, uint32_t gt4Rumble, const input::HapticsOut& haptics, uint64_t nowMs);
-    // host.log says, per pad: at its open, SDL's rumble capabilities and a zero-strength call's result; the first time
-    // GT4's rumble and the physics' haptics each turn its motors on, with SDL's result; the first failure.
-    // The rumble test (the Odin's report, 2026-11-09): every pad's low-frequency motor for 0.5 s, then its
-    // high-frequency one, each result logged. rumbleTest starts it (`why`: what asked, for the log); rumbleTestStep,
-    // called every main-loop pass, runs it; feel() leaves the motors to it meanwhile.
+    // host.log says, per pad: at its open, the driver SDL opened it through, SDL's rumble capabilities and a
+    // zero-strength call's result; the first time GT4's rumble and the physics' haptics each turn its motors on, with
+    // SDL's result; the first failure; and every 30 s while anything is asked, the strongest asks and sends.
+    // The rumble test (the Odin's report, 2026-11-09): every pad's motors in numbered pulses (pad_devices.cpp's
+    // kTestSteps: each motor through SDL for 1.5 s, then on Windows both through XInputSetState itself), each result
+    // logged with its time. rumbleTest starts it (`why`: what asked, for the log); rumbleTestStep, called every
+    // main-loop pass, runs it; feel() leaves the motors to it meanwhile.
     void rumbleTest(uint64_t nowMs, const char* why);
     void rumbleTestStep(uint64_t nowMs);
     // The settings `port` runs with: the globals with its devices' own (device_settings.h, gated by the globals'
@@ -114,7 +116,8 @@ private:
             float physicsLow = 0.0f, physicsHigh = 0.0f;
             uint16_t low = 0, high = 0;
         } asked;
-        int testPhase = 2;   // the rumble test: -1 to start, 0 the low motor, 1 the high one, 2 done
+        static constexpr int kTestDone = 100;
+        int testPhase = kTestDone;   // the rumble test: -1 to start, then its last step taken (kTestSteps), or done
     };
     void take(SDL_Gamepad* pad, int port);
     uint64_t testAt_ = 0;   // the rumble test's start
@@ -141,9 +144,10 @@ private:
     void watchCapture(const input::Snapshot& s, bool keyboard, const std::string& key);
 };
 
-// --rumble-test: every gamepad SDL finds (within 2 s) opened, its rumble capabilities logged, its low-frequency motor
-// run for 0.5 s then its high-frequency one, each result logged, and closed. SDL's gamepad subsystem must be up; no
-// game, no window. Exit status: 0 every pulse ok, 1 a pad failed, 3 no gamepad found.
+// --rumble-test: every gamepad SDL finds (within 2 s) opened, its rumble capabilities logged, and the test's pulses
+// run on it (pad_devices.cpp's kTestSteps: each motor through SDL for 1.5 s, then on Windows both through
+// XInputSetState itself), each result logged with its time, and closed. SDL's gamepad subsystem must be up; no game,
+// no window. Exit status: 0 every SDL pulse ok, 1 a pad failed, 3 no gamepad found (the direct pulse is logged only).
 int rumbleTestOnly();
 
 }  // namespace gt4
