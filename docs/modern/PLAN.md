@@ -671,6 +671,16 @@ motion (that race, and `menus_boot`'s title window with the field-blended menus)
 against the GS scene's own resolve (a cut on `race_pe2_prog`), run at `ultra` as shipped, scene records off, so it
 measures what a player sees: if FSR 2 ghosts there and the resolve doesn't, B16c needs a cut signal that doesn't need
 records; `PERF`; `PRESETS` identical except where `upscaler = fsr2`, by design.
+Progress (lane B, 2026-11-09): parts 1 and 3, the anchor (`findSeamAnchor`, with its unit test), the Light's motion
+vectors kept (`gsn_seam_keep.comp`), the seam (`gsn_seam.comp`) and the display pass's seam variant
+(`gsn_display.frag`, `GSN_SEAM`), are on main (eecb88f) behind `GsnScene::setDisplaySeam`, off by default
+(`GT4_B16C_SEAM=1` to test), and nothing calls them until part 4. With the seam off, `ORIG` is identical on race7,
+race_grid43 and race_boot. With it on over `race_pe2_prog` at `ultra`, there are 0 validation messages, and all 1,024
+progressive lists chain to a Light (3,255 fields-mode lists, 21 without an anchor, the cap never hit). Open before
+part 4: the bumper view's near-road motion vectors are wrong (a constant band with the camera still), to be fixed in
+the scene stage; and lane A's two review points on the anchor, each with a test in `tests/seam_anchor.cpp`: the
+made-target search counts a grade's destination, not only draws; and at each step back, a Light counts only if no
+covering pass sampling a target wrote that source after it. The diagnostics are on origin as `debug/b-b16c-diag`.
 
 **B17: FSR 3.1 (M; lane C, moved from lane B on 2026-11-08, lane B reviewing).** A backend of B16's interface:
 FSR 3.1 only, from FidelityFX SDK v1.1.4 (MIT), vendored unmodified with our glslang and our own Vulkan glue, at
