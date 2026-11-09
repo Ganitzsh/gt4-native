@@ -235,6 +235,7 @@ struct GsnScene::Impl {
     std::vector<uint32_t> skipAt;
     uint64_t n3ItemsSkipped = 0, n3Frames = 0, n3OverParity = 0;   // n3OverParity: B7 spans a skip left undrawn
     uint64_t n3ItemsSeen = 0;   // items of main views on frames that pass the gate (the verdicts' denominator)
+    uint64_t n3Misaligned = 0;  // views whose skip list isn't one per material (ignored: it's read by index)
     void planSkips();
     std::unordered_map<uint32_t, vk::Pipeline> parityPipelines;
     uint64_t paritySpansOutside = 0;   // spans not inside their draw's vertices (drawn on the GS path; should be 0)
@@ -621,6 +622,9 @@ struct GsnScene::Impl {
                         static_cast<unsigned long long>(n3Frames), static_cast<unsigned long long>(n3ItemsSeen),
                         static_cast<unsigned long long>(n3ItemsSkipped), static_cast<unsigned long long>(n3OverParity),
                         std::getenv("GT4_N3_SKIP_TEST") ? " (GT4_N3_SKIP_TEST)" : "");
+        if (n3Misaligned)
+            std::printf("N3: %llu views ignored, their skip list not one per material\n",
+                        static_cast<unsigned long long>(n3Misaligned));
         if (nightSplitSkipped)
             std::printf("Night relight: %llu Lights without our lamps, their target holding more than one main view "
                         "(split screen: one light pass per half not yet)\n",
@@ -1447,6 +1451,10 @@ void GsnScene::Impl::planSkips() {
         mainView = true;
         for (const scene::InstanceIds& ids : view.ids) n3ItemsSeen += ids.mesh ? ids.materialCount : 0;
         if (view.skip.empty() && !test) continue;
+        if (!view.skip.empty() && view.skip.size() != view.materials.size()) {   // (one per material, or none at all)
+            ++n3Misaligned;
+            continue;
+        }
         for (const scene::InstanceIds& ids : view.ids) {
             if (!ids.mesh) continue;
             for (uint32_t j = 0; j < ids.materialCount; ++j) {
