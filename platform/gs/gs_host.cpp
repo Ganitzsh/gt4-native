@@ -253,6 +253,22 @@ public:
                     std::fprintf(stderr, "Dump: VBlank %u: could not write%s in %s\n", count, failed.c_str(), dir.c_str());
             }
         }
+        {   // DEBUG (R7, never for main): GT4_MEM_DUMP_AT=VBLANK writes the front end's GS memory at that VBlank, and each
+            // drawn target with the pages it still owns, into the working folder
+            static const long memAt = std::getenv("GT4_MEM_DUMP_AT") ? std::strtol(std::getenv("GT4_MEM_DUMP_AT"), nullptr, 10) : -1;
+            if (native && static_cast<long>(count) == memAt) {
+                std::ofstream out("gs_memory_" + std::to_string(count) + ".bin", std::ios::binary);
+                out.write(reinterpret_cast<const char*>(native->memory().data()), gsn::GsMemory::kBytes);
+                std::ofstream owners("gs_owners_" + std::to_string(count) + ".txt");
+                for (const gsn::GsFrontend::DrawnTarget& d : native->drawnTargets()) {
+                    owners << "bp " << std::hex << d.bp << " bw " << std::dec << d.bw << " psm " << std::hex << d.read.psm << " read "
+                           << std::dec << d.read.width << "x" << d.read.height << " pages";
+                    for (const uint16_t p : d.pages) owners << ' ' << p;
+                    owners << '\n';
+                }
+                std::printf("DEBUG: GS memory and page owners at VBlank %u written\n", count);
+            }
+        }
         // GT4_GSN_AT=FROM[,TO] (debugging): the per-frame lines below only for those VBlanks.
         static const std::pair<long, long> statsAt = [] {
             long from = 0, to = -1;
