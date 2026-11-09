@@ -289,8 +289,12 @@ void main() {
     const float r = 1.0 / inW;
     const vec4 colour = homogeneous ? inColourW * r : inColour;
 #endif
-    const vec3 stqIn = homogeneous ? inStqW * r : inStq;
-    const vec4 cv = floor(colour * 255.0 + 0.5);
+    vec3 stqIn = homogeneous ? inStqW * r : inStq;
+    // DEBUG (Odin strips, never for main): the interpolated colour and STQ rounded as 16-bit floats, as a GPU that
+    // interpolates varyings at half precision would leave them
+    const vec4 colourHalf = vec4(unpackHalf2x16(packHalf2x16(colour.xy)), unpackHalf2x16(packHalf2x16(colour.zw)));
+    stqIn = vec3(unpackHalf2x16(packHalf2x16(stqIn.xy)), unpackHalf2x16(packHalf2x16(vec2(stqIn.z, 0.0))).x);
+    const vec4 cv = floor(colourHalf * 255.0 + 0.5);
     vec4 c = cv;
     if ((draw.flags & kTextured) != 0u) {
         const vec3 stq = atGsPoint(stqIn);
