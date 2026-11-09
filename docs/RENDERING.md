@@ -22,7 +22,7 @@ build\host-windows-Release\gt4_host.exe    :: interactive window (keys below); E
 gt4_host --headless --size 2560x1440 --frames 300 --preset ultra --capture build\captures\ultra.ppm
 gt4_host --list-gpus | --list-displays | --list-options | --help
 py tools\host_session.py run --exe build\host-windows-Release\gt4_host.exe --host-arg=--headless ^
-   --script tests\scenarios\features.json --no-audio      :: one capture per feature, HTML report
+   --script tests\scenarios\features.json --no-audio --frame-locked   :: one capture per feature, HTML report
 ```
 
 - **Headless** (`--headless`): the whole pipeline renders into an offscreen image of `--size WxH` (default:
@@ -40,6 +40,11 @@ py tools\host_session.py run --exe build\host-windows-Release\gt4_host.exe --hos
   session 0. `tests/scenarios/controller.json` is the input/resize/audio diagnostic (`--verify-diagnostics`);
   `tests/scenarios/features.json` captures every feature for before/after comparison.
 - Headless runs and sessions advance exactly one tick per frame (`--fixed-step`), so captures are reproducible.
+  A script's commands go in at their `at` times, though, so how many frames fall between two of them depends on
+  how fast the host draws, and temporal effects (TAA, FSR 2, auto exposure) differ with it. `--frame-locked` queues
+  every command before the host starts and runs them back to back, separated only by the script's own `wait` and
+  `vwait`: the same frames on every run, whatever the machine's load. Use it for before/after comparisons. The
+  readout (`debug.overlay`) leaves out the GPU's time in fixed-step runs for the same reason.
 - **Validation**: set `VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation`. Messages are printed and make a session
   report fail. 53 settings combinations (every AA mode, upscaler, quality mode, MSAA count, effect tier,
   tonemapper, aspect ratio and preset) run validation-clean on the RX 7900 XTX.

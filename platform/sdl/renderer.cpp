@@ -792,7 +792,12 @@ struct Renderer::Impl {
              << " mb " << gt4::name(settings.motionBlur) << "\nshadows " << gt4::name(settings.shadows) << " refl "
              << gt4::name(settings.reflections) << " fog " << gt4::name(settings.skyFog) << "  sharp " << settings.sharpness
              << "\nGPU " << info.name;
-        if (gpuMs > 0.0) { char ms[32]; std::snprintf(ms, sizeof(ms), "  %.2f ms", gpuMs); text << ms; }
+        // (a fixed-step run leaves the GPU's time out, so its captures are the same on every run: PLAN.md PRESETS)
+        if (gpuMs > 0.0 && !fixedClock) {
+            char ms[32];
+            std::snprintf(ms, sizeof(ms), "  %.2f ms", gpuMs);
+            text << ms;
+        }
         if (!status.empty()) text << "\n" << status;
         const float x = static_cast<float>(content.offset.x) + 8.0f * scale;
         const float y = static_cast<float>(content.offset.y) + 72.0f * scale;

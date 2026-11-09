@@ -196,12 +196,26 @@ def run(args):
                 return subprocess.check_output(['wslpath', '-w', str(path)], text=True).strip()
             command = [powershell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                        windows(ROOT / 'tools/host_windows.ps1'), '-Executable', windows(executable),
-                       '-Session', native_directory, '-TimeoutSeconds', str(int(max((e['at'] for e in plan), default=0) + 45))]
+                       '-Session', native_directory, '-TimeoutSeconds',
+                       str(int(args.timeout) if args.frame_locked
+                           else int(max((e['at'] for e in plan), default=0) + 45))]
             if args.no_audio:
                 command.append('-NoAudio')
             if host_args:
                 command += ['-Extra', ' '.join(host_args)]
     (directory / 'script.json').write_text(json.dumps(plan, indent=2) + '\n', encoding='utf-8')
+    if args.frame_locked:
+        # Every command queued before the host starts, in the script's order (names that sort before any send()'s),
+        # then quit: the session runs them back to back, so only the script's own waits ('wait N', 'vwait N') come
+        # between them and a run gives the same frames whatever the machine's load. Without it the commands go in at
+        # their 'at' times, and how many frames fall between two of them depends on how fast the host draws.
+        pending = directory / 'commands'
+        pending.mkdir(parents=True, exist_ok=True)
+        locked = [e['command'] for e in plan]
+        if 'quit' not in locked:
+            locked.append('quit')
+        for index, text in enumerate(locked):
+            (pending / f'{index:020d}-locked.cmd').write_text(text + '\n', encoding='utf-8')
     print(f'Session: {directory}', flush=True)
     environment = dict(os.environ)
     if os.name != 'nt' and executable.suffix.lower() != '.exe':
@@ -221,16 +235,16 @@ def run(args):
                     raise RuntimeError('Native app failed to initialize; see process.log')
                 time.sleep(0.01)
             started = time.monotonic()
-            for event in plan:
+            for event in [] if args.frame_locked else plan:
                 while time.monotonic() - started < event['at']:
                     if process.poll() is not None:
                         raise RuntimeError('Native app exited before script completion')
                     time.sleep(0.005)
                 send(directory, event['command'])
-            if not any(e['command'] == 'quit' for e in plan):
+            if not args.frame_locked and not any(e['command'] == 'quit' for e in plan):
                 time.sleep(0.25)
                 send(directory, 'quit')
-            code = process.wait(timeout=45)
+            code = process.wait(timeout=args.timeout if args.frame_locked else 45)
             if code:
                 raise RuntimeError(f'Native app exited with code {code}; see process.log')
         finally:
@@ -299,6 +313,18 @@ def main():
     launch.add_argument('--script', type=Path)
     launch.add_argument('--no-audio', action='store_true')
     launch.add_argument('--verify-diagnostics', action='store_true')
+    launch.add_argument('--frame-locked', action='store_true',
+                        help="queue the script's commands before the host starts and run them back to back, "
+                             "ignoring their 'at' times: the same frames on every run (before/after comparisons). "
+                             "For scripts whose timing is in wait / vwait: wall-clock gaps (a tone's length, a menu "
+                             "animating on time) are dropped")
+    def seconds(text):
+        value = float(text)
+        if not value > 0:   # (0, a negative or NaN would time the run out at once)
+            raise argparse.ArgumentTypeError('must be a positive number of seconds')
+        return value
+    launch.add_argument('--timeout', type=seconds, default=600.0,
+                        help='--frame-locked: seconds the whole run may take before it fails (default 600)')
     launch.add_argument('--host-arg', action='append', metavar='ARG',
                         help='extra gt4_host argument, repeatable; use the = form: --host-arg=--headless')
     control = commands.add_parser('send', help='Send a command to an active session')
