@@ -857,6 +857,12 @@ struct GsHost::Impl {
                     // (with the drawn targets' pixels from the GPU: what is sampled later without being drawn again)
                     if (const size_t drawn = target->readVramWithTargets(vram.data()))
                         std::printf("GS: recording from here: %zu drawn targets read back from the GPU into the state\n", drawn);
+                    if (std::getenv("GT4_MEM_DUMP_REC")) {   // DEBUG (B25 step 0, never for main): the state's memory as is
+                        std::ofstream out("gs_memeff_" + std::to_string(recorder->vsyncs) + ".bin", std::ios::binary);
+                        out.write(reinterpret_cast<const char*>(vram.data()), static_cast<std::streamsize>(vram.size()));
+                        std::printf("DEBUG: the recording's GS memory at VBlank %llu written\n",
+                                    static_cast<unsigned long long>(recorder->vsyncs));
+                    }
                     const std::vector<uint8_t> state = stream->saveState(vram.data());
                     recorder->out->write(GT4_REC_STATE, state.data(), static_cast<uint32_t>(state.size()));
                     // the set upload contents the runtime counts on the host keeping (gfx::kDataKeep), oldest first
