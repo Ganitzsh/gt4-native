@@ -82,8 +82,15 @@ constexpr VkFormat kVelocity = VK_FORMAT_R16G16_SFLOAT;
 enum : uint32_t {
     kTextured = 1, kUv = 2, kFog = 4, kBlend = 8, kPabe = 16, kFba = 32, kFromTarget = 64, kTarget24 = 128, kDestAlphaBlend = 256,
     kNearest = 512, kSnap = 1024, kAlphaInvert = 2048, kMipmapped = 4096, kGeneratedMips = 8192, kSnapFiltered = 16384,
-    kReplaced = 32768, kDateFlips = 65536, kDateKeeps = 131072, kDatm = 262144,
+    kReplaced = 32768, kDateFlips = 65536, kDateKeeps = 131072, kDatm = 262144, kGsExact = 524288,
 };
+
+// B24 (GT4_GS_EXACT=1 while it is measured; render.gs_sampling later): texel coordinates and bilinear weights as the GS
+// computes them, the same on every GPU (gsn.frag exactCoordinate, targetBilinear).
+bool gsExact() {
+    static const bool on = [] { const char* e = std::getenv("GT4_GS_EXACT"); return e && *e == '1'; }();
+    return on;
+}
 
 // A fixed-function blend for C = Ad: the coefficients of Cs and Cd as (a * Ad + b), mapped onto factors.
 // Returns false when Vulkan has no factor for it (a * Ad + b with a and b both set, both negative).
@@ -724,8 +731,10 @@ struct GsnScene::Impl {
     // A GS draw's pipeline description (pipeline(); parityPipeline() changes its vertex stage).
     vk::GraphicsDesc drawDesc(uint32_t blendKey, uint32_t mask, bool depth, gsn::Topology topology, bool exports) const {
         vk::GraphicsDesc desc;
-        desc.vertex = shaders::gsn_vert();
-        desc.fragment = exports ? shaders::gsn_frag_export() : shaders::gsn_frag();
+        // (B24: the GS-exact variants while GT4_GS_EXACT is on; the default modules are main's to the byte)
+        desc.vertex = gsExact() ? shaders::gsn_vert_exact() : shaders::gsn_vert();
+        desc.fragment = gsExact() ? (exports ? shaders::gsn_frag_export_exact() : shaders::gsn_frag_exact())
+                                  : (exports ? shaders::gsn_frag_export() : shaders::gsn_frag());
         desc.colors = {kColour};
         desc.depth = depth ? kDepth : VK_FORMAT_UNDEFINED;
         desc.stencil = depth ? kDepth : VK_FORMAT_UNDEFINED;
@@ -1235,6 +1244,17 @@ struct GsnScene::Impl {
                           const std::vector<const char*>& before, const std::vector<const char*>& after, const LightPlan* first);
     void executeFinish(VkCommandBuffer command, uint32_t slot);   // after the commands: the displayed buffer
     void snapSprites();
+    // B24: each sprite's min corner and texture steps per pixel, (x0, y0, ds, dt), as PCSX2's software GS sets them up
+    // (GSRasterizer::DrawSprite), from the front end's vertices before snapSprites moves the corners; written into the
+    // sprite's own S, T, Q and U in the GPU's copy. Kept for the list (a list executed again reuses them).
+    struct ExactSprite {
+        uint32_t first;   // its six vertices
+        float x0, y0, ds, dt;
+    };
+    std::vector<ExactSprite> exactSprites;
+    uint64_t listSerial = 0;                   // lists made current so far (pendingTargets): a list executed again keeps it
+    uint64_t exactSpritesOf = ~0ull;           // the list the records are for
+    void makeExactSprites();
     // Executes every pending list in order into `command` (the scale from `extent`), then empties the queue.
     // `profiled`: a frame's own submission (GT4_GPU_PROFILE).
     void executePending(VkCommandBuffer command, uint32_t slot, VkExtent2D extent, bool profiled = false);
@@ -1292,6 +1312,35 @@ struct GsnScene::Impl {
 // clamped) read them. Each edge moves to ceil(x) - 0.5 / scale, which covers the blocks of exactly the GS's pixels
 // (and changes nothing at 1x), with the texture coordinates continued along the sprite. Idempotent: a list drawn
 // again for presentation is unchanged.
+void GsnScene::Impl::makeExactSprites() {
+    if (exactSpritesOf == listSerial) return;   // (this list again: its corners are snapped by now; the records stand)
+    exactSprites.clear();
+    exactSpritesOf = listSerial;
+    for (const gsn::Draw& d : frame.draws) {
+        if (d.modeled || d.topology != gsn::Topology::Triangles || (d.state.prim & 7) != 6 || d.count % 6) continue;
+        if (!((d.state.prim >> 4) & 1)) continue;   // untextured: no coordinate
+        const bool fst = (d.state.prim >> 8) & 1;
+        const gfx::Texture& tx = d.state.c.texture;
+        // PCSX2's 16.16 units: FST UV (texels) x 0x10000; STQ S/Q x (0x10000 << TW): powers of two, so the steps below
+        // are its float32 steps exactly, scaled back to texels
+        const float scaleU = fst ? 65536.0f : 65536.0f * float(1u << std::min<uint32_t>(tx.log2Width, 10u));
+        const float scaleV = fst ? 65536.0f : 65536.0f * float(1u << std::min<uint32_t>(tx.log2Height, 10u));
+        for (uint32_t first = d.first; first + 6 <= d.first + d.count && first + 6 <= frame.vertices.size(); first += 6) {
+            const gsn::Vertex& a = frame.vertices[first];       // the sprite's first vertex's corner (gs_frontend.cpp)
+            const gsn::Vertex& b = frame.vertices[first + 4];   // the second's
+            const float ua = fst ? a.u : a.s / a.q, ub = fst ? b.u : b.s / b.q;
+            const float va = fst ? a.v : a.t / a.q, vb = fst ? b.v : b.t / b.q;
+            // per axis, the min corner's coordinate with it (DrawSprite's blend on v0.p < v1.p)
+            const bool ax = a.x < b.x, ay = a.y < b.y;
+            const float x0 = ax ? a.x : b.x, x1 = ax ? b.x : a.x, y0 = ay ? a.y : b.y, y1 = ay ? b.y : a.y;
+            const float u0 = (ax ? ua : ub) * scaleU, u1 = (ax ? ub : ua) * scaleU;
+            const float v0 = (ay ? va : vb) * scaleV, v1 = (ay ? vb : va) * scaleV;
+            const float ds = x1 != x0 ? (u1 - u0) / (x1 - x0) : 0.0f, dt = y1 != y0 ? (v1 - v0) / (y1 - y0) : 0.0f;
+            exactSprites.push_back({first, x0, y0, ds / 65536.0f, dt / 65536.0f});   // (texels per pixel)
+        }
+    }
+}
+
 void GsnScene::Impl::snapSprites() {
     for (const gsn::Draw& d : frame.draws) {
         if (d.modeled || d.topology != gsn::Topology::Triangles || (d.state.prim & 7) != 6 || d.count % 6) continue;
@@ -1515,6 +1564,7 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
     ex.command = command;
     ex.slot = slot;
     nightOrdinal = 0;
+    if (gsExact()) makeExactSprites();
     snapSprites();
     if (seamOn) {   // B16c: this list's display seam
         seamPlan = gsn::findSeamAnchor(frame);
@@ -1531,6 +1581,14 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
     ex.modelBase = static_cast<uint32_t>(frame.vertices.size());   // where the GPU's vertices start
     const uint32_t modelBase = ex.modelBase;
     std::memcpy(vertices.mapped, frame.vertices.data(), frame.vertices.size() * sizeof(gsn::Vertex));
+    if (gsExact()) {   // B24: the sprites' (x0, y0, ds, dt) in their own S, T, Q and U, the GPU's copy only
+        gsn::Vertex* gpu = static_cast<gsn::Vertex*>(vertices.mapped);
+        for (const ExactSprite& e : exactSprites)
+            for (uint32_t k = 0; k < 6; ++k) {
+                gsn::Vertex& v = gpu[e.first + k];
+                v.s = e.x0, v.t = e.y0, v.q = e.ds, v.u = e.dt;
+            }
+    }
     // GT4's 3D batches (docs/NATIVE_V2.md, step 2): gsn_models.comp writes their triangles into the ranges their
     // draws hold, before any draw reads them.
     if (!frame.models.empty()) {
@@ -2411,6 +2469,7 @@ void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t
             const bool linear = sm.magLinear;
             const bool repeat = sm.wrapU == 0;
             if (!linear) k.flags |= kNearest;
+            if (gsExact()) k.flags |= kGsExact;
             k.clampU = sm.wrapU | (static_cast<uint32_t>(sm.minU) << 2) | (static_cast<uint32_t>(sm.maxU) << 12);
             k.clampV = sm.wrapV | (static_cast<uint32_t>(sm.minV) << 2) | (static_cast<uint32_t>(sm.maxV) << 12);
             k.lod = sm.lodFixed | (static_cast<uint32_t>(sm.lodL) << 1) | ((static_cast<uint32_t>(sm.lodK) & 0xFFF) << 3) |
@@ -4090,6 +4149,7 @@ void GsnScene::Impl::decideScale(VkExtent2D extent) {
 // List `listIndex`: made current (`frame`), its targets made or cleared.
 void GsnScene::Impl::pendingTargets(VkCommandBuffer command, uint32_t slot) {
     std::swap(frame, pending[listIndex]);
+    ++listSerial;
     // (a new list: from the previous frame's state, where the one before ended)
     modelTPrevious = 0.0f;
     modelT = interpolate && listIndex == pendingShown ? sinceArrival() : 1.0f;

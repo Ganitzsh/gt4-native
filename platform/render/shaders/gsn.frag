@@ -30,6 +30,8 @@ layout(location = 9) flat in uint inHomogeneous;
 // strip's last) vertex's, and bit 2 that vertex's ADC bit (the triangle not drawn: culled, hidden, or its fog word past
 // the byte), as gsn_models.comp decides them.
 layout(location = 10) flat in vec4 inFlatColour;
+#elif defined(GSN_EXACT)
+layout(location = 11) flat in vec4 inSprite;   // B24: a sprite's (x0, y0, ds, dt) in GS pixels and texels (gsn.vert)
 #endif
 
 layout(location = 0, index = 0) out vec4 outColour;
@@ -127,7 +129,29 @@ vec4 bilinearSubTexels(vec2 position) {
     return mix(top, bottom, f.y) * 255.0;
 }
 
+#if defined(GSN_EXACT)
+// A target sampled with the bilinear filter in the shader (B24, kGsExact), not the GPU's sampler, whose sub-texel
+// precision differs between devices: the four render pixels around the point, the weights at 4 bits as the GS's,
+// clamped at the target's edges as the sampler was.
+vec4 targetBilinear(vec2 gsPixel) {
+    const ivec2 last = textureSize(source, 0) - 1;
+    const vec2 p = gsPixel * draw.sourceScale - 0.5;
+    const vec2 cell = floor(p);
+    const vec2 f = floor((p - cell) * 16.0) / 16.0;
+    const ivec2 a = clamp(ivec2(cell), ivec2(0), last), b = clamp(ivec2(cell) + 1, ivec2(0), last);
+    const vec4 top = mix(texelFetch(source, a, 0), texelFetch(source, ivec2(b.x, a.y), 0), f.x);
+    const vec4 bottom = mix(texelFetch(source, ivec2(a.x, b.y), 0), texelFetch(source, b, 0), f.x);
+    return mix(top, bottom, f.y);
+}
+#endif
+
 float pixelQ = 1.0;   // this pixel's Q (the GS's mipmap level comes from it)
+#if defined(GSN_EXACT)
+// The coordinate's change per render pixel where B24 sets it (exactCoordinate): a sprite's from its steps, other
+// primitives' from the interpolated coordinate before truncation. Texture packs and generated mipmaps choose their
+// level from these, not from the stepped coordinate's derivatives.
+vec2 exactDx = vec2(0.0), exactDy = vec2(0.0);
+#endif
 
 // The GS's level of detail for its own mipmaps: K, or (log2(1 / Q) << L) + K, then less by the render
 // scale's log2 so that a higher resolution keeps the same texels per pixel.
@@ -153,7 +177,11 @@ vec4 texel(vec2 coordinate) {
             p = vec2(wrap(int(cell.x), draw.clampU, size.x), wrap(int(cell.y), draw.clampV, size.y)) + (p - cell);
         }
         const vec2 at = (p - draw.sourceOffset) / draw.sourceSize, perTexel = draw.textureSize / draw.sourceSize;
+#if defined(GSN_EXACT)
+        vec4 c = textureGrad(source, at, exactDx * perTexel, exactDy * perTexel);   // (B24: the steps' derivatives)
+#else
         vec4 c = textureGrad(source, at, dFdx(coordinate) * perTexel, dFdy(coordinate) * perTexel);
+#endif
         // The alpha test sees level 0's alpha, as with made levels: averaged levels make cut-outs solid.
         if ((draw.alphaTest & 1u) != 0u) c.a = textureLod(source, at, 0.0).a;
         return floor(c * 255.0 + 0.5);
@@ -170,7 +198,11 @@ vec4 texel(vec2 coordinate) {
     }
     if ((draw.flags & kFromTarget) != 0u) {
         const vec2 gsPixel = draw.sourceOffset + fromTargetPosition(coordinate * draw.textureSize);
+#if defined(GSN_EXACT)
+        const vec4 t = targetBilinear(gsPixel);
+#else
         const vec4 t = texture(source, gsPixel / draw.sourceSize);
+#endif
         vec4 c = min(vec4(t.rgb * 255.0, t.a * 128.0), 255.0);   // COLCLAMP, as above
         if ((draw.flags & kTarget24) != 0u) {
             const bool black = all(lessThan(c.rgb, vec3(0.5)));
@@ -178,13 +210,50 @@ vec4 texel(vec2 coordinate) {
         }
         return floor(c + 0.5);
     }
+#if defined(GSN_EXACT)
+    vec4 c = (draw.flags & (kMipmapped | kGeneratedMips)) == kMipmapped ? textureLod(source, coordinate, gsLevel())
+                                                                      : textureGrad(source, coordinate, exactDx, exactDy);
+#else
     vec4 c = (draw.flags & (kMipmapped | kGeneratedMips)) == kMipmapped ? textureLod(source, coordinate, gsLevel())
                                                                       : texture(source, coordinate);
+#endif
     // Made levels with the alpha test: the alpha of level 0, as the GS (without mipmaps) tests it; the levels
     // would average cut-outs (fences, foliage) into solid texels.
     if ((draw.flags & kGeneratedMips) != 0u && (draw.alphaTest & 1u) != 0u) c.a = textureLod(source, coordinate, 0.0).a;
     return floor(c * 255.0 + 0.5);
 }
+
+#if defined(GSN_EXACT)
+// B24 (kGsExact): the texture coordinate as PCSX2's software GS computes it, deterministic on every GPU. A sprite:
+// linear in screen space at the integer GS pixel, s = s0 + ds (px - x0) from its min corner (GSRasterizer::
+// DrawSprite), in 16.16 with half a texel taken off first for the bilinear filter (GSRendererSW), truncated; the
+// result is given back to texel() at 1/16 texel, which bilinearTexel / nearestTexel turn into the GS's texel and
+// 4-bit weight exactly. Other primitives: the interpolated coordinate truncated to 1/16 texel (exact at 1x only where
+// the interpolator agrees; deterministic above it). Known limit: PCSX2 steps rows in float and pixels in truncated
+// 16.16 integers; this closed form differs where a coordinate falls within a rounding step of a texel boundary.
+vec2 exactCoordinate(vec2 coordinate) {
+    const vec2 size = draw.textureSize;
+    exactDx = dFdx(coordinate);
+    exactDy = dFdy(coordinate);
+#if !defined(GSN_PARITY)
+    if (inBounds.x <= inBounds.z) {
+        exactDx = vec2(inSprite.z, 0.0) / draw.scale.x / size;
+        exactDy = vec2(0.0, inSprite.w) / draw.scale.y / size;
+        // the GS pixel: at 1x the render pixel's integer coordinate; above it, the render pixel's GS position
+        const vec2 gs = (gl_FragCoord.xy - 0.5) / draw.scale - draw.jitter;
+        const vec2 step = inSprite.zw;
+        const vec2 toTexels = (draw.flags & kUv) != 0u ? vec2(1.0) : size;   // STQ sprites: S/Q and T/Q, normalised
+        const vec2 start = vec2(step.x >= 0.0 ? inBounds.x : inBounds.z, step.y >= 0.0 ? inBounds.y : inBounds.w) * toTexels;
+        const bool filtered = (draw.flags & kNearest) == 0u;
+        const float halfTexel = filtered ? 32768.0 : 0.0;
+        precise vec2 fixedPoint = (start * 65536.0 - halfTexel) + (step * 65536.0) * (gs - inSprite.xy);
+        const ivec2 i = ivec2(fixedPoint);   // truncation, as the SW renderer's conversion
+        return (vec2((i >> 12) + (filtered ? 8 : 0)) / 16.0) / size;
+    }
+#endif
+    return floor(coordinate * size * 16.0) / 16.0 / size;
+}
+#endif
 
 bool alphaPasses(float a) {
     const uint atst = (draw.alphaTest >> 1) & 7u;
@@ -227,7 +296,11 @@ void main() {
         const vec3 stq = atGsPoint(stqIn);
         pixelQ = (draw.flags & kUv) != 0u ? 1.0 : stq.z;
         const vec2 uv = atGsPoint(vec3(inUv, 0.0)).xy;
+#if defined(GSN_EXACT)
+        const vec2 coordinate = exactCoordinate((draw.flags & kUv) != 0u ? uv / draw.textureSize : stq.xy / stq.z);
+#else
         const vec2 coordinate = (draw.flags & kUv) != 0u ? uv / draw.textureSize : stq.xy / stq.z;
+#endif
         const vec4 ct = texel(coordinate);
         const uint tfx = draw.tex & 3u;
         const bool tcc = (draw.tex & 4u) != 0u;

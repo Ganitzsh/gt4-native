@@ -47,6 +47,9 @@ const uint kReplaced = 32768u;    // a texture pack's image: any size, sampled n
 const uint kDateFlips = 65536u;
 const uint kDateKeeps = 131072u;
 const uint kDatm = 262144u;       // DATM: the pass value of the destination alpha test (bit 7)
+#if defined(GSN_EXACT)
+const uint kGsExact = 524288u;    // B24: texel coordinates and bilinear weights as the GS computes them (gsn.frag)
+#endif
 const uint kGeneratedMips = 8192u;// ... levels made from level 0 (the GS has none): alpha from level 0         // coordinates at the GS pixel's sample point, not the render pixel's
 
 // A vertex's clip-space position (gsn.vert, gsn_velocity.vert: the same to the bit). GS window coordinates

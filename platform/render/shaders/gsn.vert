@@ -29,6 +29,12 @@ layout(location = 6) out vec3 outStqW;
 layout(location = 7) out float outFogW;
 layout(location = 8) out float outW;
 layout(location = 9) flat out uint outHomogeneous;
+#if defined(GSN_EXACT)
+// B24 (kGsExact): a sprite's min corner and its texture steps per pixel, (x0, y0, ds, dt), which GsnScene writes into
+// the sprite's own S, T, Q and U in the GPU's copy (the front end's vertices keep their UVs); flat, so the provoking
+// vertex's exact bits arrive. Other primitives and other modes: whatever S, T, Q and U hold, unread.
+layout(location = 11) flat out vec4 outSprite;
+#endif
 
 // gsn_velocity.vert draws the scene's 3D again with the same position to the bit (its depth test EQUAL).
 invariant gl_Position;
@@ -40,6 +46,9 @@ void main() {
     outUv = inUv;
     outFog = float(inFog);
     outBounds = inBounds;
+#if defined(GSN_EXACT)
+    outSprite = vec4(inStq, inUv.x);
+#endif
     const float w = gl_Position.w;
     outColourW = inColour * w;
     outStqW = inStq * w;

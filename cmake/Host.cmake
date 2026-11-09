@@ -55,6 +55,10 @@ gt4_shader(gs_frame_frag ${S}/gs_frame.frag frag)
 gt4_shader(gsn_vert ${S}/gsn.vert vert)
 gt4_shader(gsn_frag ${S}/gsn.frag frag)
 gt4_shader(gsn_frag_export ${S}/gsn.frag frag DEFINES GSN_STENCIL_EXPORT=1)
+# B24 (GT4_GS_EXACT): GS-exact texel coordinates as their own variants, so the default SPIR-V stays main's to the byte.
+gt4_shader(gsn_vert_exact ${S}/gsn.vert vert DEFINES GSN_EXACT=1)
+gt4_shader(gsn_frag_exact ${S}/gsn.frag frag DEFINES GSN_EXACT=1)
+gt4_shader(gsn_frag_export_exact ${S}/gsn.frag frag DEFINES GSN_EXACT=1 GSN_STENCIL_EXPORT=1)
 # B7's parity path (render.scene = parity): a view's items from the mesh cache, through gsn.frag's GSN_PARITY variants.
 gt4_shader(modern_parity_vert ${S}/modern_parity.vert vert)
 gt4_shader(gsn_frag_parity ${S}/gsn.frag frag DEFINES GSN_PARITY=1)
