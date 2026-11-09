@@ -381,6 +381,7 @@ add_executable(gt4_host
     platform/ui/host/page_test.cpp
     platform/render/upscale/fsr2.cpp
     platform/render/smaa_textures.cpp
+    platform/sdl/stb_image_write_impl.cpp
     ${GT4_SHADER_OUT}/gt4_shaders.cpp
     ${GT4_SHADER_HEADERS})
 target_include_directories(gt4_host PRIVATE platform/sdl platform/render platform/render/graph platform/render/modern
@@ -394,11 +395,11 @@ if(MSVC)
   target_compile_options(gt4_host PRIVATE /W4)
   # Generated SPIR-V tables and the volk loader are third-party style code: no warnings there.
   set_source_files_properties(${GT4_SHADER_OUT}/gt4_shaders.cpp
-      platform/render/smaa_textures.cpp PROPERTIES COMPILE_OPTIONS "/W0")
+      platform/render/smaa_textures.cpp platform/sdl/stb_image_write_impl.cpp PROPERTIES COMPILE_OPTIONS "/W0")
 else()
   target_compile_options(gt4_host PRIVATE -Wall -Wextra -Wpedantic)
   set_source_files_properties(${GT4_SHADER_OUT}/gt4_shaders.cpp
-      platform/render/smaa_textures.cpp PROPERTIES COMPILE_OPTIONS "-w")
+      platform/render/smaa_textures.cpp platform/sdl/stb_image_write_impl.cpp PROPERTIES COMPILE_OPTIONS "-w")
 endif()
 if(MINGW)
   target_link_options(gt4_host PRIVATE -static -static-libgcc -static-libstdc++)

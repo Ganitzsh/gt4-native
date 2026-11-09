@@ -51,6 +51,43 @@ int main() {
         ChordGuard hold;    // a long Start alone: sent from kChordMs on
         check(poll(hold, true, false, 0) == 0 && poll(hold, true, false, 250) == 1, "a Start held alone reaches the game");
     }
+    {   // the dump key's chord (PLAN.md C6b): L3 + R3 held kHoldMs; L3 or R3 alone reaches the game at once
+        using ps2::PadL3;
+        using ps2::PadR3;
+        struct Poll {
+            bool fired;
+            float l3, r3;
+        };
+        auto poll = [](DumpChord& d, bool l3, bool r3, uint64_t t) {
+            ps2::PadInput in{};
+            in.button[PadL3] = l3 ? 1.0f : 0.0f;
+            in.button[PadR3] = r3 ? 1.0f : 0.0f;
+            const bool fired = d.filter(in, t);
+            return Poll{fired, in.button[PadL3], in.button[PadR3]};
+        };
+        DumpChord alone;
+        const Poll a = poll(alone, true, false, 0);
+        check(!a.fired && a.l3 == 1.0f, "L3 alone reaches the game the same poll");
+        const Poll b = poll(alone, false, true, 40);
+        check(!b.fired && b.r3 == 1.0f && b.l3 == 0.0f, "R3 alone reaches the game the same poll");
+        DumpChord chord;
+        const Poll c0 = poll(chord, true, true, 1000), c1 = poll(chord, true, true, 1100);
+        const Poll c2 = poll(chord, true, true, 1260), c3 = poll(chord, true, true, 1400);
+        check(!c0.fired && !c1.fired && c2.fired && !c3.fired, "L3 + R3 held 250 ms fires once a hold");
+        check(c0.l3 == 0 && c0.r3 == 0 && c3.l3 == 0 && c3.r3 == 0, "neither reaches the game while both are down");
+        const Poll c4 = poll(chord, false, true, 1450), c5 = poll(chord, false, false, 1500);
+        check(!c4.fired && c4.r3 == 0.0f && !c5.fired, "letting one go first sends no stray press");
+        const Poll c6 = poll(chord, true, false, 1600);
+        check(c6.l3 == 1.0f, "after both are up, L3 alone reaches the game again");
+        DumpChord again;   // one let go and pressed again while the other is held: the hold counts from the new press
+        const bool early = poll(again, true, true, 0).fired || poll(again, true, false, 100).fired ||
+                           poll(again, true, true, 200).fired || poll(again, true, true, 300).fired;
+        check(!early && poll(again, true, true, 460).fired, "a hold counts from both being down together again");
+        DumpChord quick;
+        check(!poll(quick, true, true, 0).fired && !poll(quick, false, false, 100).fired &&
+              !poll(quick, true, true, 200).fired && !poll(quick, true, true, 300).fired,
+              "a chord let go before 250 ms doesn't fire, and a new one counts from its own start");
+    }
 
     // Parsing and validation.
     Settings s;

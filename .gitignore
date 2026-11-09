@@ -15,3 +15,5 @@ orig/
 # Bulk imported source bundle is reproducible from pinned upstream revision.
 /bulk-import/
 /upstream-checkout/
+# The problem dump (L3 + R3, Ctrl + F12): frames and GS memory, game content, never committed
+dumps/

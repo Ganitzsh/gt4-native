@@ -24,6 +24,9 @@ compiler and the prebuilt libraries (`ffx_*.{h,cpp}`, `shaders/`, `vk/ffx_fsr2_v
 `stb_image.h` 2.30 (public domain or MIT) from https://github.com/nothings/stb, commit `003501f6`: decodes
 texture packs' PNG files (`platform/gsnative/texture_pack.cpp`). Unmodified.
 
+`stb_image_write.h` 1.16 (public domain or MIT), same repository and commit: writes the problem dump's frames as
+PNG (`platform/sdl/renderer.cpp`; its implementation in `platform/sdl/stb_image_write_impl.cpp`). Unmodified.
+
 `stb_truetype.h` 1.26 (public domain or MIT), same repository and commit: reads the bundled UI fonts
 (`assets/ui/fonts/`) and renders their glyphs as signed distance fields (`platform/ui/host/sdf_font.cpp`; its
 implementation in `platform/ui/host/stb_truetype_impl.cpp`). Unmodified. It is not hardened against hostile font

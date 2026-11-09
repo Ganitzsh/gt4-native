@@ -46,4 +46,39 @@ private:
     int tap = 0, tapFrames = 0;
 };
 
+// L3 + R3 held together for kHoldMs: the dump key (main.cpp; PLAN.md C6b, the night bands). L3 or R3 alone reaches
+// the game at once, unchanged (GT4 may use either); from the poll both are down until both are up again, neither does,
+// so letting one go first sends no stray press. True on the poll the hold completes, once a hold.
+class DumpChord {
+public:
+    static constexpr uint64_t kHoldMs = 250;
+
+    bool filter(ps2::PadInput& input, uint64_t now) {
+        using ps2::PadL3;
+        using ps2::PadR3;
+        const bool l3 = input.button[PadL3] > 0.0f, r3 = input.button[PadR3] > 0.0f;
+        if (l3 && r3 && !chord) chord = true, fired = false;
+        if (!chord) return false;
+        if (!l3 && !r3) {
+            chord = false;
+            both = false;
+            return false;
+        }
+        input.button[PadL3] = input.button[PadR3] = 0.0f;
+        if (l3 && r3 && !both) since = now;   // (both down again after one was up: the hold counts from here)
+        both = l3 && r3;
+        if (!fired && both && now - since >= kHoldMs) {
+            fired = true;
+            return true;
+        }
+        return false;
+    }
+
+private:
+    uint64_t since = 0;    // when both were last down together, after one was up
+    bool chord = false;    // both went down: neither reaches the game until both are up
+    bool both = false;     // both down at the last poll
+    bool fired = false;    // this hold has dumped
+};
+
 }  // namespace gt4

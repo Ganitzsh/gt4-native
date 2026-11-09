@@ -81,6 +81,9 @@ public:
     // The front end's scene split (A10; sceneSplitWanted in the settings, or GT4_GSN_SCENE_SPLIT=1): from the next VSync.
     // Live and in replays alike.
     void setSceneSplit(bool on);
+    // The dump key (main.cpp; PLAN.md C6b, the night bands): the next frame's draw list (draws.txt) and the front
+    // end's GS memory (gs_memory.bin) written into `dir` at that frame's VBlank. False without the native path.
+    bool requestDump(const std::string& dir);
 
     bool live() const;          // linked to a running game
     uint64_t vblanks() const;   // VBlanks received from the game or the capture (the game's clock)

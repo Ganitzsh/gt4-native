@@ -34,7 +34,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <ctime>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -825,6 +827,15 @@ int run(const Options& options) {
     menu.setStartValues(settings);
     bool padHeldBack = false;
     gt4::ChordGuard chordGuard;   // Select + Start, the menu's chord: neither reaches the game (chord_guard.h)
+    // The dump key (PLAN.md C6b, the night bands): L3 + R3 on a pad (DumpChord), Ctrl + F12 on a keyboard. Each press
+    // writes dumps/<date-time>/ beside the host: the presented frame and the next (PNG), the frame's GS draw list and
+    // GS memory (gs_host), the settings and the presentation. Game content: never in the package or a repository.
+    gt4::DumpChord dumpChord;
+    gt4::DumpChord dumpChordNoGame;   // (no live game, so no pad poll for it: replays, the test scene; nothing to mask)
+    bool dumpWanted = false;
+    std::string dumpSecond;          // the folder whose second frame is still to be captured
+    uint64_t dumpSecondAfter = 0;    // ... after this many presented frames
+    int dumpCount = 0;
     SDL_GamepadButton menuHeld = SDL_GAMEPAD_BUTTON_INVALID;
     Uint64 menuRepeatAt = 0;
     int stickHeld = 0;   // the left stick in the menu: -1 up, 1 down
@@ -929,6 +940,7 @@ int run(const Options& options) {
         padLast = padNow;
         gt4::ps2::PadInput input = pads.read(0, settings, padDt);
         if (menuEnabled) chordGuard.filter(input, SDL_GetTicks());
+        if (dumpChord.filter(input, SDL_GetTicks())) dumpWanted = true;   // L3 + R3: the dump key (PLAN.md C6b)
         if (padHeldBack) {
             bool held = std::fabs(input.leftX) > 0.3f || std::fabs(input.leftY) > 0.3f;
             for (float pressure : input.button) held |= pressure > 0.0f;
@@ -1051,6 +1063,11 @@ int run(const Options& options) {
                 if (menuHeld == static_cast<SDL_GamepadButton>(event.gbutton.button)) menuHeld = SDL_GAMEPAD_BUTTON_INVALID;
                 break;
             case SDL_EVENT_KEY_DOWN:
+                // the dump key (F12 alone is Steam's screenshot)
+                if (event.key.key == SDLK_F12 && (event.key.mod & SDL_KMOD_CTRL)) {
+                    if (!event.key.repeat) dumpWanted = true;
+                    break;
+                }
                 if (event.key.key == SDLK_ESCAPE && menuEnabled) {
                     if (!event.key.repeat) openMenu(!menu.isOpen());
                     break;
@@ -1096,6 +1113,64 @@ int run(const Options& options) {
             }
         }
         if (!running) break;
+        // The dump key's press (L3 + R3, Ctrl + F12): a folder beside the host, the frames asked of the renderer, the
+        // draw list and GS memory of the GS host, the settings and the presentation written here. With a live game the
+        // pad poll (sendPads) sees the chord and keeps it from the game; without one, every open gamepad is read here.
+        if (!(gs && gs->live())) {
+            gt4::ps2::PadInput chord{};
+            int count = 0;
+            if (SDL_JoystickID* ids = SDL_GetGamepads(&count)) {
+                for (int k = 0; k < count; ++k)
+                    if (SDL_Gamepad* pad = SDL_GetGamepadFromID(ids[k]);   // (both on one pad)
+                        pad && SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_LEFT_STICK) &&
+                        SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_RIGHT_STICK))
+                        chord.button[gt4::ps2::PadL3] = chord.button[gt4::ps2::PadR3] = 1.0f;
+                SDL_free(ids);
+            }
+            if (dumpChordNoGame.filter(chord, SDL_GetTicks())) dumpWanted = true;
+        }
+        if (dumpWanted) {
+            dumpWanted = false;
+            const auto utf8 = [](const std::filesystem::path& p) {
+                const std::u8string s = p.u8string();
+                return std::string(s.begin(), s.end());
+            };
+            const char* basePath = SDL_GetBasePath();
+            const std::string baseText = basePath ? basePath : ".";
+            char stamp[32] = "dump";
+            const std::time_t now = std::time(nullptr);
+            if (const std::tm* local = std::localtime(&now)) std::strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", local);
+            const std::string name = std::string(stamp) + "-" + std::to_string(++dumpCount);
+            const std::filesystem::path dir =
+                std::filesystem::path(std::u8string(baseText.begin(), baseText.end())) / "dumps" / name;
+            std::error_code error;
+            std::filesystem::create_directories(dir, error);
+            if (error) {
+                std::fprintf(stderr, "Dump: could not make %s (%s)\n", utf8(dir).c_str(), error.message().c_str());
+            } else {
+                const std::string folder = utf8(dir);
+                renderer->capture(utf8(dir / "frame_0.png"));
+                dumpSecond = folder;
+                dumpSecondAfter = frames + 1;
+                const bool draws = gs && gs->requestDump(folder);
+                {
+                    std::ofstream info(dir / "info.txt");
+                    info << "GT4 native dump " << name << "\nhost: " << baseText
+                         << "\nhost frames presented: " << frames << "\n";
+                    if (gs) info << "game VBlanks: " << gs->vblanks() << "\n";
+                    info << "presentation: " << renderer->displayInfo() << "\ndraw list and GS memory: "
+                         << (draws ? "draws.txt, gs_memory.bin (the frame after the press)"
+                                   : "none (no native GS path)")
+                         << "\nsettings in force: settings.ini in this folder\n"
+                         << "frame_1 follows the PNG encode of frame_0 (a hitch the dump causes): its timing is not the "
+                            "player's\n";
+                }
+                try { gt4::saveSettings(settings, utf8(dir / "settings.ini")); }
+                catch (const std::exception& e) { std::fprintf(stderr, "Dump: %s\n", e.what()); }
+                std::printf("Dump: %s\n", folder.c_str());
+                renderer->showMessage("Dump: dumps/" + name);
+            }
+        }
         // The settings pages' requests (M4), drained once a frame at this one point, before the session's commands (so a
         // session's set and a page's set keep one order): all of the frame's requests go through the bridge
         // (setOption), then one apply (a preset moves twenty values, an apply can rebuild the pipeline), then a save
@@ -1445,6 +1520,10 @@ int run(const Options& options) {
         }
         if (presented) {
             ++frames;
+            if (!dumpSecond.empty() && frames >= dumpSecondAfter) {   // the dump key's second frame: the next one
+                renderer->capture(dumpSecond + "/frame_1.png");
+                dumpSecond.clear();
+            }
             perfGpu += renderer->gpuMilliseconds();
             // --profile-json: the frame pacing and the GPU's time, a line a presented frame (tools/perf_report.py).
             if (!options.profileJson.empty()) {

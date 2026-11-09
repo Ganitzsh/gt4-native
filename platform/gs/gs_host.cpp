@@ -22,6 +22,8 @@
 #include <chrono>
 #include <condition_variable>
 #include <deque>
+#include <filesystem>
+#include <fstream>
 #include <cstdio>
 #include <utility>
 #include <cstdlib>
@@ -157,6 +159,44 @@ public:
         }
         native->display(shown);
     }
+    // One line per draw batch of a frame's list, every target (texture fields decoded, extents): GT4_GSN_DRAWS=all
+    // prints them each frame, and the dump key (requestDump) writes them for one frame.
+    static void writeDrawLines(std::FILE* out, const gsn::FrameList& list) {
+        for (const auto& d : list.draws) {
+            const gsn::Target* t = nullptr;
+            for (const auto& x : list.targets) if (x.id == d.target) t = &x;
+            float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f, u0 = 1e9f, v0 = 1e9f, u1 = -1e9f, v1 = -1e9f;
+            for (uint32_t k = 0; k < (d.modeled ? 0u : d.count); ++k) {   // (3D on the GPU: not here)
+                const auto& v = list.vertices[d.first + k];
+                x0 = std::min(x0, v.x); x1 = std::max(x1, v.x); y0 = std::min(y0, v.y); y1 = std::max(y1, v.y);
+                u0 = std::min(u0, v.u); u1 = std::max(u1, v.u); v0 = std::min(v0, v.v); v1 = std::max(v1, v.v);
+            }
+            const gfx::Texture& t0 = d.state.c.texture;
+            const gfx::Context& c = d.state.c;
+            std::fprintf(out, "[gsn all] t%u bp %X fb %X/%u psm %X keep %X prim %03X | tbp %X tbw %u psm %X %ux%u tfx %u cbp %X cpsm %X csa %u cld %u | src %d:%u | blend %u%u%u%u fix %X test a%u/%u/%X/%u d%u/%u z%u/%u sc %u-%u,%u-%u | n %u xy %.0f,%.0f-%.0f,%.0f uv %.0f,%.0f-%.0f,%.0f rgba %08X",
+                         d.target, t ? t->bp : 0, c.colorBase, c.colorWidth, c.colorFormat, c.colorKeep, d.state.prim,
+                         t0.base, t0.width, t0.format, 1u << t0.log2Width, 1u << t0.log2Height, t0.function, t0.clutBase, t0.clutFormat,
+                         t0.clutOffset, t0.clutLoad, static_cast<int>(d.texture.kind), d.texture.id, c.blendA, c.blendB, c.blendC, c.blendD,
+                         c.blendFixed, c.alphaTest, c.alphaFunc, c.alphaRef, c.alphaFail, c.destTest, c.destPass, c.depthTest, c.depthFunc,
+                         c.scissorX0, c.scissorX1, c.scissorY0, c.scissorY1, d.count, x0, y0, x1, y1, u0, v0, u1, v1,
+                         d.count && !d.modeled ? list.vertices[d.first].rgba : 0u);
+            if (d.texture.kind == gsn::TextureSource::Kind::Reinterpreted && d.texture.id < list.reinterpretations.size()) {
+                const auto& r = list.reinterpretations[d.texture.id];
+                std::fprintf(out, " | from t%u clut t%u", r.target, r.clutTarget);
+                if (!r.indices.empty()) {
+                    std::fprintf(out, " indices");
+                    for (size_t k = 0; k < std::min<size_t>(r.indices.size(), 16); ++k) std::fprintf(out, " %u", r.indices[k]);
+                }
+            }
+            std::fprintf(out, "\n");
+        }
+    }
+    // The dump key (main.cpp, the bands' C6b item): the next frame's draw lines and the front end's GS memory into
+    // `dir` (draws.txt, gs_memory.bin). Any thread; taken at the frame's VBlank on the front end's.
+    void requestDump(const std::string& dir) {
+        std::lock_guard<std::mutex> lock(dumpMutex);
+        dumpDir = dir;
+    }
     void vsync(uint32_t field, uint32_t count) override {
         (void)field;
         {
@@ -169,6 +209,44 @@ public:
                 }
             native->vsync(count, list);
             native->setSceneSplit(splitFromEnv || splitWanted.load(std::memory_order_relaxed));   // (between frames)
+            // the dump key's request: this frame's draw list and GS memory (one string test a frame until then)
+            std::string dir;
+            {
+                std::lock_guard<std::mutex> lock(dumpMutex);
+                dir.swap(dumpDir);
+            }
+            if (!dir.empty()) {
+                // (opened by the path itself: wide on Windows, so a folder with a non-ASCII name works too)
+                const std::filesystem::path folder(std::u8string(dir.begin(), dir.end()));
+                std::string failed;
+                {
+                    // the draw lines through writeDrawLines' C stream, opened by the wide path on Windows
+                    const std::filesystem::path draws = folder / "draws.txt";
+#ifdef _WIN32
+                    std::FILE* f = _wfopen(draws.c_str(), L"w");
+#else
+                    std::FILE* f = std::fopen(draws.c_str(), "w");
+#endif
+                    if (f) {
+                        std::fprintf(f, "# VBlank %u: %zu draw batches, %zu targets\n", count, list.draws.size(),
+                                     list.targets.size());
+                        writeDrawLines(f, list);
+                        const bool error = std::ferror(f) != 0;
+                        if (std::fclose(f) != 0 || error) failed += " draws.txt";   // (a full disk shows at the flush)
+                    } else {
+                        failed += " draws.txt";
+                    }
+                }
+                {
+                    std::ofstream out(folder / "gs_memory.bin", std::ios::binary);
+                    out.write(reinterpret_cast<const char*>(native->memory().data()), gsn::GsMemory::kBytes);
+                    if (!out) failed += " gs_memory.bin";
+                }
+                if (failed.empty())
+                    std::printf("Dump: VBlank %u's draw list and GS memory in %s\n", count, dir.c_str());
+                else
+                    std::fprintf(stderr, "Dump: VBlank %u: could not write%s in %s\n", count, failed.c_str(), dir.c_str());
+            }
         }
         // GT4_GSN_AT=FROM[,TO] (debugging): the per-frame lines below only for those VBlanks.
         static const std::pair<long, long> statsAt = [] {
@@ -220,36 +298,7 @@ public:
             // GT4_GSN_DRAWS=all: one line per draw batch of every target (texture fields decoded, extents).
             static const char* drawsEnv = std::getenv("GT4_GSN_DRAWS");
             static const long drawsAt = drawsEnv ? std::strtol(drawsEnv, nullptr, 16) : -1;
-            if (drawsEnv && !std::strcmp(drawsEnv, "all")) {
-                for (const auto& d : list.draws) {
-                    const gsn::Target* t = nullptr;
-                    for (const auto& x : list.targets) if (x.id == d.target) t = &x;
-                    float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f, u0 = 1e9f, v0 = 1e9f, u1 = -1e9f, v1 = -1e9f;
-                    for (uint32_t k = 0; k < (d.modeled ? 0u : d.count); ++k) {   // (3D on the GPU: not here)
-                        const auto& v = list.vertices[d.first + k];
-                        x0 = std::min(x0, v.x); x1 = std::max(x1, v.x); y0 = std::min(y0, v.y); y1 = std::max(y1, v.y);
-                        u0 = std::min(u0, v.u); u1 = std::max(u1, v.u); v0 = std::min(v0, v.v); v1 = std::max(v1, v.v);
-                    }
-                    const gfx::Texture& t0 = d.state.c.texture;
-                    const gfx::Context& c = d.state.c;
-                    std::printf("[gsn all] t%u bp %X fb %X/%u psm %X keep %X prim %03X | tbp %X tbw %u psm %X %ux%u tfx %u cbp %X cpsm %X csa %u cld %u | src %d:%u | blend %u%u%u%u fix %X test a%u/%u/%X/%u d%u/%u z%u/%u sc %u-%u,%u-%u | n %u xy %.0f,%.0f-%.0f,%.0f uv %.0f,%.0f-%.0f,%.0f rgba %08X",
-                                d.target, t ? t->bp : 0, c.colorBase, c.colorWidth, c.colorFormat, c.colorKeep, d.state.prim,
-                                t0.base, t0.width, t0.format, 1u << t0.log2Width, 1u << t0.log2Height, t0.function, t0.clutBase, t0.clutFormat,
-                                t0.clutOffset, t0.clutLoad, static_cast<int>(d.texture.kind), d.texture.id, c.blendA, c.blendB, c.blendC, c.blendD,
-                                c.blendFixed, c.alphaTest, c.alphaFunc, c.alphaRef, c.alphaFail, c.destTest, c.destPass, c.depthTest, c.depthFunc,
-                                c.scissorX0, c.scissorX1, c.scissorY0, c.scissorY1, d.count, x0, y0, x1, y1, u0, v0, u1, v1,
-                                d.count && !d.modeled ? list.vertices[d.first].rgba : 0u);
-                    if (d.texture.kind == gsn::TextureSource::Kind::Reinterpreted && d.texture.id < list.reinterpretations.size()) {
-                        const auto& r = list.reinterpretations[d.texture.id];
-                        std::printf(" | from t%u clut t%u", r.target, r.clutTarget);
-                        if (!r.indices.empty()) {
-                            std::printf(" indices");
-                            for (size_t k = 0; k < std::min<size_t>(r.indices.size(), 16); ++k) std::printf(" %u", r.indices[k]);
-                        }
-                    }
-                    std::printf("\n");
-                }
-            }
+            if (drawsEnv && !std::strcmp(drawsEnv, "all")) writeDrawLines(stdout, list);
             for (const auto& d : list.draws) {
                 const gsn::Target* t = nullptr;
                 for (const auto& x : list.targets) if (x.id == d.target) t = &x;
@@ -377,6 +426,8 @@ private:
     gsn::FrameList list;
     bool stats = false;
     bool splitFromEnv = false;   // GT4_GSN_SCENE_SPLIT=1
+    std::mutex dumpMutex;
+    std::string dumpDir;   // requestDump's folder, taken at the next VBlank
     std::shared_ptr<render::GlowClassifier> glow = std::make_shared<render::GlowClassifier>();   // (F2b; the front end's thread)
 };
 
@@ -1178,6 +1229,12 @@ void GsHost::setGameOption(uint32_t id, uint32_t value) {
 
 void GsHost::setSceneSplit(bool on) {
     if (impl->target) impl->target->splitWanted.store(on, std::memory_order_relaxed);
+}
+
+bool GsHost::requestDump(const std::string& dir) {
+    if (!impl->target) return false;
+    impl->target->requestDump(dir);
+    return true;
 }
 
 bool GsHost::live() const { return impl->link && impl->link->running(); }

@@ -51,6 +51,9 @@ public:
     VkExtent2D drawableExtent() const;
     void setControls(float horizontal, bool action);
     void capture(const std::string& path);
+    // The presentation as it stands: the swapchain's size, format, present mode and image count, the video driver and
+    // the GPU (the dump key's info.txt, PLAN.md C6b).
+    std::string displayInfo() const;
     // --record (platform/sdl/recorder.h): every presented frame to `sink` once the GPU has finished it, a frame or two
     // later, so the frame itself never waits: its pixels (rows of width * 4 bytes), width, height, VkFormat and the
     // steady-clock second it was drawn. An empty sink turns it off.

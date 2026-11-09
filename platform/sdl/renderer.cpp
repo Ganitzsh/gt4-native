@@ -11,6 +11,8 @@
 #include "test_scene.h"
 #include "vk.h"
 
+#include "stb/stb_image_write.h"
+
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 
@@ -926,6 +928,13 @@ struct Renderer::Impl {
         const std::vector<std::string> paths = std::move(capturePaths);
         capturePaths.clear();
         for (const std::string& path : paths) {
+            // .png (the dump key's frames, PLAN.md C6b): compressed, small enough to copy off a handheld
+            if (path.size() > 4 && path.compare(path.size() - 4, 4, ".png") == 0) {
+                const int w = static_cast<int>(target.extent.width), h = static_cast<int>(target.extent.height);
+                if (!stbi_write_png(path.c_str(), w, h, 3, rgb.data(), w * 3))
+                    std::fprintf(stderr, "Could not write framebuffer capture: %s\n", path.c_str());
+                continue;
+            }
             std::ofstream output(path, std::ios::binary);
             output << "P6\n" << target.extent.width << " " << target.extent.height << "\n255\n";
             output.write(reinterpret_cast<const char*>(rgb.data()), static_cast<std::streamsize>(rgb.size()));
@@ -1227,6 +1236,26 @@ VkExtent2D Renderer::drawableExtent() const { return impl->extent; }
 void Renderer::setControls(float horizontal, bool action) {
     impl->stick = std::clamp(horizontal, -1.0f, 1.0f);
     impl->action = action;
+}
+std::string Renderer::displayInfo() const {
+    // the dump key's info.txt (PLAN.md C6b): what the frames were presented through
+    const auto& i = *impl;
+    const char* mode = i.presentMode == VK_PRESENT_MODE_FIFO_KHR ? "FIFO"
+                       : i.presentMode == VK_PRESENT_MODE_MAILBOX_KHR ? "MAILBOX"
+                       : i.presentMode == VK_PRESENT_MODE_IMMEDIATE_KHR ? "IMMEDIATE"
+                       : i.presentMode == VK_PRESENT_MODE_FIFO_RELAXED_KHR ? "FIFO_RELAXED" : "other";
+    const char* driver = SDL_GetCurrentVideoDriver();
+    std::ostringstream out;
+    if (i.headless) {
+        out << "headless " << i.extent.width << "x" << i.extent.height << ", format " << static_cast<int>(i.format);
+    } else {
+        out << "swapchain " << i.extent.width << "x" << i.extent.height << ", format " << static_cast<int>(i.format)
+            << (i.presentedHdr ? " (HDR10)" : i.srgbFormat ? " (sRGB)" : "") << ", present mode " << mode << ", "
+            << i.swapImages.size() << " images, " << i.presentedBits << " bits; SDL video driver "
+            << (driver ? driver : "(none)");
+    }
+    out << "; GPU " << i.info.name;
+    return out.str();
 }
 void Renderer::capture(const std::string& path) {
     // Several requests for one frame (a session's capture command, --capture, --capture-every, --capture-frames) all
