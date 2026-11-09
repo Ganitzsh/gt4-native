@@ -1494,6 +1494,9 @@ bool GsnScene::Impl::drawSkipMask(const gsn::FrameList::Lighting& l, size_t ligh
     k.scale[1] = static_cast<float>(sy);
     k.sourceScale[0] = k.scale[0];
     k.sourceScale[1] = k.scale[1];
+    // The draw's own sense, not the buffer's at the Light: a Z buffer GT4 inverts in place (its Z24 pass) is never inverted
+    // here (Target::inverted: drawn as kept, each later draw's Z turned round, max - Z), so the GPU's buffer keeps one sense
+    // all frame, and a draw's test in that sense is the one its Draw::depthInverted gives, whatever passes run after it.
     static const VkCompareOp zops[4] = {VK_COMPARE_OP_NEVER, VK_COMPARE_OP_ALWAYS, VK_COMPARE_OP_GREATER_OR_EQUAL, VK_COMPARE_OP_GREATER};
     static const VkCompareOp invertedZops[4] = {VK_COMPARE_OP_NEVER, VK_COMPARE_OP_ALWAYS, VK_COMPARE_OP_LESS_OR_EQUAL, VK_COMPARE_OP_LESS};
     for (size_t at = 0; at < lightAt && at < frame.commands.size(); ++at) {
