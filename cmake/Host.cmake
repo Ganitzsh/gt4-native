@@ -704,6 +704,10 @@ add_test(NAME material_table COMMAND gt4_material_table_test)
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/frame_diff.py --selftest)
     # The machine's slots (tools/slot.py): a live holder kept, a dead or reused one removed, on a temporary folder.
     add_test(NAME slot_selftest COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/slot.py --self-test)
+    # The sources the game shares with the host (platform/ui, platform/audio/spu): none includes a host-only header,
+    # so a release game build cannot fail at game_link on one (E5's 7755399 did; tools/game_link.py --check-shared).
+    add_test(NAME game_link_shared
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/game_link.py --check-shared)
     # PLAN rule 9's comment-only proof (tools/comment_only.py): comment edits pass; a // comment ending in a
     # backslash, a /* */ pair around unchanged code, code, known.txt entries and added sources fail. Skipped (77)
     # without g++.

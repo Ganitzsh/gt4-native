@@ -87,7 +87,57 @@ def mingw_env():
     return env
 
 
+# Host libraries a source the game shares with the host must never include (they are not on the game's paths).
+HOST_ONLY_INCLUDES = ("SDL", "vulkan", "volk", "stb_", "imgui")
+
+
+def shared_sources():
+    """The .cpp files the game takes from the host's folders: platform/ui (the settings pages' engine) and
+    platform/audio/spu (the SPU2), only those folders themselves (platform/ui/host is the host's alone)."""
+    ui = os.path.join(ROOT, "platform", "ui")
+    spu = os.path.join(ROOT, "platform", "audio", "spu")
+    return ([(os.path.join(ui, n), "ui_" + n) for n in sorted(os.listdir(ui)) if n.endswith(".cpp")] +
+            [(os.path.join(spu, n), "spu_" + n) for n in sorted(os.listdir(spu)) if n.endswith(".cpp")])
+
+
+def check_shared_sources():
+    """Problems with the shared sources' includes, empty when there are none: every quoted include, followed through
+    the shared headers, must be found on the game's include paths (the file's own folder, runtime/, include/,
+    platform/ui/, platform/audio/), and no angle include may name a host library. A host-only file left in
+    platform/ui broke every release game build from 7755399 to 1463624 (E5); this finds it before the release."""
+    paths = [os.path.join(ROOT, "runtime"), os.path.join(ROOT, "include"), os.path.join(ROOT, "platform", "ui"),
+             os.path.join(ROOT, "platform", "audio")]
+    problems, seen = [], set()
+    todo = [src for src, _ in shared_sources()]
+    while todo:
+        src = todo.pop()
+        if src in seen:
+            continue
+        seen.add(src)
+        with open(src, encoding="utf-8", errors="replace") as f:
+            for number, line in enumerate(f, 1):
+                m = re.match(r'\s*#\s*include\s*([<"])([^>"]+)[>"]', line)
+                if not m:
+                    continue
+                where = f"{os.path.relpath(src, ROOT)}:{number}"
+                if m.group(1) == "<":
+                    if any(part in m.group(2) for part in HOST_ONLY_INCLUDES):
+                        problems.append(f"{where}: <{m.group(2)}> is a host library")
+                    continue
+                found = [os.path.join(d, m.group(2)) for d in [os.path.dirname(src)] + paths]
+                found = [p for p in found if os.path.isfile(p)]
+                if not found:
+                    problems.append(f'{where}: "{m.group(2)}" is not on the game\'s include paths')
+                else:
+                    todo.append(os.path.normpath(found[0]))
+    return problems
+
+
 def compile_runtime(out):
+    problems = check_shared_sources()
+    if problems:
+        raise SystemExit("game_link: shared sources include host-only headers (move such files to "
+                         "platform/ui/host):\n  " + "\n  ".join(problems))
     rt = os.path.join(ROOT, "runtime")
     objdir = os.path.join(out, "runtime")
     os.makedirs(objdir, exist_ok=True)
@@ -106,14 +156,12 @@ def compile_runtime(out):
         prefix = "" if sub == "." else sub.replace(os.sep, "_") + "_"
         files += [(os.path.join(dirpath, n), prefix + n) for n in sorted(names)]
     # The settings pages' engine (platform/ui: the page model, layout and UI records), the same sources the host
-    # builds: runtime/menu runs it in the game (docs/modern/MENU_DESIGN.md 3.1). Only its .cpp files; no SDL or GPU.
+    # builds: runtime/menu runs it in the game (docs/modern/MENU_DESIGN.md 3.1); and the SPU2 (platform/audio/spu:
+    # voices, reverb, the register image and GT4's status), one source with the host's mixer (PLAN.md D5). Only the
+    # folders' own .cpp files (shared_sources; checked above); no SDL or GPU.
     ui = os.path.join(ROOT, "platform", "ui")
-    files += [(os.path.join(ui, n), "ui_" + n) for n in sorted(os.listdir(ui)) if n.endswith(".cpp")]
-    # The SPU2 (platform/audio/spu: voices, reverb, the register image and GT4's status), one source with the host's
-    # mixer (PLAN.md D5): the game answers GT4's status from it. Only its .cpp files; no SDL.
     audio = os.path.join(ROOT, "platform", "audio")
-    spu = os.path.join(audio, "spu")
-    files += [(os.path.join(spu, n), "spu_" + n) for n in sorted(os.listdir(spu)) if n.endswith(".cpp")]
+    files += shared_sources()
     for src, name in files:
         obj = os.path.join(objdir, os.path.splitext(name)[0] + (".s.o" if name.endswith(".s") else ".o"))
         if name.endswith(".cpp"):
@@ -782,7 +830,9 @@ def link_script(out):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--decomp", required=True)
+    ap.add_argument("--check-shared", action="store_true", help="only check the sources shared with the host "
+                    "(platform/ui, platform/audio/spu) for host-only includes, and exit (ctest's game_link_shared)")
+    ap.add_argument("--decomp")
     ap.add_argument("--objs", default="", help="directory of game objects (.o), searched recursively")
     ap.add_argument("--objlist", default="", help="file listing the game objects to link (instead of --objs)")
     ap.add_argument("--exclude", default="", help="file of object basenames to leave out (one per line)")
@@ -793,6 +843,14 @@ def main():
     ap.add_argument("--strict-drafts", action="store_true", help="stop, instead of leaving it out, on a provisional "
                     "draft at an address a matched source provides (tools/release_game.py)")
     a = ap.parse_args()
+    if a.check_shared:
+        problems = check_shared_sources()
+        for p in problems:
+            print(p)
+        print(f"game_link: {len(shared_sources())} shared sources, {len(problems)} problem(s)")
+        sys.exit(1 if problems else 0)
+    if not a.decomp:
+        ap.error("--decomp is required")
     os.makedirs(a.out, exist_ok=True)
     nm_cache_load(a.out)
     rt_objs = compile_runtime(a.out) + compile_eeorig(a.out, a.eeorig)
