@@ -620,16 +620,20 @@ copy of the approved `saves-ss-r5`, whose Route 5 races run in B-spec). Then M9f
 the old menu (`settings_menu.*`, its `main.cpp` handling, `renderer`'s menu drawing) and makes Guide, Esc and the
 chord open the game's pages over any live game, whatever `ui.entry`, which then governs only GT4's own ways in; M9f2
 sets low to ultra and the default to `ui.entry = integrated` and `ui.pause = native` (`original` stays `hotkey` and
-`gt4`), with the README's controls and a release-note line (a settings.ini without ui lines gets the new values under
-low to ultra). Depends: M3, M4, M5. Acceptance: `CTEST`; `ORIG`; Guide and the chord in a race pause through GT4 and
-open Settings, with `ui.pause = native` and with `ui.pause = gt4`, in GT mode, a time trial, a single race and (M9d3)
-a B-spec race, a short Start alone still pauses GT4 (with `ui.pause = gt4`, `pause.strb`); command 6 during the
-opening, a load or a movie, and before the start, changes nothing in the game (a session test); the replay and test
-scene open the host-run hub; the pages' sounds heard (moved from M5: in the game's own mix, `GT4_AUDIO_WAV`, the map's
-sequenced music hides a menu sound, GT4's own included), by an A/B of two runs with the same inputs, one moving a
-page's cursor and one not. M9f2 adds: a session with an old settings.ini that has no ui lines, under `high` and under
-`original`, showing what each gets (`integrated` / `native` under high, `hotkey` / `gt4` under original), so the
-release note's sentence is proven.
+`gt4`), with the README's controls and a release-note line. Existing settings files take it on their first start:
+every saved file holds both ui lines, so M9f2 raises `Settings::kVersion` to 2, and in a version-1 file `ui.entry =
+hotkey` and `ui.pause = gt4` count as unset and follow the loaded preset (they were every preset's value then, not a
+player's choice), logged once at load; `integrated` and `native` in a v1 file are kept, and from version 2 on the
+file's values are choices. `original`'s preset sets `hotkey` and `gt4` explicitly. A `CTEST` covers each case (v1
+under high and under original, v1 with the new values, v2, no ui lines). Depends: M3, M4, M5. Acceptance: `CTEST`;
+`ORIG`; Guide and the chord in a race pause through GT4 and open Settings, with `ui.pause = native` and with `ui.pause
+= gt4`, in GT mode, a time trial, a single race and (M9d3) a B-spec race, a short Start alone still pauses GT4 (with
+`ui.pause = gt4`, `pause.strb`); command 6 during the opening, a load or a movie, and before the start, changes
+nothing in the game (a session test); the replay and test scene open the host-run hub; the pages' sounds heard (moved
+from M5: in the game's own mix, `GT4_AUDIO_WAV`, the map's sequenced music hides a menu sound, GT4's own included), by
+an A/B of two runs with the same inputs, one moving a page's cursor and one not. M9f2 adds: a session with a version-1
+settings.ini (holding `hotkey` / `gt4`) under `high` and under `original`, showing what each gets (`integrated` /
+`native` under high, `hotkey` / `gt4` under original), so the release note's sentence is proven.
 
 **M10: Style guide and the first asset set (M).** `docs/modern/menu/STYLE.md` (section 5.1, extended), the prompts
 and assets of the hub and pause screens, the review of section 5.4, and the asset pipeline moved here from M3
