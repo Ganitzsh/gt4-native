@@ -492,7 +492,6 @@ add_executable(gt4_host
     platform/sdl/wheel_haptics.cpp
     platform/sdl/device_settings.cpp
     ${GT4_SETTINGS_SOURCES}
-    platform/sdl/settings_menu.cpp
     platform/sdl/display.cpp
     platform/render/vk.cpp
     platform/render/pipeline_cache_file.cpp
@@ -549,7 +548,7 @@ if(BUILD_TESTING)
   target_link_libraries(gt4_device_settings_test PRIVATE gt4_input)
   add_test(NAME device_settings COMMAND gt4_device_settings_test)
 
-  add_executable(gt4_host_settings_test tests/host_settings.cpp ${GT4_SETTINGS_SOURCES} platform/sdl/settings_menu.cpp)
+  add_executable(gt4_host_settings_test tests/host_settings.cpp ${GT4_SETTINGS_SOURCES})
   target_include_directories(gt4_host_settings_test PRIVATE platform/sdl platform/render platform/gs)
   if(MSVC)
     target_compile_options(gt4_host_settings_test PRIVATE /W4)

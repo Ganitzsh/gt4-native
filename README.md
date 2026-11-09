@@ -64,7 +64,7 @@ folder can be copied anywhere: another PC, an SD card, a handheld.
 | Left stick | Left stick | I / J / K / L |
 | Right stick | Right stick | |
 | Start / Select | Start / Back | Enter / Backspace or Right Shift |
-| Settings menu | Select + Start, or Guide | Escape |
+| Settings | Guide, or Select + Start | Escape |
 | Problem dump (below) | L3 + R3 pressed and held together (pad 1 in a game) | Ctrl + F12 |
 | Fullscreen | | F11 or Alt+Enter |
 
@@ -81,29 +81,31 @@ The same Windows executables run under Proton:
 
 The host is a 64-bit and the game a 32-bit Windows program; on an ARM handheld, Proton runs both through FEX.
 
-## Settings menu
+## Settings
 
-Press **Select + Start** on the pad, or **Escape** on the keyboard (the pad's Guide button works too), to open the
-settings menu over the game. The game pauses while it is open.
+Press **Escape** on the keyboard, or the pad's **Guide** button (or **Select + Start**), to open Settings. Over a
+running game, the game opens them at its next menu screen; in a race, the same keys pause it and open them
+from the pause screen (Start alone pauses as GT4 does). The same keys close them. With no game, the host shows them
+itself; quit with the **Quit** row on the System tab, or Alt+F4.
 
 | Action | Pad | Keyboard |
 |---|---|---|
-| Choose an option | D-pad or left stick up/down | W/S or arrow keys |
-| Change its value | D-pad or left stick left/right | A/D or arrow keys |
-| Jump between sections | L1 / R1 | Page Up / Page Down |
-| Accept | Cross (south button) | Enter |
-| Close the menu | Circle or Start | Escape or Backspace |
+| Choose an option | D-pad up/down | Arrow keys |
+| Change its value | D-pad left/right | Arrow keys |
+| Switch tabs | L1 / R1 | Q / E |
+| Accept | Cross | X |
+| Back | Circle | C |
 
-Changes apply at once and are saved to `settings.ini`. Options marked `*` (aspect ratio, menu layout) apply at the
-next start. Each option shows a description. The main ones:
+Changes are saved to `settings.ini`. Most apply at once; a row that applies after a confirmation, at the next
+race or at the next start says so. Each option shows a description. The main ones:
 
-- **GRAPHICS**: the preset (`original`, `low`, `medium`, `high`, `ultra`), PS2 or native resolution, render scale,
+- **Graphics**: the preset (`original`, `low`, `medium`, `high`, `ultra`), PS2 or native resolution, render scale,
   upscaler (FSR 1, FSR 2), sharpening, anti-aliasing, texture filtering, lighting, rear-view mirror detail,
   HD textures, shadows, reflections, bloom, depth of field, motion blur, tone mapping.
-- **DISPLAY**: window or fullscreen, v-sync, **Frame rate limit**, **Frame interpolation**, aspect ratio, menu and
+- **Display**: window or fullscreen, v-sync, **Frame rate limit**, **Frame interpolation**, aspect ratio, menu and
   HUD layout.
-- **GAMEPLAY**: the AI's catch-up. Every other option leaves the game itself as it was.
-- **IMAGE**: film grain, vignette, chromatic aberration, dither, and a performance readout (frame rate on screen).
+- **Game**: the AI's catch-up. Every other option leaves the game itself as it was.
+- **Image**: film grain, vignette, chromatic aberration, dither, and a performance readout (frame rate on screen).
 
 The `original` preset shows the game as the PS2 drew it, at its resolution. Every option and its values are listed
 in [docs/RENDERING.md](docs/RENDERING.md#settings-reference), and `gt4_host.exe --list-options` prints them.
@@ -180,7 +182,7 @@ GT4-Native-0.1.0/
 A pack that comes in versions (for example 3.0, then 3.0.1 to 3.0.4) is installed in order, each one's files over
 the last. If PCSX2 is installed on the same PC with a pack, the port finds PCSX2's `textures/SCUS-97328` too.
 
-Switch it on and off with **HD textures** in the settings menu (GRAPHICS). It reads "Not installed" when no pack was
+Switch it on and off with **HD textures** in Settings (Graphics). It reads "Not installed" when no pack was
 found at start. Textures load in the background the first time they're drawn, so the original shows for a few
 frames first. Other places the port looks, and how matching works: [docs/TEXTURE_PACKS.md](docs/TEXTURE_PACKS.md).
 

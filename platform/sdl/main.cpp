@@ -23,7 +23,6 @@
 #include "save_import.h"
 #include "session.h"
 #include "settings.h"
-#include "settings_menu.h"
 #include "host_hub.h"
 #include "prompt_style.h"
 #include "settings_schema.h"
@@ -65,7 +64,7 @@ void require(bool success, const char* operation) {
 const char* kUsage =
     "Usage: gt4_host [mode] [options]\n"
     "SDL3/Vulkan host: the display pipeline on a test scene, or on GT4's frames (--game, --replay).\n"
-    "Modes (default: interactive window; Escape opens the settings menu):\n"
+    "Modes (default: interactive window; Escape opens Settings):\n"
     "  --probe              verify a window surface and a GPU that can present to it, then exit\n"
     "  --frames N           render N frames, then exit\n"
     "  --smoke-test         180 frames with resize/minimize/restore checks\n"
@@ -897,11 +896,6 @@ int run(const Options& options) {
         }
     };
 
-    // The settings menu (Esc; the pad's Guide button or Select + Start). Over a live game it pauses the game;
-    // afterwards the pad reaches the game again once every button is released.
-    gt4::SettingsMenu menu(gsMode);
-    menu.setStartValues(settings);
-    bool padHeldBack = false;
     bool keyboardLast = false;   // the pages' prompts follow the input used last (ui.prompts = auto, M9)
     gt4::ChordGuard chordGuard;   // Select + Start, the menu's chord: neither reaches the game (chord_guard.h)
     gt4::ChordGuard wheelChordGuard;   // the same for a wheel GT4 sees as its Driving Force Pro (PLAN.md D7)
@@ -917,22 +911,20 @@ int run(const Options& options) {
     std::string dumpSecond;          // the folder whose second frame is still to be captured
     uint64_t dumpSecondAfter = 0;    // ... after this many presented frames
     int dumpCount = 0;
-    SDL_GamepadButton menuHeld = SDL_GAMEPAD_BUTTON_INVALID;
-    Uint64 menuRepeatAt = 0;
-    int stickHeld = 0;   // the left stick in the menu: -1 up, 1 down
     const std::vector<ScriptedKey> scriptedKeys = keyScript();
     size_t nextScriptedKey = 0;
     const bool menuEnabled = interactive || !scriptedKeys.empty();
     if (interactive && gsMode) renderer->showMessage("Settings: Esc, or Guide / Select + Start on the pad", 6.0f);
 
     bool running = true, firstResize = false, minimized = false, restored = false, sawMinimized = false;
-    // The settings pages (M9d1): over a live game with ui.entry = integrated, Esc, Guide and Select + Start ask the
-    // game to open its pages (GT4_REC_HOST_CMD 6) or, while one shows, to close them (7); the game opens them at its
-    // next safe point (MENU_DESIGN 3.2 point 5). Otherwise the host's own menu, as before, until M9f.
+    // The settings pages (M9d1, M9f): over a live game Esc, Guide and Select + Start ask the game to open its pages
+    // (GT4_REC_HOST_CMD 6) or, while one shows, to close them (7), whatever ui.entry says (it governs only GT4's own
+    // ways in: its Options items, Start on the map); the game opens them at its next safe point (MENU_DESIGN 3.2
+    // point 5). With no live game the host runs them itself (the hub, below).
     bool pageShown = false;          // a page's list is with the renderer (M9c)
     Uint64 settingsAskedAt = 0;      // when command 6 went out (ms), until a page shows (0: none waiting)
     auto gamePages = [&] {
-        return gsMode && gs && gs->live() && settings.uiEntry == gt4::UiEntry::Integrated;
+        return gsMode && gs && gs->live();
     };
     auto toggleSettings = [&](bool& handled) {
         if (!gs || !gs->live()) {   // (lane C: a page open when a game ended never makes the next Esc a close)
@@ -944,12 +936,6 @@ int run(const Options& options) {
         gs->sendMenuCommand(pageShown ? 7u : 6u);
         settingsAskedAt = pageShown ? 0 : std::max<Uint64>(SDL_GetTicks(), 1);
         std::printf("settings: %s asked of the game\n", pageShown ? "close" : "open");
-    };
-    auto openMenu = [&](bool open) {
-        if (open) menu.open(settings);
-        else menu.close();
-        if (!open) padHeldBack = true;
-        menuHeld = SDL_GAMEPAD_BUTTON_INVALID;
     };
     // The host-run hub (M9e, MENU_DESIGN 3.2 point 5): with no live game (the test scene, a replay) Esc, Guide and
     // Select + Start open the pages here, the host running the page engine itself through the M4 bridge. Its Quit
@@ -1004,9 +990,7 @@ int run(const Options& options) {
             toggleSettings(handled);
             if (handled) return "the game's pages";
             toggleHub(handled);
-            if (handled) return "the host's hub";
-            openMenu(!menu.isOpen());   // (Esc's third branch: the overlay menu, a live game with hotkey entry)
-            return "the host's menu";
+            return "the host's hub";
         });
     auto hubKey = [&](SDL_Keycode key, bool down) {
         using In = gt4::ui::Input;
@@ -1022,35 +1006,6 @@ int run(const Options& options) {
         case SDLK_E: case SDLK_PAGEDOWN: hubInput(In::TabRight, down); break;
         default: break;
         }
-    };
-    auto menuInput = [&](gt4::SettingsMenu::Input input) {
-        const auto result = menu.input(input, settings);
-        if (result.changed) {
-            applySettings();
-            save();
-        }
-        if (result.closed) openMenu(false);
-        if (result.quit) running = false;
-    };
-    // A pad button in the menu; directions repeat while held.
-    auto menuButton = [&](SDL_GamepadButton button) {
-        using Input = gt4::SettingsMenu::Input;
-        switch (button) {
-        case SDL_GAMEPAD_BUTTON_DPAD_UP: menuInput(Input::Up); break;
-        case SDL_GAMEPAD_BUTTON_DPAD_DOWN: menuInput(Input::Down); break;
-        case SDL_GAMEPAD_BUTTON_DPAD_LEFT: menuInput(Input::Left); break;
-        case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: menuInput(Input::Right); break;
-        case SDL_GAMEPAD_BUTTON_SOUTH: menuInput(Input::Accept); break;
-        case SDL_GAMEPAD_BUTTON_EAST:
-        case SDL_GAMEPAD_BUTTON_START: menuInput(Input::Back); break;
-        case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER: menuInput(Input::PageUp); break;
-        case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: menuInput(Input::PageDown); break;
-        default: return;
-        }
-        const bool direction = button == SDL_GAMEPAD_BUTTON_DPAD_UP || button == SDL_GAMEPAD_BUTTON_DPAD_DOWN ||
-                               button == SDL_GAMEPAD_BUTTON_DPAD_LEFT || button == SDL_GAMEPAD_BUTTON_DPAD_RIGHT;
-        menuHeld = direction && menu.isOpen() ? button : SDL_GAMEPAD_BUTTON_INVALID;
-        menuRepeatAt = SDL_GetTicks() + 350;
     };
     uint32_t frames = 0;
     const Uint64 started = SDL_GetTicks();
@@ -1101,8 +1056,6 @@ int run(const Options& options) {
     // since its last send (the samples taken while the loop waits for the game's frame, below).
     uint8_t padSent[2][18] = {};
     const auto sendPads = [&](bool onlyChanged) {
-        // Nothing reaches the game while the menu is open, nor afterwards until every button is up
-        // (the button that closed the menu would act in the game).
         // the frame's time for the pads' response (its filters and the keys' ramp): a 60 Hz tick under
         // --fixed-step (replays and sessions: the same pad bytes every run), else the wall clock, a tenth of a
         // second at most
@@ -1118,11 +1071,11 @@ int run(const Options& options) {
         gt4::ps2::PadInput wheelPad;
         const bool wheel = pads.wheelInput(settings, wheelPad);
         if (wheel && menuEnabled) wheelChordGuard.filter(wheelPad, SDL_GetTicks());
-        // While one of our pages shows (the host menu, the hub, the game's pages and pause page: pageShown), the
+        // While one of our pages shows (the hub, the game's pages and pause page: pageShown), the
         // pages read the pads' bytes, not LGDEV (MENU_DESIGN 3.3), so the wheel's input goes to its pad port and
         // LGDEV gets it neutral; GT4's own pad is neutral then too. After the page, LGDEV gets it back only once
         // the wheel is let go, so the closing button never acts in GT4 (lane C, the architect).
-        const bool wheelOnPage = wheel && (pageShown || menu.isOpen() || hostHub.isOpen());
+        const bool wheelOnPage = wheel && (pageShown || hostHub.isOpen());
         const int wheelPort = wheelOnPage ? pads.dfpPort(settings) : -1;
         if (wheelOnPage) wheelHeldBack = true;
         else if (wheelHeldBack) {
@@ -1140,17 +1093,7 @@ int run(const Options& options) {
             to.rightX = std::clamp(to.rightX + wheelPad.rightX, -1.0f, 1.0f);
             to.rightY = std::clamp(to.rightY + wheelPad.rightY, -1.0f, 1.0f);
         };
-        if (padHeldBack) {
-            bool held = std::fabs(input.leftX) > 0.3f || std::fabs(input.leftY) > 0.3f;
-            for (float pressure : input.button) held |= pressure > 0.0f;
-            if (wheel) {   // (the wheel held too: nothing reaches the game until it is let go)
-                held |= std::fabs(wheelPad.leftX) > 0.3f;
-                for (float pressure : wheelPad.button) held |= pressure > 0.0f;
-            }
-            padHeldBack = held;
-        }
-        if (menu.isOpen() || padHeldBack) input = gt4::ps2::PadInput{};
-        else if (wheelPort == 0) addWheel(input);
+        if (wheelPort == 0) addWheel(input);
         uint8_t pad[18];
         gt4::ps2::encodePad(input, pad);
         if (!onlyChanged || std::memcmp(pad, padSent[0], sizeof pad) != 0) {
@@ -1173,13 +1116,12 @@ int run(const Options& options) {
             session->record("pad", "\"port\":" + std::to_string(port) + ",\"bytes\":\"" + hex + "\"");
         };
         recordPad(0, pad);
-        // Pad 2: the gamepad holding port 2 (no keyboard), held back like pad 1. Without one, port 2 is empty:
+        // Pad 2: the gamepad holding port 2 (no keyboard). Without one, port 2 is empty:
         // the game sees no controller there, as on a PS2 (runtime/iop.cpp scePad2GetState); told once when it
         // goes. (in a session: its second virtual pad, button2 / axis2)
         if (pads.connected(1)) {
             gt4::ps2::PadInput input2 = pads.read(1, settings, padDt);
-            if (menu.isOpen() || padHeldBack) input2 = gt4::ps2::PadInput{};
-            else if (wheelPort == 1) addWheel(input2);
+            if (wheelPort == 1) addWheel(input2);
             gt4::ps2::encodePad(input2, pad);
             if (!onlyChanged || std::memcmp(pad, padSent[1], sizeof pad) != 0) {
                 gs->sendPad(1, true, pad);
@@ -1199,8 +1141,7 @@ int run(const Options& options) {
         if (wheel || wheelSent) {
             Gt4LinkWheel w{};
             if (wheel)
-                w = menu.isOpen() || padHeldBack || wheelHeldBack ? gt4::input::dfpWheelNeutral()
-                                                                   : gt4::input::dfpWheel(wheelPad);
+                w = wheelHeldBack ? gt4::input::dfpWheelNeutral() : gt4::input::dfpWheel(wheelPad);
             if (!onlyChanged || std::memcmp(&w, &wheelLast, sizeof w) != 0) {
                 gs->sendWheel(w);
                 if (session && std::memcmp(&w, &wheelLast, sizeof w) != 0) {
@@ -1310,11 +1251,9 @@ int run(const Options& options) {
                     bool handled = false;
                     toggleSettings(handled);
                     if (!handled) toggleHub(handled);
-                    if (!handled) openMenu(!menu.isOpen());
                     break;
                 }
                 if (hostHub.isOpen()) { hubButton(button, true); break; }
-                if (menu.isOpen()) { menuButton(button); break; }
                 if (!gsMode) {
                     const std::string change = gamepadCommand(settings, button);
                     if (!change.empty()) { std::printf("%s\n", change.c_str()); renderer->showMessage(change); renderer->apply(settings); save(); }
@@ -1323,7 +1262,6 @@ int run(const Options& options) {
             }
             case SDL_EVENT_GAMEPAD_BUTTON_UP:
                 if (hostHub.isOpen()) hubButton(static_cast<SDL_GamepadButton>(event.gbutton.button), false);
-                if (menuHeld == static_cast<SDL_GamepadButton>(event.gbutton.button)) menuHeld = SDL_GAMEPAD_BUTTON_INVALID;
                 break;
             case SDL_EVENT_GAMEPAD_AXIS_MOTION:
                 // A stick or trigger past half counts as the pad for the prompts (lane C: a player steering only)
@@ -1350,7 +1288,6 @@ int run(const Options& options) {
                         bool handled = false;
                         toggleSettings(handled);
                         if (!handled) toggleHub(handled);
-                        if (!handled) openMenu(!menu.isOpen());
                     }
                     break;
                 }
@@ -1358,25 +1295,6 @@ int run(const Options& options) {
                 if (hostHub.isOpen()) {
                     // Alt + Enter (fullscreen) and the F-keys stay the host's
                     if (!event.key.repeat && !(event.key.mod & SDL_KMOD_ALT)) hubKey(event.key.key, true);
-                    if (!(event.key.key >= SDLK_F1 && event.key.key <= SDLK_F12) &&
-                        !(event.key.key == SDLK_RETURN && (event.key.mod & SDL_KMOD_ALT)))
-                        break;
-                }
-                if (menu.isOpen()) {
-                    using Input = gt4::SettingsMenu::Input;
-                    switch (event.key.key) {
-                    case SDLK_UP: case SDLK_W: menuInput(Input::Up); break;
-                    case SDLK_DOWN: case SDLK_S: menuInput(Input::Down); break;
-                    case SDLK_LEFT: case SDLK_A: menuInput(Input::Left); break;
-                    case SDLK_RIGHT: case SDLK_D: menuInput(Input::Right); break;
-                    case SDLK_RETURN: case SDLK_KP_ENTER: case SDLK_SPACE:
-                        if (!(event.key.mod & SDL_KMOD_ALT)) menuInput(Input::Accept);
-                        break;
-                    case SDLK_BACKSPACE: menuInput(Input::Back); break;
-                    case SDLK_PAGEUP: case SDLK_Q: menuInput(Input::PageUp); break;
-                    case SDLK_PAGEDOWN: case SDLK_E: menuInput(Input::PageDown); break;
-                    default: break;
-                    }
                     if (!(event.key.key >= SDLK_F1 && event.key.key <= SDLK_F12) &&
                         !(event.key.key == SDLK_RETURN && (event.key.mod & SDL_KMOD_ALT)))
                         break;
@@ -1528,7 +1446,7 @@ int run(const Options& options) {
         // 120 Hz handheld, twice the work for nothing). GT4_PRESENT_EVERY_REFRESH=1: every refresh, as before.
         static const bool everyRefresh = [] { const char* e = std::getenv("GT4_PRESENT_EVERY_REFRESH"); return e && std::strcmp(e, "0"); }();
         const bool followGame = gs && gs->live() && windowed && !lockstep && !everyRefresh && !settings.frameInterpolation &&
-                                settings.fpsLimit == 0 && !menu.isOpen();
+                                settings.fpsLimit == 0;
         bool freshFrame;
         {
             GT4_STAGE_SCOPE("main: waiting for the game's frames");
@@ -1608,7 +1526,7 @@ int run(const Options& options) {
             gs->setAudioInterpolation(static_cast<uint32_t>(settings.audioInterpolation));
             gs->setAudioSpatial(static_cast<uint32_t>(settings.audioSpatial));
             if (gs->live()) {
-                gs->setPaused(menu.isOpen() || SDL_GetTicks() < stallUntil);
+                gs->setPaused(SDL_GetTicks() < stallUntil);   // (lane D's stall test; the old menu's use is gone, M9f)
                 gs->setGameOption(0, static_cast<uint32_t>(settings.aiCatchUp));   // runtime.h kOptionAiCatchUp
                 gs->setGameOption(1, static_cast<uint32_t>(settings.mirror));      // kOptionMirrorDetail
                 gs->setGameOption(2, static_cast<uint32_t>(settings.modelDetail)); // kOptionModelDetail
@@ -1652,7 +1570,7 @@ int run(const Options& options) {
                     gt4::input::HapticsOut h;
                     const gt4::Settings& ps = pads.settingsFor(p, settings);   // (with the pad's own, D13)
                     if (ps.hapticsMode == gt4::HapticsMode::Physics && playerCarAt[p] && now - playerCarAt[p] < 250 &&
-                        !menu.isOpen() && !padHeldBack)
+                        !pageShown)
                         h = gt4::input::haptics(playerCar[p], {ps.hapticsStrength / 100.0f, ps.triggerEffects, ps.hapticsUndersteer,
                                                                ps.hapticsLockUp, ps.hapticsWheelspin, ps.hapticsKerbs});
                     if (session) {
@@ -1717,7 +1635,7 @@ int run(const Options& options) {
                                 session->record("wheel_physics", fields);
                             }
                         }
-                        if (pageShown || menu.isOpen() || hostHub.isOpen()) wheelHaptics.stop("a page is open");
+                        if (pageShown || hostHub.isOpen()) wheelHaptics.stop("a page is open");
                         else if (now - fxVblankAt >= 500) wheelHaptics.stop("the watchdog: no game frame for 0.5 s");
                         else wheelHaptics.play(forces, now);
                     }
@@ -1758,33 +1676,7 @@ int run(const Options& options) {
             renderer->setPage(nullptr);
             hubShown = false;
         }
-        // The settings menu: held directions repeat; the view follows the settings (keys change them too).
-        if (menu.isOpen()) {
-            using Input = gt4::SettingsMenu::Input;
-            if (SDL_Gamepad* gamepad = pads.gamepad(0)) {
-                const float y = static_cast<float>(SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTY)) / 32767.0f;
-                const int stick = y < -0.6f ? -1 : y > 0.6f ? 1 : 0;
-                if (stick != stickHeld) {
-                    stickHeld = stick;
-                    if (stick) menuInput(stick < 0 ? Input::Up : Input::Down);
-                    menuRepeatAt = SDL_GetTicks() + 350;
-                } else if (stick && SDL_GetTicks() >= menuRepeatAt) {
-                    menuInput(stick < 0 ? Input::Up : Input::Down);
-                    menuRepeatAt = SDL_GetTicks() + 110;
-                }
-            }
-            if (menuHeld != SDL_GAMEPAD_BUTTON_INVALID && SDL_GetTicks() >= menuRepeatAt) {
-                menuButton(menuHeld);
-                menuRepeatAt = SDL_GetTicks() + 110;
-            }
-        }
         if (!running) break;
-        if (menu.isOpen()) {
-            const gt4::MenuView view = menu.view(settings);
-            renderer->setMenu(&view);
-        } else {
-            renderer->setMenu(nullptr);
-        }
         // Controls are sampled once per frame here; the game will sample its input once per tick.
         if (session) {
             renderer->setControls(session->horizontal(), session->action());

@@ -79,8 +79,8 @@ enum Gt4LinkRecordType {
  *                     id = low 32 bits of the register value, value = the full 64-bit value.
  *   GT4_REC_PAD       26 bytes: u32 port, u32 connected, 18 bytes of libpad2 data; sent every host frame.
  *   GT4_REC_HOST_CMD  1 (quit) when the host closes; the host terminates the game 3 s later if needed. 2 (pause)
- *                     and 3 (resume) around the host's settings menu: the game's bus clock stands still (retired
- *                     with that menu, MENU_DESIGN M9; the numbers stay reserved). 4: a gameplay option (runtime.h
+ *                     and 3 (resume): the game's bus clock stands still between them (the session's `stall MS`;
+ *                     the old settings menu's use went with it, MENU_DESIGN M9f). 4: a gameplay option (runtime.h
  *                     GameOption) changed, or its value at start. 5: the host lost a texture content it was
  *                     counted on to keep; the game sends every content again (runtime/frame.cpp). 6: open the
  *                     settings pages at the next safe point; 7: close them (the host is shutting down).

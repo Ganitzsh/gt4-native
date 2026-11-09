@@ -2,7 +2,6 @@
 // ratios and the Hor+ reverse-Z projection. No GPU or window needed.
 #include "chord_guard.h"
 #include "settings.h"
-#include "settings_menu.h"
 #include "temp_path.h"
 #include "vecmath.h"
 
@@ -450,74 +449,6 @@ int main() {
     const Vec4 far = narrow * Vec4(0.0f, 0.0f, -1.0e6f, 1.0f);
     check(near(atNear.z / atNear.w, 1.0f), "reverse Z: depth 1 at the near plane");
     check(far.z / far.w >= 0.0f && far.z / far.w < 1e-6f, "reverse Z: depth towards 0 at infinity");
-
-    // The in-game settings menu.
-    {
-        using Input = SettingsMenu::Input;
-        Settings m;
-        applyPreset(m, Preset::High);
-        SettingsMenu menu(true);
-        menu.setStartValues(m);
-        menu.open();
-        auto selectedLabel = [&] {
-            for (const auto& row : menu.view(m).rows) if (row.selected) return row.label;
-            return std::string();
-        };
-        check(selectedLabel() == "Preset", "the menu starts on the first option");
-        check(menu.input(Input::Right, m).changed && m.preset == Preset::Ultra, "right moves the preset on");
-        check(!menu.input(Input::Right, m).changed && m.preset == Preset::Ultra, "the last value stays (custom is never chosen)");
-        check(menu.input(Input::Left, m).changed && m.preset == Preset::High, "left moves it back");
-        menu.input(Input::Down, m);
-        check(selectedLabel() == "Renderer", "down selects the next row");
-        check(menu.input(Input::Left, m).changed && m.gsRenderer == GsRenderer::Original && m.preset == Preset::Custom,
-              "the renderer changes, the preset becomes custom");
-        menu.input(Input::Down, m);
-        menu.input(Input::Down, m);
-        check(selectedLabel() == "Render scale", "render scale row");
-        check(menu.input(Input::Left, m).changed && m.quality == QualityMode::Custom && m.renderScale == 90,
-              "the render scale steps from the quality's scale and sets custom");
-        menu.input(Input::PageDown, m);
-        check(selectedLabel() == "Window", "page down goes to the next section");
-        menu.input(Input::PageUp, m);
-        check(selectedLabel() == "Preset", "page up goes to the top of the previous section");
-        for (int i = 0; i < 4; ++i) menu.input(Input::PageDown, m);   // display, gameplay, image, actions
-        menu.input(Input::Up, m);
-        menu.input(Input::PageDown, m);
-        check(selectedLabel() == "Resume", "the actions come last");
-        auto view = menu.view(m);
-        check(!menu.restartPending(m), "nothing waits for a restart");
-        Settings widened = m;
-        setOption(widened, "aspect.ratio", "16:9");
-        check(menu.restartPending(widened), "the aspect ratio waits for a restart");
-        check(menu.view(widened).footer.find("starts again") != std::string::npos, "the footer says so");
-        const auto quitRow = menu.input(Input::Down, m);
-        check(!quitRow.changed && selectedLabel() == "Quit game", "quit row");
-        const auto quit = menu.input(Input::Accept, m);
-        check(quit.closed && quit.quit && !menu.isOpen(), "quit closes the menu and asks to quit");
-        menu.open();
-        check(menu.input(Input::Back, m).closed && !menu.isOpen(), "back closes the menu");
-        (void)view;
-    }
-
-    // Race frames apply from the next race: a preset switched in the menu that changes them says so.
-    {
-        Settings m;
-        applyPreset(m, Preset::Original);
-        SettingsMenu menu(true);
-        menu.setStartValues(m);
-        menu.open(m);
-        check(!menu.nextRacePending(m), "nothing waits for the next race");
-        bool marked = false;
-        for (const auto& row : menu.view(m).rows) marked = marked || (row.label == "Race frames" && row.nextRace);
-        check(marked, "the race frames row is marked");
-        check(menu.input(SettingsMenu::Input::Right, m).changed && m.raceFrames == RaceFrames::Progressive,
-              "a preset from original changes the race frames");
-        check(menu.nextRacePending(m), "the race frames wait for the next race");
-        check(menu.view(m).footer.find("next race") != std::string::npos, "the footer says so");
-        menu.close();
-        menu.open(m);
-        check(!menu.nextRacePending(m), "opened again: nothing pending");
-    }
 
     if (failures == 0) std::puts("host settings: all checks passed");
     return failures == 0 ? 0 : 1;

@@ -265,7 +265,6 @@ struct Renderer::Impl {
     float stick = 0.0f;
     bool action = false;
     std::string status;
-    std::optional<gt4::MenuView> menu;
     std::string message;
     Uint64 messageUntil = 0;   // SDL_GetTicks
     bool fixedClock = false;   // setFixedClock: the GS scene's interpolation phase from presents (--fixed-step)
@@ -675,7 +674,7 @@ struct Renderer::Impl {
         canvas.safeArea = settings.safeArea;
         overlay->setFilter(settings.uiFilter);
         overlay->begin(frameSlot, extent, canvas);
-        if (gameFrame) { composeReadout(); composeMessage(); composeMenu(); composePage(); return; }
+        if (gameFrame) { composeReadout(); composeMessage(); composePage(); return; }
         // Test HUD on the 640 x 480 canvas, anchored like a racing game's.
         const gt4::Color8 panel{8, 12, 20, 170}, white{240, 240, 240, 255}, accent{255, 190, 40, 255};
         overlay->canvasRect(16, 16, 150, 44, panel, gt4::Anchor::Left);
@@ -694,11 +693,10 @@ struct Renderer::Impl {
         overlay->canvasText(320, 20, 8, "GT4 NATIVE - DISPLAY PIPELINE TEST SCENE", white, gt4::Anchor::Center);
         composeReadout();
         composeMessage();
-        composeMenu();
         composePage();
     }
 
-    // The settings page (MENU_DESIGN M3), last: over the readout and the old menu, in the content rectangle (the
+    // The settings page (MENU_DESIGN M3), last: over the readout, in the content rectangle (the
     // canvas follows the content's aspect, so at a ratio narrower than the window it stays inside the pillarbox).
     void composePage() {
         const VkRect2D content = pipeline->contentRect();
@@ -758,7 +756,7 @@ struct Renderer::Impl {
     }
 
     void composeMessage() {
-        if (message.empty() || SDL_GetTicks() >= messageUntil || menu) return;
+        if (message.empty() || SDL_GetTicks() >= messageUntil || page) return;   // (none over a page)
         const auto content = pipeline->contentRect();
         const float unit = std::max(1.0f, static_cast<float>(content.extent.height) / 360.0f);
         const float em = 9.6f * unit, pad = 8.0f * unit;
@@ -768,97 +766,6 @@ struct Renderer::Impl {
         const float y = static_cast<float>(content.offset.y + content.extent.height) - h - 24.0f * unit;
         overlay->pixelRect(x, y, w, h, {10, 14, 22, 200});
         overlay->uiText(x + pad, y + pad, em, gt4::ui::FontFace::Row, message, {235, 238, 242, 255});
-    }
-
-    // The settings menu: a panel in the middle of the content, a scrolling list of rows, the selected row's
-    // description and the controls underneath. Text in the UI fonts (E5): titles and section names in the title
-    // face, rows in the row face, the description in the help face, laid out by measured widths.
-    void composeMenu() {
-        if (!menu) return;
-        using gt4::ui::FontFace;
-        const auto content = pipeline->contentRect();
-        const float cx = static_cast<float>(content.offset.x), cy = static_cast<float>(content.offset.y);
-        const float cw = static_cast<float>(content.extent.width), ch = static_cast<float>(content.extent.height);
-        overlay->pixelRect(cx, cy, cw, ch, {0, 0, 0, 150});
-        const float unit = std::max(1.0f, ch / 400.0f);   // the old 8 x 8 menu's scale, now continuous
-        const float em = 9.6f * unit, rowHeight = 13.0f * unit, pad = 12.0f * unit;
-        const float panelW = std::min(cw - 2.0f * pad, 8.0f * unit * 72.0f + 2.0f * pad);
-        const size_t fit = static_cast<size_t>(std::max(4.0f, (ch - 2.0f * pad - 8.0f * rowHeight) / rowHeight));
-        const size_t shown = std::min(fit, menu->rows.size());
-        const float panelH = rowHeight * static_cast<float>(shown) + 7.0f * rowHeight + 2.0f * pad;
-        const float px = cx + (cw - panelW) * 0.5f, py = cy + std::max(pad, (ch - panelH) * 0.5f);
-        const gt4::Color8 panel{12, 16, 26, 235}, text{225, 230, 238, 255}, dim{140, 150, 165, 255},
-            accent{255, 196, 48, 255}, bar{48, 80, 140, 255}, ink{255, 255, 255, 255};
-        overlay->pixelRect(px, py, panelW, panelH, panel);
-        overlay->pixelRect(px, py, panelW, 2.0f * unit, accent);
-        float y = py + pad;
-        overlay->uiText(px + pad, y - 2.0f * unit, 2.0f * em, FontFace::Title, menu->title, ink);
-        y += 2.0f * rowHeight;
-        // Scroll so that the selected row (and its section title) is visible.
-        size_t selected = 0;
-        for (size_t i = 0; i < menu->rows.size(); ++i) if (menu->rows[i].selected) selected = i;
-        size_t first = 0;
-        if (menu->rows.size() > shown) {
-            const long want = static_cast<long>(selected > 0 && menu->rows[selected - 1].header ? selected - 1 : selected);
-            first = static_cast<size_t>(std::clamp(want - static_cast<long>(shown / 2), 0L, static_cast<long>(menu->rows.size() - shown)));
-        }
-        const float listTop = y;
-        const float right = px + panelW - pad;   // values end here
-        for (size_t i = first; i < first + shown; ++i) {
-            const auto& row = menu->rows[i];
-            const float x = px + pad;
-            if (row.header) {
-                if (!row.label.empty()) overlay->uiText(x, y, em, FontFace::Title, row.label, accent);
-                y += rowHeight;
-                continue;
-            }
-            if (row.selected) overlay->pixelRect(px + pad * 0.5f, y - 2.0f * unit, panelW - pad, rowHeight, bar);
-            const std::string label = row.label + (row.restart ? " *" : row.nextRace ? " +" : "");
-            overlay->uiText(x + 2.0f * em * 0.5f, y, em, FontFace::Row, label, row.selected ? ink : text);
-            if (row.adjustable) {
-                const std::string value = row.selected ? "<  " + row.value + "  >" : row.value;
-                overlay->uiText(right - overlay->uiTextWidth(FontFace::Row, em, value), y, em, FontFace::Row, value,
-                                row.selected ? ink : accent);
-            }
-            y += rowHeight;
-        }
-        const float mark = overlay->uiTextWidth(FontFace::Row, em, "^");
-        if (first > 0) overlay->uiText(right - mark, listTop - rowHeight, em, FontFace::Row, "^", dim);
-        if (first + shown < menu->rows.size()) overlay->uiText(right - mark, y, em, FontFace::Row, "v", dim);
-        // The description, word-wrapped by its measured width over three lines at most, then the controls.
-        y += rowHeight;
-        overlay->pixelRect(px + pad, y - 4.0f * unit, panelW - 2.0f * pad, 1.0f * unit, dim);
-        const float width = panelW - 2.0f * pad;
-        const std::string& help = menu->help;
-        int lines = 0;
-        size_t start = 0;
-        while (start < help.size() && lines < 3) {
-            size_t end = start, fits = start;
-            while (end < help.size()) {
-                size_t next = help.find(' ', end + 1);
-                if (next == std::string::npos) next = help.size();
-                const auto candidate = std::string_view(help).substr(start, next - start);
-                if (overlay->uiTextWidth(FontFace::Help, em, candidate) > width && fits > start) break;
-                fits = next;
-                end = next;
-            }
-            if (fits == start) {   // one word wider than the panel: that word alone, the rest wraps after it
-                fits = help.find(' ', start + 1);
-                if (fits == std::string::npos) fits = help.size();
-            }
-            overlay->uiText(px + pad, y + rowHeight * static_cast<float>(lines), em, FontFace::Help,
-                            std::string_view(help).substr(start, fits - start), text);
-            start = fits + (fits < help.size() && help[fits] == ' ' ? 1 : 0);
-            ++lines;
-        }
-        y += rowHeight * 3.5f;
-        std::string footer = menu->footer;
-        // Trimmed a whole code point at a time (its continuation bytes, then its lead), never inside a character.
-        while (!footer.empty() && overlay->uiTextWidth(FontFace::Help, em, footer) > width) {
-            while (footer.size() > 1 && (static_cast<unsigned char>(footer.back()) & 0xC0) == 0x80) footer.pop_back();
-            footer.pop_back();
-        }
-        overlay->uiText(px + pad, y, em, FontFace::Help, footer, dim);
     }
 
     void composeReadout() {
@@ -1303,10 +1210,6 @@ void Renderer::flushFrameSink() {
     }
 }
 void Renderer::setStatus(const std::string& text) { impl->status = text; }
-void Renderer::setMenu(const gt4::MenuView* view) {
-    if (view) impl->menu = *view;
-    else impl->menu.reset();
-}
 void Renderer::showMessage(const std::string& text, float seconds) {
     impl->message = text;
     impl->messageUntil = SDL_GetTicks() + static_cast<Uint64>(seconds * 1000.0f);

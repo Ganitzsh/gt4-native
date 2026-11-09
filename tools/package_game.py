@@ -78,7 +78,8 @@ README = """Gran Turismo 4, native
 Start gt4_host.exe. It runs the game from game/ (CORE.GT4.elf and the disc image) with the settings in
 settings.ini and the saves in saves/, all in this folder.
 
-Controls: a gamepad (the PS2 pad's layout), or the keyboard. Select+Start or Escape: the settings menu.
+Controls: a gamepad (the PS2 pad's layout), or the keyboard. Escape, Guide or Select+Start: Settings (over
+a running game the game's pages, in a race through its pause; with no game the host's own).
 
 On Linux (a Steam Deck, Armada or another SteamOS-like system on an ARM handheld):
   1. Extract this folder anywhere (the internal storage or an SD card).
@@ -91,7 +92,7 @@ game.log (the game) beside gt4_host.exe and Steam's Proton log (PROTON_LOG=1 %co
 say what went wrong if it does not start.
 
 HD textures: extract GT4-Native-HD-Textures.zip into this folder (it adds textures/SCUS-97328/...);
-the settings menu's texture options switch it on and off.
+HD textures in Settings (Graphics) switches it on and off.
 """
 
 
@@ -103,7 +104,7 @@ data. Full instructions, controls, settings and known issues: https://github.com
 
 1. Put an image of your own Gran Turismo 4 disc (USA, SCUS-97328, version 1.01) as an .iso file in the game folder.
 2. Start gt4_host.exe. The first start makes game\\CORE.GT4.elf from the image (about a second).
-3. Settings menu: Escape, or Select+Start on the pad.
+3. Settings: Escape, or Guide or Select+Start on the pad.
 
 Handheld (Steam Deck, ARM handhelds under Proton): rename settings-handheld.ini to settings.ini first.
 To try the work that is in no preset yet: settings-playtest.ini (each line says what to look for), copied over
@@ -131,7 +132,7 @@ an ARM handheld runs it through FEX. Steam with a Proton installed is all it nee
    From a terminal: ./gt4-native.sh
 3. The first start makes game/CORE.GT4.elf from the image (about a second) and the Wine prefix
    (~/.local/share/gt4-native/prefix, WINEPREFIX to change it), which takes longer.
-4. Settings menu: Escape, or Select+Start on the pad.
+4. Settings: Escape, or Guide or Select+Start on the pad.
 
 GT4_PROTON=/path/to/a/Proton/folder ./gt4-native.sh uses that Proton (by default the newest Steam has, then
 ~/.steam/root/compatibilitytools.d and /usr/share/steam/compatibilitytools.d).
@@ -203,7 +204,7 @@ def linux_host_check(path, arch):
 
 
 TEXTURES_NOTE = """Put an HD texture pack for Gran Turismo 4 (USA, SCUS-97328) here: its PNG files, in any subfolders, as PCSX2
-keeps them. Switch it on and off with HD textures in the settings menu (GRAPHICS).
+keeps them. Switch it on and off with HD textures in Settings (Graphics).
 """
 
 GAME_FOLDER_NOTE = """Put an image of your own Gran Turismo 4 disc here, as a .iso file:

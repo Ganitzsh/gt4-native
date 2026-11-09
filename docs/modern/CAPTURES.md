@@ -219,7 +219,7 @@ run" (and `one_sided_stages` in `--json`). Across B4 step 4 (cced3ed), the GS pa
 A scripted session runs the host with `--session-dir DIR`: it attaches a virtual pad and runs the commands it finds in
 `DIR/commands/*.cmd`, in name order (`tools/host_session.py send` writes one; the syntax is in
 `platform/sdl/session.cpp`: `button NAME 0|1`, `axis NAME VALUE`, `wait FRAMES`, `vwait VBLANKS`, `capture NAME
-[COUNT]`, `settings` (what Esc does: the game's pages, else the host's hub, else the overlay menu, in the session's
+[COUNT]`, `settings` (what Esc does: the game's pages, else the host's hub, in the session's
 own steps), `quit`; `button2` and `axis2` drive a second virtual pad, the game's pad 2, plugged in at their first use
 and removed by `unplug2`; `wheel2` plugs pad 2 in as a wheel instead, a device SDL types as one (PLAN.md D7), and
 `freeze MS` holds the host's main thread and `stall MS` the game's clock (D7's stop tests); `unplug` removes pad 1

@@ -18,7 +18,7 @@ the simulation.
 
 ```bat
 tools\build_windows.cmd Release            :: VS 2022 + Ninja, -DGT4_BUILD_HOST=ON, builds and runs ctest
-build\host-windows-Release\gt4_host.exe    :: interactive window (keys below); Escape opens the settings menu
+build\host-windows-Release\gt4_host.exe    :: interactive window (keys below); Escape opens Settings
 gt4_host --headless --size 2560x1440 --frames 300 --preset ultra --capture build\captures\ultra.ppm
 gt4_host --list-gpus | --list-displays | --list-options | --help
 py tools\host_session.py run --exe build\host-windows-Release\gt4_host.exe --host-arg=--headless ^
@@ -30,8 +30,8 @@ py tools\host_session.py run --exe build\host-windows-Release\gt4_host.exe --hos
   and no desktop is needed. Captures, session commands and reports are the same as in windowed runs.
 - **Sessions** (`tools/host_session.py`, `--session-dir`): a virtual gamepad plus a command queue (`axis`, `button`,
   `reset`, `capture NAME`, `set KEY VALUE`, `wait FRAMES`, `vwait VBLANKS`, `resize W H`, `tone HZ S`, `settings`,
-  `quit`; `settings` does what Esc does, the game's pages, else the host's hub, else the overlay menu, in the
-  session's own steps); with `--game` its virtual gamepad is the game's pad 1 (`button dpdown 1` ...). `button2` and
+  `quit`; `settings` does what Esc does, the game's pages, else the host's hub, in the session's own
+  steps); with `--game` its virtual gamepad is the game's pad 1 (`button dpdown 1` ...). `button2` and
   `axis2` drive a second virtual gamepad, the game's pad 2, plugged in at their first use and removed by `unplug2`;
   `wheel2` plugs pad 2 in as a wheel instead (PLAN.md D7); `freeze MS` holds the host's main thread and `stall MS` the
   game's clock (D7's stop tests); `unplug` removes pad 1 until the next `button` or `axis` (each pad keeps its port
@@ -61,25 +61,18 @@ sharpness, G grain, V vignette, C chromatic aberration, P pause; Shift reverses 
 stick swing the chase camera; Space or the south button brightens the lights. Gamepad: Start preset, Back
 readout, D-pad anti-aliasing and render quality, shoulders upscaler, north button aspect ratio.
 
-## The settings menu
+## Settings pages
 
-Escape, or the pad's Guide button (or Select + Start), opens the settings menu over the picture: the options that
-apply to what is shown (over the game: preset, renderer, render resolution and scale, upscaler, sharpening,
-anti-aliasing, anisotropic filtering, window, v-sync, frame rate limit, aspect ratio, menu layout, the AI's
-catch-up, grain, vignette, chromatic aberration, dither, the readout), each with a description, then Resume and
-Quit. Up/Down (D-pad, left
-stick, W/S) choose, Left/Right change, L1/R1 or PgUp/PgDn jump between sections, Enter or the south button
-accepts, Escape, Backspace, Circle or Start close it. Changes apply at once and are saved to the settings file.
-
-Over a live game the menu pauses it: the host sends `GT4_REC_HOST_CMD` 2 and the game's kernel stops its bus
-clock, so no VBlank, alarm or timer comes due (sound stops with the VBlanks that drive it); 3 resumes it, and the
-time spent paused is left out of the clock. The pad reaches the game again once every button is released, so
-the button that closed the menu does not also act in the game. The aspect ratio and the menu layout are passed
-to the game when it starts: they are marked `*` and apply at the next start. The `[gameplay]` options are the
-only settings that change the game itself: the host sends each one when the game starts and whenever it changes
-(`GT4_REC_HOST_CMD` 4: id, value), and their defaults are the original game's behaviour. `GT4_HOST_KEYS=FRAME:KEY,...`
-(escape up down left right return backspace pageup pagedown f1) presses keys at host frames, for unattended
-checks of the menu, also without a window.
+Escape, the pad's Guide button or Select + Start open Settings (MENU_DESIGN.md). Over a live game the host asks the
+game to open its pages (`GT4_REC_HOST_CMD` 6; 7 closes them): it opens them at its next menu screen, or in a race
+through its pause, draws them and reads the pad while they show. With no game the host runs the same pages itself (the
+hub, `platform/ui/host/host_hub`), with a Quit row on the System tab. `ui.entry` governs only GT4's own ways in (its
+Options items, Start on the map). Each row applies at once, after a confirmation, at the next race or at the next
+start, and says which; every change is saved to the settings file. The `[gameplay]` options are the only settings that
+change the game itself: the host sends each one when the game starts and whenever it changes (`GT4_REC_HOST_CMD` 4:
+id, value), and their defaults are the original game's behaviour. `GT4_HOST_KEYS=FRAME:KEY,...` (escape up down left
+right return backspace pageup pagedown f1) presses keys at host frames, for unattended checks of the pages, also
+without a window.
 
 ## Settings
 
