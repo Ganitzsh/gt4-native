@@ -141,7 +141,7 @@ The game decides what is on screen and when; the host decides how it looks at th
 | Game-side page host | `runtime/menu/menu_host.{h,cpp}` | M | New | Ticks the engine once a game frame, owns input focus, plays sounds, holds the race pause, talks to the host. |
 | Flow hooks | `game_src/func_00109B38.cpp` (M5), `func_00109D00.cpp` (M6), `func_003C3820.cpp` (M7) (copies of matched code) | M (A reviews) | New | One call each into `runtime/menu` (section 3.2). `tools/hook_lint.py` clean. No copy of `func_0010FE40`: its `"option"` reaches `startProject` too (M6). |
 | Pad focus | `runtime/iop.cpp` `gt4_replace_scePad2Read` | D's file, M's change | Changed (one test) | Neutral pad to GT4 while a page owns the pad. |
-| Settings bridge | `platform/ui/settings_schema.{h,cpp}` (host) | M (C reviews) | New | Builds the schema from `describe()` plus the page layout table (section 4); applies `SettingsSet`. |
+| Settings bridge | `platform/ui/host/settings_schema.{h,cpp}` (host only: `tools/game_link.py` compiles `platform/ui`'s own sources into the game) | M (C reviews) | New | Builds the schema from `describe()` plus the page layout table (section 4); applies `SettingsSet`. |
 | UI renderer | `platform/ui/ui_renderer.{h,cpp}` on `platform/render/modern/layer2d.*` | M (C reviews) | New | Draws a `DrawList`: textured quads, nine-slices, gradients, SDF text (E5), at output resolution, HDR at paper white. |
 | Assets | `assets/ui/` (PNG sources, `manifest.json`, `prompts/`), `tools/ui_assets.py` | M | New | Section 5.4. Packed into an atlas at build time; installed beside the host. |
 | Host wiring | `platform/sdl/main.cpp` | C's order | Changed | Old menu removed; Guide / Esc sends "open"; UI list to the renderer; no-game modes run the engine on the host. |
@@ -291,7 +291,9 @@ Each row has one apply class, shown on the row:
 | **restart** | aspect ratio (read at the **game's** start, its `--aspect` argument), menu layout (`aspect.hud`) | stored; a badge and a prompt at close that the game must restart |
 
 Only the menu's own sets go through confirm's revert. A setting set by a session (its `set` command) or by `--set`
-never does, so sessions stay repeatable (C1).
+never does, so sessions stay repeatable (C1). A confirm value is saved only once kept: the page sends the
+`confirm.keep` action naming the key; a revert, a refusal or a value still waiting is never written to the settings
+file (M4).
 
 Values the current renderer does not use are greyed with `unusedReason` as the reason (ARCHITECTURE section 7).
 GT4's own values (Option struct) are shown read-only on the Game tab with a link into GT4's screen, except the race
@@ -500,7 +502,7 @@ Depends: none. Acceptance: `CTEST`: navigation, repeat, tab memory, apply classe
 draws the hub from a recorded draw list at 720p, 1440p and 4K (these images are our own art only: committed as
 goldens); HDR measured at paper white.
 
-**M4: Settings bridge (S-M).** `platform/ui/settings_schema.*` and the page layout table of section 4; host side
+**M4: Settings bridge (S-M).** `platform/ui/host/settings_schema.*` and the page layout table of section 4; host side
 of `SETTINGS` / `SETTINGS_SET`. Depends: M1, M2, E1. Acceptance: `CTEST`: every option in `describe()` is on a page
 or listed as hidden, from day one; a set through the bridge equals `setOption`; the four apply classes; a session
 `set` and `--set` never start confirm's revert; `detectPreset` ignores `ui.*`. Depends also on M7 for two checks
