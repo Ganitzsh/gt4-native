@@ -640,8 +640,7 @@ void GsFrontend::memoryWritten(uint32_t bp, uint32_t bw, uint32_t psm, uint32_t 
                     uploadPages.push_back(page);
                 }
                 if (pageLogged(page) && frameCount >= pageLogFrom())   // DEBUG
-                    std::printf("pagelog: frame %llu page %u transfer (bp %X bw %u psm %X rect %u,%u %ux%u)%s
-",
+                    std::printf("pagelog: frame %llu page %u transfer (bp %X bw %u psm %X rect %u,%u %ux%u)%s\n",
                                 (unsigned long long)frameCount, page, bp, bw, psm, x, y, w, h, changed ? "" : " (unchanged)");
                 pages[page] = {0, ++serial};
                 memorySerial[page] = serial;
@@ -1042,8 +1041,7 @@ void GsFrontend::markWritten(uint32_t targetId, uint32_t bp, uint32_t bw, uint32
             // valid for whatever reads or writes memory there later, P2a)
             PageOwner& p = pages[(bp / 32 + py * perRow + px) & 511];
             if (pageLogged(bp / 32 + py * perRow + px) && frameCount >= pageLogFrom())   // DEBUG
-                std::printf("pagelog: frame %llu page %u draw t%u (bp %X bw %u psm %X rect %u-%u,%u-%u)
-", (unsigned long long)frameCount,
+                std::printf("pagelog: frame %llu page %u draw t%u (bp %X bw %u psm %X rect %u-%u,%u-%u)\n", (unsigned long long)frameCount,
                             (bp / 32 + py * perRow + px) & 511, targetId, bp, bw, psm, x0, x1, y0, y1);
             if (p.target != targetId) ++ownerChanges;
             p = {targetId, ++serial};
@@ -1128,8 +1126,7 @@ void GsFrontend::texSet(const uint8_t* payload, size_t bytes) {
                         if (extra && !(bp % 32)) break;
                         const uint32_t page = (bp / 32 + py * perRow + px + extra) & 511;
                         if (pageLogged(page) && frameCount >= pageLogFrom())   // DEBUG
-                            std::printf("pagelog: frame %llu page %u set %u loaded
-", (unsigned long long)frameCount, page, slot.id);
+                            std::printf("pagelog: frame %llu page %u set %u loaded\n", (unsigned long long)frameCount, page, slot.id);
                         pages[page] = {0, ++serial};
                         memorySerial[page] = serial;
                         ++pageGeneration[page];
