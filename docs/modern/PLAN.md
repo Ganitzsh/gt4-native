@@ -12,10 +12,14 @@ Sizes: **S** = 1-3 days, **M** = 1-3 weeks, **L** = 1-3 months, for one agent. R
 1. **main only.** No branches on origin but rule 10's three kinds. Rebase on `origin/main` before every push; never
    force-push.
 2. **Small commits.** One ticket is one to five commits. Each commit builds, passes ctest and does one thing.
-3. **Review before push, by someone other than the author.** The author commits locally, runs the ticket's
-   acceptance, and sends the reviewer the commit hashes and the clone path over arc. The reviewer fetches from the
-   author's clone (`git fetch <path> HEAD`, read-only), reads the diff, reruns the acceptance, and answers OK or
-   the changes needed. Only then does the author push. The reviewer never edits the author's clone.
+3. **Review before push, by someone other than the author.** The author commits locally, runs the ticket's acceptance,
+   and sends the reviewer the commit hashes and the clone path over arc. The reviewer fetches from the author's clone
+   (`git fetch <path> HEAD`, read-only), reads the diff, reruns the acceptance, and answers OK or the changes needed.
+   Only then does the author push. The reviewer never edits the author's clone. A rebase needs no new OK when `git
+   range-diff` shows the patch unchanged ('='), no conflict was resolved, and the new main overlaps the patch's files
+   only in hunks the patch doesn't touch; the push message states the range-diff line (the coordinator, 2026-11-09). A
+   new OK stays required when the patch changed or a conflict was resolved. The gates the rebase needs follow the
+   rebase rules as before.
 4. **Clean release builds only.** Acceptance runs on `tools/release_game.py` game builds (it refuses uncommitted
    inputs, so commit locally first) and on hosts built from an empty build folder by `tools/build_windows.cmd
    Release`. No acceptance on incremental `build/game` objects.
