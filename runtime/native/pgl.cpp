@@ -557,6 +557,16 @@ uint32_t gt4_scene_view_begin(uint32_t context, int role, int flags, uint32_t pa
         for (int i = 0; i < 4; ++i) r.worldToView[i][i] = 1.0f;
     }
     sceneAppend(context, &r, sizeof r);
+    if (r.role == scene::kViewMain || r.role == scene::kViewPhoto) {   // A3b DEBUG (never for main): the camera
+        const float(&m)[4][4] = r.worldToView;
+        float c[3], f[3];
+        for (int j = 0; j < 3; ++j) {
+            c[j] = -(m[3][0] * m[j][0] + m[3][1] * m[j][1] + m[3][2] * m[j][2]);
+            f[j] = m[j][2];
+        }
+        log_info("a3b view vbl %u role %u flags %u pass %u pos %.3f %.3f %.3f dir %.4f %.4f %.4f p00 %.5f p11 %.5f",
+                 kernel_frame_count(), r.role, r.flags, r.pass, c[0], c[1], c[2], f[0], f[1], f[2], set1[0], set1[5]);
+    }
     g_scene.openView = view;
     g_scene.viewInstances = 0;
     if (role == scene::kViewMain) {

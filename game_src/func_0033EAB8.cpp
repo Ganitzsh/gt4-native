@@ -68,6 +68,7 @@ static inline void setFlare(s32 on) { D_00621D24 = on; }
 static inline V *entry(char *p, int off) { return (V *)(P(p, 0) + off); }
 static inline V *method(char *self, int off) { return (V *)(P(self, 0x64) + off); }
 
+extern "C" void gt4_logf(const char *fmt, ...);
 extern "C" void func_0033EAB8(char *self, void *buf, void *cur, void *aux, f32 t, s32 car) {
     f32 one = 1.0f;
     char *course = P(P(P(self, 0x6C), 0x80), 4);
@@ -90,6 +91,7 @@ extern "C" void func_0033EAB8(char *self, void *buf, void *cur, void *aux, f32 t
     RaceEntryCar__update(0);
     func_004A7454();
     { V *e = entry(cam, 0x18); ((FnF)e->fn)(cam + e->d, t); }
+    gt4_logf("a3b cam %p entry %d", (void *)cam, I(cam, 0x9BC));   /* A3b DEBUG (never for main) */
     gt4_scene_view_begin(spr_base(), 1, 4, 0);   /* kViewMain, kViewCameraKnown: the camera is set 0 now */
     func_00397CE0(scene);
     if (I(self, 0xE340)) {
