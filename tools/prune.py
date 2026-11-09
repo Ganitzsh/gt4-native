@@ -20,12 +20,13 @@ gustavocanepa/gt4-native) and the worktrees of gt4-native-game and gt4-decomp; o
 5. build/sessions/* and stray .ppm/.png files in build/ (three levels down, outside the trees above): idle 3 days.
 6. Build trees, per checkout: game, game_*, *_game and host-*, *-host, each family's newest 2 stay, older ones go
    when idle 3 days.
-Never: gt4-native-game's or gt4-decomp's own files, C:/Users/julie/locks, gt4-native-sprite, anything named
-saves*, caps, captures or refs (the REF stills), any .iso/.elf/.ps2/.tgz/.mcd/.mc2 or BIOS file, a file named in
-docs/CAPTURES.md, a path or name listed in --home's prune-keep.txt (one per line). An item a slot lock, a
-process's command line or a live arc session's folder names is in use and stays. A directory junction or link
-is removed with `cmd /c rmdir` (without /s) and never followed. Every removal is logged to --home's prune.log.
-If any check fails, nothing is deleted.
+Never: gt4-native-game's or gt4-decomp's own files, C:/Users/julie/locks, gt4-native-sprite, an item with a
+saves*, *_saves, caps, captures or refs (REF stills) folder in its top two levels (in a checkout, among the files
+git doesn't track), any .iso/.elf/.ps2/.tgz/.mcd/.mc2 or BIOS file, a file named in docs/CAPTURES.md, a path or
+name listed in --home's prune-keep.txt (one per line). An item a slot lock, a process's command line or a live
+arc session's folder names is in use and stays. A directory junction or link is removed with `cmd /c rmdir`
+(without /s) and never followed. Every removal is logged to --home's prune.log. If any check fails, nothing is
+deleted.
 """
 import argparse
 import json
@@ -43,7 +44,19 @@ ORIGIN = re.compile(r"[/:](ganitzsh|gustavocanepa)/gt4-native(\.git)?/?$", re.I)
 KEEP_CLONES = re.compile(r"^(gt4-lane-.*|gt4-native-(arch|audit|sprite|game)|gt4-decomp)$", re.I)
 PROTECTED_REPOS = ("gt4-native-game", "gt4-decomp")
 PROTECTED_EXT = {".iso", ".elf", ".ps2", ".tgz", ".mcd", ".mc2"}
-PROTECTED_NAME = re.compile(r"saves|^caps$|^captures$|^refs$|bios|^scph.*\.bin$", re.I)   # refs: REF stills
+# Folders of saves (saves, r5_saves, saves-ss-r5), captures and the REF stills: they sit near the top of an item
+# (build/saves, build/refs/<set>), so only the first two levels count; deeper, build output repeats source paths
+# (CMakeFiles/gt4_saves.dir/platform/saves/...). BIOS files and the game's file types count at any depth.
+PROTECTED_DIR = re.compile(r"^(saves.*|.*[_-]saves|caps|captures|refs)$", re.I)
+PROTECTED_FILE = re.compile(r"bios|^scph.*\.bin$", re.I)
+NAME_DEPTH = 2
+
+
+def protected_parts(parts, keep_names=()):
+    """Whether a relative path (its components) is or holds a save, capture, game file or a listed name."""
+    last = parts[-1].lower()
+    return (any(PROTECTED_DIR.match(p) for p in parts[:NAME_DEPTH]) or bool(PROTECTED_FILE.search(last)) or
+            os.path.splitext(last)[1] in PROTECTED_EXT or last in keep_names)
 CAPTURE_TOKEN = re.compile(r"[\w.+-]+\.(?:gs|gsd|ppm|png|gz|bin|dump|cap|raw|zst|p2s)\b", re.I)
 GAME_TREE = re.compile(r"^(game|game_.+|.+_game)$", re.I)
 HOST_TREE = re.compile(r"^(host-.+|.+-host)$", re.I)
@@ -77,13 +90,13 @@ def is_link(entry_or_path):
 class Scan:
     """One tree: its size, its newest change, the links and protected files in it."""
 
-    def __init__(self, path, protected_names=()):
+    def __init__(self, path, protected_names=(), names=True):
         self.size, self.newest, self.links, self.protected = 0, 0.0, [], []
-        stack = [path]
+        stack = [(path, ())]
         st = os.lstat(long_path(path))
         self.newest = st.st_mtime
         while stack:
-            d = stack.pop()
+            d, rel = stack.pop()
             with os.scandir(long_path(d)) as it:
                 for e in it:
                     full = os.path.join(d, e.name)
@@ -92,11 +105,10 @@ class Scan:
                         self.links.append(full)
                         continue
                     self.newest = max(self.newest, st.st_mtime)
-                    if (PROTECTED_NAME.search(e.name) or e.name.lower() in protected_names or
-                            os.path.splitext(e.name)[1].lower() in PROTECTED_EXT):
+                    if names and protected_parts(rel + (e.name,), protected_names):
                         self.protected.append(full)
                     if e.is_dir(follow_symlinks=False):
-                        stack.append(full)
+                        stack.append((full, rel + (e.name,)))
                     else:
                         self.size += st.st_size
 
@@ -192,7 +204,7 @@ class Pruner:
                 return "in prune-keep.txt"
         if os.path.basename(path).lower() in self.keep_names:
             return "named in prune-keep.txt or CAPTURES.md"
-        if PROTECTED_NAME.search(os.path.basename(path)) or os.path.splitext(path)[1].lower() in PROTECTED_EXT:
+        if protected_parts([os.path.basename(path)]):
             return "a save, capture or game file"
         use = self.use_of(path)
         if use:
@@ -259,9 +271,17 @@ class Pruner:
     def check_checkout(self, rule, path, idle_days=1):
         """Rule 1 (and a release folder that is a worktree): clean, pushed, not locked, no links, idle."""
         is_worktree = os.path.isfile(os.path.join(path, ".git"))
-        scan = Scan(path, self.keep_names)
+        scan = Scan(path, self.keep_names, names=False)   # the source tree's own names (platform/saves) don't count
         if self.git(path, "status", "--porcelain", "--untracked-files=all").strip():
             return self.add(rule, path, scan, "changes or untracked files")
+        # what git doesn't track (clean, so only ignored files): saves, captures, game files or listed names stay
+        for rel in filter(None, self.git(path, "ls-files", "--others", "--ignored", "--exclude-standard",
+                                         "-z").split("\0")):
+            parts = rel.rstrip("/").split("/")
+            if rel.endswith("/") and "_deps" not in parts:   # CMake's fetched dependencies come back on a rebuild
+                return self.add(rule, path, scan, "holds a checkout of its own: " + rel)
+            if protected_parts(parts, self.keep_names):
+                return self.add(rule, path, scan, "holds " + rel + " (a save, capture, game file or a listed name)")
         if not self.git(path, "branch", "-r", "--contains", "HEAD").strip():
             return self.add(rule, path, scan, "HEAD is on no remote branch (unpushed)")
         owner = None
@@ -354,7 +374,7 @@ class Pruner:
                 continue   # a program's folder (PCSX2's, a host's): its images are its own, not dumps
             for e in entries:
                 full = os.path.join(d, e.name)
-                if is_link(e) or full in skip or PROTECTED_NAME.search(e.name):
+                if is_link(e) or full in skip or PROTECTED_DIR.match(e.name) or PROTECTED_FILE.search(e.name):
                     continue
                 if e.is_dir(follow_symlinks=False):
                     if depth < 2 and not os.path.exists(os.path.join(full, ".git")) and \
@@ -559,13 +579,19 @@ def self_test():
         run("clone", "-q", origin, lane)
         open(os.path.join(lane, "a.txt"), "w").write("a\n")
         open(os.path.join(lane, ".gitignore"), "w").write("build/\n")
+        os.makedirs(os.path.join(lane, "platform", "saves"))   # tracked source named like saves: doesn't count
+        open(os.path.join(lane, "platform", "saves", "saves.cpp"), "w").write("int x;\n")
         run("add", ".", cwd=lane)
         run("commit", "-qm", "a", cwd=lane)
         run("push", "-q", "origin", "HEAD:main", cwd=lane)
         run("fetch", "-q", cwd=lane)
-        old_wt, new_wt, dirty_wt = (os.path.join(home, n) for n in ("old-wt", "new-wt", "dirty-wt"))
-        for wt in (old_wt, new_wt, dirty_wt):
+        old_wt, new_wt, dirty_wt, saves_wt = (os.path.join(home, n) for n in ("old-wt", "new-wt", "dirty-wt",
+                                                                             "saves-wt"))
+        for wt in (old_wt, new_wt, dirty_wt, saves_wt):
             run("worktree", "add", "-q", "--detach", wt, "HEAD", cwd=lane)
+        os.makedirs(os.path.join(saves_wt, "build", "r5_saves"))   # an ignored copy of a save: the worktree stays
+        open(os.path.join(saves_wt, "build", "r5_saves", "card.ps2"), "w").write("s")
+        age(saves_wt, 3)
         os.makedirs(os.path.join(old_wt, "build"))
         open(os.path.join(old_wt, "build", "x.o"), "w").write("o")   # ignored: git worktree remove takes it
         open(os.path.join(dirty_wt, "new.txt"), "w").write("n")
@@ -580,6 +606,21 @@ def self_test():
             age(os.path.join(build, n), days)
         os.makedirs(os.path.join(build, "game_e", "saves"))   # old and not newest, but holds saves: stays
         age(os.path.join(build, "game_e"), 20)
+        deep = os.path.join("CMakeFiles", "gt4_saves.dir", "platform", "saves")   # build output's source path
+        os.makedirs(os.path.join(build, "game_f", deep))   # ... is not a save: the old tree goes
+        open(os.path.join(build, "game_f", deep, "save_import.cpp.obj"), "w").write("o")
+        age(os.path.join(build, "game_f"), 10)
+        os.makedirs(os.path.join(old_wt, "build", deep))   # nor in an ignored build of a worktree
+        open(os.path.join(old_wt, "build", deep, "save_import.cpp.obj"), "w").write("o")
+        dep = os.path.join(old_wt, "build", "_deps", "lib-src")   # a fetched dependency's own checkout
+        run("init", "-q", dep)
+        open(os.path.join(dep, "lib.c"), "w").write("int y;\n")
+        run("add", ".", cwd=dep)
+        run("commit", "-qm", "lib", cwd=dep)
+        nested_wt = os.path.join(home, "nested-wt")   # a worktree holding a checkout of ours: stays
+        run("worktree", "add", "-q", "--detach", nested_wt, "HEAD", cwd=lane)
+        run("init", "-q", os.path.join(nested_wt, "build", "inner"))
+        age(nested_wt, 3)
         os.makedirs(os.path.join(build, "sessions", "s_old")); age(os.path.join(build, "sessions", "s_old"), 5)
         os.makedirs(os.path.join(build, "sessions", "s_new"))
         open(os.path.join(build, "shot.ppm"), "w").write("p"); age(os.path.join(build, "shot.ppm"), 5)
@@ -614,7 +655,8 @@ def self_test():
         expect(not pr.errors, f"no errors ({pr.errors})")
         go = {os.path.relpath(p[1], home).replace("\\", "/") for p in pr.plan}
         want = {"old-wt", "gt4-lane-Z/build/packages/p0", "gt4-lane-Z/build/packages/p1", "gt4-lane-Z/build/game_a",
-                "gt4-lane-Z/build/game_b", "gt4-lane-Z/build/sessions/s_old", "gt4-lane-Z/build/shot.ppm",
+                "gt4-lane-Z/build/game_b", "gt4-lane-Z/build/game_f", "gt4-lane-Z/build/sessions/s_old",
+                "gt4-lane-Z/build/shot.ppm",
                 "gt4-lane-Z/build/rel-old"}
         expect(go == want, f"the plan: extra {sorted(go - want)}, missing {sorted(want - go)}")
         expect(len(pr.objcache_drop) == 2, f"objcache: the 2 oldest of 4 go for the cap ({len(pr.objcache_drop)})")
@@ -624,7 +666,10 @@ def self_test():
         if not failed:
             pr.apply()
             expect(not os.path.exists(old_wt) and os.path.exists(new_wt) and os.path.exists(dirty_wt),
-                   "only the idle clean worktree is removed")
+                   "only the idle clean worktree is removed (its tracked platform/saves doesn't hold it)")
+            expect(os.path.exists(os.path.join(saves_wt, "build", "r5_saves", "card.ps2")),
+                   "a worktree holding an ignored save stays")
+            expect(os.path.exists(os.path.join(nested_wt, "build", "inner")), "a worktree holding a checkout stays")
             expect("old-wt" not in subprocess.run(["git", "-C", lane, "worktree", "list"], capture_output=True,
                                                   text=True).stdout, "git's entry for it is gone")
             expect(os.path.exists(os.path.join(target, "precious.txt")), "a junction's target is untouched")
