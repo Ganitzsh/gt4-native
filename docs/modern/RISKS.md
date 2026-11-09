@@ -384,6 +384,12 @@ decomp.
 
 ## R15: LGDEV effect structures (blocks D7)
 
+**Status: answered** (lane D, `spikes/R15-lgdev-effects.md`, 2026-11-09): GT4 drives three effects, each a 60-byte
+block in one layout: A, a constant force (type 0, direction 90, endless) whose magnitude (-255..255) it updates every
+frame of a race from its physics; B, a damper (type 0x10), and C, a centring spring (type 7), set when the race
+starts. Confirmed live with a fake Driving Force Pro (`GT4_FAKE_DFP=1`): the downloads matched the code byte for byte,
+A was updated 1,216 times in a race. Three of IOP_SERVICES 5.8's labels were wrong and are corrected. D7 can start.
+
 **Question.** What are the parameter layouts of the effects GT4 sends through LGDEV fno 8-16 (IOP_SERVICES.md:
 595-611; 005552B8, 00556298, 00561288...)?
 

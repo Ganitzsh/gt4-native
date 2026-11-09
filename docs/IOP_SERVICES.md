@@ -601,10 +601,12 @@ code at `+0` (0x80000002 bad index, ...04 bad handle, ...05 already open, ...06 
 - Init `00560778`: bind, then **fno 12** with `+0x5C` = uncached EE address of `00874300`: the IOP
   writes 64 bytes there (first byte 1) and replies `+4` = version; the EE accepts `0x010B2400` or
   any `0x010Bxxxx` (else it hangs). Then fno 18 if a saved state exists.
-- Device commands: 1 device info (index `+4` -> 0x18 bytes at `+0x70`), 2 open (handle `+8`),
-  3 close, 4/5 get/set property (`+0x58` id, `+0x5C` value), 6/7 read input state (to `+0x70`),
-  8 download a force effect (`+0x18` params -> effect handle `+0x70`), 9/10/13/14 effect
-  start/stop/update, 15/16 effect parameters, 17/18 device scan.
+- Device commands (corrected by `docs/modern/spikes/R15-lgdev-effects.md`, which has the layouts): 1 device info
+  (index `+4` -> 0x18 bytes at `+0x70`), 2 open (handle `+8`), 3 close, 4/5 get/set property (`+0x58` id,
+  `+0x5C` value; 0x10005 the signature VID << 16 | PID), 6 read input state (to `+0x70`), 14 read several devices,
+  7 download a force effect (the 60-byte block at `+0x70` -> effect handle `+0x18`), 13 update an effect (handle
+  `+0x18`, block `+0x70`), 8/9/10 start/stop/unload an effect (handle `+0x18`), 15/16 start/stop several (handles
+  from `+0x18`, count `+0x5C`), 17/18 save/restore a 0x160-byte state.
 - Supported: VID 0x046D, PID 0xC293-0xC295, 0xC298 (Driving Force Pro), 0xCA00-0xCA7F.
 
 **Host**: reply to fno 12 with version `0x010B2400` and report no device (fno 1 -> 0x80000006),
