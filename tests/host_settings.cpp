@@ -89,6 +89,36 @@ int main() {
               "a chord let go before 250 ms doesn't fire, and a new one counts from its own start");
     }
 
+    // The menu chord and the dump chord stay apart (the architect, M9d): ChordGuard (Select + Start) never touches
+    // L3 or R3, DumpChord never touches Start or Select, and all four held at once give each chord its own, with none
+    // of the four reaching the game. (MENU_DESIGN 3.2 point 5 no longer names L3 + R3 as a menu chord.)
+    {
+        using ps2::PadL3;
+        using ps2::PadR3;
+        using ps2::PadSelect;
+        using ps2::PadStart;
+        ChordGuard menu;
+        DumpChord dump;
+        bool fired = false, leaked = false, crossed = false;
+        for (uint64_t t = 0; t <= 400; t += 20) {
+            ps2::PadInput in{};
+            in.button[PadStart] = in.button[PadSelect] = in.button[PadL3] = in.button[PadR3] = 1.0f;
+            ps2::PadInput menuOnly = in, dumpOnly = in;
+            ChordGuard menuProbe;   // (its own guard: `menu` sees the polls sendPads makes, once each)
+            menuProbe.filter(menuOnly, t);
+            crossed = crossed || menuOnly.button[PadL3] != 1.0f || menuOnly.button[PadR3] != 1.0f;
+            DumpChord probe;
+            probe.filter(dumpOnly, t);
+            crossed = crossed || dumpOnly.button[PadStart] != 1.0f || dumpOnly.button[PadSelect] != 1.0f;
+            menu.filter(in, t);   // main.cpp's order: ChordGuard, then the dump chord (sendPads)
+            fired = dump.filter(in, t) || fired;
+            leaked = leaked || in.button[PadStart] > 0.0f || in.button[PadSelect] > 0.0f || in.button[PadL3] > 0.0f ||
+                     in.button[PadR3] > 0.0f;
+        }
+        check(!crossed, "neither chord filters the other's buttons");
+        check(fired && !leaked, "both chords held: the dump fires, and none of the four reaches the game");
+    }
+
     // Parsing and validation.
     Settings s;
     check(setOption(s, "render.aa", "smaa").empty() && s.aa == AntiAliasing::Smaa, "enum option parses");

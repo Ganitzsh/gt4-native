@@ -874,6 +874,25 @@ int run(const Options& options) {
     if (interactive && gsMode) renderer->showMessage("Settings: Esc, or Guide / Select + Start on the pad", 6.0f);
 
     bool running = true, firstResize = false, minimized = false, restored = false, sawMinimized = false;
+    // The settings pages (M9d1): over a live game with ui.entry = integrated, Esc, Guide and Select + Start ask the
+    // game to open its pages (GT4_REC_HOST_CMD 6) or, while one shows, to close them (7); the game opens them at its
+    // next safe point (MENU_DESIGN 3.2 point 5). Otherwise the host's own menu, as before, until M9f.
+    bool pageShown = false;          // a page's list is with the renderer (M9c)
+    Uint64 settingsAskedAt = 0;      // when command 6 went out (ms), until a page shows (0: none waiting)
+    auto gamePages = [&] {
+        return gsMode && gs && gs->live() && settings.uiEntry == gt4::UiEntry::Integrated;
+    };
+    auto toggleSettings = [&](bool& handled) {
+        if (!gs || !gs->live()) {   // (lane C: a page open when a game ended never makes the next Esc a close)
+            pageShown = false;
+            settingsAskedAt = 0;
+        }
+        handled = gamePages();
+        if (!handled) return;
+        gs->sendMenuCommand(pageShown ? 7u : 6u);
+        settingsAskedAt = pageShown ? 0 : std::max<Uint64>(SDL_GetTicks(), 1);
+        std::printf("settings: %s asked of the game\n", pageShown ? "close" : "open");
+    };
     auto openMenu = [&](bool open) {
         if (open) menu.open(settings);
         else menu.close();
@@ -1081,7 +1100,12 @@ int run(const Options& options) {
                 const auto button = static_cast<SDL_GamepadButton>(event.gbutton.button);
                 const bool chord = (button == SDL_GAMEPAD_BUTTON_START && SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_BACK)) ||
                                    (button == SDL_GAMEPAD_BUTTON_BACK && SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_START));
-                if (button == SDL_GAMEPAD_BUTTON_GUIDE || chord) { openMenu(!menu.isOpen()); break; }
+                if (button == SDL_GAMEPAD_BUTTON_GUIDE || chord) {
+                    bool handled = false;
+                    toggleSettings(handled);
+                    if (!handled) openMenu(!menu.isOpen());
+                    break;
+                }
                 if (menu.isOpen()) { menuButton(button); break; }
                 if (!gsMode) {
                     const std::string change = gamepadCommand(settings, button);
@@ -1109,7 +1133,11 @@ int run(const Options& options) {
                     !(event.key.key >= SDLK_LCTRL && event.key.key <= SDLK_RGUI))
                     keyboardLast = true;
                 if (event.key.key == SDLK_ESCAPE && menuEnabled) {
-                    if (!event.key.repeat) openMenu(!menu.isOpen());
+                    if (!event.key.repeat) {
+                        bool handled = false;
+                        toggleSettings(handled);
+                        if (!handled) openMenu(!menu.isOpen());
+                    }
                     break;
                 }
                 if (event.key.key == SDLK_ESCAPE) { running = false; break; }
@@ -1310,8 +1338,16 @@ int run(const Options& options) {
                     }
                 }
                 if (page) {
-                    if (page->items.empty()) renderer->setPage(nullptr);
+                    pageShown = !page->items.empty();
+                    if (pageShown) settingsAskedAt = 0;
+                    if (!pageShown) renderer->setPage(nullptr);
                     else renderer->setPage(std::move(*page));
+                }
+                // Asked, and no page a second later: the game opens it at its next safe point (a load, a movie, a
+                // race until M9d2), so say so once.
+                if (settingsAskedAt && SDL_GetTicks() - settingsAskedAt > 1000) {
+                    renderer->showMessage("Settings open at the next menu screen", 4.0f);
+                    settingsAskedAt = 0;
                 }
             }
             // A read of drawn pixels the game waits for (the car thumbnails it renders and keeps): the lists up
