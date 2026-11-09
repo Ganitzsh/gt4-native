@@ -110,15 +110,20 @@ SeamAnchor findSeamAnchor(const FrameList& list) {
         a.outcome = SeamAnchor::Outcome::NotShown;
         return a;
     }
-    // The target this list makes for the display: its last draw into a target of the shown one's size and format
-    // (double buffering: the game draws into the back buffer while the front one is shown), else the shown one.
+    // The target this list makes for the display: its last write (a draw, or a grade's destination: GT4 may grade last)
+    // into a target of the shown one's size and format (double buffering: the game draws into the back buffer while the
+    // front one is shown), else the shown one.
     const uint32_t shown = list.display.target2 ? list.display.target2 : list.display.target1;
     a.made = shown;
     if (const Target* s = targetOf(list, shown))
         for (size_t at = list.commands.size(); at-- > 0;) {
             const FrameList::Command& cmd = list.commands[at];
-            if (cmd.kind != FrameList::Command::Kind::Draw || cmd.index >= list.draws.size()) continue;
-            const Target* t = targetOf(list, list.draws[cmd.index].target);
+            uint32_t written = 0;
+            if (cmd.kind == FrameList::Command::Kind::Draw && cmd.index < list.draws.size()) written = list.draws[cmd.index].target;
+            else if (cmd.kind == FrameList::Command::Kind::Effect && cmd.index < list.effects.size())
+                written = list.effects[cmd.index].destination;
+            if (!written) continue;
+            const Target* t = targetOf(list, written);
             if (t && !t->depth && t->bw == s->bw && t->height == s->height && (t->psm == s->psm || (t->psm <= 1 && s->psm <= 1))) {
                 a.made = t->id;
                 break;
@@ -165,6 +170,16 @@ SeamAnchor findSeamAnchor(const FrameList& list) {
             if (list.commands[at].kind == FrameList::Command::Kind::Light && list.commands[at].index < list.lights.size() &&
                 list.lights[list.commands[at].index].target == p->source)
                 lit = long(at);
+        // The last pass into the source before this one: it must sample a target and cover what this one read. One
+        // after the Light means the picture this pass read is that pass's, not the Light's: followed, not the Light.
+        const Pass* next = nullptr;
+        for (size_t i = passes.size(); i-- > 0;) {
+            const Pass& q = passes[i];
+            if (q.dest != p->source || q.last >= p->first || q.kind == Pass::k3D) continue;
+            if (q.source && covers(q, p->u0, p->v0, p->u1, p->v1, 0.9f)) next = &q;
+            break;
+        }
+        if (lit >= 0 && next && long(next->first) > lit) lit = -1;
         if (lit >= 0) {
             const FrameList::Lighting& l = list.lights[list.commands[size_t(lit)].index];
             a.outcome = SeamAnchor::Outcome::Found;
@@ -186,14 +201,6 @@ SeamAnchor findSeamAnchor(const FrameList& list) {
         if (a.hops >= kSeamHops) {
             a.outcome = SeamAnchor::Outcome::Capped;
             return a;
-        }
-        // The last pass into the source before this one: it must sample a target and cover what this one read.
-        const Pass* next = nullptr;
-        for (size_t i = passes.size(); i-- > 0;) {
-            const Pass& q = passes[i];
-            if (q.dest != p->source || q.last >= p->first || q.kind == Pass::k3D) continue;
-            if (q.source && covers(q, p->u0, p->v0, p->u1, p->v1, 0.9f)) next = &q;
-            break;
         }
         if (!next) {
             a.outcome = SeamAnchor::Outcome::NoLight;

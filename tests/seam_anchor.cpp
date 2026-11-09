@@ -196,6 +196,45 @@ int main() {
         const gsn::SeamAnchor a = gsn::findSeamAnchor(l);
         check(a.outcome == Outcome::Capped && a.hops == gsn::kSeamHops, "five passes: the cap");
     }
+    {   // The list's last write into a buffer of the display's size is a grade (lane A's point 2): after the copy into the
+        // back buffer 15, a draw into the scene target 4 (the same size) and then the grade into 15 with no draw after it.
+        // The picture made is 15, the grade's destination, not 4.
+        gsn::FrameList l;
+        addTargets(l);
+        setDisplay(l);
+        draw3d(l, 4, 5);
+        light(l, 4, 5);
+        sprite(l, 15, 0, 0, 640, 448, 4, 0, 0, 640, 448);   // command 2: the copy
+        sprite(l, 4, 0, 0, 640, 448);                       // the scene target cleared for later
+        grade(l, 15, 15);                                   // command 4: the grade, the list's last write into 15
+        const gsn::SeamAnchor a = gsn::findSeamAnchor(l);
+        check(a.made == 15, "a grade last: the picture made is the grade's destination");
+        check(a.found() && a.at == 4 && a.hops == 2, "a grade last: the anchor is the grade, two passes back to the Light");
+    }
+    {   // A covering pass into the Light's target after the Light (lane A's point 3): the scene target 4 is lit, then
+        // overwritten by a composite from 20 (which no Light drew), then copied out. The picture copied is the
+        // composite's, so the chain follows it and ends at no Light, rather than taking the Light's vectors.
+        gsn::FrameList l;
+        addTargets(l);
+        setDisplay(l);
+        draw3d(l, 4, 5);
+        light(l, 4, 5);
+        sprite(l, 4, 0, 0, 640, 448, 20, 0, 0, 640, 448);   // the composite into 4, after its Light
+        sprite(l, 15, 0, 0, 640, 448, 4, 0, 0, 640, 448);   // the copy
+        const gsn::SeamAnchor a = gsn::findSeamAnchor(l);
+        check(a.outcome == Outcome::NoLight && a.hops == 2, "a composite after the Light: followed, no Light");
+    }
+    {   // ... and a plain glow pass after the Light (it samples no target) leaves the Light the source.
+        gsn::FrameList l;
+        addTargets(l);
+        setDisplay(l);
+        draw3d(l, 4, 5);
+        light(l, 4, 5);
+        sprite(l, 4, 0, 0, 640, 448);                       // an untextured full-screen pass into 4
+        sprite(l, 15, 0, 0, 640, 448, 4, 0, 0, 640, 448);
+        const gsn::SeamAnchor a = gsn::findSeamAnchor(l);
+        check(a.found() && a.hops == 1, "a plain pass after the Light: the Light stands");
+    }
     {   // A list cut for a GS read shows nothing.
         gsn::FrameList l;
         addTargets(l);
