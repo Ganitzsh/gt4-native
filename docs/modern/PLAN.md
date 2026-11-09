@@ -1132,6 +1132,18 @@ and reset from the pad alone; a profile set in the menu matches the file; the me
 **E8b: Audio page (S; now M11's Audio page, lane M).** Depends: D5.
 **E9: HUD scale, safe area, HUD off, photo export (M).** Depends: E6.
 
+**E10: `display.field_mode = clean` without a bob or flicker (M; lane B; parked).** clean (6df8aa1) blends where the
+two fields agree and shows the newer field alone where something moved; that field sits half a line from the other,
+so moving content bobs a line a frame (the owner's menu shake on the Odin; lane B, 2026-11-09). It left every preset
+(27f5729: `blend` again). Parked on lane B's branch `clean-still` (eeb298b): the field shown alone moved half way by
+its VBlank parity, which fixes the moved-area bob (`menus_boot`'s title window: 30 of 30 frame pairs moved before, 0
+after). Left: still thin edges that the motion test calls moved alternate fields (the GT map's icons and text: the
+one-frame against two-frame ratio blend 0.65, clean 2.6, the parked fix 2.19); the fix is a same-parity motion test,
+each field compared with its own previous field (two kept field images in `GsnScene`, the shader reading them).
+clean returns to a preset only with 0 pairs moved on `menus_boot`'s GT map (3000-3030), its title (6450-6480) and an
+intro window picked on it (the intro movie itself), the edge ratio at blend's on the GT map, the hidden-line check,
+and a fields-mode race with no new shake.
+
 ### Lane F: night lighting, and the Route 5 night artefacts
 
 **F0: Light list in code (S).** `include/gt4/render/light_list.h`, `platform/render/shaders/light_list.glsl`
