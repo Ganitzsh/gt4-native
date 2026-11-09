@@ -409,6 +409,26 @@ struct AudioCpu {
     }
 } g_audio_cpu;
 
+// GT4_SPU_ADVANCE_CHECK=1 (debugging, off; PLAN.md D5): with the host mixing, each frame's advance() is checked
+// against the per-sample path on a copy of the SPU2 (mix(), whose voices step one sample at a time): every voice's
+// state and ENDX compared, the frames and any difference logged every 600 frames ("spu advance check:"). The
+// session check behind tests/spu2_advance.cpp: the game's own voices, live.
+struct AdvanceCheck {
+    bool on = [] {
+        const char *e = std::getenv("GT4_SPU_ADVANCE_CHECK");
+        return e && *e && *e != '0';
+    }();
+    uint64_t frames = 0, differing = 0, voices = 0;
+    std::vector<int32_t> scratch;
+} g_advance_check;
+
+bool same_voice(const spu::Voice &a, const spu::Voice &b) {
+    return a.phase == b.phase && a.env == b.env && a.env_wait == b.env_wait && a.block == b.block &&
+           a.loop == b.loop && a.flags == b.flags && a.index == b.index && a.counter == b.counter &&
+           std::memcmp(a.samples, b.samples, sizeof a.samples) == 0 && a.s1 == b.s1 && a.s2 == b.s2 &&
+           a.last == b.last && a.cur == b.cur && std::memcmp(a.hist, b.hist, sizeof a.hist) == 0;
+}
+
 double micros_since(std::chrono::steady_clock::time_point t) {
     return std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t).count();
 }
@@ -444,8 +464,32 @@ void audio_frame() {
         // with the host mixing, the game only advances its voices, unless it writes its own mix (GT4_AUDIO_WAV: the
         // two mixes of one run compared, D5's acceptance)
         const auto t0 = std::chrono::steady_clock::now();
-        if (!host || g_wav) g_spu.mix(mix.data(), n, dry_only);
-        else g_spu.advance(n);
+        if (!host || g_wav) {
+            g_spu.mix(mix.data(), n, dry_only);
+        } else if (g_advance_check.on) {   // (the check: the copy steps per sample, the model in bulk)
+            spu::Spu2 oracle = g_spu;
+            oracle.gains = nullptr;
+            g_advance_check.scratch.assign(2 * static_cast<size_t>(n), 0);
+            oracle.mix(g_advance_check.scratch.data(), n, true);
+            g_spu.advance(n);
+            bool same = true;
+            for (int c = 0; c < 2; ++c) {
+                same = same && oracle.core[c].endx == g_spu.core[c].endx;
+                for (int k = 0; k < 24; ++k) {
+                    if (g_spu.core[c].v[k].phase != spu::kOff) ++g_advance_check.voices;
+                    same = same && same_voice(oracle.core[c].v[k], g_spu.core[c].v[k]);
+                }
+            }
+            ++g_advance_check.frames;
+            if (!same) ++g_advance_check.differing;
+            if (g_advance_check.frames % 600 == 0)
+                log_info("spu advance check: %llu frames, %llu with a difference, %llu live voice frames",
+                         static_cast<unsigned long long>(g_advance_check.frames),
+                         static_cast<unsigned long long>(g_advance_check.differing),
+                         static_cast<unsigned long long>(g_advance_check.voices));
+        } else {
+            g_spu.advance(n);
+        }
         if (g_audio_cpu.on) g_audio_cpu.voices += micros_since(t0);
         if (host) {
             const uint32_t head[2] = {GT4_SPU2_RUN, static_cast<uint32_t>(n)};
