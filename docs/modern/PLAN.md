@@ -1655,6 +1655,7 @@ it. Depends: none. Acceptance:
 Acceptance: the answer and its measurements in R17. If it finds a use, a ticket follows.
 
 **P6: Spike R18, the sound driver without the SPU2 register image (M, lane D).** RISKS.md R18. Depends: D5.
+Done (2026-11-09, `spikes/R18-sound-driver-without-image.md`): no, the register image stays; no ticket follows.
 
 ## 5. Day one, per lane
 

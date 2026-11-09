@@ -433,6 +433,13 @@ build; nothing goes to main.
 
 ## R18: The sound driver without the SPU2 register image (PLAN P6)
 
+**Status: answered, no** (lane D, `spikes/R18-sound-driver-without-image.md`, 2026-11-09): the register image stays.
+The driver reads back only each voice's ENVX (in `func_0055D890`, to free a voice at 0; ENDX is never read, the
+whole ELF checked), and R16 showed it can't come late, so a native API would still need the game-side `Spu2` model
+D5 already runs. The gain is too small: the image is 928 bytes a frame (with D9's tags, about 0.4 % of a race's
+stream) and 4.2 us to apply at most, and what a native API was to enable (positional audio, per-voice effects,
+higher quality, sample replacement) is done or doable from the image (D9, `audio.interpolation`).
+
 **What is known.** GT4's sound driver (game logic) writes an SPU2 register image every frame (SPUP fno 4). It frees
 voices by the ENVX / ENDX replies. `runtime/audio.cpp` (and D5's host mixer) mixes voices the way SPU2 does: ADPCM,
 ADSR, pitch, reverb.
