@@ -389,23 +389,26 @@ bracket (it calls method 0x378, `render_reflection`, when course flag 0x01000000
 glow pass (method 0x3F0) or at its place when course flag 0x400000 skips it, every car's lamps in each half's view.
 Each half also draws its own mirror (method 0x3C0, `render_back_mirror`, 00341E50, which already opens a `kViewMirror`
 view through our hooks); in split screen that view gets its half's `pass` and `kViewSplit` too, so two mirror views a
-frame each say which half they belong to. A5a's HUD markers go around each half's panel draw, so the HUD's regions are
-known per half. The halves are two `kViewMain` views drawing into one target with disjoint scissors, new for the host
-(until now a bound view had its own target or the whole of one, CONTRACTS a.5.7), so every feature that works per view
-reaches both, and every pass at a view's Light command (hybrid's substitution, the night relight) keeps to that view's
-scissor: `ViewBegin::pass` is the half (0 the first drawn, 1 the second; 0 in a single view, as today), `scissor` its
-rectangle (side by side or top and bottom, as GT4 lays them out), and a new `ViewFlags` bit, `kViewSplit` = 8, marks
-both, so a consumer that keeps one state per role can tell. CONTRACTS' `ViewBegin` says so in the same commit (the
-'per half in 2 Player Battle' comments corrected in 19b3472). The consumers that keep state per main view are checked
-in the acceptance: temporal history (TAA, B16's upscalers) per view, not per role; B16c's seam; F6's player per half
-(its followed-entrant field). Depends: A3, A7 step 2. Acceptance: `REL`; `DIFFTEST`; `ORIG` and `STREAM` unchanged
-(records off); on a 2 Player Battle capture (Arcade, Mode Selection, 2 Player Battle, pad 2 from the session), every
-frame opened, two `kViewMain` views with `kViewSplit`, each with its scissor, and two mirror views each with its
-half's `pass` and `kViewSplit`, at 16:9 and at 4:3, both cars' lamps on their glow points, and `lighting.night` and
-`render.scene = hybrid` running in both halves without validation messages, each half lit and substituted inside its
-own scissor only (lane B reviews it), and each half's picture its own (no history shared between them). Priority:
-ahead of lane A's queue (the coordinator, 2026-11-09); A7 step 2's battle check waits on it, blocked rather than
-failed.
+frame each say which half they belong to. Each half also draws its car's environment map (0033FD88 calls 0044E9A0,
+whose copy sends `kViewEnvFace` and `kViewEnvCopy` with `pass` = the face): inside a half they carry `kViewSplit` and
+`pass` = face | half << 8, so a consumer keyed by (role, `pass`) keeps the two cars' maps apart without inferring the
+half from the views' order (lane A, 2026-11-09). A5a's HUD markers go around each half's panel draw, so the HUD's
+regions are known per half. The halves are two `kViewMain` views drawing into one target with disjoint scissors, new
+for the host (until now a bound view had its own target or the whole of one, CONTRACTS a.5.7), so every feature that
+works per view reaches both, and every pass at a view's Light command (hybrid's substitution, the night relight) keeps
+to that view's scissor: `ViewBegin::pass` is the half (0 the first drawn, 1 the second; 0 in a single view, as today),
+`scissor` its rectangle (side by side or top and bottom, as GT4 lays them out), and a new `ViewFlags` bit,
+`kViewSplit` = 8, marks both, so a consumer that keeps one state per role can tell. CONTRACTS' `ViewBegin` says so in
+the same commit (the 'per half in 2 Player Battle' comments corrected in 19b3472). The consumers that keep state per
+main view are checked in the acceptance: temporal history (TAA, B16's upscalers) per view, not per role; B16c's seam;
+F6's player per half (its followed-entrant field). Depends: A3, A7 step 2. Acceptance: `REL`; `DIFFTEST`; `ORIG` and
+`STREAM` unchanged (records off); on a 2 Player Battle capture (Arcade, Mode Selection, 2 Player Battle, pad 2 from
+the session), every frame opened, two `kViewMain` views with `kViewSplit`, each with its scissor, and two mirror views
+each with its half's `pass` and `kViewSplit`, at 16:9 and at 4:3, both cars' lamps on their glow points, and
+`lighting.night` and `render.scene = hybrid` running in both halves without validation messages, each half lit and
+substituted inside its own scissor only (lane B reviews it), and each half's picture its own (no history shared
+between them). Priority: ahead of lane A's queue (the coordinator, 2026-11-09); A7 step 2's battle check waits on it,
+blocked rather than failed.
 
 ### Lane B: renderer
 
