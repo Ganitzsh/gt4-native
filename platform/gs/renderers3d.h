@@ -61,6 +61,7 @@ public:
 
 private:
     std::unordered_map<uint64_t, std::vector<Constants>> lastFrame, thisFrame;
+    uint64_t diagFrames = 0;   // DIAG (local, B16c: GT4_MOTION_LOG)
     bool hasPrevious = false;
     Constants previous;   // the current object's constants in the previous frame (when hasPrevious)
     // The lighting chain that last decoded each batch buffer's vertices on the GPU (which leaves them as sent):

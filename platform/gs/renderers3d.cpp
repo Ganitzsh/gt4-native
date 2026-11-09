@@ -7,6 +7,7 @@
 #include <bit>
 #include <cfloat>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -970,6 +971,7 @@ void Renderers3d::endFrame() {
     bool drew = false;
     for (const auto& [key, list] : thisFrame) drew = drew || !list.empty();
     if (!drew) return;   // a VSYNC inside a frame drawn over two (30 frames a second): its objects carry on
+    ++diagFrames;   // DIAG (GT4_MOTION_LOG)
     lastFrame.swap(thisFrame);
     if (thisFrame.size() > 50000) thisFrame.clear();   // objects of courses left long ago
     for (auto& [key, list] : thisFrame) list.clear();
@@ -1059,6 +1061,23 @@ bool Renderers3d::run(const Batch3d& batch, PrimitiveSink& sink, uint32_t& conti
                 if (moved < best) best = moved, previous = c;
             }
             hasPrevious = best <= 0.3f * size;
+        }
+        {   // DIAG (local, B16c): GT4_MOTION_LOG=N logs frame N's matches (the setups whose previous transform moved)
+            static const long logFrame = std::getenv("GT4_MOTION_LOG") ? std::atol(std::getenv("GT4_MOTION_LOG")) : -1;
+            if (long(diagFrames) == logFrame) {
+                float moved = 0.0f;
+                if (hasPrevious)
+                    for (int k = 0; k < 4; ++k)
+                        for (int i = 0; i < 4; ++i) moved += std::fabs(constants.matrix[k][i] - previous.matrix[k][i]);
+                const size_t candidates = then != lastFrame.end() ? then->second.size() : 0;
+                std::printf("motion: frame %llu key %016llx candidates %zu this frame %zu previous %d moved %g; T (%g %g %g %g) Tprev (%g %g %g %g) "
+                            "scale (%g %g %g %g) offset (%g %g %g %g)\n",
+                            (unsigned long long)diagFrames, (unsigned long long)key, candidates, seen.size(), hasPrevious ? 1 : 0, moved,
+                            constants.matrix[3][0], constants.matrix[3][1], constants.matrix[3][2], constants.matrix[3][3],
+                            previous.matrix[3][0], previous.matrix[3][1], previous.matrix[3][2], previous.matrix[3][3],
+                            constants.scale[0], constants.scale[1], constants.scale[2], constants.scale[3], constants.offset[0],
+                            constants.offset[1], constants.offset[2], constants.offset[3]);
+            }
         }
         seen.push_back(constants);
         ++stats.setups;
