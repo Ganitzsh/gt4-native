@@ -21,6 +21,7 @@
 #include "session.h"
 #include "settings.h"
 #include "settings_menu.h"
+#include "host_hub.h"
 #include "prompt_style.h"
 #include "settings_schema.h"
 #include "test_scene.h"
@@ -602,6 +603,7 @@ int run(const Options& options) {
     // The settings pages' bridge (MENU_DESIGN.md M4): its next-race and restart baseline is the settings as the game
     // starts, --set included (a --set value is not pending).
     gt4::ui::SettingsBridge settingsBridge(settings);
+    gt4::ui::HostHub hostHub(settingsBridge);   // the pages with no game to run them (M9e)
     // The pages' requests (GT4_REC_SETTINGS_SET), pushed by the GS host's stream thread, which never touches settings;
     // the main loop drains them once a frame. Bounded: a page sends one request a press.
     struct SettingsRequests {
@@ -907,6 +909,67 @@ int run(const Options& options) {
         if (!open) padHeldBack = true;
         menuHeld = SDL_GAMEPAD_BUTTON_INVALID;
     };
+    // The host-run hub (M9e, MENU_DESIGN 3.2 point 5): with no live game (the test scene, a replay) Esc, Guide and
+    // Select + Start open the pages here, the host running the page engine itself through the M4 bridge. Its Quit
+    // row ends the host (Esc no longer does). Over a replay that holds the game's page lists (M9c), the hub's list
+    // wins while it is open, and closing it clears the page until the replay's next list arrives (lane C: a page
+    // gone for a frame there is that, not a fault).
+    Uint64 hubTicks = 0;
+    bool hubShown = false;
+    auto hubResult = [&](const gt4::ui::HostHub::Result& r) {
+        if (r.changed) applySettings();
+        if (r.save) save();
+        if (r.quit) running = false;
+    };
+    auto toggleHub = [&](bool& handled) {
+        handled = !gs || !gs->live();
+        if (!handled) return;
+        if (hostHub.isOpen()) {
+            hostHub.close();
+        } else {
+            hostHub.open(settings);
+            hubTicks = SDL_GetTicks();
+        }
+    };
+    // The page engine's inputs as the game's hub has them (Cross confirm, Circle back, Square reset, the shoulders the
+    // tabs, Start close); the keyboard's are the keys its prompts show (X, C, Z, Q, E) and the usual ones. A held
+    // direction repeats in the engine (hold), so a key's own repeat is ignored.
+    auto hubInput = [&](gt4::ui::Input input, bool down) {
+        using In = gt4::ui::Input;
+        if (input == In::Up || input == In::Down || input == In::Left || input == In::Right) hostHub.hold(input, down);
+        if (down) hubResult(hostHub.press(input, settings));
+    };
+    auto hubButton = [&](SDL_GamepadButton button, bool down) {
+        using In = gt4::ui::Input;
+        switch (button) {
+        case SDL_GAMEPAD_BUTTON_DPAD_UP: hubInput(In::Up, down); break;
+        case SDL_GAMEPAD_BUTTON_DPAD_DOWN: hubInput(In::Down, down); break;
+        case SDL_GAMEPAD_BUTTON_DPAD_LEFT: hubInput(In::Left, down); break;
+        case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: hubInput(In::Right, down); break;
+        case SDL_GAMEPAD_BUTTON_SOUTH: hubInput(In::Confirm, down); break;
+        case SDL_GAMEPAD_BUTTON_EAST: hubInput(In::Back, down); break;
+        case SDL_GAMEPAD_BUTTON_WEST: hubInput(In::Reset, down); break;
+        case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER: hubInput(In::TabLeft, down); break;
+        case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: hubInput(In::TabRight, down); break;
+        case SDL_GAMEPAD_BUTTON_START: hubInput(In::Close, down); break;
+        default: break;
+        }
+    };
+    auto hubKey = [&](SDL_Keycode key, bool down) {
+        using In = gt4::ui::Input;
+        switch (key) {
+        case SDLK_UP: case SDLK_W: hubInput(In::Up, down); break;
+        case SDLK_DOWN: case SDLK_S: hubInput(In::Down, down); break;
+        case SDLK_LEFT: case SDLK_A: hubInput(In::Left, down); break;
+        case SDLK_RIGHT: case SDLK_D: hubInput(In::Right, down); break;
+        case SDLK_X: case SDLK_RETURN: case SDLK_KP_ENTER: case SDLK_SPACE: hubInput(In::Confirm, down); break;
+        case SDLK_C: case SDLK_BACKSPACE: hubInput(In::Back, down); break;
+        case SDLK_Z: hubInput(In::Reset, down); break;
+        case SDLK_Q: case SDLK_PAGEUP: hubInput(In::TabLeft, down); break;
+        case SDLK_E: case SDLK_PAGEDOWN: hubInput(In::TabRight, down); break;
+        default: break;
+        }
+    };
     auto menuInput = [&](gt4::SettingsMenu::Input input) {
         const auto result = menu.input(input, settings);
         if (result.changed) {
@@ -1130,9 +1193,11 @@ int run(const Options& options) {
                 if (button == SDL_GAMEPAD_BUTTON_GUIDE || chord) {
                     bool handled = false;
                     toggleSettings(handled);
+                    if (!handled) toggleHub(handled);
                     if (!handled) openMenu(!menu.isOpen());
                     break;
                 }
+                if (hostHub.isOpen()) { hubButton(button, true); break; }
                 if (menu.isOpen()) { menuButton(button); break; }
                 if (!gsMode) {
                     const std::string change = gamepadCommand(settings, button);
@@ -1141,6 +1206,7 @@ int run(const Options& options) {
                 break;
             }
             case SDL_EVENT_GAMEPAD_BUTTON_UP:
+                if (hostHub.isOpen()) hubButton(static_cast<SDL_GamepadButton>(event.gbutton.button), false);
                 if (menuHeld == static_cast<SDL_GamepadButton>(event.gbutton.button)) menuHeld = SDL_GAMEPAD_BUTTON_INVALID;
                 break;
             case SDL_EVENT_GAMEPAD_AXIS_MOTION:
@@ -1167,11 +1233,19 @@ int run(const Options& options) {
                     if (!event.key.repeat) {
                         bool handled = false;
                         toggleSettings(handled);
+                        if (!handled) toggleHub(handled);
                         if (!handled) openMenu(!menu.isOpen());
                     }
                     break;
                 }
                 if (event.key.key == SDLK_ESCAPE) { running = false; break; }
+                if (hostHub.isOpen()) {
+                    // Alt + Enter (fullscreen) and the F-keys stay the host's
+                    if (!event.key.repeat && !(event.key.mod & SDL_KMOD_ALT)) hubKey(event.key.key, true);
+                    if (!(event.key.key >= SDLK_F1 && event.key.key <= SDLK_F12) &&
+                        !(event.key.key == SDLK_RETURN && (event.key.mod & SDL_KMOD_ALT)))
+                        break;
+                }
                 if (menu.isOpen()) {
                     using Input = gt4::SettingsMenu::Input;
                     switch (event.key.key) {
@@ -1205,6 +1279,7 @@ int run(const Options& options) {
                 }
                 break;
             case SDL_EVENT_KEY_UP:
+                if (hostHub.isOpen()) hubKey(event.key.key, false);
                 if (event.key.key == SDLK_LEFT || event.key.key == SDLK_RIGHT) keyboardStick = 0.0f;
                 if (event.key.key == SDLK_SPACE) keyboardAction = false;
                 break;
@@ -1291,7 +1366,7 @@ int run(const Options& options) {
             }
             if (changed) applySettings();
             if (saveNow) save();
-            if (settingsBridge.schemaSent())
+            if (settingsBridge.schemaSent() && !hostHub.isOpen())
                 if (const auto values = settingsBridge.refresh(settings); !values.empty()) gs->sendSettings(values);
         }
         if (session) {
@@ -1481,6 +1556,31 @@ int run(const Options& options) {
                 running = false;
                 break;
             }
+        }
+        // The host-run hub (M9e): its clock (repeats, the confirm dialog's countdown), other writers' changes, and its
+        // list laid out for the content's shape and the controller in use, drawn as the game's pages are.
+        if (hostHub.isOpen()) {
+            const Uint64 t = SDL_GetTicks();
+            // (--fixed-step: a 60th a frame, as the scene, so captures of the hub are the same every run)
+            hubResult(hostHub.tick(options.fixedStep ? 1.0f / 60.0f : static_cast<float>(t - hubTicks) / 1000.0f,
+                                   settings));
+            hubTicks = t;
+            hostHub.refresh(settings);
+        }
+        if (hostHub.isOpen()) {
+            const VkExtent2D e = renderer->drawableExtent();
+            const float a = settings.aspect != gt4::AspectRatio::Window ? gt4::aspectValue(settings.aspect)
+                            : e.height ? float(e.width) / float(e.height) : 0.0f;
+            SDL_Gamepad* pad = pads.gamepad(0);
+            const SDL_GamepadType type = pad ? SDL_GetGamepadType(pad) : SDL_GAMEPAD_TYPE_UNKNOWN;
+            const bool playstation = type == SDL_GAMEPAD_TYPE_PS3 || type == SDL_GAMEPAD_TYPE_PS4 ||
+                                     type == SDL_GAMEPAD_TYPE_PS5;
+            renderer->setPage(hostHub.layout(a > 0.0f ? std::round(1080.0f * a) : 1920.0f,
+                                             gt4::ui::promptStyle(settings.uiPrompts, playstation, keyboardLast)));
+            hubShown = true;
+        } else if (hubShown) {
+            renderer->setPage(nullptr);
+            hubShown = false;
         }
         // The settings menu: held directions repeat; the view follows the settings (keys change them too).
         if (menu.isOpen()) {

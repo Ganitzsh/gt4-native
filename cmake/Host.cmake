@@ -382,6 +382,7 @@ add_executable(gt4_host
     platform/ui/menu_layout.cpp
     platform/ui/host/ui_renderer.cpp
     platform/ui/host/page_test.cpp
+    platform/ui/host/host_hub.cpp
     platform/render/upscale/fsr2.cpp
     platform/render/smaa_textures.cpp
     platform/sdl/stb_image_write_impl.cpp
@@ -462,6 +463,19 @@ if(BUILD_TESTING)
     target_compile_options(gt4_ui_settings_schema_test PRIVATE -Wall -Wextra -Wpedantic)
   endif()
   add_test(NAME ui_settings_schema COMMAND gt4_ui_settings_schema_test)
+
+  # The host-run hub (M9e): the page engine with no game, through the M4 bridge; its Quit row.
+  add_executable(gt4_ui_host_hub_test tests/ui_host_hub.cpp platform/ui/host/host_hub.cpp
+                 platform/ui/host/settings_schema.cpp platform/ui/ui_records.cpp platform/ui/draw_list.cpp
+                 platform/ui/menu_model.cpp platform/ui/menu_layout.cpp ${GT4_SETTINGS_SOURCES})
+  target_include_directories(gt4_ui_host_hub_test PRIVATE platform/ui platform/ui/host platform/sdl platform/render
+                             platform/gs include tests)
+  if(MSVC)
+    target_compile_options(gt4_ui_host_hub_test PRIVATE /W4)
+  else()
+    target_compile_options(gt4_ui_host_hub_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  add_test(NAME ui_host_hub COMMAND gt4_ui_host_hub_test)
 
   # The host UI's SDF text (E5): the fonts load, layout and measure agree, UTF-8, a missing codepoint is a box.
   add_executable(gt4_ui_sdf_font_test tests/ui_sdf_font.cpp)
