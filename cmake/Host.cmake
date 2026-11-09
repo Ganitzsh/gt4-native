@@ -199,23 +199,23 @@ else()
 endif()
 
 # AMD FidelityFX Super Resolution 2.2.1 runtime and its Vulkan backend (third_party/fidelityfx-fsr2, MIT).
-# The precompiled shader tables of the SDK are replaced by platform/render/fsr2_shaders.cpp (our SPIR-V,
+# The precompiled shader tables of the SDK are replaced by platform/render/upscale/fsr2_shaders.cpp (our SPIR-V,
 # reflected at run time). Vendored code is built without our warning flags; it is not modified.
 add_library(gt4_fsr2 STATIC
     ${GT4_FSR2_DIR}/ffx_fsr2.cpp
     ${GT4_FSR2_DIR}/ffx_assert.cpp
     ${GT4_FSR2_DIR}/vk/ffx_fsr2_vk.cpp
-    platform/render/fsr2_shaders.cpp)
-target_include_directories(gt4_fsr2 PRIVATE ${GT4_FSR2_DIR} ${GT4_SHADER_OUT} platform/render)
+    platform/render/upscale/fsr2_shaders.cpp)
+target_include_directories(gt4_fsr2 PRIVATE ${GT4_FSR2_DIR} ${GT4_SHADER_OUT} platform/render platform/render/upscale)
 # FFX_GCC only makes FFX_API empty (no dllexport): FSR 2 is linked statically.
 target_compile_definitions(gt4_fsr2 PRIVATE VK_NO_PROTOTYPES FFX_GCC _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
     _CRT_SECURE_NO_WARNINGS)
 target_link_libraries(gt4_fsr2 PRIVATE Vulkan::Headers)
 target_link_libraries(gt4_fsr2 PRIVATE ${GT4_VOLK_HEADERS})
 if(MSVC)
-  target_compile_options(gt4_fsr2 PRIVATE /W0 /FI${CMAKE_CURRENT_SOURCE_DIR}/platform/render/ffx_compat.h)
+  target_compile_options(gt4_fsr2 PRIVATE /W0 /FI${CMAKE_CURRENT_SOURCE_DIR}/platform/render/upscale/ffx_compat.h)
 else()
-  target_compile_options(gt4_fsr2 PRIVATE -w -include ${CMAKE_CURRENT_SOURCE_DIR}/platform/render/ffx_compat.h)
+  target_compile_options(gt4_fsr2 PRIVATE -w -include ${CMAKE_CURRENT_SOURCE_DIR}/platform/render/upscale/ffx_compat.h)
 endif()
 
 # PS2 graphics (docs/GS_BACKEND.md). gt4_ps2gfx is plain C++ (no GPU): the game link and capture
@@ -370,11 +370,12 @@ add_executable(gt4_host
     platform/render/modern/lights_cluster.cpp
     platform/render/modern/parity_view.cpp
     platform/render/overlay.cpp
-    platform/render/fsr2.cpp
+    platform/render/upscale/fsr2.cpp
     platform/render/smaa_textures.cpp
     ${GT4_SHADER_OUT}/gt4_shaders.cpp
     ${GT4_SHADER_HEADERS})
 target_include_directories(gt4_host PRIVATE platform/sdl platform/render platform/render/graph platform/render/modern
+    platform/render/upscale
     ${GT4_SHADER_OUT}
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party
     ${GT4_FSR2_DIR})

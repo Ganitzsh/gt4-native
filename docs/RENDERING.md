@@ -233,7 +233,7 @@ with TAA, plus `texture.lod_bias`.
 FSR 2 integration: the runtime and Vulkan backend are vendored unmodified (`third_party/README.md`); the
 precompiled shader permutations of the SDK are replaced by our build-time GLSL compilation with this host's
 options (HDR input, render-resolution unjittered motion vectors, inverted infinite depth), reflected at run time
-by `platform/render/fsr2_shaders.cpp`, which also leaves out resources a pass declares but does not use. Two
+by `platform/render/upscale/fsr2_shaders.cpp`, which also leaves out resources a pass declares but does not use. Two
 storage-image format qualifiers of the SDK's GLSL are corrected at build time to the formats its runtime creates.
 
 ### Texture filtering

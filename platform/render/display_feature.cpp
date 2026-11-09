@@ -1,6 +1,7 @@
 #include "display_feature.h"
 
 #include "fsr2.h"
+#include "upscaler.h"
 #include "gt4_shaders.h"
 #include "smaa_textures.h"
 
@@ -9,6 +10,7 @@
 #include <cstdio>
 #include <cstring>
 #include <map>
+#include <memory>
 
 namespace gt4 {
 namespace {
@@ -50,7 +52,7 @@ struct DisplayFeature::Impl {
     const vk::Device& device;
     VkCommandPool pool;
     DisplayConfig config;   // configure's, then each frame's (DisplayInputs::config)
-    Fsr2 fsr2;
+    std::unique_ptr<upscale::Upscaler> upscaler;   // the temporal upscaler (B16: FSR 2, its one backend so far)
 
     // Samplers.
     VkSampler linearClamp = VK_NULL_HANDLE, pointClamp = VK_NULL_HANDLE;
@@ -86,7 +88,7 @@ struct DisplayFeature::Impl {
     const Settings* settings = nullptr;
     rg::Graph* graph = nullptr;
 
-    Impl(const vk::Device& d, VkCommandPool p) : device(d), pool(p), fsr2(d) {
+    Impl(const vk::Device& d, VkCommandPool p) : device(d), pool(p), upscaler(std::make_unique<Fsr2>(d)) {
         linearClamp = vk::createSampler(device, VK_FILTER_LINEAR, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
         pointClamp = vk::createSampler(device, VK_FILTER_NEAREST, VK_SAMPLER_MIPMAP_MODE_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
         createPipelines();
@@ -103,7 +105,7 @@ struct DisplayFeature::Impl {
 
     ~Impl() {
         vkDeviceWaitIdle(device.device);
-        fsr2.destroy();
+        upscaler->destroy();
         releaseTargets();
         for (vk::Pipeline* p : {&histogramPass, &adapt, &taa, &bloomDownPass, &bloomUpPass, &dofPrepare, &dofGather,
                                 &dofComposite, &tileMax, &neighbourMaxPass, &motionBlur, &tonemap, &fxaa, &smaaResolve,
@@ -254,14 +256,14 @@ struct DisplayFeature::Impl {
         }
         if (c.fsr2) {
             fsrOutput = image(kHdr, c.output, rw, "fsr2 output");
-            if (!fsr2.valid() || !sameExtent(fsr2.displaySize(), c.output)) {
-                if (!fsr2.create(c.output)) {
+            if (!upscaler->valid() || !sameExtent(upscaler->displaySize(), c.output)) {
+                if (!upscaler->create(c.output)) {
                     std::fprintf(stderr, "FSR 2 is unavailable on this device; using TAA instead\n");
                     return false;
                 }
             }
         } else {
-            fsr2.destroy();
+            upscaler->destroy();
         }
         const VkExtent2D p = c.post;
         const VkExtent2D half{std::max(1u, p.width / 2), std::max(1u, p.height / 2)};
@@ -465,7 +467,7 @@ struct DisplayFeature::Impl {
                     H(b, *image) = b.use(H(b, *image), Use::Opaque, kAll);
             }, [&](rg::PassContext& c) {
                 vk::beginLabel(c.command, "fsr2");
-                Fsr2Inputs in;
+                upscale::Inputs in;
                 in.color = &sceneColor();
                 in.depth = &depthImage();
                 in.velocity = &sceneVelocity();
@@ -476,11 +478,11 @@ struct DisplayFeature::Impl {
                 in.sharpness = settings->sharpness;
                 in.deltaMilliseconds = inputs.dt * 1000.0f;
                 in.reset = inputs.sceneState->reset;
-                in.near = inputs.sceneState->camera.near;
+                in.nearPlane = inputs.sceneState->camera.near;
                 in.verticalFov = inputs.sceneState->camera.verticalFov;
                 in.reactive = inputs.scene->reactiveMask();
                 in.transparencyAndComposition = inputs.scene->transparencyMask();
-                fsr2.dispatch(c.command, in);
+                upscaler->dispatch(c.command, in);
                 vk::endLabel(c.command);
             });
             hdrKey = &fsrOutput;

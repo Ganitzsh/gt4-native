@@ -243,8 +243,8 @@ struct FramePipeline::Impl {
         view.settings = &settings;
         jitter = Vec2{};
         if (config.fsr2) {
-            const int phases = Fsr2::jitterPhaseCount(config.render.width, config.output.width);
-            jitter = Fsr2::jitterOffset(static_cast<int>(index % static_cast<uint32_t>(phases)), phases);
+            const int phases = Fsr2::phaseCount(config.render.width, config.output.width);
+            jitter = Fsr2::offset(static_cast<int>(index % static_cast<uint32_t>(phases)), phases);
         } else if (config.taa) {
             // Halton (2, 3), with more phases when upsampling so every output pixel gets covered.
             const float ratio = static_cast<float>(config.output.width) / static_cast<float>(config.render.width);

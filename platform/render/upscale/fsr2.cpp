@@ -99,7 +99,7 @@ void Fsr2::dispatch(VkCommandBuffer command, const Fsr2Inputs& in) {
     d.frameTimeDelta = in.deltaMilliseconds;
     d.preExposure = 1.0f;
     d.reset = in.reset;
-    d.cameraNear = in.near;
+    d.cameraNear = in.nearPlane;
     d.cameraFar = 1.0e6f;   // infinite far plane (FFX_FSR2_ENABLE_DEPTH_INFINITE)
     d.cameraFovAngleVertical = in.verticalFov;
     d.viewSpaceToMetersFactor = 1.0f;
@@ -117,13 +117,13 @@ void Fsr2::dispatch(VkCommandBuffer command, const Fsr2Inputs& in) {
     in.output->access = VK_ACCESS_2_SHADER_WRITE_BIT;
 }
 
-int Fsr2::jitterPhaseCount(uint32_t renderWidth, uint32_t displayWidth) {
+int Fsr2::phaseCount(uint32_t renderWidth, uint32_t displayWidth) {
     return ffxFsr2GetJitterPhaseCount(static_cast<int32_t>(renderWidth), static_cast<int32_t>(displayWidth));
 }
 
-Vec2 Fsr2::jitterOffset(int index, int phaseCount) {
+Vec2 Fsr2::offset(int index, int phases) {
     Vec2 result;
-    ffxFsr2GetJitterOffset(&result.x, &result.y, index, phaseCount);
+    ffxFsr2GetJitterOffset(&result.x, &result.y, index, phases);
     return result;
 }
 
