@@ -109,13 +109,12 @@ const PresetTable& presetValues(Preset preset) {
 }
 
 // What a preset sets besides its members (MENU_DESIGN 3.8): applyPreset sets these too, but detectPreset ignores them
-// and changing one leaves graphics.preset as it is, since they are not graphics choices. ui.entry: hotkey in the
-// original preset (GT4's screens untouched); hotkey in the others too until the host draws the pages (MENU_DESIGN M9
-// sets integrated there): before, a hub opened from GT4's Options would be invisible. ui.pause likewise: gt4 in all
-// of them until M9 sets native in the others (an invisible pause page would leave the race paused with no way out).
+// and changing one leaves graphics.preset as it is, since they are not graphics choices. ui.entry and ui.pause:
+// hotkey and gt4 in the original preset, set explicitly (GT4's screens and pause untouched, whatever the defaults);
+// integrated and native in the others (MENU_DESIGN M9f2).
 const PresetTable& presetFollowers(Preset preset) {
     static const PresetTable original{{"ui.entry", "hotkey"}, {"ui.pause", "gt4"}};
-    static const PresetTable others{{"ui.entry", "hotkey"}, {"ui.pause", "gt4"}};
+    static const PresetTable others{{"ui.entry", "integrated"}, {"ui.pause", "native"}};
     static const PresetTable none;
     return preset == Preset::Original ? original : preset == Preset::Custom ? none : others;
 }
@@ -313,12 +312,14 @@ void saveSettings(const Settings& settings, const std::string& path) {
         throw std::runtime_error("Cannot replace settings file: " + path);
 }
 
-std::vector<std::string> loadSettings(Settings& settings, const std::string& path) {
+std::vector<std::string> loadSettings(Settings& settings, const std::string& path, bool* older) {
+    if (older) *older = false;
     std::vector<std::string> warnings;
     std::ifstream file(path, std::ios::binary);
     if (!file) return warnings;
     std::string line, section;
     std::vector<std::string> seen;   // the options the file sets
+    int fileVersion = 1;             // (a file without a version line is from before version 2)
     int number = 0;
     while (std::getline(file, line)) {
         ++number;
@@ -336,11 +337,14 @@ std::vector<std::string> loadSettings(Settings& settings, const std::string& pat
         const auto value = trim(text.substr(equals + 1));
         if (section.empty() && key == "version") {
             int version = 0;
-            if (!parseInt(value, version)) warnings.push_back(where + "bad version");
-            else if (version > Settings::kVersion)
-                warnings.push_back(where + "written by a newer version (" + std::to_string(version) +
-                                   "); unknown options are ignored");
-            // Migrations from older versions go here when the format changes.
+            if (!parseInt(value, version)) {
+                warnings.push_back(where + "bad version");
+            } else {
+                if (version > Settings::kVersion)
+                    warnings.push_back(where + "written by a newer version (" + std::to_string(version) +
+                                       "); unknown options are ignored");
+                fileVersion = version;
+            }
             continue;
         }
         const auto qualified = section + "." + key;
@@ -350,6 +354,34 @@ std::vector<std::string> loadSettings(Settings& settings, const std::string& pat
         else seen.push_back(qualified);   // (a refused value is as if the line were missing)
     }
     settings.preset = detectPreset(settings);
+    // Version 1 -> 2 (MENU_DESIGN M9f2): every version-1 file holds ui.entry = hotkey and ui.pause = gt4, every
+    // preset's value then, not a player's choice, so they count as unset and follow the preset below. A value that
+    // moves is logged; the host writes the file back as version 2 at once (*older), so that is once. integrated and
+    // native in a version-1 file (the playtest file's opt-in) are kept; from version 2 on, the file's values are
+    // choices.
+    if (fileVersion < Settings::kVersion && older) *older = true;
+    if (fileVersion < 2) {
+        std::vector<std::pair<const char*, const char*>> reset;   // an option the file set to its version-1 value
+        using Old = std::pair<const char*, const char*>;
+        for (const auto& [key, old] : {Old{"ui.entry", "hotkey"}, Old{"ui.pause", "gt4"}}) {
+            const auto it = std::find(seen.begin(), seen.end(), key);
+            if (it == seen.end() || find(key)->get(settings) != old) continue;
+            seen.erase(it);
+            find(key)->set(settings, find(key)->get(Settings{}));   // (Custom has no followers: the default)
+            reset.push_back({key, old});
+        }
+        for (const auto& [key, value] : presetFollowers(settings.preset))
+            if (std::find(seen.begin(), seen.end(), key) == seen.end()) find(key)->set(settings, value);
+        std::string moved;   // (under original nothing moves: no line)
+        for (const auto& [key, old] : reset)
+            if (find(key)->get(settings) != old) moved += moved.empty() ? key : std::string(" and ") + key;
+        if (!moved.empty()) {
+            const char* verb = moved.find(" and ") != std::string::npos ? " now follow" : " now follows";
+            warnings.push_back(path + ": version 1: " + moved + verb + " the preset (" +
+                               find("ui.entry")->get(settings) + ", " + find("ui.pause")->get(settings) + " under " +
+                               name(settings.preset) + ")");
+        }
+    }
     // A follower the file does not set (written before it existed) takes the loaded preset's value: an original
     // player's file from before ui.entry keeps GT4's screens untouched.
     for (const auto& [key, value] : presetFollowers(settings.preset))

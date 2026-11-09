@@ -88,6 +88,11 @@ running game, the game opens them at its next menu screen; in a race, the same k
 from the pause screen (Start alone pauses as GT4 does). The same keys close them. With no game, the host shows them
 itself; quit with the **Quit** row on the System tab, or Alt+F4.
 
+Under the `low` to `ultra` presets, GT4's own Options items and Start on the GT mode map open Settings too, and the
+race pause is this game's pause page (Continue, Retry, Exit, Screen, Settings). The `original` preset keeps GT4's
+screens and pause as on the PS2. Both are settings of their own: Settings entry and Race pause, on the
+Accessibility tab.
+
 | Action | Pad | Keyboard |
 |---|---|---|
 | Choose an option | D-pad up/down | Arrow keys |

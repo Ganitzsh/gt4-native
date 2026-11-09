@@ -64,7 +64,8 @@ enum class UiPause : uint8_t { Gt4, Native };
 enum class UiPrompts : uint8_t { Auto, Xbox, PlayStation, Keyboard };
 
 struct Settings {
-    static constexpr int kVersion = 1;
+    // 2 (MENU_DESIGN M9f2): a version-1 file's ui.entry = hotkey and ui.pause = gt4 count as unset (loadSettings)
+    static constexpr int kVersion = 2;
 
     // [display]
     WindowMode windowMode = WindowMode::Windowed;
@@ -150,9 +151,9 @@ struct Settings {
     AudioSpatial audioSpatial = AudioSpatial::Original;                     // the host mixer's (audio.mixer = host)
 
     // [ui] (settings_ui.cpp, lane M; set by every preset, but not part of what makes one: MENU_DESIGN 3.8)
-    UiEntry uiEntry = UiEntry::Hotkey;   // sent to the game (kOptionUiEntry); integrated in low to ultra from M9
+    UiEntry uiEntry = UiEntry::Integrated;   // sent to the game (kOptionUiEntry); hotkey in the original preset
     UiPrompts uiPrompts = UiPrompts::Auto;   // sent to the game as kOptionPromptStyle (platform/ui/host/prompt_style.h)
-    UiPause uiPause = UiPause::Gt4;      // sent to the game (kOptionUiPause); native in low to ultra from M9
+    UiPause uiPause = UiPause::Native;       // sent to the game (kOptionUiPause); gt4 in the original preset
 
     // [input] (settings_input.cpp; not part of the graphics presets but for input.response)
     TriggerTravel triggerTravel = TriggerTravel::Game;   // sent to the game (kOptionTriggerTravel)
@@ -236,7 +237,8 @@ std::vector<OptionInfo> describe(const Settings& settings);
 std::string unusedReason(const Settings& settings, std::string_view key);
 
 // INI file I/O. load() returns warnings (unknown keys, bad values) and keeps defaults for those.
-std::vector<std::string> loadSettings(Settings& settings, const std::string& path);
+// *older (when given): the file was written by an older version; the interactive host writes it back at once.
+std::vector<std::string> loadSettings(Settings& settings, const std::string& path, bool* older = nullptr);
 void saveSettings(const Settings& settings, const std::string& path);
 std::string formatSettings(const Settings& settings);
 

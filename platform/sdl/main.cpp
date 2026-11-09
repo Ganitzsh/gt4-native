@@ -584,8 +584,21 @@ int run(const Options& options) {
     std::string settingsPath = options.settingsPath;
     if (settingsPath.empty() && interactive) settingsPath = defaultSettingsPath();
     if (!settingsPath.empty()) {
-        for (const auto& warning : gt4::loadSettings(settings, settingsPath)) std::fprintf(stderr, "Settings: %s\n", warning.c_str());
+        bool older = false;
+        for (const auto& warning : gt4::loadSettings(settings, settingsPath, &older))
+            std::fprintf(stderr, "Settings: %s\n", warning.c_str());
         std::printf("Settings: %s\n", settingsPath.c_str());
+        // A file from an older version is written back at once (before the command line's overrides), under the
+        // condition of the missing file's save below: its migration (settings.cpp) is then logged once, and the next
+        // start reads its values as choices (MENU_DESIGN M9f2).
+        if (older && interactive) {
+            try {
+                gt4::saveSettings(settings, settingsPath);
+                std::printf("Settings: written back as version %d\n", gt4::Settings::kVersion);
+            } catch (const std::exception& error) {
+                std::fprintf(stderr, "%s\n", error.what());
+            }
+        }
     }
     // The pipelines compiled in earlier runs (vk::openPipelineCache): pipeline_cache.bin beside the settings;
     // GT4_PIPELINE_CACHE=FILE another file, =0 none. Paths in UTF-8, as settingsPath.

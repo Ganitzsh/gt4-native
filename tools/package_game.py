@@ -66,6 +66,9 @@ NAME = "GT4-Native"
 # shows it full screen), each game frame presented once (no frame interpolation: half the work on a 120 Hz screen),
 # the 16:9 game. Stated as well, whatever the preset says: no ambient occlusion, FSR 1, the game's own rear-view
 # mirror (the high one draws the course and cars again), whole frames in races. Everything else at the host's defaults.
+# The packaged settings files' first line: platform/sdl/settings.h's Settings::kVersion. A file from an older version
+# is written back whole at the host's first interactive start (MENU_DESIGN M9f2), so they say the current one.
+SETTINGS_HEADER = "version = 2\n\n"
 PROFILES = {
     "desktop": "",
     "handheld": "[graphics]\npreset = low\n\n[render]\nupscaler = fsr1\n\n[effects]\nambient_occlusion = off\nmirror = original\n\n"
@@ -386,8 +389,8 @@ def release(a):
     files = [(f, os.path.basename(f)) for f in [host, game] + vc_runtime(a.arch)]
     files += [(os.path.join(root, d), d) for d in RELEASE_DOCS if os.path.isfile(os.path.join(root, d))]
     texts = {
-        "settings.ini": ("version = 1\n\n" + PROFILES["desktop"], "\n"),
-        "settings-handheld.ini": ("version = 1\n\n" + PROFILES["handheld"], "\n"),
+        "settings.ini": (SETTINGS_HEADER + PROFILES["desktop"], "\n"),
+        "settings-handheld.ini": (SETTINGS_HEADER + PROFILES["handheld"], "\n"),
         "README.txt": (RELEASE_README.format(version=a.release), "\r\n"),
         "BUILD-INFO.txt": ("\n".join(info) + "\n", "\r\n"),
         "game/PUT-YOUR-GAME-HERE.txt": (GAME_FOLDER_NOTE, "\r\n"),
@@ -429,8 +432,8 @@ def linux_release(a, name, host, game, root, info, sources):
     files += [(os.path.join(root, d), d, 0o644) for d in RELEASE_DOCS if os.path.isfile(os.path.join(root, d))]
     texts = {
         "gt4-native.sh": (LINUX_LAUNCHER, 0o755),
-        "settings.ini": ("version = 1\n\n" + PROFILES["desktop"], 0o644),
-        "settings-handheld.ini": ("version = 1\n\n" + PROFILES["handheld"], 0o644),
+        "settings.ini": (SETTINGS_HEADER + PROFILES["desktop"], 0o644),
+        "settings-handheld.ini": (SETTINGS_HEADER + PROFILES["handheld"], 0o644),
         "README.txt": (LINUX_README.format(version=a.release, arch=LINUX_ARCHES[a.arch][1],
                                            proton=LINUX_ARCHES[a.arch][2]), 0o644),
         "BUILD-INFO.txt": ("\n".join(info) + "\n", 0o644),
@@ -548,7 +551,7 @@ def main():
     saves = import_save(a.save, work) if a.save else None
     settings = os.path.join(work, "settings.ini")
     with open(settings, "w", newline="\n") as f:
-        f.write("version = 1\n\n" + PROFILES[a.profile])
+        f.write(SETTINGS_HEADER + PROFILES[a.profile])
     readme = os.path.join(work, "README.txt")
     with open(readme, "w", newline="\r\n") as f:
         f.write(README)

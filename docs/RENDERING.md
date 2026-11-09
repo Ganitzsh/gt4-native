@@ -83,9 +83,11 @@ option with its values and effect is in the reference at the end, and `gt4_host 
   `~/.local/share/gt4-native/host/`). Interactive runs create it with the defaults, read it and save every
   change made with the keys. Scripted runs (`--frames`, `--smoke-test`, `--session-dir`, `--headless`) start
   from the defaults and never write it, unless `--settings PATH` names a file.
-- **Format**: `version = 1`, then `[section]` blocks of `key = value`, each preceded by a comment with the
+- **Format**: `version = 2`, then `[section]` blocks of `key = value`, each preceded by a comment with the
   allowed values. Unknown keys and bad values are reported and keep their defaults; a file written by a newer
-  version is read as far as possible. Migrations from older versions belong in `loadSettings()`.
+  version is read as far as possible. Migrations from older versions belong in `loadSettings()`: in a version-1
+  file, `ui.entry = hotkey` and `ui.pause = gt4` (every preset's values then) follow the loaded preset, logged once
+  at load (MENU_DESIGN M9f2).
 - **Precedence**: defaults, then the file, then `--preset NAME` / `--set section.key=value` in command-line
   order, then `--gpu`. Sessions change settings with `set KEY VALUE`.
 - **Presets** (`graphics.preset`): applying one sets its members; changing a member afterwards makes it
@@ -415,6 +417,14 @@ Generated from `gt4_host --list-options` (defaults are the `high` preset).
 | Option | Default | Values | Effect |
 |---|---|---|---|
 | `gameplay.ai_catchup` | `original` | original \| reduced \| off | The AI's catch-up (GT4's slow car boost), in the events that set it: cars behind the player are sped up and cars ahead slowed down as the gaps grow. original = as on the PS2, reduced = half as strong, off = every car at its own pace. |
+
+#### [ui]
+
+| Option | Default | Values | Effect |
+|---|---|---|---|
+| `ui.entry` | `integrated` | hotkey \| integrated | How Settings opens: by the host's keys only (`original`), or also from GT4's Options items and Start on GT mode's map. |
+| `ui.pause` | `native` | gt4 \| native | The race pause: GT4's own (`original`), or this game's pause page with Settings in it. |
+| `ui.prompts` | `auto` | auto \| xbox \| playstation \| keyboard | The button names the settings pages show; auto follows the controller in use. |
 
 #### [scene]
 

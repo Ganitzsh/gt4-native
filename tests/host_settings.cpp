@@ -10,8 +10,11 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
+#include <tuple>
 #include <utility>
+#include <vector>
 
 namespace {
 int failures = 0;
@@ -247,29 +250,36 @@ int main() {
         check(!setOption(f, "display.field_mode", "bob").empty(), "an unknown field mode is refused");
     }
 
-    // ui.entry (settings_ui.cpp, MENU_DESIGN 3.8): every preset sets it (hotkey in all of them until M9 draws the
-    // pages), but it decides no preset: changing it keeps graphics.preset, and the file round trip keeps the player's.
+    // ui.entry (settings_ui.cpp, MENU_DESIGN 3.8): every preset sets it (hotkey in original, integrated in the others
+    // from M9f2), but it decides no preset: changing it keeps graphics.preset, and the file round trip keeps it.
     {
         Settings u;
-        check(u.uiEntry == UiEntry::Hotkey && getOption(u, "ui.entry") == "hotkey", "ui.entry is hotkey by default (until M9)");
+        check(u.uiEntry == UiEntry::Integrated && getOption(u, "ui.entry") == "integrated" && u.preset == Preset::High,
+              "ui.entry is integrated by default, as the default preset (high) sets it");
         applyPreset(u, Preset::Original);
         check(u.uiEntry == UiEntry::Hotkey && detectPreset(u) == Preset::Original, "the original preset opens by hotkey only");
         check(setOption(u, "ui.entry", "integrated").empty() && u.preset == Preset::Original && detectPreset(u) == Preset::Original,
               "ui.entry = integrated keeps the original preset");
         applyPreset(u, Preset::High);
-        check(u.uiEntry == UiEntry::Hotkey, "a quality preset sets hotkey (until M9)");
-        // Until M9 wires the host's page drawing, no preset may open a page the host cannot draw (MENU_DESIGN 3.8):
-        // M9 changes this check to the table's values.
+        check(u.uiEntry == UiEntry::Integrated, "a quality preset sets integrated");
+        // The table (MENU_DESIGN M9f2): original sets hotkey and gt4 explicitly, whatever the struct's defaults; the
+        // others integrated and native.
         for (Preset preset : {Preset::Original, Preset::Low, Preset::Medium, Preset::High, Preset::Ultra}) {
-            Settings t;
-            t.uiEntry = UiEntry::Integrated;
-            t.uiPause = UiPause::Native;
-            applyPreset(t, preset);
-            check(t.uiEntry == UiEntry::Hotkey, "no preset sets ui.entry = integrated before M9");
-            check(t.uiPause == UiPause::Gt4, "no preset sets ui.pause = native before M9");
+            const bool isOriginal = preset == Preset::Original;
+            for (const bool from : {false, true}) {
+                Settings t;
+                t.uiEntry = from ? UiEntry::Integrated : UiEntry::Hotkey;
+                t.uiPause = from ? UiPause::Native : UiPause::Gt4;
+                applyPreset(t, preset);
+                check(t.uiEntry == (isOriginal ? UiEntry::Hotkey : UiEntry::Integrated),
+                      "each preset sets its ui.entry: hotkey in original, integrated in the others");
+                check(t.uiPause == (isOriginal ? UiPause::Gt4 : UiPause::Native),
+                      "each preset sets its ui.pause: gt4 in original, native in the others");
+            }
         }
-        check(setOption(u, "ui.entry", "integrated").empty() && u.preset == Preset::High && detectPreset(u) == Preset::High,
-              "ui.entry = integrated keeps the high preset");
+        check(setOption(u, "ui.entry", "hotkey").empty() && u.preset == Preset::High && detectPreset(u) == Preset::High,
+              "ui.entry = hotkey keeps the high preset");
+        check(setOption(u, "ui.entry", "integrated").empty(), "ui.entry = integrated is taken");
         check(!setOption(u, "ui.entry", "start").empty(), "an unknown ui.entry is refused");
         const auto path = gt4::test::uniqueTempPath("gt4_ui_entry", ".ini");
         saveSettings(u, path.string());
@@ -305,18 +315,23 @@ int main() {
         check(clean3 && old3.preset == Preset::Original && old3.uiEntry == UiEntry::Integrated,
               "an original file that sets ui.entry = integrated keeps it, and keeps the original preset");
         auto [clean4, old4] = loadText("version = 1\n[graphics]\npreset = high\n");
-        check(clean4 && old4.uiEntry == UiEntry::Hotkey, "a high file without ui.entry is hotkey (until M9)");
+        check(clean4 && old4.uiEntry == UiEntry::Integrated && old4.uiPause == UiPause::Native,
+              "a high file without ui lines follows its preset: integrated, native");
         auto [clean5, old5] = loadText("version = 1\n[graphics]\npreset = original\n[ui]\nentry = bogus\n");
         check(!clean5 && old5.uiEntry == UiEntry::Hotkey, "a refused ui.entry is as if missing: the original preset's hotkey");
     }
 
-    // ui.pause (settings_ui.cpp, MENU_DESIGN 3.8, M7): as ui.entry, gt4 in every preset until M9 draws the pages.
+    // ui.pause (settings_ui.cpp, MENU_DESIGN 3.8, M7): as ui.entry, gt4 in original and native in the others (M9f2).
     {
         Settings u;
-        check(u.uiPause == UiPause::Gt4 && getOption(u, "ui.pause") == "gt4", "ui.pause is gt4 by default (until M9)");
-        check(unusedReason(u, "ui.pause").empty(), "gt4 is not listed as unused");
+        check(u.uiPause == UiPause::Native && getOption(u, "ui.pause") == "native", "ui.pause is native by default");
+        check(unusedReason(u, "ui.pause").empty(), "native is not listed as unused");
+        applyPreset(u, Preset::Original);
+        check(u.uiPause == UiPause::Gt4 && unusedReason(u, "ui.pause").empty(), "the original preset sets gt4, not unused");
         applyPreset(u, Preset::High);
-        check(u.uiPause == UiPause::Gt4, "a quality preset sets gt4 (until M9)");
+        check(u.uiPause == UiPause::Native, "a quality preset sets native");
+        check(setOption(u, "ui.pause", "gt4").empty() && u.preset == Preset::High && detectPreset(u) == Preset::High,
+              "ui.pause = gt4 keeps the high preset");
         check(setOption(u, "ui.pause", "native").empty() && u.preset == Preset::High && detectPreset(u) == Preset::High,
               "ui.pause = native keeps the high preset");
         check(unusedReason(u, "ui.pause").empty(), "native is taken, and not listed as unused (M9)");
@@ -339,6 +354,93 @@ int main() {
         const bool refusedClean = loadSettings(refused, bogus.string()).empty();
         std::filesystem::remove(bogus);
         check(!refusedClean && refused.uiPause == UiPause::Gt4, "a refused ui.pause is as if missing: the original preset's gt4");
+    }
+
+    // Version 1 -> 2 (MENU_DESIGN M9f2): a version-1 file's ui.entry = hotkey and ui.pause = gt4 were every preset's
+    // value then, so they follow the loaded preset, logged once; the new values in a v1 file are kept; a version-2
+    // file's values are choices. One file per case, as a player has them.
+    {
+        auto load = [](const std::string& text) {
+            const auto file = gt4::test::uniqueTempPath("gt4_ui_v1", ".ini");
+            { std::ofstream out(file, std::ios::binary); out << text; }
+            Settings s;
+            const auto warnings = loadSettings(s, file.string());
+            std::filesystem::remove(file);
+            return std::make_pair(warnings, s);
+        };
+        auto logged = [](const std::vector<std::string>& w, const char* what) {
+            return w.size() == 1 && w[0].find(what) != std::string::npos;
+        };
+        const auto [w1, v1High] = load("version = 1\n[graphics]\npreset = high\n[ui]\nentry = hotkey\npause = gt4\n");
+        check(v1High.uiEntry == UiEntry::Integrated && v1High.uiPause == UiPause::Native && v1High.preset == Preset::High,
+              "v1 under high with hotkey / gt4: integrated / native");
+        check(logged(w1, "version 1: ui.entry and ui.pause now follow the preset (integrated, native under high)"),
+              "v1 under high: the migration is logged once, with what it gives");
+        const auto [w2, v1Original] = load("version = 1\n[graphics]\npreset = original\n[ui]\nentry = hotkey\npause = gt4\n");
+        check(v1Original.uiEntry == UiEntry::Hotkey && v1Original.uiPause == UiPause::Gt4 &&
+                  v1Original.preset == Preset::Original,
+              "v1 under original with hotkey / gt4: hotkey / gt4");
+        check(w2.empty(), "v1 under original: nothing moves, nothing logged");
+        const auto [w3, v1New] = load("version = 1\n[graphics]\npreset = original\n[ui]\nentry = integrated\npause = native\n");
+        check(w3.empty() && v1New.uiEntry == UiEntry::Integrated && v1New.uiPause == UiPause::Native,
+              "v1 with integrated / native keeps them (the playtest file's opt-in), nothing logged");
+        const auto [w4, v2High] = load("version = 2\n[graphics]\npreset = high\n[ui]\nentry = hotkey\npause = gt4\n");
+        check(w4.empty() && v2High.uiEntry == UiEntry::Hotkey && v2High.uiPause == UiPause::Gt4 &&
+                  v2High.preset == Preset::High,
+              "v2 under high with hotkey / gt4 keeps them: a player's choice");
+        const auto [w5, none] = load("version = 1\n[graphics]\npreset = medium\n");
+        check(w5.empty() && none.uiEntry == UiEntry::Integrated && none.uiPause == UiPause::Native,
+              "a file with no ui lines follows its preset, nothing logged");
+        const auto [w6, oneKey] = load("version = 1\n[graphics]\npreset = high\n[ui]\nentry = hotkey\npause = native\n");
+        check(oneKey.uiEntry == UiEntry::Integrated && oneKey.uiPause == UiPause::Native &&
+                  logged(w6, "version 1: ui.entry now follows the preset"),
+              "v1 with only hotkey: that one follows the preset");
+        // The host's write-back (main.cpp, interactive): a v1 file loaded, saved as v2, loaded again: logged the
+        // first time only, the values kept; a v1 original file: no line, and written back as v2 all the same.
+        auto writeBack = [](const std::string& text) {
+            const auto file = gt4::test::uniqueTempPath("gt4_ui_back", ".ini");
+            { std::ofstream out(file, std::ios::binary); out << text; }
+            Settings first;
+            bool older = false;
+            const auto w = loadSettings(first, file.string(), &older);
+            if (older) saveSettings(first, file.string());
+            Settings second;
+            bool olderAgain = true;
+            const auto again = loadSettings(second, file.string(), &olderAgain);
+            std::ifstream in(file, std::ios::binary);
+            const std::string written((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            in.close();
+            std::filesystem::remove(file);
+            return std::make_tuple(w, older, again, olderAgain, second, written);
+        };
+        const auto [hw, hOlder, hAgain, hOlderAgain, hSecond, hText] =
+            writeBack("version = 1\n[graphics]\npreset = high\n[ui]\nentry = hotkey\npause = gt4\n");
+        check(hOlder && logged(hw, "now follow the preset (integrated, native under high)") && hAgain.empty() &&
+                  !hOlderAgain && hText.find("\nversion = 2\n") != std::string::npos,
+              "a v1 high file: logged at the first load, written back as v2, nothing logged at the next");
+        check(hSecond.uiEntry == UiEntry::Integrated && hSecond.uiPause == UiPause::Native &&
+                  hSecond.preset == Preset::High,
+              "a v1 high file written back keeps integrated / native");
+        const auto [ow, oOlder, oAgain, oOlderAgain, oSecond, oText] =
+            writeBack("version = 1\n[graphics]\npreset = original\n[ui]\nentry = hotkey\npause = gt4\n");
+        check(oOlder && ow.empty() && oAgain.empty() && !oOlderAgain &&
+                  oText.find("\nversion = 2\n") != std::string::npos,
+              "a v1 original file: no line, written back as v2");
+        check(oSecond.uiEntry == UiEntry::Hotkey && oSecond.uiPause == UiPause::Gt4 &&
+                  oSecond.preset == Preset::Original,
+              "a v1 original file written back keeps hotkey / gt4");
+        Settings saved;
+        saved.uiEntry = UiEntry::Hotkey;
+        check(formatSettings(saved).rfind("version = 2\n", 0) != std::string::npos ||
+                  formatSettings(saved).find("\nversion = 2\n") != std::string::npos,
+              "files are written as version 2");
+        const auto path = gt4::test::uniqueTempPath("gt4_ui_v2", ".ini");
+        saveSettings(saved, path.string());
+        Settings back;
+        const auto again = loadSettings(back, path.string());
+        std::filesystem::remove(path);
+        check(again.empty() && back.uiEntry == UiEntry::Hotkey && back.preset == Preset::High,
+              "a saved hotkey under high stays hotkey: written as version 2, a choice");
     }
 
     // lighting.night (settings_lighting.cpp, PLAN.md F2): original by default and in the original preset, which

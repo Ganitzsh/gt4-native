@@ -2,6 +2,13 @@
 
 Versions follow [semantic versioning](https://semver.org). Each release is tagged `vMAJOR.MINOR.PATCH`.
 
+## Unreleased
+
+- Settings: Escape, Guide or Select + Start open the game's own Settings pages, over menus and, in a race, from the
+  pause. Under `low` to `ultra`, GT4's Options items and Start on the GT mode map open them too, and the race pause
+  is the new pause page. Existing settings files take this on the first start, and the first start logs it in
+  `host.log`. The `original` preset keeps GT4's own screens and pause; Escape there now opens the pages too.
+
 ## 0.1.0 - 2026-11-04
 
 First public release. The game runs natively from your own USA 1.01 disc image, on Windows and on Linux through
