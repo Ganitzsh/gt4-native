@@ -170,6 +170,18 @@ model contents to the state record (a capture format change, version 5).
 
 **Time box.** 1 day.
 
+**Textures in a mid-run capture (lane C, 2026-11-09; open).** Ground truth for the day captures: a mid-run
+sub-capture recorded while replaying a from-boot capture, replayed and compared with it over the same VBlanks:
+`race_boot` at the grid and `menus_boot` at the track menus, 298 of 300 frames identical in each. Only the first two
+frames after the state snapshot differ, in both tests (and `race_pe2_r`'s known dark frame 1). So the snapshot
+carries what the day races and the menus draw from, and `race_grid43` and `race_pe2_r` are right past their first
+frames (b.10's re-baseline and R6's pairing on `race_grid43` stand). The night laps recorded from a trigger
+(`lap_ssr5r`, `lap_csr5`) replay some textures wrong: 4-bit indexed textures decoded from GS memory with CLD 0
+(2,348 decodes on `lap_ssr5r`, 0-1 on the day captures), likely palettes GT4 draws on the GS, which the snapshot
+reads back only as the pages a target still owns. Being pinned on a night capture recorded from game start (its
+mid-run sub-capture, the same test), which then becomes the fix's regression test. Until then, colours in those
+night replays aren't the game's in places (CAPTURES' night section).
+
 ---
 
 ## R8: Material classes from lighting bodies (blocks B10)
