@@ -1053,6 +1053,14 @@ and the interface: spikes/R15-lgdev-effects.md). Depends: R15.
   - A hard ceiling in code that no setting passes: 60 % of the device's full scale until the live check has
     measured a wheel.
   - The first live run is at 15 %.
+  - The budget, for D7 and D8 alike (the architect, 2026-11-09): every frame the device's whole output stays within
+    min(strength, ceiling). The active effects (the constant force, D8's vibration) take it first, then the
+    spring's and the damper's saturations get only the room they leave, so the sum of every effect's maximum output
+    never exceeds it: a device clips the sum at its own maximum, so effects capped one by one could still ask for
+    100 %. In D7 that's GT4's A first, then its spring, then its damper. The room is rounded down to sixteenths of
+    the budget, so the conditions change on the device only at a step. Passive effects are not exempt while no
+    wheel has been measured; the live check can revisit it. `budgetForces` in `platform/input/wheel_ffb`, `CTEST` on
+    every magnitude GT4 can send and on D8's worst frames, low speed included.
 - The link: two new kinds, and `GT4_LINK_VERSION` 6 (or the next free number if another lane's bump lands first;
   kinds 18 and 69 are free on main at d0ad4a3).
   - Host to game, `GT4_REC_WHEEL` = 69, every host frame like `GT4_REC_PAD`: the wheel's index (0; D15's second
@@ -1136,25 +1144,31 @@ slip vibration). Depends: D6, D7. (D10 and D11 moved to lane C.)
 - The signal, from the Vehicle record (D6), in `platform/input/wheel_physics` (no SDL):
   - Aligning torque: Mz is the front wheels' sum of `forceLateral` x t(`slipAngle`), the pneumatic trail
     t = t0 x max(0, 1 - |alpha| / alpha_peak), normalised by the front axle's grip (front loads x 1.0). It falls
-    to nothing as the front tyres saturate: the loss of weight at understeer. alpha_peak is fitted to GT4's own A
-    over the recorded lap (where A fades against the front slip angle), and the fitted value and its lap are written
-    here; 0.15 rad (R14's slip angles at 11-14 m/s2) only starts the fit. Played as the constant force, with D7's
-    sign and its 200 ms renewal.
+    to nothing as the front tyres saturate: the loss of weight at understeer. alpha_peak is the slip angle of GT4's
+    own front tyre curve's peak (|`forceLateral`| / `load` against `slipAngle`): 0.14-0.18 rad on D8's first lap
+    (mean 1.04 at 0.14-0.16, sagging after), so 0.15 rad. The second, gentler lap stayed under 0.06 rad and doesn't
+    place the peak. With t falling linearly to zero there, Mz itself peaks near alpha_peak / 2 and is gone at the
+    lateral force's peak, as a real tyre's aligning torque leads its lateral force: the shape, not a tuning accident.
+    GT4's own A has no such fade (it is about k x front Fy: r = 0.978 with no fade on the first lap, every fade
+    worse), so the fade is what D8 adds over the PS2's wheel. Mz's sign against `forceLateral` is -1 (mzSign), from
+    GT4's A: 66 of 66 frames on the first lap, 59 of 61 on the second. Played as the constant force, with D7's sign
+    and its 200 ms renewal.
   - `steeringTorque` isn't filled (R14 open 1): Mz comes from the tyre forces until it is, and if R14 later finds
     GT4's own rack torque, D8 is compared against it.
   - Kerb and road texture: a periodic effect from the front wheels' stroke speed, as D14's `roadTexture`; its
     frequency follows the speed.
   - Lock-up and wheelspin: a periodic vibration from D14's `lockUp` and `wheelspin`.
   - Low speed: a centring spring and a damper fading in below 10 km/h, where no aligning torque builds.
-  - `input.wheel.ffb_strength`, D7's 60 % ceiling and D7's stops apply unchanged.
+  - `input.wheel.ffb_strength`, D7's 60 % ceiling, D7's budget (the conditions in what the active effects leave)
+    and D7's stops apply unchanged.
 - Acceptance:
   - `CTEST`, on synthetic records: the formula's shape (Mz fades past alpha_peak at a constant lateral force; zero
     when stopped or in the air).
   - `CTEST`, on fields recorded from a lap (numbers only, as R15's), at its worst frames (a kerb at the limit of
     grip): the constant force plus the periodic effects never exceed the strength and the ceiling together.
   - Against GT4's own aligning torque (effect A, recorded with the same lap): Mz has A's sign on at least 95 % of
-    frames where both are above 5 % of their range; their correlation is reported, with where they part (the
-    understeer fade past alpha_peak, kerbs) said to be on purpose or not.
+    frames where both are above 5 % of their range; their correlation is reported, and the bins where they part are
+    expected past about alpha_peak / 2 (the fade, on purpose).
   - A session test over a lap with `GT4_PHYSICS_FFB=1` and a virtual wheel, the effect stream recorded:
     - kerb pulses line up within a frame with D6's kerb events (a front wheel on the ground with |`strokeSpeed`|
       over 0.15 m/s, the start of `roadTexture`'s ramp);
@@ -1162,6 +1176,15 @@ slip vibration). Depends: D6, D7. (D10 and D11 moved to lane C.)
     - D7's stops all hold.
   - D11: each effect at most one frame behind its Vehicle record.
   - Live: none here (no wheel). The loss of weight at understeer and kerbs are D15's live items.
+- Results (lane D, 2026-11-09; virtual wheel, the approved save's GT-mode race, `d8_lap`'s throttle and steering):
+  - First lap, sweeps to 80 % lock (732 records with both fronts down above 2 m/s): sign 66 of 66; r = -0.978
+    with no fade. Binned by the mean of the two fronts' slip angles, with Mz at alpha_peak 0.15: they part from
+    0.09 rad (A 0.70 against Mz 0.26), and past 0.21 rad Mz is 0 while A stays 0.5-0.7 (slides, faded on purpose).
+    Every kerb event (111) and slip frame (601) with the vibration on the same record. The constant force plus the
+    vibration at most exactly the ceiling (19,660 of 32,767), none over (before the budget took in the conditions).
+  - Second lap, gentle sweeps (852 records): sign 59 of 61 (96.7 %); r = -0.814 with no fade; the same parting
+    (from 0.12 rad: A 0.44 against Mz 0.07; Mz 0 past 0.21); 272 kerb events and 457 slip frames, all with the
+    vibration; none over the ceiling.
 
 **D9: Spatial audio (L, lane D).** The audit (section 4.2, design 3) gives the design but no acceptance; this is it
 (the architect, 2026-11-08; lane D reviewed). `audio.spatial = original | stereo | hrtf`, behind `audio.mixer =
