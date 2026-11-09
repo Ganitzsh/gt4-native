@@ -1093,6 +1093,11 @@ host mix within -60 dB of the game-side mix on a session's audio over 60 s (`ori
 driver's key-on counts within the run-to-run spread of today's (2-8 %; one frame late gives 1.9x), and its main
 re-key gap still at 2 frames with about today's count (a stale reply shows as a peak at 3 or 4), so no voice frees
 early.
+The game-side model's cost (lane D, 2026-11-09; 66b56e1 to 2212835): `advance()` takes each voice in closed form
+between events (a block crossing, an envelope step, the voice going off; a sustain held at its clamp steps without
+being one), bit-identical to `mix()`'s per-sample path by `CTEST` (`spu2_advance`, every sample) and the live check
+(`GT4_SPU_ADVANCE_CHECK`: 7200 frames, 0 differences). A race's voice advance went from about 215 to about 70 us a
+frame on the desktop.
 
 **D6: Vehicle state discovery (L).** RISKS R14, then the fields of `scene::Vehicle`. Depends: R14. Acceptance: per
 wheel load and slip plotted over a lap, consistent with the car's motion; documented addresses.
