@@ -225,11 +225,9 @@ std::string getOption(const Settings& settings, std::string_view key) {
 }
 
 std::string unusedReason(const Settings& settings, std::string_view key) {
-    // PLAN.md D7: the wheel's force feedback works from step 2c (lane C: drop the step 2c line then). dfp itself has
-    // no reason: from step 2b it steers GT4 (lane M)
+    // PLAN.md D7: the wheel's force feedback only in dfp (lane M)
     if (key == "input.wheel.ffb_strength" && settings.wheelMode != WheelMode::Dfp)
         return "only with Wheel = Driving Force Pro";
-    if (key == "input.wheel.ffb_strength") return "no force feedback until D7 step 2c";
     // (platform/render/pipeline.cpp: SceneSource::drawsOriginalEffects turns these off for the native GS's frames)
     if (settings.gsRenderer == GsRenderer::Native &&
         (key == "effects.bloom" || key == "post.bloom_intensity" || key == "post.tonemapper" || key == "post.auto_exposure"))

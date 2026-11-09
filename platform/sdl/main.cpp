@@ -11,6 +11,7 @@
 #include "display.h"
 #include "gs_host.h"
 #include "wheel_dfp.h"
+#include "wheel_haptics.h"
 #include "cpu_profile.h"
 #include "ps2_pad.h"
 #include "input_map.h"
@@ -500,6 +501,13 @@ std::string gamepadCommand(gt4::Settings& s, SDL_GamepadButton button) {
     }
 }
 
+// The wheel's force effects as GT4 last set them (GT4_REC_WHEEL_FX, from the stream's thread; PLAN.md D7), for the
+// main loop, which plays them (wheel_haptics.h).
+struct WheelFxMailbox {
+    std::mutex mutex;
+    Gt4WheelFx fx{};
+} g_wheelFx;
+
 // The game's pad motors (GT4_REC_RUMBLE, from the stream's thread) for the main loop, per port: bit 31 set once the
 // game has sent any, bit 8 the small motor, bits 0-7 the large one.
 std::atomic<uint32_t> g_rumble[2];
@@ -752,6 +760,10 @@ int run(const Options& options) {
         gsOptions.rumble = [](uint32_t port, uint32_t small, uint32_t large) {
             if (port < 2) g_rumble[port] = 0x80000000u | (small ? 0x100u : 0u) | (large & 0xFFu);
         };
+        gsOptions.wheelFx = [](const Gt4WheelFx& fx) {
+            std::lock_guard<std::mutex> lock(g_wheelFx.mutex);
+            g_wheelFx.fx = fx;
+        };
         gsOptions.replayPath = options.replay;
         gsOptions.lockstep = lockstep;
         gsOptions.loop = options.replayLoop;
@@ -809,10 +821,12 @@ int run(const Options& options) {
         renderer->apply(settings);
         if (display) display->apply(settings);
     };
+    Uint64 stallUntil = 0;   // a session's "stall": the game's clock held until then (PLAN.md D7's watchdog test)
     std::unique_ptr<Session> session;
     if (!options.sessionDirectory.empty()) {
         session = std::make_unique<Session>(options.sessionDirectory, options.audio, true);
         if (gs) session->onGameClock([&gs] { return gs->vblanks(); });
+        if (gs) session->onStall([&](uint32_t ms) { stallUntil = SDL_GetTicks() + ms; });
         session->onSetting([&](const std::string& key, const std::string& value) {
             const std::string error = gt4::setOption(settings, key, value);
             if (error.empty()) applySettings();
@@ -832,6 +846,15 @@ int run(const Options& options) {
         profilesPath.assign(p.begin(), p.end());
     }
     gt4::PadDevices pads(profilesPath, session != nullptr);
+    // The wheel's force feedback (PLAN.md D7), recorded in a session. Declared after the session: destroyed first.
+    gt4::WheelHaptics::Recorder wheelRecorder;
+    if (session)
+        wheelRecorder = [&](const std::string& type, const std::string& fields) {
+            session->record(type.c_str(), fields);
+        };
+    gt4::WheelHaptics wheelHaptics(wheelRecorder);
+    uint64_t fxVblanks = 0;   // the game's clock as the watchdog last saw it change, and when
+    Uint64 fxVblankAt = 0;
     SDL_JoystickID sessionPads[2] = {};   // a session's virtual pads as the ports last saw them
     bool pad2Sent = false;            // pad 2 sent as connected, so its removal is told to the game
     uint32_t rumbleApplied[2] = {};    // g_rumble as a session last recorded it
@@ -1187,6 +1210,7 @@ int run(const Options& options) {
                                    .replace_filename(u8"rumble-test");
     Uint64 rumbleTestLookedAt = 0;
     while (running) {
+        if (!(gs && gs->live())) wheelHaptics.stop("no live game");   // (PLAN.md D7: a replay, or the game ended)
         {
             const Uint64 now = SDL_GetTicks();
             if (!rumbleTestFile.empty() && now - rumbleTestLookedAt >= 1000) {
@@ -1547,7 +1571,7 @@ int run(const Options& options) {
             gs->setAudioInterpolation(static_cast<uint32_t>(settings.audioInterpolation));
             gs->setAudioSpatial(static_cast<uint32_t>(settings.audioSpatial));
             if (gs->live()) {
-                gs->setPaused(menu.isOpen());
+                gs->setPaused(menu.isOpen() || SDL_GetTicks() < stallUntil);
                 gs->setGameOption(0, static_cast<uint32_t>(settings.aiCatchUp));   // runtime.h kOptionAiCatchUp
                 gs->setGameOption(1, static_cast<uint32_t>(settings.mirror));      // kOptionMirrorDetail
                 gs->setGameOption(2, static_cast<uint32_t>(settings.modelDetail)); // kOptionModelDetail
@@ -1611,6 +1635,27 @@ int run(const Options& options) {
                         }
                     } else {
                         pads.feel(p, v, h, now);
+                    }
+                }
+                // PLAN.md D7: the wheel's force feedback, GT4's effects on the dfp wheel, with the host's stops: one
+                // of our pages (a settings page, the pause page, the host's menu or hub) and the watchdog (no game
+                // frame for 0.5 s: a hang, a debugger, a long load). GT4's effect state is never touched: play()
+                // after a stop applies the latest again.
+                {
+                    const int wheelPort = pads.dfpPort(settings);
+                    wheelHaptics.attach(wheelPort >= 0 ? SDL_GetGamepadJoystick(pads.gamepad(wheelPort)) : nullptr);
+                    const Uint64 now = SDL_GetTicks();
+                    if (gs->vblanks() != fxVblanks || !fxVblankAt) fxVblanks = gs->vblanks(), fxVblankAt = now;
+                    if (wheelPort >= 0) {
+                        Gt4WheelFx fx;
+                        {
+                            std::lock_guard<std::mutex> lock(g_wheelFx.mutex);
+                            fx = g_wheelFx.fx;
+                        }
+                        const gt4::Settings& ws = pads.settingsFor(wheelPort, settings);
+                        if (pageShown || menu.isOpen() || hostHub.isOpen()) wheelHaptics.stop("a page is open");
+                        else if (now - fxVblankAt >= 500) wheelHaptics.stop("the watchdog: no game frame for 0.5 s");
+                        else wheelHaptics.play(gt4::input::wheelForces(fx, {ws.wheelFfbStrength / 100.0f, 1}), now);
                     }
                 }
             }
@@ -1973,6 +2018,7 @@ int run(const Options& options) {
         std::fprintf(recorded ? stdout : stderr, "%s\n", report.c_str());
         recorder.reset();
     }
+    wheelHaptics.stop("the host is closing");   // (PLAN.md D7; its destructor closes the device)
     if (options.frames && frames < options.frames && !gameExited)
         throw std::runtime_error("Window closed before the requested frames were presented");
     if (options.smoke && (!firstResize || !minimized || !restored || !sawMinimized))

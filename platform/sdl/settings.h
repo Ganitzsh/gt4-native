@@ -175,9 +175,8 @@ struct Settings {
     float hapticsStrength = 100.0f;     // percent
     bool triggerEffects = true;
     bool hapticsUndersteer = true, hapticsLockUp = true, hapticsWheelspin = true, hapticsKerbs = true;
-    // A wheel (PLAN.md D7; not a preset member). pad until D7's force feedback lands (rule 10: off until finished),
-    // then dfp, the PS2's behaviour.
-    WheelMode wheelMode = WheelMode::Pad;
+    // A wheel (PLAN.md D7; not a preset member): dfp, the PS2's behaviour, in every preset.
+    WheelMode wheelMode = WheelMode::Dfp;
     float wheelFfbStrength = 100.0f;    // percent; never past platform/input/wheel_ffb.h's ceiling
 
     // [scene] (test scene only; not saved)

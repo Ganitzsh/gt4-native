@@ -26,9 +26,12 @@ namespace gt4::input {
 // strength (PLAN.md D7: until the live check has measured a wheel).
 inline constexpr float kWheelForceCeiling = 0.60f;
 
-// The constant force's length (ms): renewed on each update and each host frame while it runs, so a host that stalls
-// lets it lapse at the device (PLAN.md D7's hung-host case).
-inline constexpr uint32_t kWheelConstantLengthMs = 100;
+// The constant force's length (ms): renewed while it runs, every kWheelConstantRenewMs and on each change, so a host
+// that stalls lets it lapse at the device within 0.2 s (PLAN.md D7's hung-host case), while an ordinary hitch (a
+// shader compile, streaming) holds the last force, as the PS2's wheel did; and a fast display doesn't start it every
+// frame (lane C, the architect).
+inline constexpr uint32_t kWheelConstantLengthMs = 200;
+inline constexpr uint32_t kWheelConstantRenewMs = 30;
 
 enum class WheelEffectKind : uint8_t { None, Constant, Spring, Damper };
 

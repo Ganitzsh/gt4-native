@@ -30,7 +30,7 @@ py tools\host_session.py run --exe build\host-windows-Release\gt4_host.exe --hos
   and no desktop is needed. Captures, session commands and reports are the same as in windowed runs.
 - **Sessions** (`tools/host_session.py`, `--session-dir`): a virtual gamepad plus a command queue (`axis`,
   `button`, `reset`, `capture NAME`, `set KEY VALUE`, `wait FRAMES`, `vwait VBLANKS`, `resize W H`, `tone HZ S`, `quit`); with `--game` its virtual gamepad is the game's pad 1 (`button dpdown 1` ...). `button2` and `axis2`
-  drive a second virtual gamepad, the game's pad 2, plugged in at their first use and removed by `unplug2`; `unplug` removes pad 1 until the next `button` or `axis` (each pad keeps its port across a reconnect, PLAN.md D13; `reset` releases both pads); a session
+  drive a second virtual gamepad, the game's pad 2, plugged in at their first use and removed by `unplug2`; `wheel2` plugs pad 2 in as a wheel instead (PLAN.md D7); `freeze MS` holds the host's main thread and `stall MS` the game's clock (D7's stop tests); `unplug` removes pad 1 until the next `button` or `axis` (each pad keeps its port across a reconnect, PLAN.md D13; `reset` releases both pads); a session
   that never uses them has an empty port 2. `vwait` counts the game's VBlanks: a press
   timed in host frames can fall between two of the game's pad reads while it is busy (headless, the host
   draws several frames per VBlank, unevenly), and GT4 then never sees it. The

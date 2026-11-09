@@ -35,6 +35,9 @@ public:
     // The game's clock in VBlanks, for "vwait N" (a game session: presses timed in game frames, which the
     // host's frames are not when the game is busy).
     void onGameClock(std::function<uint64_t()> clock);
+    // "stall MS" (PLAN.md D7's watchdog test): the game's clock held for MS milliseconds without the host's pages
+    // knowing, as a hung or busy game looks to the host.
+    void onStall(std::function<void(uint32_t ms)> stall);
     // Adds an event to events.jsonl; fields is a JSON object body without braces.
     void record(const char* type, const std::string& fields);
 private:

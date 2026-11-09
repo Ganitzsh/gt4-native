@@ -67,6 +67,7 @@ struct Session::Impl {
     int burstLeft = 0, burstIndex = 0;
     uint32_t waitFrames = 0;   // "wait N": frames to render before the next command
     std::function<uint64_t()> gameClock;
+    std::function<void(uint32_t)> stall;
     uint64_t waitVblank = 0;   // "vwait N": the game VBlank to reach before the next command
     bool waiting() {
         if (waitFrames) { --waitFrames; return true; }
@@ -272,6 +273,17 @@ struct Session::Impl {
         } else if (op == "unplug2") unplug2();
         else if (op == "unplug") unplug1();
         else if (op == "reset") reset();
+        else if (op == "freeze") {   // the host's main thread held (PLAN.md D7: a hung host's wheel force lapses)
+            uint32_t ms = 0;
+            if (!(input >> ms) || ms > 10000) throw std::runtime_error("freeze MS (up to 10000) required");
+            event("freeze", "\"ms\":" + std::to_string(ms));   // (the next renewal gap is this one)
+            SDL_Delay(ms);
+        } else if (op == "stall") {
+            uint32_t ms = 0;
+            if (!(input >> ms) || ms > 10000) throw std::runtime_error("stall MS (up to 10000) required");
+            if (!stall) throw std::runtime_error("stall: no game");
+            stall(ms);
+        }
         else if (op == "capture") {
             std::string name; input >> name;
             int count = 1; input >> count;
@@ -393,6 +405,7 @@ void Session::onSetting(std::function<std::string(const std::string&, const std:
     impl->setting = std::move(handler);
 }
 void Session::onGameClock(std::function<uint64_t()> clock) { impl->gameClock = std::move(clock); }
+void Session::onStall(std::function<void(uint32_t)> stall) { impl->stall = std::move(stall); }
 void Session::record(const char* type, const std::string& fields) { impl->event(type, fields); }
 void Session::frame(uint32_t number, double milliseconds, double gpuMilliseconds, uint32_t width, uint32_t height) {
     impl->event("frame", "\"frame\":" + std::to_string(number) + ",\"duration_ms\":" + std::to_string(milliseconds) +
