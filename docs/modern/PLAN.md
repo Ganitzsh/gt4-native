@@ -1315,6 +1315,14 @@ rectangle, so the bilinear filter does not pull in the row GT4's menus park outg
 Acceptance: `ORIG` (at 1x the clamp never moves a sample); at `high` on the menu capture the bottom row no longer
 shows text, and the only differing pixels are in the outer row and column of the picture; PCSX2 still of the same
 menu for comparison. **Day one.**
+- **Closed, not landed (lane C, 2026-11-09): the clamp changes nothing on today's main.** Ported onto main's
+  `fieldPoint` (every displayed sample) and built beside main from one tree, it gives the same frames as main on
+  `menus_boot`'s text menus (the title menu, Original Circuits' row, City Courses' row; 17 frames, 1280 x 720) at
+  `original`, `high` and `ultra`, in `display.field_mode = blend` (every preset's since 27f5729) and in `clean`
+  (where one field's rows are sampled alone): 17 of 17 identical at each, in both. So the bilinear pull E3 was
+  written against doesn't occur on main's display any more. A faint
+  row in blend, if one shows, is the field modes' question (E4, E10), not this clamp's. The change as it was found
+  is parked: `parked/e3-display-clamp` (7b7bada1, on 1b495a6).
 
 **E4: Track-menu band and stutter (S).** The owner's words: "browsing tracks in the various menus like original
 tracks or city tracks is stuttery, the black band at the bottom is moving a bit up and down vertically and it's
