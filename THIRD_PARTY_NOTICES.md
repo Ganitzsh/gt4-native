@@ -39,6 +39,7 @@ fetched by CMake at pinned commits (`cmake/HostDependencies.cmake`) and are not 
 | Component | Where | Licence | Use |
 |---|---|---|---|
 | AMD FidelityFX Super Resolution 2.2.1 | `third_party/fidelityfx-fsr2/` (vendored, unmodified) | MIT, Copyright (c) 2022-2023 Advanced Micro Devices, Inc. (`third_party/fidelityfx-fsr2/LICENSE.txt`) | FSR 2 temporal upscaling; its RCAS header for sharpening. |
+| AMD FidelityFX SDK 1.1.4, FSR 3.1 upscaler only | `third_party/fidelityfx-sdk/` (vendored, unmodified; the files and their upstream hashes in its `MANIFEST.txt`) | MIT, Copyright (C) 2024 Advanced Micro Devices, Inc. (`third_party/fidelityfx-sdk/LICENSE.txt`) | FSR 3.1 temporal upscaling (PLAN.md B17), not yet built. The SDK's upscaler and what it needs; none of its frame generation (no frame interpolation, no optical flow). |
 | AMD FidelityFX Super Resolution 1.0, EASU | `platform/render/shaders/easu.comp` (a GLSL port of `ffx_fsr1.h`) | MIT, Copyright (c) 2021 Advanced Micro Devices, Inc. (same terms as FSR 2 above) | FSR 1 spatial upscaling. |
 | SMAA | `third_party/smaa/` (vendored, unmodified) | MIT-style, Copyright (C) 2013 Jorge Jimenez, Jose I. Echevarria, Belen Masia, Fernando Navarro, Diego Gutierrez (`third_party/smaa/LICENSE.txt`) | SMAA 1x / T2x anti-aliasing: the shader and its precomputed area and search textures. |
 | stb_image 2.30 | `third_party/stb/` (vendored, unmodified) | Public domain (Unlicense) or MIT, Sean Barrett (the end of `stb_image.h`) | Decodes texture packs' PNG files. |

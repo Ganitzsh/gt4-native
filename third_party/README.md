@@ -19,6 +19,22 @@ compiler and the prebuilt libraries (`ffx_*.{h,cpp}`, `shaders/`, `vk/ffx_fsr2_v
 - `platform/render/upscale/ffx_compat.h` is force-included when compiling the runtime: Vulkan entry points from
   volk, and portable definitions of two MSVC CRT helpers for GCC and Clang.
 
+## fidelityfx-sdk/
+
+AMD FidelityFX SDK v1.1.4 (MIT), from https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK, tag `v1.1.4`
+(commit `c6efa6bf`), for FSR 3.1 (PLAN.md B17): the upscaler only. The FSR 3 upscaler component
+(`src/components/fsr3upscaler/`), its GLSL passes (`src/backends/vk/shaders/fsr3upscaler/`) and the headers they
+include (`include/FidelityFX/gpu/`: the core, `fsr3upscaler/`, `fsr1/` and `spd/`), the Vulkan backend
+(`src/backends/vk/ffx_vk.cpp`), the host interface (`include/FidelityFX/host/`), and the shared sources
+(`src/shared/`, `src/backends/shared/ffx_shader_blobs.h`): the `#include` closure of the component, the backend
+and the passes, 54 files, with `LICENSE.txt`. Nothing of the SDK's frame generation (frame interpolation, optical
+flow, its swapchain) is here, not even unused.
+- The files are unmodified. `MANIFEST.txt` lists each with its upstream git blob hash and SHA-256: `git hash-object
+  FILE` equals the first column. They are LF as upstream has them, and `.gitattributes`' `third_party/** -text`
+  keeps git from converting them.
+- Not yet built (B17 step 1's next piece): the passes will be compiled with glslang and the SDK's shader blobs
+  (`ffx_shader_blobs.cpp`, not vendored) replaced by our own, as for FSR 2 above.
+
 ## stb/
 
 `stb_image.h` 2.30 (public domain or MIT) from https://github.com/nothings/stb, commit `003501f6`: decodes
