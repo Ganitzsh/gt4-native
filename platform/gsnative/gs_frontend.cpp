@@ -1851,12 +1851,12 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
         // buffer's width is decoded, its last column repeated to the right.
         const uint32_t shownWidth = std::max<uint32_t>(t.tbw, 1) * 64;
         const bool part = id && levelCount == 1 && !indexed && shownWidth < w;
-        if (part) {
-            std::vector<uint32_t> visible(size_t(shownWidth) * h);
-            mem.decode(t, texa, 0, 0, shownWidth, h, visible.data());
-            for (uint32_t y = 0; y < h; ++y) {
+        if (part) {   // decoded packed at the buffer's start, then each row moved to its place, last row first (a row
+                      // only moves to a later or equal place: none is overwritten before it moves; no temporary)
+            mem.decode(t, texa, 0, 0, shownWidth, h, image.pixels.data());
+            for (uint32_t y = h; y-- > 0;) {
                 uint32_t* row = image.pixels.data() + size_t(y) * w;
-                std::memcpy(row, visible.data() + size_t(y) * shownWidth, size_t(shownWidth) * 4);
+                std::memmove(row, image.pixels.data() + size_t(y) * shownWidth, size_t(shownWidth) * 4);
                 std::fill(row + shownWidth, row + w, row[shownWidth - 1]);
             }
         }

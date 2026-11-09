@@ -128,6 +128,42 @@ void testWrites(std::mt19937& rng) {
     expect(same, "uploads match writePixel for every format, odd rectangles and positions, split pixels");
 }
 
+// decode's 32/24-bit block path (whole 8x8 blocks) against readPixel with decode's own alpha rule, pixel by pixel:
+// CT32, CT24, Z32, Z24, random TBP (up to the top of memory: the addresses wrap), TBW, alpha settings, block-aligned
+// rectangles anywhere up to the 2047 wrap, and unaligned ones (the general path) for good measure.
+void testDecode(const GsMemory& m, std::mt19937& rng) {
+    const uint32_t psms[] = {psm::PSMCT32, psm::PSMCT24, psm::PSMZ32, psm::PSMZ24};
+    auto pick = [&](uint32_t lo, uint32_t hi) { return std::uniform_int_distribution<uint32_t>(lo, hi)(rng); };
+    bool same = true;
+    for (int round = 0; round < 600 && same; ++round) {
+        GsMemory::Tex0 t;
+        t.psm = psms[round % 4];
+        t.tbp = round < 8 ? 0x3FFF - round * 32 : pick(0, 0x3FFF);
+        t.tbw = pick(1, 16);
+        psm::Texa texa;
+        texa.ta0 = static_cast<uint8_t>(pick(0, 255));
+        texa.aem = pick(0, 1) != 0;
+        const bool aligned = round % 5 != 4;
+        const uint32_t u0 = aligned ? pick(0, 255) * 8 : pick(0, 2047);
+        const uint32_t v0 = aligned ? pick(0, 255) * 8 : pick(0, 2047);
+        const uint32_t w = aligned ? pick(1, 12) * 8 : pick(1, 70), h = aligned ? pick(1, 12) * 8 : pick(1, 70);
+        std::vector<uint32_t> got(size_t(w) * h), want(size_t(w) * h);
+        m.decode(t, texa, u0, v0, w, h, got.data());
+        const bool rgb = t.psm == psm::PSMCT24 || t.psm == psm::PSMZ24;
+        for (uint32_t y = 0; y < h; ++y)
+            for (uint32_t x = 0; x < w; ++x) {
+                uint32_t raw = m.readPixel(t.psm, t.tbp, t.tbw, u0 + x, v0 + y);
+                if (rgb) raw = (raw & 0xFFFFFF) | (uint32_t(texa.aem && !(raw & 0xFFFFFF) ? 0 : texa.ta0) << 24);
+                want[size_t(y) * w + x] = raw;
+            }
+        same = got == want;
+        if (!same)
+            std::fprintf(stderr, "  decode: psm %02X tbp %04X tbw %u at %u,%u %ux%u differs\n", t.psm,
+                         t.tbp, t.tbw, u0, v0, w, h);
+    }
+    expect(same, "decode's block path matches readPixel for CT32/CT24/Z32/Z24, any TBP and TBW, up to the wraps");
+}
+
 }  // namespace
 
 int main() {
@@ -138,6 +174,7 @@ int main() {
         std::memcpy(m->data() + i, &v, 4);
     }
     testReadClut(*m, rng);
+    testDecode(*m, rng);
     testWrites(rng);
     std::printf("gs_memory: %s\n", failures ? "FAILED" : "fast paths match the reference");
     return failures ? 1 : 0;

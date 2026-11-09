@@ -540,6 +540,36 @@ uint32_t expand16(uint32_t c, const Texa& texa) {
 }  // namespace
 
 void GsMemory::decode(const Tex0& t, const Texa& texa, uint32_t u0, uint32_t v0, uint32_t w, uint32_t h, uint32_t* out) const {
+    // 32 and 24-bit formats over whole 8x8 blocks (a movie frame, 640x448 at 0,0): the block found once, its 64 words
+    // read through the column table, instead of the page and block worked out again for each pixel. The same words
+    // and the same alpha rule as readPixel below (tests/gs_memory.cpp checks both).
+    const bool z = t.psm == PSMZ32 || t.psm == PSMZ24;
+    const bool wide = t.psm == PSMCT32 || t.psm == PSMCT24 || z;
+    if (wide && !(u0 & 7) && !(v0 & 7) && !(w & 7) && !(h & 7)) {
+        const bool rgb = t.psm == PSMCT24 || t.psm == PSMZ24;
+        for (uint32_t by = 0; by < h; by += 8)
+            for (uint32_t bx = 0; bx < w; bx += 8) {
+                const uint32_t x = (u0 + bx) & 2047, y = (v0 + by) & 2047;   // (readPixel's wrap; a block stays whole)
+                const uint32_t page = (x >> 6) + (y >> 5) * t.tbw;
+                uint32_t block = t.tbp + page * 32 + kBlock32[(y >> 3) & 3][(x >> 3) & 7];
+                if (z) block ^= 24;
+                for (uint32_t yy = 0; yy < 8; ++yy) {
+                    uint32_t* row = out + size_t(by + yy) * w + bx;
+                    for (uint32_t xx = 0; xx < 8; ++xx) {
+                        uint32_t raw;
+                        std::memcpy(&raw, &mem[((block * 64 + kColumn32[yy][xx]) * 4) & kMask], 4);
+                        if (rgb) {
+                            raw &= 0xFFFFFF;
+                            uint32_t a = texa.ta0;
+                            if (texa.aem && !raw) a = 0;
+                            raw |= a << 24;
+                        }
+                        row[xx] = raw;
+                    }
+                }
+            }
+        return;
+    }
     const bool four = t.psm == PSMT4 || t.psm == PSMT4HL || t.psm == PSMT4HH;
     for (uint32_t y = 0; y < h; ++y)
         for (uint32_t x = 0; x < w; ++x) {
