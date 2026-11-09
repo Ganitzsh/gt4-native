@@ -1026,8 +1026,10 @@ early.
 **D6: Vehicle state discovery (L).** RISKS R14, then the fields of `scene::Vehicle`. Depends: R14. Acceptance: per
 wheel load and slip plotted over a lap, consistent with the car's motion; documented addresses.
 
-**D7: Wheels through LGDEV (L).** GT4 sees a Logitech Driving Force Pro through LGDEV, and drives its three effects
-on the host's wheel through `SDL_Haptic` (the effects and the interface: spikes/R15-lgdev-effects.md). Depends: R15.
+**D7: Wheels through LGDEV (L). Done except the live check** (lane D, 2026-11-09: steps 1, 2a, 2b and 2c on main,
+5a221df the last; the live check needs a wheel, not owned, and is on C6b's owner list, 4b217a3). GT4 sees a Logitech
+Driving Force Pro through LGDEV, and drives its three effects on the host's wheel through `SDL_Haptic` (the effects
+and the interface: spikes/R15-lgdev-effects.md). Depends: R15.
 - Settings, per device (D13): `input.wheel.mode` = `pad` | `dfp` (D15 adds `native`).
   - `pad` is the behaviour before D7: the wheel is a DualShock 2 through its profile.
   - `dfp` is the PS2's behaviour. It is the default for a device SDL types as a wheel, in every preset, `original`
