@@ -281,6 +281,13 @@ struct GsnScene::Impl {
         double microseconds = 0.0;   // the pass's time on the render thread
     } lampTotals;
     uint64_t nightSplitSkipped = 0;   // Lights not relit: their target holds more than one main view (split screen)
+    // B25: Z buffers started from GS memory's Z (FrameList::initialDepths: only in a run started from a restored state),
+    // and Z buffers read for a snapshot (copyDepth); both 0 in a run from boot.
+    uint64_t depthsLoaded = 0, depthReadsServed = 0;
+    // ... and those a later growth replaced with a cleared image, their start lost (reshapeTarget makes a new image: the
+    // snapshot would need the targets' heights for that, B25's next step)
+    std::unordered_set<uint32_t> depthStarted;
+    uint64_t depthStartsLost = 0;
     // gsn_light.comp's push constants from `night` on (offset 40): mirrored field for field.
     struct NightPush {
         float night = 0.0f, pad0 = 0.0f;
@@ -605,6 +612,11 @@ struct GsnScene::Impl {
                         static_cast<unsigned long long>(t.merged), static_cast<unsigned long long>(t.mergedAgain),
                         t.microseconds / double(t.frames));
         }
+        if (depthsLoaded || depthReadsServed)
+            std::printf("B25: %llu Z buffers started from GS memory (a run from a restored state), %llu read for a snapshot, "
+                        "%llu restored Z buffers grown, their start lost\n",
+                        static_cast<unsigned long long>(depthsLoaded), static_cast<unsigned long long>(depthReadsServed),
+                        static_cast<unsigned long long>(depthStartsLost));
         if (nightSplitSkipped)
             std::printf("Night relight: %llu Lights without our lamps, their target holding more than one main view "
                         "(split screen: one light pass per half not yet)\n",
@@ -4164,10 +4176,47 @@ void GsnScene::Impl::pendingTargets(VkCommandBuffer command, uint32_t slot) {
             const bool existed = targets.count(t.id) && targets[t.id].image.valid();
             const VkImage before = existed ? targets[t.id].image.image : VK_NULL_HANDLE;
             ensureTarget(t);
-            if (!existed || targets[t.id].image.image != before) created.push_back(t.id);
+            if (!existed || targets[t.id].image.image != before) {
+                created.push_back(t.id);
+                if (existed && depthStarted.erase(t.id)) ++depthStartsLost;   // (B25: a restored start, now cleared)
+            }
         }
         for (uint32_t id : created) clearNew(command, targets[id]);
         counters.targets += created.size();
+        // B25: a new Z buffer in a run started from a restored state starts from GS memory's Z (the front end decoded it),
+        // not 0: each render pixel its GS pixel's Z, never filtered (a filtered depth on an edge invents a depth nothing
+        // drew), as the draws write it (Z / 2^32). One buffer-to-image copy into the depth aspect: kDepth is D32_SFLOAT_S8
+        // on every device, so the aspect takes 4-byte floats (a packed D24 format would need a gl_FragDepth draw instead).
+        for (const gsn::FrameList::InitialDepth& init : frame.initialDepths) {
+            if (std::find(created.begin(), created.end(), init.target) == created.end()) continue;   // (created by this list)
+            GpuTarget& g = targets[init.target];
+            if (!g.depth || !g.image.valid() || !init.width || !init.height) continue;
+            const uint32_t w = g.image.extent.width, h = g.image.extent.height;
+            vk::Buffer staging = vk::createBuffer(device, VkDeviceSize(w) * h * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, true);
+            float* out = static_cast<float*>(staging.mapped);
+            for (uint32_t y = 0; y < h; ++y) {
+                const uint32_t gy = std::min(y / g.scaleY, init.height - 1);
+                for (uint32_t x = 0; x < w; ++x) {
+                    const uint32_t gx = std::min(x / g.scaleX, init.width - 1);
+                    out[size_t(y) * w + x] = float(init.z[size_t(gy) * init.width + gx]) * (1.0f / 4294967296.0f);
+                }
+            }
+            // (after clearNew's clear of both aspects, the stencil's start kept: the clear's write before this copy's)
+            VkMemoryBarrier2 cleared{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+            cleared.srcStageMask = cleared.dstStageMask = vk::kTransfer;
+            cleared.srcAccessMask = cleared.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            VkDependencyInfo dependency{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+            dependency.memoryBarrierCount = 1;
+            dependency.pMemoryBarriers = &cleared;
+            vkCmdPipelineBarrier2(command, &dependency);
+            VkBufferImageCopy copy{};
+            copy.imageSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
+            copy.imageExtent = {w, h, 1};
+            vkCmdCopyBufferToImage(command, staging.buffer, g.image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+            bufferGraveyard.emplace_back(uploads, staging);   // (destroyed once this submission is done)
+            ++depthsLoaded;
+            depthStarted.insert(init.target);
+        }
     }
     mark(command, "new targets");
 }

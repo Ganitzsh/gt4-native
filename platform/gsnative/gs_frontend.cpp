@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
 #include <mutex>
 #include <string>
 
@@ -82,6 +83,7 @@ void FrameList::clear() {
     modelVertices = 0;
     retiredTextures.clear();
     resetTextures = false;
+    initialDepths.clear();
     targets.clear();
     displayed = false;
     dump = false;
@@ -162,6 +164,10 @@ void carryOver(FrameList& dropped, FrameList& into) {
     into.resetTextures = into.resetTextures || dropped.resetTextures;
     dropped.textures.clear();
     dropped.retiredTextures.clear();
+    // (its new Z buffers are in the next list's targets too: their starting Z goes with them)
+    into.initialDepths.insert(into.initialDepths.begin(), std::make_move_iterator(dropped.initialDepths.begin()),
+                              std::make_move_iterator(dropped.initialDepths.end()));
+    dropped.initialDepths.clear();
     // Its scene frame and views' packages go with it, never drawn (the next list's draws are not theirs): counted when
     // it had views (a vehicles-only frame, a.1 mode 2, has none: nothing a substitution would have drawn).
     const bool withViews = !dropped.views.empty() || (dropped.scene && !dropped.scene->views.empty());
@@ -580,6 +586,7 @@ void GsFrontend::readTransfer(void* out, uint32_t qwc) {
 void GsFrontend::restoreMemory(const void* data) {
     lastTexture.valid = false;
     std::memcpy(mem.data(), data, GsMemory::kBytes);
+    restored = true;   // (B25: from here on, a new Z buffer starts from this memory's Z, not cleared)
     for (uint32_t page = 0; page < pages.size(); ++page) {
         pages[page] = {0, ++serial};
         memorySerial[page] = serial;
@@ -996,6 +1003,21 @@ uint32_t GsFrontend::targetFor(uint32_t bp, uint32_t psm, bool depth, uint32_t h
     if (slot) *slot = t;
     else targets.push_back(t);
     surfaces[key.packed()] = t.id;
+    // B25: in a run started from a restored state (a sub-capture), a Z buffer starts from GS memory's Z, as the GS's
+    // own would: GT4 inverts Z in place instead of clearing it, so a cleared start left the car ahead's edges tested
+    // against 0. Decoded in its own Z format (Z32, Z24, Z16, Z16S swizzle differently), once, at its creation. Never in
+    // a run from boot (restoreMemory is what sets `restored`), so those are unchanged by construction.
+    if (depth && restored) {
+        FrameList::InitialDepth init;
+        init.target = t.id;
+        init.width = std::max<uint32_t>(bw, 1) * 64;
+        init.height = t.height;
+        init.z.resize(size_t(init.width) * init.height);
+        for (uint32_t y = 0; y < init.height; ++y)
+            for (uint32_t x = 0; x < init.width; ++x) init.z[size_t(y) * init.width + x] = mem.readPixel(psm, bp, bw, x, y);
+        frame.initialDepths.push_back(std::move(init));
+        ++stats.initialDepths;
+    }
     return t.id;
 }
 
@@ -3005,6 +3027,9 @@ void GsFrontend::sceneFrame(std::unique_ptr<scene::SceneFrame> f) {
 }
 
 void GsFrontend::vsync(uint64_t vblank, FrameList& out) {
+    // (B25: only the restored state's first frame with draws creates Z buffers from memory's Z; a VSync recorded before
+    // any draw, as a sub-capture's first record can be, leaves it on)
+    if (!frame.draws.empty()) restored = false;
     packetsThisFrame = 0;
     lastModelView = 0;
     if (sceneOpen) sceneVsyncInFrame = true;   // (its markers' indices span two lists: not checked)

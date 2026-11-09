@@ -225,6 +225,14 @@ struct FrameList {
         uint32_t id = 0, qwc = 0;
     };
     std::vector<Readback> readbacks;
+    // B25: a Z buffer created in a run that started from a restored state (a sub-capture): its Z as GS memory held it
+    // (the snapshot's write-back undid the source run's inversion, so these are the GS's own values), GS pixels row by
+    // row over the buffer's width (bw x 64) and height, for the back end to load instead of clearing the new image.
+    struct InitialDepth {
+        uint32_t target = 0, width = 0, height = 0;
+        std::vector<uint32_t> z;
+    };
+    std::vector<InitialDepth> initialDepths;
     bool dump = false;   // debugging: the renderer writes this frame's targets out (GT4_GSN_TRIGGER)
     // The scene frame whose FrameEnd arrived while this list was built (CONTRACTS.md a.8): its views bound to targets by
     // the front end, its cuts counted; null without scene records, and on a partial list cut before its FrameEnd.
@@ -385,6 +393,7 @@ public:
         uint64_t byAddress = 0;   // textures still named by graphics-memory address (lookups)
         uint64_t droppedDraws = 0;   // past the target limit (targetFor)
         uint64_t targetsReused = 0;  // slots given to a new buffer at the limit
+        uint64_t initialDepths = 0;  // B25: Z buffers given GS memory's Z at creation (only after restoreMemory)
         uint64_t reads = 0, readsFromTargets = 0;   // LOCAL -> HOST transfers; those with drawn pages
         // reads of drawn pages served from the memory model (not the GPU's pixels), by (target psm, read psm): the
         // first kReadMismatchKinds pairs seen, the rest under the last entry's count
@@ -617,6 +626,10 @@ private:
     // The drawing state changes (register writes of its groups, state records): emit() works out the state and the
     // targets once while it stays.
     uint64_t stateSerial = 0;
+    // B25: restoreMemory came, and no VSync since: a Z buffer created now is one the snapshot covers, so it takes memory's
+    // Z. After the first VSync new buffers start cleared, as from boot (one made later, on another course, never had its
+    // Z in the snapshot: memory there holds older Z the from-boot run never draws with).
+    bool restored = false;
     uint32_t invertRun = 0;   // the Z buffer the primitives just before inverted (one inversion per run of them)
     float invertFirst[6] = {};   // the run's first primitive (x, y of its vertices): drawn again, a second pass
     uint32_t invertFirstCount = 0;
