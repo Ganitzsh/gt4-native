@@ -180,6 +180,11 @@ public:
                          c.blendFixed, c.alphaTest, c.alphaFunc, c.alphaRef, c.alphaFail, c.destTest, c.destPass, c.depthTest, c.depthFunc,
                          c.scissorX0, c.scissorX1, c.scissorY0, c.scissorY1, d.count, x0, y0, x1, y1, u0, v0, u1, v1,
                          d.count && !d.modeled ? list.vertices[d.first].rgba : 0u);
+            if (d.texture.kind == gsn::TextureSource::Kind::Target)   // DEBUG (R7): the source target's identity
+                for (const auto& x : list.targets)
+                    if (x.id == d.texture.id)
+                        std::fprintf(out, " | src target bp %X bw %u h %u psm %X exact %d off %d,%d", x.bp, x.bw, x.height, x.psm, x.exact ? 1 : 0,
+                                     d.texture.offsetX, d.texture.offsetY);
             if (d.texture.kind == gsn::TextureSource::Kind::Reinterpreted && d.texture.id < list.reinterpretations.size()) {
                 const auto& r = list.reinterpretations[d.texture.id];
                 std::fprintf(out, " | from t%u clut t%u", r.target, r.clutTarget);
