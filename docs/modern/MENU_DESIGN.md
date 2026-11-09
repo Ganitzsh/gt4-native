@@ -214,20 +214,25 @@ Each hook is a `game_src` copy of a matched function with one added call, guarde
    (`DIFFTEST`). Otherwise the command waits and is logged once. Every single-player class uses that function as it is
    (GT mode, arcade, championship, free practice, license, machine test, mission, free run), so Settings are reachable
    mid-race in all of them, time trials and single races included. B-spec races and replays pause through the
-   `SimplePause` (bit 0x80; the spike corrects M0, which had it before the start), which has no menu: M9d3 brings
-   B-spec in (below), and until then a command 6 there waits for the race's end. LAN, net and photo have their own
-   handlers and wait for the next menu. The pause it opens shows our pause page with Settings, under `ui.pause = gt4`
-   too: a pause opened by command 6 takes the native branch of the `RacePause::update` copy for that pause only, while
-   a Start the player presses still gives GT4's `pause.strb`. That is a deliberate exception for `original` (the
-   architect, 2026-11-09): GT4's own pause stays GT4's, and the host's Settings stay reachable in a race, as the old
-   host menu had them. While the game waits (loading, movies, saves, the opening, a race before its start) the host
-   says so, once, if no page arrives within a second: "Settings open at the next menu screen" until M9d2 (M9d1 can't
-   tell a load from a race, so a command 6 in a race waits for the next menu too), then, from M9d2, the reason the
-   game gives: when command 6 has to wait, the game sends a `GT4_REC_SETTINGS_SET` action, key `page.waiting`, value
-   the reason (`load`, `race-start`, `race-end` for B-spec until M9d3, `menu`); the bridge answers it without touching
-   a setting, and the host shows one line per reason: "Settings open when loading ends", "... when the race starts",
-   "... when the race ends", "... at the next menu screen". No new record and no link version: an older host refuses
-   an unknown action, which the game ignores. Without a game (replay, test scene) the host runs the engine itself.
+   `SimplePause` (bit 0x80; the spike corrects M0, which had it before the start), which has no menu. M9d3 brings
+   B-spec in the same way (lane M's spike): in B-spec (the copy's state 2) a pending command 6 acts as if 0x80 were
+   down, so GT4's own B-spec branch opens its `SimplePause` (`pauseStart(R + 0xE404)`), and a `game_src` copy of
+   `SimplePause::update` (003C3A90, matched: 0x80 or 0x20 continues, else the time limit or stay paused) shows our
+   pause page for a pause command 6 opened, with no GT4 items (Continue and Settings), opening on Settings, answering
+   GT4's codes (3 continue, 2 the time limit). A player's own 0x80 still gives GT4's silent pause, under `ui.pause =
+   gt4` too. LAN, net and photo have their own handlers and wait for the next menu. The pause it opens shows our pause
+   page with Settings, under `ui.pause = gt4` too: a pause opened by command 6 takes the native branch of the
+   `RacePause::update` copy for that pause only, while a Start the player presses still gives GT4's `pause.strb`. That
+   is a deliberate exception for `original` (the architect, 2026-11-09): GT4's own pause stays GT4's, and the host's
+   Settings stay reachable in a race, as the old host menu had them. While the game waits (loading, movies, saves, the
+   opening, a race before its start) the host says so, once, if no page arrives within a second: "Settings open at the
+   next menu screen" until M9d2 (M9d1 can't tell a load from a race, so a command 6 in a race waits for the next menu
+   too), then, from M9d2, the reason the game gives: when command 6 has to wait, the game sends a
+   `GT4_REC_SETTINGS_SET` action, key `page.waiting`, value the reason (`load`, `race-start`, `menu`; `race-end` for
+   B-spec until M9d3 lands); the bridge answers it without touching a setting, and the host shows one line per reason:
+   "Settings open when loading ends", "... when the race starts", "... when the race ends", "... at the next menu
+   screen". No new record and no link version: an older host refuses an unknown action, which the game ignores.
+   Without a game (replay, test scene) the host runs the engine itself.
 
 No hook touches `RacePause::callFunction` (0 % matched) or the corrected draft 0022BC20.
 
@@ -611,14 +616,15 @@ coordinator, 2026-11-09). M9 also switches presets low to ultra to `ui.entry = i
 In three steps (lane M, 2026-11-09): M9d1, the host side (Esc, Guide and the chord send 6, and 7 while a page is open;
 `ChordGuard` kept, the dump chord's buttons kept apart, which a host test checks), with command 6 opening at the next
 menu project until M9d2; M9d2, the copy of `RaceBasic::updatePlayCheckPause` of 3.2 point 5 (lane M's spike); M9d3,
-B-spec's pause: how a `SimplePause` can carry our page (a copy of `SimplePause::update` 003C3A90 with the same native
-branch for a pause command 6 opened, if that function is matched), a spike first. Depends: M3, M4, M5. Acceptance:
-`CTEST`; `ORIG`; Guide and the chord in a race pause through GT4 and open Settings, with `ui.pause = native` and with
-`ui.pause = gt4`, in GT mode, a time trial, a single race and (M9d3) a B-spec race, a short Start alone still pauses
-GT4 (with `ui.pause = gt4`, `pause.strb`); command 6 during the opening, a load or a movie, and before the start,
-changes nothing in the game (a session test); the replay and test scene open the host-run hub; the pages' sounds heard
-(moved from M5: in the game's own mix, `GT4_AUDIO_WAV`, the map's sequenced music hides a menu sound, GT4's own
-included), by an A/B of two runs with the same inputs, one moving a page's cursor and one not.
+B-spec's pause, as 3.2 point 5 describes (003C3A90 is matched; DIFFTEST covers its copy and 0038B0E0's state-2 path,
+the native branch the stated gap as for 003C3820; a B-spec session on a copy of the approved `saves-ss-r5`, whose
+Route 5 races run in B-spec). Depends: M3, M4, M5. Acceptance: `CTEST`; `ORIG`; Guide and the chord in a race pause
+through GT4 and open Settings, with `ui.pause = native` and with `ui.pause = gt4`, in GT mode, a time trial, a single
+race and (M9d3) a B-spec race, a short Start alone still pauses GT4 (with `ui.pause = gt4`, `pause.strb`); command 6
+during the opening, a load or a movie, and before the start, changes nothing in the game (a session test); the replay
+and test scene open the host-run hub; the pages' sounds heard (moved from M5: in the game's own mix, `GT4_AUDIO_WAV`,
+the map's sequenced music hides a menu sound, GT4's own included), by an A/B of two runs with the same inputs, one
+moving a page's cursor and one not.
 
 **M10: Style guide and the first asset set (M).** `docs/modern/menu/STYLE.md` (section 5.1, extended), the prompts
 and assets of the hub and pause screens, the review of section 5.4, and the asset pipeline moved here from M3
