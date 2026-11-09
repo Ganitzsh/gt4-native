@@ -497,10 +497,20 @@ open; a capture taken with no page open carries no UI record.
 Depends: none. Acceptance: `CTEST`: navigation, repeat, tab memory, apply classes, confirm-revert timer, layout at
 16:9, 21:9 and 4:3 against golden draw lists (text, not images).
 
-**M3: UI renderer and assets pipeline (M).** `platform/ui/ui_renderer.*` on `layer2d`, `assets/ui/`,
-`tools/ui_assets.py`. Depends: E5 (SDF font), E6's layer for HDR at paper white. Acceptance: `VAL`; the test scene
-draws the hub from a recorded draw list at 720p, 1440p and 4K (these images are our own art only: committed as
-goldens); HDR measured at paper white.
+**M3: UI renderer (M).** `platform/ui/host/ui_renderer.*` (host only, like `settings_schema`: `game_link` compiles
+every source in `platform/ui` into the game, and this one includes the overlay and Vulkan). The shorter path (the
+coordinator, 2026-11-09): M3 draws in SDR on E5's overlay primitives (its SDF text, quads and images), so M9 needn't
+wait for E6. In HDR output until M3b, the UI draws at the player's `display.hdr_paper_white` (200 cd/m2 by default,
+lane C's key), as the overlay already does (`Overlay::setHdr`), so the integrated entry behaves the same on SDR and
+HDR displays. No asset is packed yet: asset 0 is flat colour, and an unknown asset draws flat and is logged once;
+the packer and atlas (`tools/ui_assets.py`, the manifest) come with M10's first asset set. Depends: E5 (SDF font).
+Acceptance: `VAL`; the test scene draws the hub from a recorded draw list at 720p, 1440p and 4K (these images are
+our own art only: committed as goldens); in HDR output the hub's white at `display.hdr_paper_white`, measured
+headless as the overlay's PQ code (no HDR display on the desktop or the Odin).
+
+**M3b: The UI on E6's layer, HDR at paper white (S).** M3's renderer moved onto E6's output-resolution 2D layer
+(`layer2d`), composed after the tone map with the HUD. Depends: M3, E6. Acceptance: `VAL`; the hub's goldens
+unchanged in SDR; HDR at `display.hdr_paper_white` on the layer, measured headless as in M3.
 
 **M4: Settings bridge (S-M).** `platform/ui/host/settings_schema.*` and the page layout table of section 4; host side
 of `SETTINGS` / `SETTINGS_SET`. Depends: M1, M2, E1. Acceptance: `CTEST`: every option in `describe()` is on a page
@@ -563,9 +573,10 @@ sounds heard (moved from M5: in the game's own mix, `GT4_AUDIO_WAV`, the map's s
 GT4's own included), by an A/B of two runs with the same inputs, one moving a page's cursor and one not.
 
 **M10: Style guide and the first asset set (M).** `docs/modern/menu/STYLE.md` (section 5.1, extended), the prompts
-and assets of the hub and pause screens, the review of section 5.4. Depends: M3 (to see them drawn). Acceptance:
-every asset in the manifest with a prompt and a review line; side-by-side review sheets served for the owner;
-the owner's sign-off.
+and assets of the hub and pause screens, the review of section 5.4, and the asset pipeline moved here from M3
+(`tools/ui_assets.py`, the manifest, the packer and atlas). Depends: M3 (to see them drawn). Acceptance: every asset
+in the manifest with a prompt and a review line; the packer's output reproducible; side-by-side review sheets served
+for the owner; the owner's sign-off.
 
 **M11: Controls, Audio and HUD pages (M).** E8a, E8b and E9's pages as native pages; per-device profiles (D13).
 Depends: M4, M5, D12, D13 (E8a), D5 (E8b), E6 (E9). Acceptance: E8a's: every D12 setting set and reset from the

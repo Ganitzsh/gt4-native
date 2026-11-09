@@ -1455,7 +1455,8 @@ changes, `ORIG` and `STREAM` with records off and no page opened. In order:
 | **M0** Menu flow spike (`docs/modern/spikes/M0-menu-flow.md`) | S, 3 days | none |
 | **M1** UI and settings records (`ui.h`, `protocol.h` 16, 17, 68, host commands 6, 7 new and 5 documented; the version serialised with P1 and P3a) | S | none left |
 | **M2** Page engine (`platform/ui/`) | M | none |
-| **M3** UI renderer and asset pipeline | M | E5, E6 |
+| **M3** UI renderer, in SDR on E5's overlay primitives (HDR at `display.hdr_paper_white` until M3b; the asset packer moves to M10) | M | E5 |
+| **M3b** The UI on E6's 2D layer, HDR at paper white | S | M3, E6 |
 | **M4** Settings bridge (and M7's Settings-in-a-race checks) | S-M | M1, M2, E1; M7 for those checks |
 | **M5** Game-side page host (`runtime/menu/`; the pad focus in `iop.cpp`, lane D reviews) | M | M0, M1, M2 |
 | **M6** Options entry (a copy of 00109D00: both ways into GT4's Options reach `startProject`; the hub opens over GT4's Options, whose project runs the menu update the pages tick in) | S | M5 |
@@ -1463,7 +1464,7 @@ changes, `ORIG` and `STREAM` with records off and no page opened. In order:
 | **M8** Start on the GT mode map | S | M5, M0 |
 | **M8b** Settings at the mode select (the fourth way in: Start if free there, else our item beside GT4's two) | S | M5, M8 |
 | **M9** Host wiring; the old menu deleted (the pad chord kept; host commands 2, 3 retired) | S-M | M3, M4, M5 |
-| **M10** Style guide and the first asset set (the owner's sign-off) | M | M3 |
+| **M10** Style guide, the first asset set and the asset pipeline (the owner's sign-off) | M | M3 |
 | **M11** Controls, Audio and HUD pages (E8a, E8b, E9's rows) | M | M4, M5, D12, D13, D5, E6 |
 | **M12** Pointer input and accessibility options | S-M | M9 |
 | **Q1-Q8** QoL options (MENU_DESIGN 7.1), each with its own spike and a setting off in `original` | per ticket | M1-M9 |
