@@ -12,7 +12,7 @@ from pathlib import Path
 T = Path(__file__).resolve().parent
 CLONE = Path("C:/Users/julie/gt4-lane-F")
 CAPS = CLONE / "build" / "caps"
-HOST = CLONE / "build" / "lanef_run" / "gt4_host_n3knobs.exe"
+HOST = CLONE / "build" / "lanef_run" / ("gt4_host_n3knobs2.exe" if sys.argv[1] in ("3", "4") else "gt4_host_n3knobs.exe")
 VARIANTS = {
     "base": ("", ""),
     "d": ("", "GT4_N3_V4NARROW=20"),
@@ -21,12 +21,21 @@ VARIANTS = {
     "p45x12": ("GT4_N3_GLOW_RANGE=45;GT4_N3_GLOW_INTENSITY=12", ""),
     "s30x6": ("GT4_N3_GLOW_SPOT=0.5;GT4_N3_GLOW_RANGE=30", ""),
     "s30x12": ("GT4_N3_GLOW_SPOT=0.5;GT4_N3_GLOW_RANGE=30;GT4_N3_GLOW_INTENSITY=12", ""),
+    # phase 3 (knobs2 host): (a3) batwing at theta_c 55/60/65, range 40, I0 6 (straight down equals the point lamp);
+    # (a2) source radius 9 and 15 m, intensity scaled by (81 + r^2) / 81 so the road under a 9 m lamp keeps its level
+    "bw55": ("GT4_N3_GLOW_BATWING=55;GT4_N3_GLOW_RANGE=40", ""),
+    "bw60": ("GT4_N3_GLOW_BATWING=60;GT4_N3_GLOW_RANGE=40", ""),
+    "bw65": ("GT4_N3_GLOW_BATWING=65;GT4_N3_GLOW_RANGE=40", ""),
+    "r9x12": ("GT4_N3_GLOW_RADIUS=9;GT4_N3_GLOW_RANGE=40;GT4_N3_GLOW_INTENSITY=12", ""),
+    "r15x23": ("GT4_N3_GLOW_RADIUS=15;GT4_N3_GLOW_RANGE=40;GT4_N3_GLOW_INTENSITY=23", ""),
 }
 LAPS = {"lapc": ("lap_csr5.cap", 9000), "laps": ("lap_ssr5r.cap", 10200), "lapcr": ("lap_csr5r.cap", 7500)}
 
 phase = sys.argv[1]
 if phase == "1":
-    jobs = [("lapc", 5000, v) for v in VARIANTS]
+    jobs = [("lapc", 5000, v) for v in list(VARIANTS)[:7]]
+elif phase in ("3", "4"):   # 3: the phase-3 set on lap_csr5 600-5000; 4 VARIANT...: given variants there (knobs2 host)
+    jobs = [("lapc", 5000, v) for v in (sys.argv[2:] or ["bw55", "bw60", "bw65", "r9x12", "r15x23"])]
 else:
     jobs = [(lap, frames, v) for v in sys.argv[2:] for lap, (_, frames) in LAPS.items()]
 summary = CLONE / "build" / "sessions" / "n3_sweep.txt"

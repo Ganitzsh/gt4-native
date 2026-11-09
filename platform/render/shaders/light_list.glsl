@@ -72,7 +72,16 @@ float lightAttenuation(GpuLight light, vec3 p, out vec3 L) {
     const float d = length(toLight);
     L = d > 0.0 ? toLight / d : vec3(0.0, 0.0, 1.0);
     float a = lightFalloff(d, light.range, light.sourceRadius);
-    if (light.type == kSpot) a *= lightCone(dot(-L, light.direction), light.spotScale, light.spotOffset);
+    if (light.type == kSpot && light.spotScale < 0.0) {
+        // LOCAL N3 DEBUG (a3): a street lamp's batwing, spotOffset = cos(theta_c): min(1/cos^3, 1/cos^3(theta_c)),
+        // which keeps a flat road's illuminance even out to theta_c, then a smooth roll-off to 0 over 10 degrees
+        const float c = clamp(dot(-L, light.direction), 0.0, 1.0);
+        const float cm = max(c, light.spotOffset);
+        const float th = acos(c), thc = acos(clamp(light.spotOffset, 0.0, 1.0));
+        a *= (1.0 / max(cm * cm * cm, 1e-4)) * (1.0 - smoothstep(thc, thc + radians(10.0), th));
+    } else if (light.type == kSpot) {
+        a *= lightCone(dot(-L, light.direction), light.spotScale, light.spotOffset);
+    }
     return a;
 }
 
