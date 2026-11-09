@@ -10,6 +10,7 @@
 #include "spu/spu2.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -386,6 +387,33 @@ void spu_trace() {
     log_info("%s", line);
 }
 
+// GT4_TRACE_AUDIO_CPU=1 (measurement, off; PLAN.md D5's default, C6b's Odin row): the time audio_frame spends on
+// the SPU2's voices, a frame, over each 600 frames: the whole mix with audio.mixer = game, only the voices' advance
+// with host (the host mixes them), and BGM and movie sound in both. Logged as "audio cpu:" lines, so the two modes'
+// game-side cost can be compared on the desktop and under FEX on the Odin.
+namespace {
+struct AudioCpu {
+    bool on = [] {
+        const char *e = std::getenv("GT4_TRACE_AUDIO_CPU");
+        return e && *e && *e != '0';
+    }();
+    double voices = 0.0, rest = 0.0;   // microseconds over the window
+    uint32_t frames = 0;
+    void report(bool host) {
+        if (++frames < 600) return;
+        log_info("audio cpu: %s mixer: SPU2 voices %.1f us a frame (%s), BGM and movies %.1f us a frame, "
+                 "over %u frames", host ? "host" : "game", voices / frames, host ? "advanced only" : "mixed",
+                 rest / frames, frames);
+        voices = rest = 0.0;
+        frames = 0;
+    }
+} g_audio_cpu;
+
+double micros_since(std::chrono::steady_clock::time_point t) {
+    return std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t).count();
+}
+}  // namespace
+
 void audio_frame() {
     {
         std::lock_guard<std::mutex> lock(g_mutex);
@@ -415,16 +443,23 @@ void audio_frame() {
         static const bool dry_only = std::getenv("GT4_REVERB") && !std::strcmp(std::getenv("GT4_REVERB"), "off");
         // with the host mixing, the game only advances its voices, unless it writes its own mix (GT4_AUDIO_WAV: the
         // two mixes of one run compared, D5's acceptance)
+        const auto t0 = std::chrono::steady_clock::now();
         if (!host || g_wav) g_spu.mix(mix.data(), n, dry_only);
         else g_spu.advance(n);
+        if (g_audio_cpu.on) g_audio_cpu.voices += micros_since(t0);
         if (host) {
             const uint32_t head[2] = {GT4_SPU2_RUN, static_cast<uint32_t>(n)};
             link_send(GT4_REC_SPU2_REGS, head, sizeof head);
         }
+        const auto t1 = std::chrono::steady_clock::now();
         bgm_mix(rest.data(), n);
         const int m = static_cast<int>(std::min<size_t>(g_movie.size() / 2, static_cast<size_t>(n)));
         for (int i = 0; i < 2 * m; ++i) rest[i] += g_movie[i];
         g_movie.erase(g_movie.begin(), g_movie.begin() + 2 * m);
+        if (g_audio_cpu.on) {
+            g_audio_cpu.rest += micros_since(t1);
+            g_audio_cpu.report(host);
+        }
     }
     std::vector<int16_t> out(2 * n);
     if (host && link_active()) {   // stream 1: BGM and movie sound, for the host to add to its SPU2 mix
