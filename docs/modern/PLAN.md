@@ -620,11 +620,35 @@ between targets, the reads' downscale). `original` never takes a fractional scal
 67 % at 4K upscaled by FSR 2 without TAA ghosting on the flyover (review), motion vectors exact (velocity debug
 view).
 
+**B16c: The GS path's velocity and depth at the seam (S-M; lane B, lane C reviewing).** Before FSR 3.1 (B17) can reach
+the game's frames (the coordinator, 2026-11-09). Lane C's survey: FSR 2 never runs on the game's frames, because
+`GsnScene::hasMotionVectors()` is false, although the GS scene already draws motion vectors for its own temporal
+resolve (`gs_passes/motion vectors`); a selected FSR 2 turns on that resolve and scales with FSR 1. B16c delivers them
+at CONTRACTS b.11's seam, at today's integer scales (independent of B16b's free scale): velocity from `gsn_velocity`'s
+GS pixels divided by the target's extent (b.11's fraction of R), depth in b.11's GS-path convention,
+`hasMotionVectors()` true when they are, and a temporal upscaler then taking over from the GS scene's own resolve
+(`resolveConfig`'s `selfResolved` follows). Also delivered, since the game's frames reach the pipeline whole: a
+reactive or transparency mask over the 2D draws (a constant Z per sprite: the HUD, the speedometer, menu text) and the
+sky, whose depth is arbitrary (b.11), so FSR 2 doesn't smear them; and `DisplaySceneState::reset`, so a cut doesn't
+ghost: always on a change of the displayed target's size or format and on the GS scene's own history resets (its TAA
+already resets on those), since a preset with `upscaler = fsr2` doesn't always want scene records; and on the camera
+cuts (`kViewCut`, the race's and the replay's) and scene switches when records are on. The scene stage's jitter then
+follows the selected upscaler's sequence (B16 (3)) instead of its own Halton phase, or the two disagree; and FSR 2's
+disocclusion is trusted only where b.11's depth convention has been checked for the view's role (race views so far).
+Depends: B16 (1), B8. Acceptance: `ORIG` (`original` never uses it); motion vectors exact on `race7` (the velocity
+debug view); FSR 2 running on the game's frames (its passes in `--profile-json`), reviewed against the GS scene's own
+resolve for ghosting; the HUD and a menu screen held still through FSR 2 under camera motion (a race capture with the
+HUD, and `menus_boot`'s title window with the field-blended menus); the frame after a camera cut clean against the GS
+scene's own resolve (a `race7` or `race_boot` cut), run at `ultra` as shipped, scene records off, so it measures what
+a player sees: if FSR 2 ghosts there and the resolve doesn't, B16c needs a cut signal that doesn't need records;
+`PERF`; `PRESETS` identical except where `upscaler = fsr2`, by design.
+
 **B17: FSR 3.1 (M; lane C, moved from lane B on 2026-11-08, lane B reviewing).** A backend of B16's interface:
 FSR 3.1 only, from FidelityFX SDK v1.1.4 (MIT), vendored unmodified with our glslang and our own Vulkan glue, at
-today's integer scales. Its depth flags are the ones b.9 states (B16 (1); FSR 2's today: inverted, for GT4's
+today's integer scales. Its depth flags are the ones b.11 states (B16 (1); FSR 2's today: inverted, for GT4's
 larger-is-nearer Z, and an infinite far plane). DLSS and XeSS are out: R13 finds their licences incompatible with
-GPLv3 and RELEASE_POLICY.md, and only the owner can change that. Depends: B16, R13 (B16b for fractional scales).
+GPLv3 and RELEASE_POLICY.md, and only the owner can change that. Depends: B16, R13; B16c for the game's frames
+(without it FSR 3.1 reaches only the test scene and the modern scene); B16b for fractional scales.
 Acceptance: `VAL`; `PERF`; as for FSR 2, the same frames on every device class CI runs (the Linux and arm64 cross
 builds).
 
