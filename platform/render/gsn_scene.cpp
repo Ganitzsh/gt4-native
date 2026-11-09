@@ -317,6 +317,21 @@ struct GsnScene::Impl {
     // GS -> host reads (GsnScene::read): how many, the frames skipped ahead of them, and GT4_READ_SKIP_TEST's frames
     // held back (the newest lists, drawn only at the next read: a backlog for a lockstep replay's reads).
     uint64_t reads = 0, readSkips = 0;
+    // The picture on screen kept whole while a synchronous read draws part of the next frame into its buffer (a screen
+    // drawn into the buffer it shows: Photo Travel's shooting screen, its focus probe every frame). GsnScene::read's
+    // cut list would otherwise leave that buffer half drawn for the present: `heldPicture` is a copy of it taken before the
+    // list's first draw into it, shown by recordMain instead of the live buffer until a displayed list is drawn. One
+    // image, reused (made again only for another size or format); its copy timed on the GPU.
+    vk::Image heldPicture;
+    bool heldShown = false;
+    uint32_t heldTarget = 0, heldPresented = 0;   // (presents of this hold)
+    struct HeldCounts {
+        uint64_t copies = 0, alreadyHeld = 0, presents = 0, releasedByFrame = 0, releasedByDisplayChange = 0;
+        uint64_t repeated = 0;   // holds presented more than once: no displayed list came by the next present (a stall)
+        double copyGpuMs = 0.0;
+    } heldCounts;
+    VkQueryPool heldQueries = VK_NULL_HANDLE;
+    bool heldTimed = false;   // timestamps written by the copy in this read's command buffer
     // A rectangle of a target copied into a host buffer (GsnScene::read, FrameList::readbacks), packed as the GS keeps
     // it once the GPU has done the copy.
     struct Copied {
@@ -581,6 +596,17 @@ struct GsnScene::Impl {
                         static_cast<unsigned long long>(stagesOnMembers), static_cast<unsigned long long>(stagesOnTransients));
         if (readSkips) std::printf("... of them ahead of GS reads: %llu (of %llu reads)\n", static_cast<unsigned long long>(readSkips),
                                    static_cast<unsigned long long>(reads));
+        if (heldCounts.copies)
+            std::printf("Pictures held whole while a synchronous read drew into the shown buffer: %llu copies (%.3f ms GPU "
+                        "each), %llu reads found it held, %llu presents of it (%llu holds shown more than once); released by "
+                        "the frame drawn whole %llu, by a display change %llu\n",
+                        static_cast<unsigned long long>(heldCounts.copies), heldCounts.copyGpuMs / double(heldCounts.copies),
+                        static_cast<unsigned long long>(heldCounts.alreadyHeld), static_cast<unsigned long long>(heldCounts.presents),
+                        static_cast<unsigned long long>(heldCounts.repeated),
+                        static_cast<unsigned long long>(heldCounts.releasedByFrame),
+                        static_cast<unsigned long long>(heldCounts.releasedByDisplayChange));
+        vk::destroy(device, heldPicture);
+        if (heldQueries) vkDestroyQueryPool(device.device, heldQueries, nullptr);
         if (profile.pool) vkDestroyQueryPool(device.device, profile.pool, nullptr);
         if (readGraph) readGraph->destroy();
         for (auto& [id, t] : targets) vk::destroy(device, t.image);
@@ -1130,6 +1156,7 @@ struct GsnScene::Impl {
     static void segments(const gsn::FrameList& list, std::vector<Segment>& out);
     void execute(VkCommandBuffer command, uint32_t slot);   // the four below, in order (as the graph's passes run them)
     void executeBegin(VkCommandBuffer command, uint32_t slot);   // before the commands: the 3D batches, ex made
+    void holdShownPicture(VkCommandBuffer command);   // a synchronous read's cut list: the shown picture kept whole
     void executeRange(VkCommandBuffer command, uint32_t slot, size_t from, size_t to);   // the commands [from, to)
     void executeLight(VkCommandBuffer command, uint32_t slot, size_t at);   // the scene stage at Light command `at`
     // The scene stage's steps, in a modern renderer's order (executeLight runs them in turn on the members; the render
@@ -1454,7 +1481,73 @@ vk::Pipeline& GsnScene::Impl::parityPipeline(uint32_t blendKey, uint32_t mask, b
 }
 
 // Before the list's commands: its vertices, its 3D batches, and the state the commands use (ex).
+// A list cut for a synchronous read (GsnScene::read) that draws into the buffer on screen: that buffer still holds the
+// frame shown, whole. Copied as it stands into `heldPicture` before the list draws over it (once: a second cut before the
+// frame's displayed list finds it held), so the present shows that frame, not the next one half drawn.
+void GsnScene::Impl::holdShownPicture(VkCommandBuffer command) {
+    if (!reading || frame.displayed || !displayTarget) return;
+    bool drawsIntoShown = false;
+    for (const auto& cmd : frame.commands)
+        if (cmd.kind == gsn::FrameList::Command::Kind::Draw && frame.draws[cmd.index].target == displayTarget) {
+            drawsIntoShown = true;
+            break;
+        }
+    if (!drawsIntoShown) return;
+    if (heldShown) {
+        ++heldCounts.alreadyHeld;
+        return;
+    }
+    auto it = targets.find(displayTarget);
+    if (it == targets.end() || !it->second.image.valid() || it->second.depth) return;
+    vk::Image& shown = it->second.image;
+    if (!heldPicture.valid() || heldPicture.extent.width != shown.extent.width || heldPicture.extent.height != shown.extent.height ||
+        heldPicture.format != shown.format) {
+        if (heldPicture.valid()) {
+            vkDeviceWaitIdle(device.device);   // (only when the shown buffer's size or format changed)
+            vk::destroy(device, heldPicture);
+        }
+        vk::ImageDesc desc;
+        desc.format = shown.format;
+        desc.extent = shown.extent;
+        desc.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        desc.name = "gsn held picture";
+        heldPicture = vk::createImage(device, desc);
+    }
+    if (!heldQueries) {
+        VkQueryPoolCreateInfo q{};
+        q.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+        q.queryType = VK_QUERY_TYPE_TIMESTAMP;
+        q.queryCount = 2;
+        if (vkCreateQueryPool(device.device, &q, nullptr, &heldQueries) != VK_SUCCESS) heldQueries = VK_NULL_HANDLE;
+    }
+    vk::Barriers b;
+    b.image(shown, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_READ_BIT);
+    b.image(heldPicture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_WRITE_BIT, true);
+    b.flush(command);
+    if (heldQueries) {
+        vkCmdResetQueryPool(command, heldQueries, 0, 2);
+        vkCmdWriteTimestamp2(command, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, heldQueries, 0);
+    }
+    VkImageCopy region{};
+    region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.extent = {shown.extent.width, shown.extent.height, 1};
+    vkCmdCopyImage(command, shown.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, heldPicture.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    if (heldQueries) {
+        vkCmdWriteTimestamp2(command, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, heldQueries, 1);
+        heldTimed = true;
+    }
+    vk::toSampled(b, heldPicture, vk::kFragment);
+    vk::toSampled(b, shown, vk::kFragment);   // (the list's first draw into it moves it on)
+    b.flush(command);
+    heldShown = true;
+    heldTarget = displayTarget;
+    heldPresented = 0;
+    ++heldCounts.copies;
+}
+
 void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
+    holdShownPicture(command);
     ex = ExecuteState{};
     ex.command = command;
     ex.slot = slot;
@@ -3328,6 +3421,10 @@ void GsnScene::Impl::executeFinish(VkCommandBuffer command, uint32_t /*slot*/) {
         if (!backBuffer && shownByGame == gameShown && targets.count(shownBefore)) displayTarget = shownBefore;
     }
     gameShown = shownByGame;
+    if (heldShown) {   // a displayed list drawn whole: the live buffer is shown again (another buffer: the screen changed)
+        heldShown = false;
+        ++(displayTarget == heldTarget ? heldCounts.releasedByFrame : heldCounts.releasedByDisplayChange);
+    }
     auto shown = targets.find(displayTarget);
     if (shown != targets.end()) {
         const gfx::DisplayCircuit& c = frame.display.record.circuit[frame.display.target2 ? 1 : 0];
@@ -4277,6 +4374,13 @@ bool GsnScene::read(const gsn::ReadRequest& request, std::vector<uint8_t>& out) 
     const Clock::time_point recorded = Clock::now();
     up.submit();
     const Clock::time_point drawn = Clock::now();
+    if (s.heldTimed) {   // (the held picture's copy, timed on the GPU: done, the read waited)
+        uint64_t ticks[2] = {};
+        if (vkGetQueryPoolResults(s.device.device, s.heldQueries, 0, 2, sizeof ticks, ticks, sizeof(uint64_t),
+                                  VK_QUERY_RESULT_64_BIT) == VK_SUCCESS && ticks[1] >= ticks[0])
+            s.heldCounts.copyGpuMs += double(ticks[1] - ticks[0]) * s.device.properties.limits.timestampPeriod * 1e-6;
+        s.heldTimed = false;
+    }
     s.finishReadbacks(s.readbacksRecorded);   // (asynchronous reads in the lists drawn: done too)
     if (copiedOk) s.pack(copied, out);
     const Clock::time_point done = Clock::now();
@@ -4589,9 +4693,18 @@ void GsnScene::recordMain(VkCommandBuffer command, const SceneView& view) {
     vkCmdSetViewport(command, 0, 1, &viewport);
     vkCmdSetScissor(command, 0, 1, &scissor);
     vk::bind(command, s.display);
+    // (a synchronous read left the shown buffer mid-frame: the frame before, whole, from its copy)
+    const bool held = s.heldShown && s.heldTarget == s.displayTarget && s.heldPicture.valid();
+    // (displayTarget changes only where a displayed list is drawn, executeFinish, which releases the copy: a display
+    // change can't leave it shown over another screen; a stall repeats the frame before, whole, counted)
+    if (held) {
+        ++s.heldCounts.presents;
+        if (++s.heldPresented == 2) ++s.heldCounts.repeated;
+    }
+    const VkImageView shownView = held ? s.heldPicture.view : shown->second.image.view;
     auto other = s.fieldBlend > 0.0f ? s.targets.find(s.blendTarget) : s.targets.end();
-    const VkImageView otherView = other != s.targets.end() ? other->second.image.view : shown->second.image.view;
-    vk::Descriptors().sampled(0, shown->second.image.view, s.samplers[2]).sampled(1, otherView, s.samplers[2]).push(command, s.display);
+    const VkImageView otherView = other != s.targets.end() ? other->second.image.view : shownView;
+    vk::Descriptors().sampled(0, shownView, s.samplers[2]).sampled(1, otherView, s.samplers[2]).push(command, s.display);
     float constants[12] = {};
     std::copy(s.displayRect, s.displayRect + 4, constants);
     std::copy(s.otherFieldRect, s.otherFieldRect + 4, constants + 4);
