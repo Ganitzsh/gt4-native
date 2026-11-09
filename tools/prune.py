@@ -23,7 +23,9 @@ gustavocanepa/gt4-native) and the worktrees of gt4-native-game and gt4-decomp; o
 7. Claude session scratchpads (the temp folder's claude/*/*/scratchpad): a scratchpad with a file changed in the
    last 24 h is skipped whole (its session may be alive); in the others, folders (frame dumps, session folders) and
    loose .ppm/.png files idle 3 days go. Scripts, notes and logs at a scratchpad's top stay. Nothing else in the temp
-   folder is looked at (DiagOutputDir and Windows' files are the owner's).
+   folder is looked at (DiagOutputDir and Windows' files are the owner's). A session idle over a day that resumes
+   later finds its 3-day-old folders gone: keep nothing only in a scratchpad folder. The root is Python's temp
+   folder, so run this from Windows (from WSL it would be /tmp/claude), or name it with --scratch.
 Never: gt4-native-game's or gt4-decomp's own files, C:/Users/julie/locks, gt4-native-sprite, an item with a
 saves*, *_saves, caps, captures or refs (REF stills) folder in its top two levels (in a checkout, among the files
 git doesn't track), any .iso/.elf/.ps2/.tgz/.mcd/.mc2 or BIOS file, a file named in docs/CAPTURES.md, a path or
@@ -116,6 +118,26 @@ class Scan:
                         stack.append((full, rel + (e.name,)))
                     else:
                         self.size += st.st_size
+
+
+def changed_within(path, since):
+    """Whether anything under path (links not followed) changed at or after `since`; stops at the first such file. A
+    folder it can't read (no permission, removed mid-walk) counts as a change: the pad is then left alone as live."""
+    stack = [path]
+    while stack:
+        d = stack.pop()
+        try:
+            with os.scandir(long_path(d)) as it:
+                for e in it:
+                    if is_link(e):
+                        continue
+                    if e.stat(follow_symlinks=False).st_mtime >= since:
+                        return True
+                    if e.is_dir(follow_symlinks=False):
+                        stack.append(os.path.join(d, e.name))
+        except OSError:
+            return True
+    return False
 
 
 def gib(n):
@@ -430,10 +452,9 @@ class Pruner:
                 pad = os.path.join(pdir, session, "scratchpad")
                 if not os.path.isdir(pad) or is_link(pad):
                     continue
-                scan = Scan(pad, self.keep_names, names=False)
-                if self.now - scan.newest < DAY:
-                    self.kept.append(("7 scratchpad", pad, scan.size,
-                                      "a file changed in the last 24 h (live session)"))
+                if changed_within(pad, self.now - DAY):   # stops at the first recent file: no walk of a big live pad
+                    self.kept.append(("7 scratchpad", pad, 0,
+                                      "a file changed in the last 24 h (live session; size not measured)"))
                     continue
                 for e in os.scandir(long_path(pad)):
                     full = os.path.join(pad, e.name)
@@ -547,6 +568,7 @@ def main():
     ap.add_argument("--home", default="C:/Users/julie" if WINDOWS else os.path.expanduser("~"))
     ap.add_argument("--apply", action="store_true", help="delete (the default is a dry run)")
     ap.add_argument("--worktrees-approved", action="store_true", help="the coordinator OK'd removing worktrees")
+    ap.add_argument("--scratch", help="rule 7's root, Claude's session folders (default: Python's temp folder/claude)")
     ap.add_argument("--self-test", action="store_true")
     a = ap.parse_args()
     if a.self_test:
@@ -555,7 +577,7 @@ def main():
     import objcache  # noqa: E402
     cache = objcache.folder() or os.path.join(os.environ.get("LOCALAPPDATA", a.home), "gt4-native", "objcache")
     before = free(a.home)
-    pr = Pruner(a.home, cache)
+    pr = Pruner(a.home, cache, scratch=a.scratch)
     if not pr.errors:
         pr.find()
     print(f"free before: {gib(before)}")
