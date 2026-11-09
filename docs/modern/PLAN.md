@@ -816,33 +816,26 @@ a night frame and a HUD frame); on the Odin, the night replay with no band (the 
 levels on every pixel at `original` on the REF captures (above 1x: deterministic across devices within 2 levels, not
 GS-exact), after which section 2's strict rule replaces the interim one; `PERF` desktop and Odin (C6b); `VAL`.
 
-**B25: 4- and 8-bit reads of drawn pages (M; lane B; lane A reviews the front end).** RISKS R7, located (lane B,
-2026-11-09, `debug/b-r7-trace`): on the night lap nine pages differ between the from-boot replay and its sub-capture,
-read as 4-bit textures or palettes (128x64 to 256x256, palettes at 0x3C00 and 0x3C20) decoded from GS memory, and page
-407 of the Z buffer bp32c0; pages 405, 478 and 494-495 are owned by drawn targets (bp32a0, bp3ae0, bp3da0) in both
-front ends, 479-482 by none now. Every write into memory takes a page back from a target, so two cases are possible,
-both perhaps present. Where a target really drew a page, a 4-bit read decodes the memory from before the draw, since
-the drawn pixels never reach it: live and from-boot are stale. And a draw claims every page under its rectangle
-(`markWritten`, whole 8 KiB pages), so the table can give a target a page it never wrote; there the snapshot's
-write-back is what damages the replay (lane F's green markings in `lap_ssr5r`'s replay), and live is right. The live
-game, the replays and the mid-run snapshots each get some of these pages wrong; which, page by page, is the first
-step's result. **Step 0, the measurement**, before either fix: per differing page, the reads' texels under memory and
-under the owning target, against PCSX2's GS dump on a night frame of the same race (lane C's stills session takes it).
-It is a content pairing (PCSX2's own run at a matching moment), so it says what kind of content the PS2 holds on each
-page: our memory's uploaded bytes (a texture: the claim was only a claim) or drawn content resembling the owning
-target's pixels (really drawn). **The fix follows per case**: (a) where live is stale, the read built from the
-target's pixels on the GPU, through the GS's own swizzle as PSMT4 or PSMT8 at any TBW (the reinterpretation path,
-extended); (b) with it, a transfer over part of a drawn page keeps the drawn rest (written into the target, which
-stays the owner, or a CPU read only where the counter shows it rare); (c) where the table over-claims, a finer claim,
-the drawn rectangle at block granularity. A debug path that writes the owned pages back before the memory decode is
-the reference for (a), counted, and doesn't ship (a GPU-to-CPU read every frame stalls the Odin). Depends: lane C's
-night GS dump. Acceptance: step 0's table per page; on the texture pages, the PS2's bytes; on the drawn pages, (a)
-equal to the reference on every counted read of `lap_ssr5r_boot` and `race_grid43_r6`; lane C's sub-capture pair
-(`lap_ssr5r_boot` against its sub-capture from VBlank 9,926) identical; `lap_ssr5r`'s markings white in a mid-run
-replay and live; an `ORIG` re-baseline under section 2's rule if from-boot pixels move, checked against lane C's PCSX2
-stills (the car ahead's reflection by day and at night, and the markings); `PERF` desktop and Odin; `VAL`. From-boot
-captures are re-rendered, not re-recorded, and until step 0 says which side is wrong, no night colour is judged
-against PCSX2 or the live picture.
+**B25: Depth buffers in the mid-run snapshot (S; lane B; lane A reviews the front end).** RISKS R7, named (lane B,
+2026-11-09, `debug/b-r7-trace`): a capture recorded mid-run differs from the same run recorded from game start because
+its snapshot carries no Z buffer. `GsFrontend::drawnTargets` skips every depth target, so `readVramWithTargets` reads
+back colour targets only, and a sub-capture starts with Z from GS memory, which the GPU-drawn Z never reaches. GT4
+inverts Z in place each frame rather than clearing it, so the stale Z survives wherever the scene keeps covering it:
+under the car ahead, whose depth-tested edges then come out differently (the Z buffer bp0000 differs on 21 values of
+the car's silhouette at VBlank 9,944, the 3D target on 109 pixels after the car's draws and 495 by the frame's end),
+and GT4's feedback buffers likely carry that on into the whole-picture difference lane C measured at VBlank 10,926. A
+sub-capture recorded from a lockstep replay reads back no targets at all (no read service). Found by limiting one
+VBlank's list (`GT4_GSN_LIMIT_AT`) with the history whole, the draw lists identical. The live game and captures from
+game start are right; the earlier leads stand as facts, not as the cause: pages written by several texture sets (our
+memory keeps the last set's blocks; reads by set don't see it), and stale 4-bit reads of drawn pages, ruled out on
+these pages. The fix: the snapshot reads the depth targets back too, `drawnTargets` including them and the read
+service returning Z in its GS format (Z32, Z24, Z16 written through `GsMemory`'s own Z swizzle), counted; and a
+lockstep replay's recording reads its targets back too, without the deadlock the read service has there (gs_host.cpp
+withholds it on purpose: the lockstep would wait on the render thread, which waits on it), for example after the front
+end's drain with the render thread idle and asked directly. Depends: nothing beyond the GS path. Acceptance: lane C's
+sub-capture pair (`lap_ssr5r_boot` against its sub-capture from VBlank 9,926, `subcap_night`'s 36 frames) identical;
+`ORIG` unchanged (the snapshot runs only when a capture starts mid-run); `CTEST` of the Z write-back's swizzle in each
+format. Until it lands, references come from captures recorded from game start, as CAPTURES says.
 
 ### Lane C: platform, ARM64, tooling
 
