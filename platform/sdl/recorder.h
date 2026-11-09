@@ -45,6 +45,11 @@ public:
     };
     static constexpr const char* kDefaultVideoArgs = "-c:v libx264 -preset veryfast -crf 18 -pix_fmt yuv420p";
 
+    // Why these options can't be used, or empty. On Windows ffmpeg starts through cmd.exe, which expands %NAME% even
+    // inside quotes and ends a quoted word at a double quote: a --record or --record-ffmpeg path with either is
+    // refused.
+    static std::string refusal(const Options& options);
+
     explicit Recorder(Options options);
     ~Recorder();
     Recorder(const Recorder&) = delete;

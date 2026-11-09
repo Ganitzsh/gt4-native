@@ -84,7 +84,8 @@ const char* kUsage =
     "  --record PATH        record what is presented, with the game's sound, to PATH (.mkv, .mp4...) in real time\n"
     "                       through the ffmpeg on PATH (or --record-ffmpeg EXE); --record-args \"ARGS\" replaces\n"
     "                       the video encoder's options (default -c:v libx264 -preset veryfast -crf 18\n"
-    "                       -pix_fmt yuv420p); a fixed-step replay records each drawn frame (docs/RECORDING.md)\n"
+    "                       -pix_fmt yuv420p); a fixed-step replay records each drawn frame; the sound is recorded\n"
+    "                       with --no-audio too (docs/RECORDING.md)\n"
     "  --session-dir PATH   attach a virtual gamepad, process commands, record frames/audio/events\n"
     "  --no-audio           disable playback and WAV capture for a session\n"
     "  --fixed-step         advance exactly one 60 Hz tick per frame (default for headless and sessions)\n"
@@ -639,6 +640,7 @@ int run(const Options& options) {
         r.path = options.record;
         if (!options.recordFfmpeg.empty()) r.ffmpeg = options.recordFfmpeg;
         r.videoArgs = options.recordArgs;
+        if (const std::string why = gt4::Recorder::refusal(r); !why.empty()) throw std::invalid_argument(why);
         recorder = std::make_unique<gt4::Recorder>(r);
     }
     const bool recordByFrame = !options.replay.empty() && options.fixedStep;
@@ -744,9 +746,9 @@ int run(const Options& options) {
                     SDL_PutAudioStreamData(stream, frames, static_cast<int>(count * 4));
                 };
         }
-        // --record: the same sound (the host's output mix, either audio.mixer) to the recording, also headless or in a
-        // session, where nothing plays it.
-        if (recorder && options.audio) {
+        // --record: the same sound (the host's output mix, either audio.mixer) to the recording, also headless, in a
+        // session or with --no-audio (which stops playback only), where nothing plays it.
+        if (recorder) {
             gsOptions.audio = [play = std::move(gsOptions.audio), rec = recorder.get()](uint32_t rate, const int16_t* frames,
                                                                                       size_t count) {
                 if (play) play(rate, frames, count);

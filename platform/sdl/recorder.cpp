@@ -67,6 +67,17 @@ double steadySeconds() {
 
 }  // namespace
 
+std::string Recorder::refusal(const Options& options) {
+#ifdef _WIN32
+    for (const std::string* path : {&options.path, &options.ffmpeg})
+        if (path->find_first_of("%\"") != std::string::npos)
+            return "--record and --record-ffmpeg paths can't hold % or \" (cmd.exe starts ffmpeg): " + *path;
+#else
+    (void)options;
+#endif
+    return {};
+}
+
 Recorder::Recorder(Options options) : options_(std::move(options)), pacer_(options_.fps) {
     if (options_.videoArgs.empty()) options_.videoArgs = kDefaultVideoArgs;
     videoPath_ = options_.path + ".video.mkv";

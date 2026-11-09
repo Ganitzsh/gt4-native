@@ -18,7 +18,8 @@ release trailer, a bug report. It is off unless `--record` is given, and it ship
   as one video frame instead.
 - **Sound**: the host's output mix (the game's own mix, or the host's SPU2 mixer with `audio.mixer = host`), also
   headless or in a session where nothing plays it, is written beside the output while recording. When the host
-  closes, ffmpeg muxes the two: the video as encoded, the sound as AAC 192 kbit/s. `--no-audio` records no sound.
+  closes, ffmpeg muxes the two: the video as encoded, the sound as AAC 192 kbit/s. `--no-audio` only stops playback:
+  the recording keeps the sound.
 - **Encoding**: `--record-args "ARGS"` replaces the video encoder's options, by default
   `-c:v libx264 -preset veryfast -crf 18 -pix_fmt yuv420p` (CPU). Any encoder ffmpeg has works, for example
   `--record-args "-c:v h264_nvenc -preset p5 -cq 19 -pix_fmt yuv420p"` (NVIDIA). A GPU encoder is not faster by
@@ -30,8 +31,10 @@ release trailer, a bug report. It is off unless `--record` is given, and it ship
   mean ffmpeg could not keep up (try a faster `-preset`). Both show as a frame held twice; the video's length stays the
   wall clock's. If ffmpeg or the mux fails, the two intermediate files (`PATH.video.mkv`, `PATH.sound.raw`) are kept
   and the command is printed.
-- The window keeps one size while recording: frames of another size (a resize, fullscreen toggled) are left out. HDR
-  output records its PQ signal as plain video: record with `display.hdr = off`.
+- The window keeps one size while recording: frames of another size (a resize, fullscreen toggled) are left out.
+  8-bit and 10-bit outputs are recorded; an HDR output in 16-bit floats (scRGB) is refused with a warning, and a
+  10-bit HDR one records its PQ signal as plain video: record with `display.hdr = off`.
+- On Windows ffmpeg starts through cmd.exe, so `--record` and `--record-ffmpeg` paths with `%` or `"` are refused.
 
 ## A README video at 1080p60
 
