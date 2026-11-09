@@ -84,10 +84,11 @@ struct Session::Impl {
         if (joystick) SDL_CloseJoystick(joystick);
         if (id) SDL_DetachVirtualJoystick(id);
     }
-    static SDL_JoystickID attachPad(const char* name, SDL_Joystick*& joystickOut, SDL_Gamepad*& gamepadOut) {
+    static SDL_JoystickID attachPad(const char* name, SDL_Joystick*& joystickOut, SDL_Gamepad*& gamepadOut,
+                                    SDL_JoystickType type = SDL_JOYSTICK_TYPE_GAMEPAD) {
         SDL_VirtualJoystickDesc desc;
         SDL_INIT_INTERFACE(&desc);
-        desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+        desc.type = type;
         desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
         desc.nbuttons = 15;
         desc.axis_mask = (1u << SDL_GAMEPAD_AXIS_COUNT) - 1;
@@ -95,6 +96,21 @@ struct Session::Impl {
         desc.name = name;
         const SDL_JoystickID attached = SDL_AttachVirtualJoystick(&desc);
         require(attached != 0, "SDL_AttachVirtualJoystick");
+        if (type != SDL_JOYSTICK_TYPE_GAMEPAD) {
+            // SDL maps a virtual gamepad itself, not a virtual wheel: the same layout, button i and axis i as the
+            // gamepad's (SDL_GAMEPAD_BUTTON_* and SDL_GAMEPAD_AXIS_* order), so it opens as a gamepad and is typed a
+            // wheel (PLAN.md D7's session test)
+            char guid[33] = {};
+            SDL_GUIDToString(SDL_GetJoystickGUIDForID(attached), guid, sizeof guid);
+            std::string mapping = std::string(guid) + "," + name + ",";
+            for (int i = 0; i < 15; ++i)
+                mapping += std::string(SDL_GetGamepadStringForButton(static_cast<SDL_GamepadButton>(i))) + ":b" +
+                           std::to_string(i) + ",";
+            for (int i = 0; i < SDL_GAMEPAD_AXIS_COUNT; ++i)
+                mapping += std::string(SDL_GetGamepadStringForAxis(static_cast<SDL_GamepadAxis>(i))) + ":a" +
+                           std::to_string(i) + ",";
+            require(SDL_AddGamepadMapping(mapping.c_str()) >= 0, "SDL_AddGamepadMapping");
+        }
         joystickOut = SDL_OpenJoystick(attached);
         require(joystickOut != nullptr, "SDL_OpenJoystick");
         gamepadOut = SDL_OpenGamepad(attached);
@@ -126,12 +142,14 @@ struct Session::Impl {
         id = 0;
         event("pad1", "\"plugged\":false");
     }
-    // Pad 2's joystick, plugged in (neutral) on first use.
-    SDL_Joystick* pad2() {
+    // Pad 2's joystick, plugged in (neutral) on first use; "wheel2" plugs it in as a wheel (PLAN.md D7: a device SDL
+    // types as one, the gamepad layout's axes and buttons), driven by "axis2" and "button2" as pad 2 is.
+    SDL_Joystick* pad2(bool wheel = false) {
         if (!joystick2) {
-            id2 = attachPad("GT4 automation controller 2", joystick2, gamepad2);
+            id2 = attachPad(wheel ? "GT4 automation wheel" : "GT4 automation controller 2", joystick2, gamepad2,
+                            wheel ? SDL_JOYSTICK_TYPE_WHEEL : SDL_JOYSTICK_TYPE_GAMEPAD);
             neutral(joystick2);
-            event("pad2", "\"plugged\":true,\"controller\":" + std::to_string(id2));
+            event("pad2", "\"plugged\":true,\"controller\":" + std::to_string(id2) + (wheel ? ",\"wheel\":true" : ""));
         }
         return joystick2;
     }
@@ -248,6 +266,9 @@ struct Session::Impl {
             auto which = button(name);
             if (which < 0 || which >= 15 || (value != 0 && value != 1)) throw std::runtime_error("Invalid button or state");
             require(SDL_SetJoystickVirtualButton(op == "button" ? pad1() : pad2(), which, value != 0), "virtual button");
+        } else if (op == "wheel2") {
+            if (joystick2) throw std::runtime_error("wheel2: pad 2 is plugged in already (unplug2 first)");
+            pad2(true);
         } else if (op == "unplug2") unplug2();
         else if (op == "unplug") unplug1();
         else if (op == "reset") reset();

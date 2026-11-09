@@ -35,8 +35,15 @@ public:
     SDL_Gamepad* gamepad(int port) const { return port >= 0 && port < input::Ports::kPorts ? port_[port].gamepad : nullptr; }
     // Whether the game sees a controller in `port`: pad 1 always (the keyboard), pad 2 while a gamepad holds it.
     bool connected(int port) const { return port == 0 || gamepad(port) != nullptr; }
-    // The port's pad for this frame: its devices' bindings, then its response (input.response; dt in seconds).
+    // The port's pad for this frame: its devices' bindings, then its response (input.response; dt in seconds). A
+    // wheel GT4 sees as its Driving Force Pro (dfpPort) isn't part of its port's pad: the keyboard alone is, on pad 1.
     ps2::PadInput read(int port, const Settings& settings, float dt);
+    // PLAN.md D7: the port whose gamepad is a wheel (a device SDL types as one) with input.wheel.mode = dfp (its own
+    // or the global value), the first such; -1 for none. One wheel: LGDEV's index 0.
+    int dfpPort(const Settings& global) const;
+    // That wheel's input through its profile's bindings, before D12's response (GT4 applies its own), for
+    // input::dfpWheel; false without one. Neutral while one of its bindings is being captured.
+    bool wheelInput(const Settings& global, ps2::PadInput& out);
     // The port's motors and triggers now: GT4's own rumble (D2's g_rumble: bit 8 the small motor, bits 0-7 the large
     // one) and the physics' haptics (D14), the larger per motor; sent when they change and every second while on
     // (SDL's rumble lasts as long as asked). Triggers: an Xbox pad's impulse triggers, or a DualSense's adaptive ones.

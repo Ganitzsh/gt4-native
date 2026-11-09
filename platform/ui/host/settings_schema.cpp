@@ -134,6 +134,9 @@ const std::vector<PageSpec> &pages() {
             {"input.haptics.wheelspin", "Wheelspin", kLive},
             {"input.haptics.kerbs", "Kerbs", kLive},
             {"input.trigger_effects", "Trigger effects", kLive},
+            header("Wheel"),
+            {"input.wheel.mode", "Wheel", kLive, 0, false, "", "pad=As a gamepad|dfp=Driving Force Pro (GT4's)"},
+            {"input.wheel.ffb_strength", "Force feedback", kLive, 5, false, "%"},
         }},
         {"audio", "Audio", "tab.audio", false, {
             {"audio.mixer", "Mixer", kLive},
@@ -228,9 +231,6 @@ const std::vector<HiddenOption> &hiddenOptions() {
         {"post.shutter", "the test scene's camera only (motion blur and depth of field over the game use GT4's own)"},
         {"post.aperture", "the test scene's camera only (motion blur and depth of field over the game use GT4's own)"},
         {"post.focus_distance", "the test scene's camera only (motion blur and depth of field over the game use GT4's own)"},
-        // (D7 step 2b moves them to the Controls page, under a Wheel header, as lane M reviewed them)
-        {"input.wheel.mode", "D7 step 2b: the wheel is not sent yet"},
-        {"input.wheel.ffb_strength", "D7 step 2b: the wheel is not sent yet"},
     };
     return hidden;
 }

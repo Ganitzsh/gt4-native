@@ -215,7 +215,9 @@ A scripted session runs the host with `--session-dir DIR`: it attaches a virtual
 finds in `DIR/commands/*.cmd`, in name order (`tools/host_session.py send` writes one; the syntax is in
 `platform/sdl/session.cpp`: `button NAME 0|1`, `axis NAME VALUE`, `wait FRAMES`, `vwait VBLANKS`,
 `capture NAME [COUNT]`, `quit`; `button2` and `axis2` drive a second virtual pad, the game's pad 2, plugged in at
-their first use and removed by `unplug2`; `unplug` removes pad 1 until the next `button` or `axis`, each pad keeping its port (D13); `reset` releases both pads: without them port 2 is empty, as before). Two pitfalls:
+their first use and removed by `unplug2`; `wheel2` plugs pad 2 in as a wheel instead, a device SDL types as one
+(PLAN.md D7); `unplug` removes pad 1 until the next `button` or `axis`, each pad keeping its port (D13); `reset`
+releases both pads: without them port 2 is empty, as before). Two pitfalls:
 
 1. **Queue a press and its release together.** Each command is run when the host sees it. Sending them one at a
    time through `host_session.py` costs about half a second each (a Python start), so `button cross 1`,

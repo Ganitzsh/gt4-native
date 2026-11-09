@@ -220,9 +220,32 @@ ps2::PadInput PadDevices::read(int port, const Settings& settings, float dt) {
             s.gamepad = false;
         }
     }
+    if (port == dfpPort(settings)) s.gamepad = false;   // the wheel goes to GT4 as its own (wheelInput)
     ps2::PadInput in = input::apply(p.map, s);
     p.response.step(in, s, responseConfig(settingsFor(port, settings)), dt);
     return in;
+}
+
+int PadDevices::dfpPort(const Settings& global) const {
+    for (int port = 0; port < input::Ports::kPorts; ++port) {
+        const Port& p = port_[port];
+        if (p.gamepad && p.profile >= 0 && profiles_[p.profile].type == input::DeviceType::Wheel &&
+            settingsFor(port, global).wheelMode == WheelMode::Dfp)
+            return port;
+    }
+    return -1;
+}
+
+bool PadDevices::wheelInput(const Settings& global, ps2::PadInput& out) {
+    const int port = dfpPort(global);
+    if (port < 0) return false;
+    const Port& p = port_[port];
+    out = ps2::PadInput{};
+    if (capture_.on && !capture_.done && profiles_[p.profile].key == capture_.key) return true;
+    input::Snapshot s = readInput(p.gamepad);
+    std::fill(std::begin(s.keys), std::end(s.keys), false);   // (the keyboard stays pad 1's)
+    out = input::apply(profiles_[p.profile].map, s);
+    return true;
 }
 
 const Settings& PadDevices::settingsFor(int port, const Settings& global) const {
@@ -266,6 +289,8 @@ std::string PadDevices::deviceValue(const std::string& key, const std::string& s
 std::string PadDevices::setDeviceValue(const std::string& key, const std::string& setting, const std::string& value) {
     const int i = profileIndex(key);
     if (i < 0) return "no device " + key;
+    if (setting.rfind("wheel.", 0) == 0 && profiles_[i].type != input::DeviceType::Wheel)
+        return "only a wheel has input.wheel.* (" + profiles_[i].name + " is not one)";
     auto& o = profiles_[i].overrides;
     auto at = std::find_if(o.begin(), o.end(), [&](const auto& e) { return e.first == setting; });
     if (value.empty()) {   // cleared: the global value again

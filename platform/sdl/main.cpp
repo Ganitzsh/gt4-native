@@ -10,6 +10,7 @@
 #include "disc_setup.h"
 #include "display.h"
 #include "gs_host.h"
+#include "wheel_dfp.h"
 #include "cpu_profile.h"
 #include "ps2_pad.h"
 #include "input_map.h"
@@ -866,6 +867,10 @@ int run(const Options& options) {
     bool padHeldBack = false;
     bool keyboardLast = false;   // the pages' prompts follow the input used last (ui.prompts = auto, M9)
     gt4::ChordGuard chordGuard;   // Select + Start, the menu's chord: neither reaches the game (chord_guard.h)
+    gt4::ChordGuard wheelChordGuard;   // the same for a wheel GT4 sees as its Driving Force Pro (PLAN.md D7)
+    Gt4LinkWheel wheelLast{};          // the wheel last sent (GT4_REC_WHEEL)
+    bool wheelSent = false;            // a connected wheel was sent, so its leaving is too
+    bool wheelHeldBack = false;        // a page had the wheel: LGDEV gets it neutral until it is let go
     // The dump key (PLAN.md C6b, the night bands): L3 + R3 on a pad (DumpChord), Ctrl + F12 on a keyboard. Each press
     // writes dumps/<date-time>/ beside the host: the presented frame and the next (PNG), the frame's GS draw list and
     // GS memory (gs_host), the settings and the presentation. Game content: never in the package or a repository.
@@ -1060,12 +1065,44 @@ int run(const Options& options) {
         gt4::ps2::PadInput input = pads.read(0, settings, padDt);
         if (menuEnabled) chordGuard.filter(input, SDL_GetTicks());
         if (dumpChord.filter(input, SDL_GetTicks())) dumpWanted = true;   // L3 + R3: the dump key (PLAN.md C6b)
+        // PLAN.md D7: a wheel GT4 sees as its Driving Force Pro (input.wheel.mode = dfp), its input as a pad's;
+        // its own chord guard keeps Select + Start (the menu's chord) from GT4 as the pad's does
+        gt4::ps2::PadInput wheelPad;
+        const bool wheel = pads.wheelInput(settings, wheelPad);
+        if (wheel && menuEnabled) wheelChordGuard.filter(wheelPad, SDL_GetTicks());
+        // While one of our pages shows (the host menu, the hub, the game's pages and pause page: pageShown), the
+        // pages read the pads' bytes, not LGDEV (MENU_DESIGN 3.3), so the wheel's input goes to its pad port and
+        // LGDEV gets it neutral; GT4's own pad is neutral then too. After the page, LGDEV gets it back only once
+        // the wheel is let go, so the closing button never acts in GT4 (lane C, the architect).
+        const bool wheelOnPage = wheel && (pageShown || menu.isOpen() || hostHub.isOpen());
+        const int wheelPort = wheelOnPage ? pads.dfpPort(settings) : -1;
+        if (wheelOnPage) wheelHeldBack = true;
+        else if (wheelHeldBack) {
+            bool held = !wheel ? false : std::fabs(wheelPad.leftX) > 0.3f;
+            if (wheel)
+                for (float pressure : wheelPad.button) held |= pressure > 0.0f;
+            wheelHeldBack = held;
+        }
+        // its input added to a port's pad: buttons the larger, sticks summed and clamped
+        const auto addWheel = [&](gt4::ps2::PadInput& to) {
+            for (uint32_t b = 0; b < gt4::ps2::PadButtonCount; ++b)
+                to.button[b] = std::max(to.button[b], wheelPad.button[b]);
+            to.leftX = std::clamp(to.leftX + wheelPad.leftX, -1.0f, 1.0f);
+            to.leftY = std::clamp(to.leftY + wheelPad.leftY, -1.0f, 1.0f);
+            to.rightX = std::clamp(to.rightX + wheelPad.rightX, -1.0f, 1.0f);
+            to.rightY = std::clamp(to.rightY + wheelPad.rightY, -1.0f, 1.0f);
+        };
         if (padHeldBack) {
             bool held = std::fabs(input.leftX) > 0.3f || std::fabs(input.leftY) > 0.3f;
             for (float pressure : input.button) held |= pressure > 0.0f;
+            if (wheel) {   // (the wheel held too: nothing reaches the game until it is let go)
+                held |= std::fabs(wheelPad.leftX) > 0.3f;
+                for (float pressure : wheelPad.button) held |= pressure > 0.0f;
+            }
             padHeldBack = held;
         }
         if (menu.isOpen() || padHeldBack) input = gt4::ps2::PadInput{};
+        else if (wheelPort == 0) addWheel(input);
         uint8_t pad[18];
         gt4::ps2::encodePad(input, pad);
         if (!onlyChanged || std::memcmp(pad, padSent[0], sizeof pad) != 0) {
@@ -1094,6 +1131,7 @@ int run(const Options& options) {
         if (pads.connected(1)) {
             gt4::ps2::PadInput input2 = pads.read(1, settings, padDt);
             if (menu.isOpen() || padHeldBack) input2 = gt4::ps2::PadInput{};
+            else if (wheelPort == 1) addWheel(input2);
             gt4::ps2::encodePad(input2, pad);
             if (!onlyChanged || std::memcmp(pad, padSent[1], sizeof pad) != 0) {
                 gs->sendPad(1, true, pad);
@@ -1107,6 +1145,29 @@ int run(const Options& options) {
             pad2Sent = false;
             if (session) session->record("pad", "\"port\":1,\"connected\":false");
             std::memset(padRecorded[1], 0, 18);   // (a pad plugged in again is recorded again)
+        }
+        // The wheel (GT4_REC_WHEEL): sent like the pads while there is one (neutral while a page has it, and until
+        // it is let go after one), and once disconnected when it goes; a session records it when it changes.
+        if (wheel || wheelSent) {
+            Gt4LinkWheel w{};
+            if (wheel)
+                w = menu.isOpen() || padHeldBack || wheelHeldBack ? gt4::input::dfpWheelNeutral()
+                                                                   : gt4::input::dfpWheel(wheelPad);
+            if (!onlyChanged || std::memcmp(&w, &wheelLast, sizeof w) != 0) {
+                gs->sendWheel(w);
+                if (session && std::memcmp(&w, &wheelLast, sizeof w) != 0) {
+                    char buttons[16];
+                    std::snprintf(buttons, sizeof buttons, "%08x", static_cast<unsigned>(w.buttons));
+                    session->record("wheel", "\"connected\":" + std::to_string(w.connected) +
+                                                 ",\"steering\":" + std::to_string(w.steering) +
+                                                 ",\"pedal0\":" + std::to_string(w.pedal[0]) +
+                                                 ",\"pedal1\":" + std::to_string(w.pedal[1]) +
+                                                 ",\"hat\":" + std::to_string(w.hat) +
+                                                 ",\"buttons\":\"" + buttons + "\"");
+                }
+                wheelLast = w;
+            }
+            wheelSent = wheel;
         }
     };
     // PLAN.md D11: while the loop waits for the game's next frame (presenting the game's frames, a live game, not
@@ -1185,7 +1246,13 @@ int run(const Options& options) {
                 break;
             case SDL_EVENT_GAMEPAD_BUTTON_DOWN: {
                 keyboardLast = false;
+                // pad 1's gamepad, or a wheel GT4 sees as its Driving Force Pro on either port (PLAN.md D7: a
+                // wheel-only player opens and uses the pages with it)
                 SDL_Gamepad* gamepad = pads.gamepad(0);
+                if (!gamepad || SDL_GetGamepadID(gamepad) != event.gbutton.which) {
+                    const int wheelPort = pads.dfpPort(settings);
+                    gamepad = wheelPort >= 0 ? pads.gamepad(wheelPort) : nullptr;
+                }
                 if (!menuEnabled || !gamepad || SDL_GetGamepadID(gamepad) != event.gbutton.which) break;
                 const auto button = static_cast<SDL_GamepadButton>(event.gbutton.button);
                 const bool chord = (button == SDL_GAMEPAD_BUTTON_START && SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_BACK)) ||
