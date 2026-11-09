@@ -2,6 +2,7 @@
 // ratios and the Hor+ reverse-Z projection. No GPU or window needed.
 #include "chord_guard.h"
 #include "settings.h"
+#include "settings_request.h"
 #include "temp_path.h"
 #include "vecmath.h"
 
@@ -49,6 +50,22 @@ int main() {
         check(!held && sent == ChordGuard::kTapFrames, "a short Start reaches the game after its release");
         ChordGuard hold;    // a long Start alone: sent from kChordMs on
         check(poll(hold, true, false, 0) == 0 && poll(hold, true, false, 250) == 1, "a Start held alone reaches the game");
+    }
+    {   // one press reaching the host as two Settings requests (the Odin's playtest log): the second within
+        // kWindowMs is dropped, a second press after it acts (here a toggle: open, then close)
+        auto run = [](uint64_t first, uint64_t second) {
+            SettingsRequestGuard guard;
+            bool shown = false;
+            int acted = 0;
+            for (uint64_t t : {first, second})
+                if (guard.take(t)) shown = !shown, ++acted;
+            return std::make_pair(acted, shown);
+        };
+        check(run(0, 0) == std::make_pair(1, true), "two requests at the same moment: one open");
+        check(run(0, 100) == std::make_pair(1, true), "two requests 100 ms apart: one open");
+        check(run(0, 200) == std::make_pair(2, false), "two requests 200 ms apart: open, then close");
+        check(run(5000, 5149) == std::make_pair(1, true) && run(5000, 5150) == std::make_pair(2, false),
+              "the window is kWindowMs from the request taken");
     }
     {   // the dump key's chord (PLAN.md C6b): L3 + R3 held kHoldMs; L3 or R3 alone reaches the game at once
         using ps2::PadL3;

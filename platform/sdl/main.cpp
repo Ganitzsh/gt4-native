@@ -18,6 +18,7 @@
 #include "input_map.h"
 #include "pad_devices.h"
 #include "chord_guard.h"
+#include "settings_request.h"
 #include "recorder.h"
 #include "renderer.h"
 #include "save_import.h"
@@ -927,7 +928,7 @@ int run(const Options& options) {
     auto gamePages = [&] {
         return gsMode && gs && gs->live();
     };
-    auto toggleSettings = [&](bool& handled) {
+    auto toggleSettings = [&](bool& handled, const char* source) {
         if (!gs || !gs->live()) {   // (lane C: a page open when a game ended never makes the next Esc a close)
             pageShown = false;
             settingsAskedAt = 0;
@@ -936,7 +937,7 @@ int run(const Options& options) {
         if (!handled) return;
         gs->sendMenuCommand(pageShown ? 7u : 6u);
         settingsAskedAt = pageShown ? 0 : std::max<Uint64>(SDL_GetTicks(), 1);
-        std::printf("settings: %s asked of the game\n", pageShown ? "close" : "open");
+        std::printf("settings: %s asked of the game (%s)\n", pageShown ? "close" : "open", source);
     };
     // The host-run hub (M9e, MENU_DESIGN 3.2 point 5): with no live game (the test scene, a replay) Esc, Guide and
     // Select + Start open the pages here, the host running the page engine itself through the M4 bridge. Its Quit
@@ -984,15 +985,24 @@ int run(const Options& options) {
         default: break;
         }
     };
-    // A session's "settings" command: what Esc does (the game's pages, else the host's hub; M9).
-    if (session)
-        session->onSettings([&]() -> std::string {
-            bool handled = false;
-            toggleSettings(handled);
-            if (handled) return "the game's pages";
-            toggleHub(handled);
-            return "the host's hub";
-        });
+    // Esc, Guide, Select + Start and a session's "settings" command (M9): the game's pages over a live game, else the
+    // host's hub. A request within SettingsRequestGuard::kWindowMs of the last one taken is dropped and logged: one
+    // press can arrive from two sources (settings_request.h).
+    gt4::SettingsRequestGuard settingsGuard;
+    auto requestSettings = [&](const char* source) -> std::string {
+        if (!settingsGuard.take(SDL_GetTicks())) {
+            std::printf("settings: a request from %s dropped (within %d ms of the last one)\n", source,
+                        static_cast<int>(gt4::SettingsRequestGuard::kWindowMs));
+            return "dropped (within " + std::to_string(gt4::SettingsRequestGuard::kWindowMs) +
+                   " ms of the last request)";
+        }
+        bool handled = false;
+        toggleSettings(handled, source);
+        if (handled) return "the game's pages";
+        toggleHub(handled);
+        return "the host's hub";
+    };
+    if (session) session->onSettings([&]() -> std::string { return requestSettings("session"); });
     auto hubKey = [&](SDL_Keycode key, bool down) {
         using In = gt4::ui::Input;
         switch (key) {
@@ -1249,9 +1259,7 @@ int run(const Options& options) {
                 const bool chord = (button == SDL_GAMEPAD_BUTTON_START && SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_BACK)) ||
                                    (button == SDL_GAMEPAD_BUTTON_BACK && SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_START));
                 if (button == SDL_GAMEPAD_BUTTON_GUIDE || chord) {
-                    bool handled = false;
-                    toggleSettings(handled);
-                    if (!handled) toggleHub(handled);
+                    requestSettings(chord ? "Select + Start" : "Guide");
                     break;
                 }
                 if (hostHub.isOpen()) { hubButton(button, true); break; }
@@ -1285,11 +1293,7 @@ int run(const Options& options) {
                     !(event.key.key >= SDLK_LCTRL && event.key.key <= SDLK_RGUI))
                     keyboardLast = true;
                 if (event.key.key == SDLK_ESCAPE && menuEnabled) {
-                    if (!event.key.repeat) {
-                        bool handled = false;
-                        toggleSettings(handled);
-                        if (!handled) toggleHub(handled);
-                    }
+                    if (!event.key.repeat) requestSettings("Esc");
                     break;
                 }
                 if (event.key.key == SDLK_ESCAPE) { running = false; break; }
