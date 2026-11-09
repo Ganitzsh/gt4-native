@@ -99,12 +99,40 @@ void skin_packed(std::uint32_t a[8]) {
     a[2] = skin_stream<std::uint8_t>(10, 0x80, packed_vertex);
     a[3] = bits(rndf(0.00005f, 0.00015f));
 }
+// A vertex whose weights cancel bone by bone (the four bytes summing to 0 under one matrix: the identity bones, or
+// the same index twice) skins its normal to zero length: 0x308 then normalises 0 (0 times the VU's MAX, so 0) where
+// x87 normalises the products' rounding residue into a full-length vector in any direction. That normal has no
+// defined value, and models' weights don't cancel. Such a vertex gets its first weight moved by one, without drawing
+// from rnd() (the tests after this one keep their inputs).
+void no_cancelling_weights(std::uint32_t stream) {
+    std::uint32_t c34;
+    std::memcpy(&c34, ram(kScratch + 0xC34), 4);
+    std::uint8_t *p = ram(stream);
+    for (;;) {
+        const unsigned tag = p[0];
+        const std::uint8_t *bone = p + 2;
+        p += 6;
+        for (unsigned v = 0; v < (tag & 0x7Fu); ++v, p += 13) {
+            bool cancels = true;
+            for (int k = 0; k < 4 && cancels; ++k) {
+                int sum = 0;
+                for (int j = 0; j < 4; ++j)
+                    if (!c34 || bone[j] == bone[k]) sum += static_cast<std::int8_t>(p[9 + j]);
+                cancels = sum == 0;
+            }
+            if (cancels) p[9] = static_cast<std::uint8_t>(static_cast<std::int8_t>(p[9]) == 127 ? 126 : p[9] + 1);
+        }
+        if (!(tag & 0x80u)) break;
+    }
+}
+
 // 0049DCB0 (s, cmd, count, dest, scale): 16-bit positions, byte normals and weights, VU0 program 0x2E8.
 void skin_packed_normal(std::uint32_t a[8]) {
     skin_context();
     a[0] = kScratch;
     a[1] = kScratch + 0x20000;
     a[2] = skin_stream<std::uint8_t>(13, 0x80, packed_vertex);
+    no_cancelling_weights(a[1]);
     a[3] = rnd() % 0xC0;   // dest, as in skin_float_normal
     a[4] = bits(rndf(0.00005f, 0.00015f));
 }
