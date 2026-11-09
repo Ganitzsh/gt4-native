@@ -1393,6 +1393,14 @@ commits).** What is left of docs/NATIVE_V2.md (step 1's textures are done):
     usual texture path; not a plain bind. It changes pictures, so it is its own commit: the draws that sample it
     named (game function, from `GT4_GSN_DRAWS` on `race7`), what the picture shows wrong, and an `ORIG`
     re-baseline under section 2's rule.
+    **Done** (lane B, c5ff20a): race7's fallbacks 1,000 to 0; not an `ORIG` re-baseline after all, since `ORIG` is
+    identical against main with R6 on race7, race_grid43 and race_boot: nothing displayed in them samples that Z
+    (CAPTURES' row says so). **Parked follow-up** (lane B): the focus probe's GS read of the Z buffer from the GPU
+    (1b75e8f, Photo Travel's 8 x 4 Z32 reads; the photo itself unchanged against PCSX2) with a held picture for the
+    synchronous read's cut (8eda650), both on lane B's branch `p2c-ztex` with the trace commit a5aab72. They failed
+    the shooting screen's acceptance: half frames in some captures and pacing below main's, from field buffers and
+    screen changes the copy didn't cover. Its start: that trace, lane A's per-buffer hold, a VBlank stamp on session
+    captures, measured in a quiet window. Until then the focus probe reads the memory model, as before.
 - A GS view of memory stays for every reader until R9 decides it: P2 needs only R9's list of readers, not its
   decisions.
 - Files: P2 owns the target, page and palette parts of `gs_frontend.*` and `gs_memory.*`, lane A reviewing
