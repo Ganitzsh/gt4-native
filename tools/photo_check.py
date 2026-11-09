@@ -14,7 +14,8 @@ opens it, Cross picks Beacon Hill, the shooting screen loads; down, right x4 put
 Cross takes it. The photo view shows the photo over its button row (Save / Return / Move / Zoom). The check
 measures the mean brightness of the photo view above that row, prints it, and fails (exit 1) under
 PHOTO_BRIGHTNESS_FLOOR. A black photo (0.1.0, and main until the CT24 read fix: the tiles read back from the memory
-model, not the GPU) measures about 0; Beacon Hill's photo measures far above the floor.
+model, not the GPU) measures about 0; Beacon Hill's photo measures far above the floor. A photo still developing (a
+slow host) is captured again, PHOTO_WAIT VBlanks apart, up to PHOTO_TRIES times; each value is printed.
 The shooting screen's brightness is printed too: if it is low, the route went astray (another save, another map
 layout) and the check says so instead of judging the photo.
 """
@@ -31,6 +32,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 PHOTO_BRIGHTNESS_FLOOR = 20.0     # mean of R, G, B (0-255) over the photo view above its button row
 SCREEN_BRIGHTNESS_FLOOR = 20.0    # the shooting screen (grey panels): under it, the route did not reach it
 BUTTON_ROW = 0.88                 # the photo view's button row starts at this fraction of the height
+PHOTO_TRIES, PHOTO_WAIT = 5, 600  # a photo under the floor is captured again, PHOTO_WAIT VBlanks apart
 
 
 def tap(button, wait):
@@ -93,6 +95,8 @@ def main():
     ap.add_argument("--no-slots", action="store_true", help="don't take this machine's heavy slot (tools/slot.py)")
     ap.add_argument("--min-gb", type=float, default=7.0)
     a = ap.parse_args()
+    for k in ("host", "game", "orig", "saves", "work"):   # (relative to where it was run, not to the host's cwd)
+        setattr(a, k, os.path.abspath(getattr(a, k)))
     if a.no_slots or not os.path.isdir(os.path.join(os.path.expanduser("~"), "locks")):
         return run(a)
     import slot as slots
@@ -126,12 +130,28 @@ def run(a):
                   f"{os.path.join(a.work, 'host.log')})")
             return 1
         screen = brightness(os.path.join(frames, "screen.ppm"))
-        if not wait_for(os.path.join(frames, "photo.ppm"), proc, 600):
-            print("photo_check: FAIL: the photo view was never captured")
-            return 1
-        photo = brightness(os.path.join(frames, "photo.ppm"), BUTTON_ROW)
+        # The shot develops its photo tile by tile, each a read the game waits for; a slow host (a loaded machine:
+        # reads of 30-500 ms) can still be developing it when the route's first capture is taken, while VBlanks run
+        # on. So under the floor, the photo view is captured again PHOTO_WAIT VBlanks later, up to PHOTO_TRIES times.
+        photos = []
+        for k in range(PHOTO_TRIES):
+            name = "photo" if k == 0 else f"photo{k}"
+            if k:
+                for j, c in enumerate((f"vwait {PHOTO_WAIT}", f"capture {name}")):
+                    tmp = os.path.join(session, "commands", f"{100000 + 10 * k + j:06d}.tmp")
+                    with open(tmp, "w") as f:
+                        f.write(c + "\n")
+                    os.replace(tmp, tmp[:-4] + ".cmd")
+            if not wait_for(os.path.join(frames, name + ".ppm"), proc, 600):
+                print("photo_check: FAIL: the photo view was never captured")
+                return 1
+            photos.append(brightness(os.path.join(frames, name + ".ppm"), BUTTON_ROW))
+            if photos[-1] >= PHOTO_BRIGHTNESS_FLOOR:
+                break
+        photo = photos[-1]
         print(f"photo_check: shooting screen {screen:.1f} (floor {SCREEN_BRIGHTNESS_FLOOR}), "
-              f"photo {photo:.1f} (floor {PHOTO_BRIGHTNESS_FLOOR})")
+              f"photo {photo:.1f} (floor {PHOTO_BRIGHTNESS_FLOOR}; captures "
+              f"{', '.join(f'{p:.1f}' for p in photos)}, {PHOTO_WAIT} VBlanks apart)")
         if screen < SCREEN_BRIGHTNESS_FLOOR:
             print("photo_check: FAIL: the route did not reach the shooting screen (another save or map layout?)")
             return 1
