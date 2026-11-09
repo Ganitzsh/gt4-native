@@ -378,6 +378,10 @@ Mockup: `menu/mock_settings.svg`.
 
 - Graphics and Image pages dim the game frame less (15 % instead of 60 %) and slide the list to one side, so the
   change shows on the game's picture behind. In a race the picture behind is the paused race.
+- On a live-preview page the rows' list gets its own backing (ink at 78 %), and the game shows around it: the preview
+  stays visible where the eye isn't reading (M9c: over GT4's bright GT mode map the values were unreadable at 15 %).
+- Contrast, for M10's review and any later page or asset: every text on its backing at least 4.5:1, measured on the
+  brightest game frame behind it (the GT mode map is a good worst case).
 - A preset change shows its card before applying (Cross applies, Circle cancels): it can change twenty values.
 
 ---

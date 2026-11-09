@@ -242,6 +242,11 @@ DrawList layout(const Menu& menu, const LayoutOptions& options) {
     if (page) {
         const int first = menu.scroll();
         const int last = std::min(static_cast<int>(page->rows.size()), first + Menu::kVisibleRows);
+        // A live-preview page dims the game little (4.3), so its list gets a backing of its own: over a bright
+        // picture (GT4's map, M9c's live run) the rows and values were hard to read. The preview shows around it.
+        if (page->livePreview)
+            b.quad(listX - 16.0f, kListTop - 32.0f, listW + 32.0f, Menu::kVisibleRows * kRowHeight + 44.0f, kInk,
+                   0.78f);
         b.add(ItemKind::ClipPush, listX, kListTop - 20.0f, listW, Menu::kVisibleRows * kRowHeight + 20.0f, 0);
         float y = kListTop;
         int band = 0;

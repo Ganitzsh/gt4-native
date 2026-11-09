@@ -40,6 +40,7 @@
 #include <fstream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -601,6 +602,16 @@ int run(const Options& options) {
         uint64_t dropped = 0;
     };
     auto settingsRequests = std::make_shared<SettingsRequests>();
+    // The settings pages' draw lists (GT4_REC_UI, MENU_DESIGN 3.6, M9c): decoded on the stream's thread, each with
+    // the VBlank it belongs to; the main thread hands the newest to the renderer once the frame list of that VBlank
+    // has been given to it (the frame pairing), so a page never runs ahead of the picture under it. 8 kept at most
+    // (a stalled main thread keeps the newest).
+    struct PageLists {
+        std::mutex mutex;
+        std::deque<std::pair<uint64_t, gt4::ui::DrawList>> lists;
+        uint64_t dropped = 0;
+    };
+    auto pageLists = std::make_shared<PageLists>();
     if (options.listOptions) {
         for (const auto& o : gt4::describe(settings)) {
             std::printf("%s = %s\n    %s\n    %s\n", o.key.c_str(), o.value.c_str(), o.allowed.c_str(), o.help.c_str());
@@ -710,6 +721,22 @@ int run(const Options& options) {
                 return;
             }
             requests->queue.emplace_back(payload, payload + size);
+        };
+        gsOptions.ui = [pages = pageLists](const uint8_t* payload, size_t size) {
+            gt4::ui::DrawList list;
+            gt4::ui::wire::UiHeader header{};
+            if (!gt4::ui::decodeDrawList(payload, size, list, &header)) {
+                static bool logged = false;
+                if (!logged) std::fprintf(stderr, "settings: a page's draw list could not be read (dropped)\n");
+                logged = true;
+                return;
+            }
+            std::lock_guard<std::mutex> lock(pages->mutex);
+            if (pages->lists.size() >= 8) {
+                pages->lists.pop_front();
+                ++pages->dropped;
+            }
+            pages->lists.emplace_back(header.vblank, std::move(list));
         };
         gsOptions.rumble = [](uint32_t port, uint32_t small, uint32_t large) {
             if (port < 2) g_rumble[port] = 0x80000000u | (small ? 0x100u : 0u) | (large & 0xFFu);
@@ -1271,6 +1298,21 @@ int run(const Options& options) {
                     if (list.displayed) newestAdded = std::max(newestAdded, list.vblank);
                 }
                 renderer->addNativeFrames(nativeFrames);
+            }
+            {   // The settings page whose frame is now with the renderer (M9c): the newest list at or before it; an
+                // empty list (the page closed) clears it. The renderer keeps it for interpolated presents.
+                std::optional<gt4::ui::DrawList> page;
+                {
+                    std::lock_guard<std::mutex> lock(pageLists->mutex);
+                    while (!pageLists->lists.empty() && pageLists->lists.front().first <= newestAdded) {
+                        page = std::move(pageLists->lists.front().second);
+                        pageLists->lists.pop_front();
+                    }
+                }
+                if (page) {
+                    if (page->items.empty()) renderer->setPage(nullptr);
+                    else renderer->setPage(std::move(*page));
+                }
             }
             // A read of drawn pixels the game waits for (the car thumbnails it renders and keeps): the lists up
             // to it are drawn now and the pixels read back. Only here, between frames, never inside Renderer::draw

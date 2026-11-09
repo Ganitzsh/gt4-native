@@ -68,6 +68,8 @@ public:
     // list's lifetime safe, not a concurrent call (the live path decodes GT4_REC_UI on the stream's thread and hands
     // the list over to the main thread).
     void setPage(const gt4::ui::DrawList* list);
+    // The live page (M9c, lane B): the decoded list moved in, without a copy at 60 Hz.
+    void setPage(gt4::ui::DrawList&& list);
     // A short message at the bottom of the screen (a setting changed by a key), for `seconds`.
     void showMessage(const std::string& text, float seconds = 2.5f);
     gt4::TestScene& scene();

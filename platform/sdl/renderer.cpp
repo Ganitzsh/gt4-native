@@ -1233,6 +1233,11 @@ void Renderer::setPage(const gt4::ui::DrawList* list) {
     if (list) impl->page = *list;
     else impl->page.reset();
 }
+void Renderer::setPage(gt4::ui::DrawList&& list) {
+    // An empty list is no page (lane B: the same state as setPage(nullptr), for whatever asks whether one is open)
+    if (list.items.empty()) impl->page.reset();
+    else impl->page = std::move(list);
+}
 bool Renderer::draw(float deltaSeconds) {
     GT4_CPU_SCOPE("render: frame");
     return impl->draw(deltaSeconds);

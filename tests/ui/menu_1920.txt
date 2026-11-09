@@ -1,4 +1,4 @@
-canvas 1920.0 flags 1 items 58
+canvas 1920.0 flags 1 items 59
 quad 0.0 0.0 1920.0 1080.0 asset 00000000 color 000000ff op 38/256
 quad 0.0 0.0 1920.0 112.0 asset 00000000 color 000000e0 op 256/256
 text 80.0 22.0 0.0 80.0 asset 00000000 color f4f4f2ff op 256/256 title 64 italic w800 left "Settings"
@@ -10,6 +10,7 @@ quad 19.0 160.0 45.0 36.0 asset 00000000 color 55585dff op 256/256
 text 19.0 166.0 45.0 22.5 asset 00000000 color f4f4f2ff op 256/256 title 18 w600 center "LB"
 quad 432.0 160.0 45.0 36.0 asset 00000000 color 55585dff op 256/256
 text 432.0 166.0 45.0 22.5 asset 00000000 color f4f4f2ff op 256/256 title 18 w600 center "RB"
+quad 64.0 268.0 1112.0 682.0 asset 00000000 color 0b0b0cff op 200/256
 clip 80.0 280.0 1080.0 658.0 asset 00000000 color 00000000 op 256/256
 text 80.0 308.0 1080.0 32.5 asset 00000000 color f29a1fff op 256/256 title 26 italic w700 left "QUALITY"
 quad 80.0 358.0 1080.0 58.0 asset 00000000 color ffffffff op 15/256
