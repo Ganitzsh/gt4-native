@@ -26,4 +26,5 @@
 00499948  screen coordinates 1/16 pixel apart: eeref runs program 0x700 in SSE arithmetic (round to nearest), the native code on the x87 (toward zero, as the VU)
 00499D00  as 00499948
 003E8790  arg0+0x48/0x4C hold addresses of its stack buffers (the original stack in eeref, the native stack natively)
+003E7A58  a puff's angle just past the 360 wrap: x87 takes 360 from its unrounded sum, the EE from the sum truncated
 003E8438  vertices a few 1/16 px or depth units apart in <10% of trials, extreme inputs (as 00499948); race calls agree
