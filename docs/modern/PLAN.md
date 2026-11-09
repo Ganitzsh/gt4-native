@@ -328,6 +328,32 @@ into `Instance::section`. **Parked with N2** (only N2's parts b and c need it); 
 A11a, N2 reopened. Acceptance: `REL`; `ORIG`; on N2's capture every course instance has a section, and the section
 under the camera changes at the crossing N2 reopened on.
 
+**A12: Scene records in split screen (M, lane A).** Split screen draws through `RacePS2Base::render_world_split`
+(0033FD88), not `render_world` (0033DEA8) or 0033EAB8. 0033FD88 is reached from `RaceSplitBattle`'s 003302F0 and
+00330348 (2 Player Battle), the overrides of vtable slots 107 and 108; LAN and net battles show one player per console
+through the single-player slots, not split screen, and their records are untested (no route). It inlines its own
+course, cars, flare, glow pass and HUD, so it calls none of our hooks: a split-screen race sends no scene records at
+all (lane A, 2026-11-09: a 600-VBlank 2 Player Battle capture has no `FrameBegin`). Every modern feature then should
+leave split screen as `original` draws it, but no feature reaches it; step 0 runs one 2 Player Battle at
+`settings-playtest.ini`'s settings (hybrid, night enhanced, FSR 1) to show that it does, before anything else. A
+`game_src` copy of 0033FD88 (its per-half callers 003302F0 and 00330348 read first) sends one `FrameBegin` per
+displayed list, as everywhere, and inside it a `ViewBegin` / `ViewEnd` per half, the course bracket, step 1a's glow
+lights and A7 step 2's car lamps. The halves are two `kViewMain` views drawing into one target with disjoint scissors,
+new for the host (until now a bound view had its own target or the whole of one, CONTRACTS a.5.7), so every feature
+that works per view reaches both, and every pass at a view's Light command (hybrid's substitution, the night relight)
+keeps to that view's scissor: `ViewBegin::pass` is the half (0 the first drawn, 1 the second; 0 in a single view, as
+today), `scissor` its rectangle, and a new `ViewFlags` bit, `kViewSplit` = 8, marks both, so a consumer that keeps one
+state per role can tell. CONTRACTS' `ViewBegin` says so in the same commit (the 'per half in 2 Player Battle' comments
+are corrected first, in their own comment-only commit). The consumers that keep state per main view are checked in the
+acceptance: temporal history (TAA, B16's upscalers) per view, not per role; B16c's seam; F6's player per half (its
+followed-entrant field). Depends: A3, A7 step 2. Acceptance: `REL`; `DIFFTEST`; `ORIG` and `STREAM` unchanged (records
+off); on a 2 Player Battle capture (Arcade, Mode Selection, 2 Player Battle, pad 2 from the session), every frame
+opened, two `kViewMain` views with `kViewSplit`, each with its scissor, both cars' lamps on their glow points, and
+`lighting.night` and `render.scene = hybrid` running in both halves without validation messages, each half lit and
+substituted inside its own scissor only (lane B reviews it), and each half's picture its own (no history shared
+between them). Priority: ahead of lane A's queue (the coordinator, 2026-11-09); A7 step 2's battle check waits on it,
+blocked rather than failed.
+
 ### Lane B: renderer
 
 **B2: Persistent pipeline cache (S).** Land the uncommitted work in `C:/Users/julie/gt4-native-game`
@@ -1628,7 +1654,7 @@ Additions to existing tickets, with the same rules:
   `lighting.night = enhanced` shows step 1a's `kSrcCarLamp` glows as before. Acceptance, met: at night 56 lamps a
   frame for 6 cars, on step 1a's glow points within 0.0002 m, 6 calibrations and none rejected; by day headlights and
   tail lamps 0 and the brake ramp 0.25 a frame. Its two lit reviews (the car behind lit red under braking, the
-  player's headlights on the road) moved to F9 and F6. Open: the 2 Player Battle check, its own report.
+  player's headlights on the road) moved to F9 and F6. Open: the 2 Player Battle check, blocked on A12.
 - **F4**: lens flares and streaks from real lights: from the light list's brightest sources (occlusion from the depth
   buffer), replacing GT4's flare pass in `modern` (N4 suppresses it there); acceptance adds the flare's occlusion
   behind a car (review), no flare from a light outside the view, and on the warning capture the tint stays below N4's
