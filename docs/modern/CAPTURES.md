@@ -39,14 +39,13 @@ removed). Only runners from main since the queue take tickets: run `tools/slot.p
 Two waits that are meant, not bugs. While a `heavy-both` waiter waits for the second heavy slot, the free one stays
 idle: the younger `heavy` waiters behind it don't take it, so the two-slot job is never starved. And the oldest
 waiter, held at its memory floor, holds back the younger ones for the same slots, even those with lower floors.
-Until the owner's next reboot (the coordinator, 2026-11-08: available memory stuck under 7 GB), `LOW_MEMORY` in
-`tools/slot.py` caps each job's floor, whatever `--min-gb` says: 4.5 GB for `heavy` (with or without `live-game`),
-5.5 GB for a job whose slots are all `game` or `live-game`. `heavy-both` keeps 7 GB, more than there is, so it is
-refused until the reboot: its waiting ticket would hold back every heavy job and game build. And heavy jobs run one
-at a time, never beside a game build: `heavy` takes only `heavy-1`, and `game` and `heavy` also take a `low-memory`
-slot. The heavy cap comes from the jobs' own measured peaks (a clean host build 1.27 GB, a game link
-1.10, a replay 1.21) plus 1 GB, raised to the 4.5 GB minimum. If available memory falls under 4.5 GB, tell the
-coordinator: then everything waits for the owner.
+`LOW_MEMORY` in `tools/slot.py` is off: every job waits for its own `--min-gb`, and `heavy-both` runs. It was on from
+2026-11-08 to the owner's reboot of 2026-11-09, while available memory stayed under 7 GB, and is turned on again only
+by the coordinator's word. When on, it caps each job's floor whatever `--min-gb` says (4.5 GB for `heavy`, with or
+without `live-game`; 5.5 GB for a job whose slots are all `game` or `live-game`). Heavy jobs then run one at a time,
+never beside a game build (`heavy` takes only `heavy-1`; `game` and `heavy` also take a `low-memory` slot), and
+`heavy-both` is refused. The heavy cap came from the jobs' own measured peaks (a clean host build 1.27 GB, a game
+link 1.10, a replay 1.21) plus 1 GB, raised to the 4.5 GB minimum.
 
 | Slot | For | Limits |
 |---|---|---|

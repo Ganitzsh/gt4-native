@@ -45,15 +45,15 @@ WINDOWS = os.name == "nt"
 SLOTS = {"game": [["gt4-decomp-release"]], "heavy": [["heavy-1"], ["heavy-2"]], "heavy-both": [["heavy-1", "heavy-2"]],
          "live-game": [["live-game"]]}
 
-# Low memory (the coordinator, 2026-11-08): the machine's available memory sits under 7 GB, a kernel leak only the
-# owner's reboot clears, and an unattended reboot could leave every lane stopped. Until that reboot the floors are
-# capped per kind and the heavy jobs run one at a time, never beside a game build: heavy takes only heavy-1, and
-# game, heavy and heavy-both all take the low-memory slot too. The caps: the largest heavy job's own peak measured
-# (a clean host build, 1.27 GB; a game link 1.10, a replay 1.21) plus 1 GB is under the 4.5 GB minimum, so heavy
-# 4.5; game and live-game 5.5 (fa02594); heavy-both keeps 7, above the memory there is, so it is refused (take():
-# its ticket would hold back every heavy job and game build). A job's floor is min(--min-gb, the largest cap among
-# its kinds), live-game counting only alone. False after the reboot.
-LOW_MEMORY = True
+# Low memory: off. On only by the coordinator's word, while the machine's available memory sits under 7 GB (a kernel
+# leak only the owner's reboot clears; on from 2026-11-08 to the reboot of 2026-11-09). When on, the floors are capped
+# per kind and the heavy jobs run one at a time, never beside a game build: heavy takes only heavy-1, and game and
+# heavy also take the low-memory slot; heavy-both is refused (take(): its 7 GB is above the memory there is, and its
+# ticket would hold back every heavy job and game build; its row below is never reached). The caps: the largest heavy
+# job's own peak measured (a clean host build, 1.27 GB; a game link 1.10, a replay 1.21) plus 1 GB is under the
+# 4.5 GB minimum, so heavy 4.5; game and live-game 5.5. A job's floor is min(--min-gb, the largest cap among its
+# kinds), live-game counting only alone.
+LOW_MEMORY = False
 FLOOR_CAPS = {"game": 5.5, "live-game": 5.5, "heavy": 4.5, "heavy-both": 7.0}
 LOW_MEMORY_SLOTS = {"game": [["gt4-decomp-release", "low-memory"]], "heavy": [["heavy-1", "low-memory"]],
                     "heavy-both": [["heavy-1", "heavy-2", "low-memory"]], "live-game": [["live-game"]]}
