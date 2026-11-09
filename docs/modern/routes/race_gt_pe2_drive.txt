@@ -1,0 +1,122 @@
+vwait 600
+vwait 300
+vwait 300
+vwait 300
+button start 1
+vwait 6
+button start 0
+vwait 240
+button start 1
+vwait 6
+button start 0
+vwait 300
+button a 1
+vwait 6
+button a 0
+vwait 300
+button b 1
+vwait 6
+button b 0
+vwait 240
+button dpup 1
+vwait 6
+button dpup 0
+vwait 120
+button dpleft 1
+vwait 6
+button dpleft 0
+vwait 120
+button dpup 1
+vwait 6
+button dpup 0
+vwait 120
+button a 1
+vwait 6
+button a 0
+vwait 120
+button b 1
+vwait 6
+button b 0
+vwait 300
+button a 1
+vwait 6
+button a 0
+vwait 600
+axis righttrigger 32767
+vwait 360
+axis leftx -32768
+vwait 40
+axis leftx 0
+vwait 80
+axis leftx 32767
+vwait 40
+axis leftx 0
+vwait 80
+axis leftx -32768
+vwait 40
+axis leftx 0
+vwait 80
+axis righttrigger -32768
+axis lefttrigger 32767
+vwait 60
+axis lefttrigger -32768
+axis righttrigger 32767
+vwait 60
+axis leftx 32767
+vwait 40
+axis leftx 0
+vwait 80
+axis leftx -32768
+vwait 40
+axis leftx 0
+vwait 80
+axis leftx 32767
+vwait 40
+axis leftx 0
+vwait 80
+axis righttrigger -32768
+axis lefttrigger 32767
+vwait 60
+axis lefttrigger -32768
+axis righttrigger 32767
+vwait 60
+axis leftx -32768
+vwait 40
+axis leftx 0
+vwait 80
+axis leftx 32767
+vwait 40
+axis leftx 0
+vwait 80
+axis leftx -32768
+vwait 40
+axis leftx 0
+vwait 80
+axis righttrigger -32768
+axis lefttrigger 32767
+vwait 60
+axis lefttrigger -32768
+axis righttrigger 32767
+vwait 60
+axis leftx 32767
+vwait 40
+axis leftx 0
+vwait 80
+axis leftx -32768
+vwait 40
+axis leftx 0
+vwait 80
+axis leftx 32767
+vwait 40
+axis leftx 0
+vwait 80
+axis righttrigger -32768
+axis lefttrigger 32767
+vwait 60
+axis lefttrigger -32768
+axis righttrigger 32767
+vwait 60
+vwait 600
+axis righttrigger -32768
+vwait 1200
+quit
