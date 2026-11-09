@@ -21,6 +21,7 @@ Writes LINK_REPORT.txt next to the executable.
 import argparse
 import collections
 import csv
+import hashlib
 import json
 import os
 import re
@@ -417,9 +418,24 @@ def rename_collisions(out, game_objs):
     rdir = os.path.join(out, "gen", "renamed")
     result = []
     jobs = []
+    out_abs = os.path.abspath(out)
     for o in game_objs:
         if o in users:
-            dst = os.path.join(rdir, os.path.relpath(os.path.abspath(o), os.path.abspath(os.sep)).replace(":", ""))
+            # Under OUT (the usual case: OUT/obj/...), the object's path relative to OUT; elsewhere, a short digest of
+            # its folder. Not its absolute path: that put the checkout's path in twice, and a checkout a few folders
+            # deep (tools/release.py's worktree inside another worktree) took objects past Windows' 260 characters.
+            o_abs = os.path.abspath(o)
+            try:
+                # (normcase both: on Windows commonpath matches any letter case but returns the first path's)
+                under_out = os.path.normcase(os.path.commonpath([o_abs, out_abs])) == os.path.normcase(out_abs)
+            except ValueError:   # (another drive)
+                under_out = False
+            if under_out:
+                rel = os.path.relpath(o_abs, out_abs)
+            else:
+                folder = hashlib.sha1(os.path.dirname(o_abs).encode()).hexdigest()[:12]
+                rel = os.path.join("elsewhere", folder, os.path.basename(o_abs))
+            dst = os.path.join(rdir, rel)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             jobs.append((o, dst))
             result.append(dst)
