@@ -151,7 +151,7 @@ void setup_state(int state, std::uint32_t args[8]) {
     switch (state) {
     case 0: started = rnd() & 1; countdown = started ? rnd() % 300 : 0; break;   // past the start (flag or none left)
     case 1: started = 0; countdown = 1 + rnd() % 300; break;                      // before the start
-    case 2: mode = 1; break;                                                     // B-spec
+    case 2: mode = 1; break;                                     // B-spec: the copy's state 0 since M9d3
     case 3: if (rnd() & 1) mode = 2 + rnd() % 3; else cdc = 1 + (rnd() & 0xFF); break;   // replay, demo, +0xCDC
     case 4: end = rndf(0.0f, 10.0f); mode = rnd() % 5; break;                     // the end delay
     default: cd0 = 1 + (rnd() & 0xFF); mode = rnd() % 5; break;                   // visual mode: nothing runs

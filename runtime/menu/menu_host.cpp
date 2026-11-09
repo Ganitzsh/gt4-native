@@ -735,10 +735,10 @@ extern "C" int gt4_race_pause_command(uint32_t race, int state) {
         return 1;
     }
     if (g_race_wait_state.exchange(state) != state) {
-        static const char *const why[] = {"", "before the start", "a B-spec race (its pause is M9d3's)",
+        static const char *const why[] = {"", "before the start", "(unused since M9d3)",
                                           "a replay or the demo", "the race's end delay"};
         log_info("menu: command 6 waits in the race (%s)", state > 0 && state < 5 ? why[state] : "?");
-        send_waiting(state == 1 ? "race-start" : state == 2 || state == 4 ? "race-end" : "menu");
+        send_waiting(state == 1 ? "race-start" : state == 4 ? "race-end" : "menu");
     }
     return 0;
 }

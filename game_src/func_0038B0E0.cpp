@@ -9,9 +9,10 @@
  * (runtime/menu/menu_host.cpp) is told the race's state each frame and answers 1 when a command 6 waits and the state is
  * one where GT4's own Start branch would reach pauseStart(+0xE400): then this frame acts as if Start were down, and
  * GT4's own code pauses exactly where Start would. With no command waiting it answers 0 and the function is GT4's as
- * it was. The state (gt4_race_pause_command's `state`): 0 Start would pause now (play, no end delay, past the start);
- * 1 before the start; 2 a B-spec race (its pause is the SimplePause, M9d3); 3 a replay (B-spec's too), the demo, or
- * +0xCDC set; 4 the end delay. */
+ * it was. The state (gt4_race_pause_command's `state`): 0 Start would pause now (play or B-spec, no end delay, past
+ * the start); 1 before the start; 3 a replay (B-spec's too), the demo, or +0xCDC set; 4 the end delay. (2, a B-spec
+ * race, is gone since M9d3: in B-spec, run mode 1, Start exits nothing (the demo's exit is mode 4, the replay's 2 and
+ * up), so it pauses through the RacePause as in play; 0x80's SimplePause is B-spec's other pause.) */
 typedef int s32;
 typedef unsigned int u32;
 typedef short s16;
@@ -50,8 +51,8 @@ extern "C" void RaceBasic__updatePlayCheckPause(RaceBasicLayout *self) {
             /* gt4-native: the host's command 6 (M9d2). Past the start: the green light's flag, or no countdown left. */
             const u32 mode = self->cc8;
             const s32 started = self->d4c == 1 || self->u6C->fBC == 0;
-            /* (run mode: 0 play, 1 B-spec, 2 replay, 3 B-spec replay, 4 the auto demo) */
-            const int state = IS_POS(self) ? 4 : mode == 1 ? 2 : (mode != 0 || self->cdc != 0) ? 3 : !started ? 1 : 0;
+            /* (run mode: 0 play, 1 B-spec, 2 replay, 3 B-spec replay, 4 the auto demo; Start pauses in 0 and 1) */
+            const int state = IS_POS(self) ? 4 : (mode > 1 || self->cdc != 0) ? 3 : !started ? 1 : 0;
             if (gt4_race_pause_command((unsigned int)self, state)) down |= 0x40;
         }
         if (down & 0x40) {
