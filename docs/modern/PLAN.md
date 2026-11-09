@@ -1031,8 +1031,12 @@ on the host's wheel through `SDL_Haptic` (the effects and the interface: spikes/
   one constant, one spring and one damper effect on the wheel's `SDL_Haptic`; a wheel that lacks one gets the
   others.
   - A: a constant force at magnitude / 255 x strength, on one axis; its sign is the first acceptance check. A
-    lasts 100 ms, renewed on each update and on each host frame while it runs, so a stalled host lets it lapse.
-  - C: a spring, its centre from `+0x0C`.
+    lasts 200 ms, renewed every 30 ms while it runs, so a stalled host lets it lapse within 0.2 s, well inside the
+    watchdog, while an ordinary hitch (100-200 ms: a shader compile, streaming) holds the last force, as the PS2's
+    wheel did (lane C, 2026-11-09). The gap event carries the host's last frame time, so a gap reads as load or
+    freeze.
+  - C: a spring, played centred until a race shows GT4's offset (`+0x0C`) and its scale: GT4 sends 0 in every
+    race seen, and an offset read in the wrong units would pull away from centre (lane D).
   - B: a damper.
   - The spring and the damper are passive and run without end.
 - Stops, the host's alone: every effect stops at a settings page, a pause, a link drop, a port change, the host's
@@ -1058,13 +1062,15 @@ on the host's wheel through `SDL_Haptic` (the effects and the interface: spikes/
     rests on the bench and SDL's documented convention until a real wheel confirms it at 15 %, on Windows and Linux.
   - A session test. A virtual SDL wheel drives GT4's menus and a race through LGDEV, and the effect stream is
     logged. Every stop is proved: page, pause, link drop, port change, exit, unplug, the 0.5 s watchdog (a game
-    that stops sending frames), and A lapsing to zero within about 0.1 s when the host's main thread freezes for
+    that stops sending frames), and A lapsing to zero within about 0.2 s when the host's main thread freezes for
     1 s (a hung host). A replay of a capture holding FX records opens no haptic.
   - `CTEST`: the translation, on fields recorded from R15's race (numbers only), and the binding forms.
   - The gates: release build, `ORIG` and `STREAM` with no wheel (nothing changes), and `DIFFTEST` if the files
     are in its list.
-  - Live, on the owner's wheel, at 15 % first. It must pull towards the centre and never away, in GT4's menus and
-    a race.
+  - Live, on a real wheel, at 15 % first, on Windows and Linux. It must pull towards the centre and never away, in
+    GT4's menus and a race; a hitch longer than 0.2 s cuts A briefly, as designed; read host.log's force-feedback
+    open line (the SDL backend, which of constant, spring and damper the wheel has, and autocentre off or not). The
+    owner has no wheel (the coordinator, 2026-11-09), so D7 ends at the session test until someone has one.
 
 **D8: Physics force feedback (M).** Depends: D6, D7. Acceptance as the audit's section 4 states, with session
 tests. (D10 and D11 moved to lane C.)
