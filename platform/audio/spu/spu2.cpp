@@ -339,6 +339,9 @@ template <bool kMix> int32_t Spu2::voiceSample(Core& c, int n, Voice& v) {
 // the pitch counter and the sample index, the 8-sample history, the envelope's wait. Those calls are taken in one
 // step; each event call is made exactly as before, so a block's flags, ENDX, a phase change and a voice going off
 // happen where they did. The game reads the status only under its audio lock, between whole advance() calls.
+// That holds only while a sample's call has no effect of its own: this SPU2 models no IRQ at IRQA, no pitch
+// modulation (PMON) and no noise. Each is per-sample and observable, so adding one means it ends a bulk, or its voices
+// leave this path.
 // A sustain held at its clamp (increasing at 0x7FFF, decreasing at 0: a race's engines, about 20,000 calls a frame)
 // steps without moving: its level and phase stay, and only its wait cycles (W, then the step's `cycles` again and
 // again). Its steps aren't events: the wait after k calls has a closed form (heldWait), and the bulk runs to the
