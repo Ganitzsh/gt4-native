@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <type_traits>
@@ -331,6 +332,56 @@ template <bool kMix> int32_t Spu2::voiceSample(Core& c, int n, Voice& v) {
     return s;
 }
 
+// advance()'s voices (PLAN.md D5: the game's voice model when the host mixes): the result of `count` per-sample calls
+// of voiceSample<false> then envelope(), bit for bit, with every Voice field and ENDX the same (tests/spu2_advance.cpp
+// checks it against mix()'s per-sample path at every sample). Between two events (the call that crosses into the
+// next block, the call that steps the envelope, the call that turns the voice off) every call only moves counters:
+// the pitch counter and the sample index, the 8-sample history, the envelope's wait. Those calls are taken in one
+// step; each event call is made exactly as before, so a block's flags, ENDX, a phase change and a voice going off
+// happen where they did. The game reads the status only under its audio lock, between whole advance() calls.
+void Spu2::advanceVoice(Core& c, int n, Voice& v, int count) {
+    constexpr int64_t kNever = INT64_MAX;
+    while (count > 0 && v.phase != kOff) {
+        // calls up to and including the envelope's next step (envelope(): a wait W > 0 steps on its W-th call)
+        int64_t toStep = kNever;
+        if (v.phase == kAttack || v.phase == kDecay || v.phase == kSustain || v.phase == kRelease)
+            toStep = std::max<int64_t>(v.env_wait, 1);
+        // calls up to and including the one whose advances reach the block's end (index 28)
+        const int64_t p = std::min<uint32_t>(v.pitch, 0x3FFF);
+        int64_t toBlock = kNever;
+        if (p > 0) {
+            const int64_t need = (static_cast<int64_t>(28 - v.index) << 12) - static_cast<int64_t>(v.counter);
+            toBlock = (need + p - 1) / p;
+        }
+        const int64_t bulk = std::min<int64_t>({static_cast<int64_t>(count) - 1, toStep - 1, toBlock - 1});
+        if (bulk > 0) {
+            // the envelope only counts down
+            if (toStep != kNever) v.env_wait -= static_cast<int32_t>(bulk);
+            // the sample position moves within the block; the history takes the samples passed
+            const int64_t total = static_cast<int64_t>(v.counter) + p * bulk;
+            const int adv = static_cast<int>(total >> 12);
+            v.counter = static_cast<uint32_t>(total & 0xFFF);
+            if (adv > 0) {
+                const int from = v.index;   // the samples passed: samples[from + 1 .. from + adv]
+                v.index += adv;
+                v.last = adv >= 2 ? v.samples[v.index - 1] : v.cur;
+                v.cur = v.samples[v.index];
+                if (adv >= 8) {
+                    std::memcpy(v.hist, v.samples + v.index - 7, sizeof v.hist);
+                } else {
+                    std::memmove(v.hist, v.hist + adv, (8 - adv) * sizeof v.hist[0]);
+                    std::memcpy(v.hist + 8 - adv, v.samples + from + 1, adv * sizeof v.hist[0]);
+                }
+            }
+            count -= static_cast<int>(bulk);
+        }
+        // the event call (or the last call), exactly as the per-sample loop makes it
+        voiceSample<false>(c, n, v);
+        envelope(v);
+        --count;
+    }
+}
+
 template <bool kMix> void Spu2::run(int32_t* mix, int n, bool dryOnly) {
     std::vector<int32_t> wet(kMix ? 2 * n : 0);
     for (int c = 0; c < 2; ++c) {
@@ -340,6 +391,10 @@ template <bool kMix> void Spu2::run(int32_t* mix, int n, bool dryOnly) {
         for (int k = 0; k < 24; ++k) {
             Voice& v = cr.v[k];
             if (v.phase == kOff) continue;
+            if constexpr (!kMix) {   // (nothing mixed: the voice's state only, in bulk between events)
+                advanceVoice(cr, k, v, n);
+                continue;
+            }
             int32_t gl = 0, gr = 0, el = 0, er = 0;
             if constexpr (kMix) {
                 const bool dry_l = cr.vmixl >> k & 1, dry_r = cr.vmixr >> k & 1;

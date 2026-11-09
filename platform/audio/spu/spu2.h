@@ -148,6 +148,9 @@ private:
     void loadBlock(Voice& v);
     template <bool kMix> int32_t voiceSample(Core& core, int n, Voice& v);
     template <bool kMix> void run(int32_t* stereo, int n, bool dryOnly);
+    // advance()'s voice: what n calls of voiceSample<false> and envelope() do, with the calls that are pure
+    // bookkeeping (no block crossing, no envelope step) taken in bulk (spu2.cpp)
+    void advanceVoice(Core& core, int n, Voice& v, int count);
 };
 
 void envelope(Voice& v);   // one step of the ADSR envelope generator
