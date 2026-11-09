@@ -1378,7 +1378,9 @@ draw numbers are those of replay 2514, and the draws are found by what they are,
   acceptance below). Every other course with the flag (C.S. Route 5 Reverse, S.S. Route 5 forward, Hong Kong at dusk)
   is hunted the same way (B-spec if an event runs there, else throttle segments) before N3 counts as proven there: the
   same textures, but other geometry, so other items. A pool sliver under the width stays baked (0.058 % of pool area),
-  the safe miss. The texture-locator fallback is parked in the spike; no hash list exists.
+  the safe miss. The texture-locator fallback is parked in the spike; no hash list exists. The debug host and tools of
+  the hunts and the never-dark sweep are on origin as `debug/f-n3-debug` (README in `tools/lanef/`), deleted when N3
+  closes.
 - **Step 1, the mechanism** (lanes F and B write it together, lane B the back end's skip; lane A the flag): the
   verdict per (material, mesh item) in `SceneCache` (`platform/scene/scene_cache.h`), beside the `MaterialTable`: a
   map keyed by (`MaterialId`, the mesh's `MeshKey`, item index), filled in `SceneCache::assign` at each view's
