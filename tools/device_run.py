@@ -17,7 +17,7 @@ and report.json. An item that fails or can't run is reported as such; the others
 in the data folder yet is 'missing' and doesn't fail the run. The items:
 
     env             the device: kernel, OS, Vulkan driver (vulkaninfo), FEX, the package's build
-    provoking       VK_EXT_provoking_vertex on the device (vulkaninfo; B7, C6)
+    provoking       VK_EXT_provoking_vertex and VK_EXT_shader_stencil_export on the device (vulkaninfo; B7, C6, C6b)
     c6_race7        race7.cap replayed at 1280x960, original: every frame's SHA-256 against the x64 hashes (C6)
     b6_span         B6's scene-cache span on race_boot.cap after its first 300 frames, per frame, p95 (B6c)
     night           the same span on the night lap with lighting.night = enhanced against original (F2b)
@@ -26,10 +26,14 @@ in the data folder yet is 'missing' and doesn't fail the run. The items:
     pipeline_cache  race7.cap twice with GT4_PIPELINE_CACHE in the work folder, emptied first: the cold run's frame
                     times against the warm one's (B2)
     mixer           audio.mixer = host, audio.interpolation = sinc, at audio.spatial original, stereo and hrtf: the
-                    host summary's mix time (and hrtf's buses) on a replay (D5, D9); underruns are a device item
+                    host summary's mix time (and hrtf's buses) on a replay of race_mixer_host.cap (lane D's REF capture
+                    recorded with the host's mixer; D5, D9); underruns are a device item
     load_times      GT4_LOAD_STATS=1 on the route to PE race 2 (docs/modern/routes/race_gt_pe2.txt) with a copy of
                     saves-pe-race2: each load's blocked VBlanks and time; the race load against 0.2 s (D10 (c))
     photo_travel    tools/photo_check.py with a copy of r5_saves: the shot's reads and time (lane A's CT24 fix)
+    night_bands     lap_ssr5r and lap_csr5 at the owner's settings at 1280x800, every 100th frame from 600 through
+                    tools/band_measure.py (lane F's), the frames deleted: per frame a triage score, to compare with the
+                    desktop's same frames (the live dump on L3 + R3 is the item's other half)
 
 Items that wait for their ticket (B16c's memory and GPU cost, F6-F9's budgets, the settings pages' cost, the
 shooting screen with the held picture) are listed as pending until they are added here. The device items of C6b
@@ -54,7 +58,7 @@ import subprocess
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TOOLS = ("device_run.py", "photo_check.py", "perf_report.py")
+TOOLS = ("device_run.py", "photo_check.py", "perf_report.py", "band_measure.py")
 ROUTE = "docs/modern/routes/race_gt_pe2.txt"
 
 # The files the device half reads in DIR (C6b; the coordinator copies them), with their sizes in bytes.
@@ -63,17 +67,28 @@ DATA = {
     "race_grid43.cap": 320675952,
     "race_boot.cap": 2252306688,
     "lap_csr5.cap": 3888681808,
+    "lap_ssr5r.cap": 4061126560,
+    "race_mixer_host.cap": 3144205376,
+    "race_pe2_prog.cap": 2313051136,
     "orig_r6_race7.sha256": 7949,
     "orig_r6_race_grid43.sha256": 55355,
 }
 SAVES = ("saves-pe-race2", "r5_saves")
-# The mixer row's capture: a race recorded with audio.mixer = host (lane D's; its name and size are added to DATA once
-# the coordinator copies it). Without it the row says so.
+# The mixer row's capture: a race recorded with audio.mixer = host (lane D's REF capture, CAPTURES.md).
 MIXER_CAP = "race_mixer_host.cap"
-MIXER_FRAMES = 9600   # its VBlanks (lane D's recording; set to the REF capture's count when it is made): a replay
-                      # doesn't end by itself at the capture's end, so --frames is the capture's length
-ITEMS = ("env", "provoking", "c6_race7", "b6_span", "night", "hybrid", "pipeline_cache", "mixer", "load_times",
-         "photo_travel")
+MIXER_FRAMES = 8121   # its VBlanks: a replay doesn't end by itself at the capture's end, so --frames is its length
+# The night bands' laps (lane F's, CAPTURES' night section): every 100th frame from 600 (after the re-upload window).
+NIGHT_LAPS = (("lap_ssr5r.cap", 10200), ("lap_csr5.cap", 9000))
+# C6's ORIG on the device (c6_orig): each REF capture, its VBlanks, and the hash list its frames are compared with:
+# lane B's R6 lists (the re-baseline 7f58836 and later), and for the progressive race (no R6 list) the desktop's,
+# made with the same flags by `--make-hashes` (lane C).
+ORIG_CAPS = (("race7.cap", 100, "orig_r6_race7.sha256"), ("race_grid43.cap", 700, "orig_r6_race_grid43.sha256"),
+             ("race_pe2_prog.cap", 4915, "orig_desktop_race_pe2_prog.sha256"))
+# the flags the hash lists were made with (CAPTURES' re-baselines): any other flag changes every hash
+ORIG_FLAGS = ["--size", "1280x960", "--preset", "original", "--set", "texture.hd_pack=off", "--set",
+              "display.frame_interpolation=off", "--set", "debug.overlay=off"]
+ITEMS = ("env", "provoking", "c6_orig", "c6_race7", "b6_span", "night", "hybrid", "pipeline_cache", "mixer",
+         "load_times", "photo_travel", "night_bands")
 PENDING = {
     "b16c_memory": "B16c (lane B): its kept images' memory, with the freed MSAA targets beside it",
     "b16c_gpu": "B16c (lane B): FSR 2 on the game's frames against the GS scene's own resolve",
@@ -113,6 +128,8 @@ def desktop(a):
                   f"--report {remote_report} --min-free-gb {a.min_free_gb}")
     if a.items:
         device_cmd += f" --items {a.items}"
+    if a.keep_differing:
+        device_cmd += f" --keep-differing {a.keep_differing}"
     code = run(ssh + [device_cmd]).returncode
     os.makedirs(out, exist_ok=True)
     if run(["scp", "-q", "-r", "-o", "BatchMode=yes", f"{a.ssh}:{remote_report}/.", out]).returncode:
@@ -206,7 +223,10 @@ class Device:
     def preflight(self, items):
         needs = {"c6_race7": ("race7.cap", "orig_r6_race7.sha256"), "b6_span": ("race_boot.cap",),
                  "night": ("lap_csr5.cap",), "hybrid": ("race_grid43.cap",), "pipeline_cache": ("race7.cap",),
-                 "load_times": ("saves-pe-race2",), "photo_travel": ("r5_saves",)}
+                 "load_times": ("saves-pe-race2",), "photo_travel": ("r5_saves",),
+                 "mixer": (MIXER_CAP,), "night_bands": tuple(cap for cap, _ in NIGHT_LAPS),
+                 # (race_pe2_prog and its desktop list are optional: the item says 'missing' for them)
+                 "c6_orig": ("race7.cap", "orig_r6_race7.sha256", "race_grid43.cap", "orig_r6_race_grid43.sha256")}
         wanted = {f for i in items for f in needs.get(i, ())}
         problems = []
         for name, size in DATA.items():
@@ -262,9 +282,122 @@ class Device:
             return {"status": "error", "note": "vulkaninfo did not run"}
         present = "VK_EXT_provoking_vertex" in full
         m = re.search(r"provokingVertexLast\s*=\s*(\w+)", full)
+        # The night bands (PLAN C6b): without the stencil export, every draw writing alpha marks DATE's stencil mirror
+        # stale and the next DATE draw rebuilds it (gsn_scene.cpp); the host enables the export when the device has it.
         return {"status": "reported", "numbers": {"VK_EXT_provoking_vertex": present,
-                                                    "provokingVertexLast": m.group(1) if m else None},
-                "note": "absent is a B7 finding, not a C6 failure"}
+                                                    "provokingVertexLast": m.group(1) if m else None,
+                                                    "VK_EXT_shader_stencil_export":
+                                                        "VK_EXT_shader_stencil_export" in full},
+                "note": "absent: a B7 finding, not a C6 failure; no stencil export: DATE's rebuild path (C6b)"}
+
+    @staticmethod
+    def write_png(path, w, h, rgb):
+        """An 8-bit RGB PNG in plain Python (zlib; no filter): a kept differing frame."""
+        import struct
+        import zlib
+
+        def chunk(kind, data):
+            return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+        rows = b"".join(b"\x00" + rgb[y * w * 3:(y + 1) * w * 3] for y in range(h))
+        with open(path, "wb") as f:
+            f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) +
+                    chunk(b"IDAT", zlib.compress(rows, 6)) + chunk(b"IEND", b""))
+
+    def streamed_hashes(self, cap, frames, name, on_frame):
+        """Replays `cap` with ORIG_FLAGS, every frame captured, and hands each frame file to on_frame(number, path)
+        once it is whole, then deletes it: the disk holds a frame or two, not the whole replay (race_grid43 every
+        frame is 2.6 GB at 1280x960). Whole: a later frame exists and the file's size is its P6 header's length
+        plus width x height x 3 (should the host's writes ever overlap, a part-written frame would otherwise hash
+        as a differing one); a frame still short when the replay has ended is left out (reported as missing, not
+        as differing). The frames are game data: whatever happens (on_frame raising, a full disk), the replay is
+        stopped and the folder removed."""
+        d = os.path.join(self.work, "orig_" + name)
+        shutil.rmtree(d, ignore_errors=True)
+        os.makedirs(d)
+        cmd = [self.host, "--headless", "--replay", self.cap(cap), "--frames", str(frames), "--capture-frames",
+               f"1-{frames}", "--capture-dir", d] + ORIG_FLAGS
+        log = open(os.path.join(self.report, "logs", f"c6_orig_{name}.log"), "w", encoding="utf-8", errors="replace")
+        log.write("$ " + " ".join(cmd) + "\n")
+        log.flush()
+        proc = None
+
+        def whole(path):
+            try:
+                with open(path, "rb") as f:
+                    head = f.read(64)
+                m = re.match(rb"P6\s+(\d+)\s+(\d+)\s+255\s", head)
+                return bool(m) and os.path.getsize(path) == m.end() + int(m.group(1)) * int(m.group(2)) * 3
+            except OSError:
+                return False
+
+        def ready(final):
+            files = sorted(f for f in os.listdir(d) if f.endswith(".ppm"))
+            for f in files if final else files[:-1]:
+                m = re.search(r"(\d+)\.ppm$", f)
+                path = os.path.join(d, f)
+                if not whole(path):
+                    if not final:
+                        continue   # (still being written: the next poll takes it)
+                    log.write(f"device_run: {f} short or unreadable at the end: left out (missing)\n")
+                elif m:
+                    on_frame(int(m.group(1)), path)
+                os.remove(path)
+        try:
+            proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=self.package)
+            while proc.poll() is None:
+                ready(False)
+                time.sleep(0.2)
+            ready(True)
+            log.write(f"\nexit {proc.returncode}\n")
+            return proc.returncode
+        finally:
+            if proc is not None and proc.poll() is None:
+                proc.kill()
+                proc.wait()
+            log.close()
+            shutil.rmtree(d, ignore_errors=True)
+
+    def item_c6_orig(self):
+        """C6's ORIG on the device: each REF capture replayed every frame with the hash lists' flags, each frame's
+        SHA-256 against its list; with --keep-differing N the first N differing frames of each capture are kept as
+        PNG in the report's frames/ (game content: the report then stays on the owner's machines)."""
+        keep = self.a.keep_differing
+        res, ok = {}, True
+        for cap, frames, listname in ORIG_CAPS:
+            name = cap[:-4]
+            if not os.path.isfile(self.cap(listname)) or not os.path.isfile(self.cap(cap)):
+                res[name] = {"status": "missing", "note": f"needs {cap} and {listname} in the data folder"}
+                continue
+            ref = {}
+            for line in open(self.cap(listname)):
+                m = re.match(r"f_(\d+)\.ppm\s+([0-9A-Fa-f]{64})", line)
+                if m:
+                    ref[int(m.group(1))] = m.group(2).upper()
+            got, differ, kept = {}, [], []
+
+            def on_frame(k, path, ref=ref, got=got, differ=differ, kept=kept, name=name):
+                data = open(path, "rb").read()
+                got[k] = hashlib.sha256(data).hexdigest().upper()
+                if k in ref and got[k] != ref[k]:
+                    differ.append(k)
+                    if len(kept) < keep:
+                        w, h, rgb = self.frames_rgb(path)
+                        out = os.path.join(self.report, "frames")
+                        os.makedirs(out, exist_ok=True)
+                        png = os.path.join(out, f"{name}_{k:06d}.png")
+                        self.write_png(png, w, h, rgb)
+                        kept.append(os.path.basename(png))
+            code = self.streamed_hashes(cap, frames, name, on_frame)
+            same = sum(1 for k in ref if got.get(k) == ref[k])
+            missing = sorted(k for k in ref if k not in got)
+            res[name] = {"exit": code, "reference frames": len(ref), "identical": same, "differing": len(differ),
+                         "first differing": differ[:20], "missing": len(missing), "kept": kept}
+            ok = ok and code == 0 and same == len(ref)
+        present = [r for r in res.values() if r.get("status") != "missing"]
+        return {"status": ("pass" if ok else "fail") if present else "missing", "numbers": res,
+                "pass_line": "every frame of each capture equal to its hash list (the R6 lists; the desktop's for "
+                             "race_pe2_prog)",
+                "note": "kept frames are game content: the report stays on the owner's machines" if keep else ""}
 
     def item_c6_race7(self):
         ref = {}
@@ -577,6 +710,45 @@ class Device:
                 "pass_line": "photo_check OK (the photo developed within PHOTO_TRIES x 600 VBlanks) and no read "
                              "over 1 s"}
 
+    def item_night_bands(self):
+        """The night bands' triage (C6b; tools/band_measure.py, lane F's): both night laps replayed at the owner's
+        settings (the package's settings.ini when there is one, else ultra) at the Odin's 1280x800, every 100th frame
+        from 600 measured on the device and deleted. A score is 'look at this frame', never a verdict: compare it with
+        the desktop's for the same replay frame."""
+        settings = os.path.join(self.package, "settings.ini")
+        chosen = (["--settings", settings] if os.path.isfile(settings) else ["--preset", "ultra"])
+        res = {"settings": settings if os.path.isfile(settings) else "preset ultra (no settings.ini in the package)"}
+        for cap, frames in NIGHT_LAPS:
+            d = os.path.join(self.work, "bands_" + cap[:-4])
+            shutil.rmtree(d, ignore_errors=True)
+            os.makedirs(d)
+            cmd = [self.host, "--headless", "--size", "1280x800", "--replay", self.cap(cap), "--frames", str(frames),
+                   "--capture-frames", f"600-{frames}/100", "--capture-dir", d] + chosen + FIXED
+            r = subprocess.run(cmd, capture_output=True, text=True, cwd=self.package, timeout=3600, errors="replace")
+            m = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "band_measure.py"), "--json", d],
+                               capture_output=True, text=True, timeout=3600, errors="replace")
+            shutil.rmtree(d, ignore_errors=True)   # (frames of the game never leave the device)
+            scores = []
+            for line in m.stdout.splitlines():
+                try:
+                    scores.append(json.loads(line))
+                except ValueError:
+                    pass
+            self.log(f"night_bands_{cap[:-4]}.jsonl", m.stdout)
+            self.log(f"night_bands_{cap[:-4]}.log", f"$ {' '.join(cmd)}\nexit {r.returncode}\n{r.stdout}{r.stderr}\n"
+                                                    f"--- band_measure\n{m.stderr}")
+            top = sorted(scores, key=lambda s: -s.get("score", 0))[:8]
+            res[cap[:-4]] = {"exit": r.returncode, "frames": len(scores),
+                             "max_score": top[0]["score"] if top else None,
+                             "top": [{"frame": s["frame"], "score": s["score"], "runs": s["runs"][:3]} for s in top]}
+        measured = any(res[c[:-4]]["frames"] for c, _ in NIGHT_LAPS)
+        return {"status": "reported" if measured else "error", "numbers": res,
+                "pass_line": "triage only: frames scoring above the desktop's same replay frames are to be looked "
+                             "at (lane F's desktop noise floor: lap_ssr5r p95 0.011, max 0.024; lap_csr5 p95 0.036, "
+                             "max 0.048)",
+                "note": "scores per frame in logs/night_bands_*.jsonl; the device's live dump (L3 + R3) is the other "
+                        "half of the item"}
+
     def run(self, items):
         problems, free = self.preflight(items)
         self.results["preflight"] = {"free_gb": round(free, 1), "problems": problems}
@@ -618,6 +790,39 @@ class Device:
             f.write("\n".join(lines) + "\n")
 
 
+def make_hashes(host, capture, out):
+    """A capture's hash list on this machine, as lane B's R6 lists are made (ORIG_FLAGS, every frame, 'f_N.ppm SHA'
+    lines): the desktop's reference that c6_orig compares the device with for a capture that has no R6 list."""
+    import tempfile
+
+    class Args:
+        data = os.path.dirname(os.path.abspath(capture))
+        package = os.path.dirname(os.path.abspath(host))
+        report = tempfile.mkdtemp(prefix="gt4_hashes_")
+        keep_differing = 0
+        min_free_gb = 3.0
+    dev = Device(Args)
+    dev.host = os.path.abspath(host)
+    frames = None
+    for cap, n, _ in ORIG_CAPS:
+        if cap == os.path.basename(capture):
+            frames = n
+    if frames is None:
+        sys.exit(f"device_run: {capture} is not one of ORIG_CAPS")
+    hashes = {}
+
+    def on_frame(k, path):
+        hashes[k] = hashlib.sha256(open(path, "rb").read()).hexdigest().upper()
+    code = dev.streamed_hashes(os.path.basename(capture), frames, "hashes", on_frame)
+    with open(out, "w", newline="\n") as f:
+        f.write(f"# {os.path.basename(capture)} original 1280x960 every 1 frame(s), host {host}\n")
+        for k in sorted(hashes):
+            f.write(f"f_{k:06d}.ppm {hashes[k]}\n")
+    shutil.rmtree(Args.report, ignore_errors=True)
+    print(f"device_run: {len(hashes)} frames hashed into {out} (host exit {code})")
+    return code
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--ssh", help="the device's ssh destination (desktop side)")
@@ -626,6 +831,11 @@ def main():
     ap.add_argument("--items", default="", help="comma-separated items (default: all)")
     ap.add_argument("--out", default="", help="where the report comes back to (desktop side)")
     ap.add_argument("--min-free-gb", type=float, default=3.0)
+    ap.add_argument("--keep-differing", type=int, default=0, help="c6_orig: keep the first N differing frames of each "
+                    "capture as PNG in the report (game content: the report then stays on the owner's machines)")
+    ap.add_argument("--make-hashes", nargs=3, metavar=("HOST", "CAPTURE", "OUT"),
+                    help="write CAPTURE's hash list with ORIG_FLAGS, every frame, as lane B's lists (the desktop's "
+                         "reference for a capture with no R6 list, such as race_pe2_prog)")
     ap.add_argument("--device", action="store_true", help="the device half (run by the desktop side over ssh)")
     ap.add_argument("--data", default="~/gt4-device")
     ap.add_argument("--report", default="")
@@ -634,6 +844,8 @@ def main():
     unknown = [i for i in items if i not in ITEMS]
     if unknown:
         ap.error(f"unknown items {unknown}; known: {', '.join(ITEMS)}")
+    if a.make_hashes:
+        sys.exit(make_hashes(*a.make_hashes))
     if a.device:
         if not a.report:
             ap.error("--device needs --report")
