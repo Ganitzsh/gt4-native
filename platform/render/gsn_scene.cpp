@@ -2956,6 +2956,23 @@ void GsnScene::Impl::findAnchor() {
                         (unsigned long long)frame.vblank, shown, made, fields ? " (fields)" : "", p.first, p.last, p.kind, p.source,
                         p.x0, p.y0, p.x1, p.y1, p.u0, p.v0, p.u1, p.v1, chain, light ? "Light" : capped ? "cap" : "no Light",
                         "", found == lastCovering ? "same" : "other");
+            for (size_t i = size_t(found) + 1; i < passes.size(); ++i) {   // what covers half the picture after it
+                const Pass& q = passes[i];
+                if (q.dest != made || q.kind == 4 || !covers(q, rx0, ry0, rx1, ry1, 0.5f)) continue;
+                const auto& cmd = frame.commands[q.first];
+                if (cmd.kind != gsn::FrameList::Command::Kind::Draw) {
+                    std::printf("  after: pass %zu-%zu kind %d from %u (a grade)\n", q.first, q.last, q.kind, q.source);
+                    continue;
+                }
+                const gsn::Draw& d = frame.draws[cmd.index];
+                const gfx::Context& cx = d.state.c;
+                std::printf("  after: pass %zu-%zu kind %d from %u (%.0f,%.0f)-(%.0f,%.0f) prim 0x%x tex %d id %u fmt %u %ux%u blend %u%u%u%u "
+                            "fix %u rgba0 %08x bracket %u\n",
+                            q.first, q.last, q.kind, q.source, q.x0, q.y0, q.x1, q.y1, d.state.prim, int(d.texture.kind), d.texture.id,
+                            cx.texture.format, 1u << cx.texture.log2Width, 1u << cx.texture.log2Height, cx.blendA, cx.blendB,
+                            cx.blendC, cx.blendD, cx.blendFixed, d.first < frame.vertices.size() ? frame.vertices[d.first].rgba : 0u,
+                            d.bracket);
+            }
         } else {
             std::printf("b16c anchor: vblank %llu shown %u made %u%s: none (%zu passes into it)\n", (unsigned long long)frame.vblank,
                         shown, made, fields ? " (fields)" : "",
