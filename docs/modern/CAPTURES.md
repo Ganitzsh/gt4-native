@@ -246,11 +246,18 @@ these, each recorded in B-spec (the game drives) from a fresh copy of the approv
   records. The lamps capture in practice: N3's proof and its step 1 acceptance.
 - `lap_csr5.cap`: Clubman Stage Route 5, Professional Events > Clubman Cup race 4; 9,000 frames; a75a6c2, scene
   records. N3's second layout and F2b's second course.
+- `lap_ssr5r_boot.cap`: `lap_ssr5r`'s race recorded from game start (C10: `GT4_HOST_RECORD=PATH,0,20200`), 20,200
+  frames (8.0 GB): boot, GT mode, the race from about frame 9,050, a full lap and part of the second. Release game
+  and host from empty folders at 95a639b (kFrameLampsOn's flag in its FrameBegins), scene records, `original`,
+  1280 x 720. 183 of 184 frames sampled every 100 from 1,900 are lit (8,000, a load, is not). It replays the live
+  game exactly: 13 live shots spread over the lap equal the replay's frames (mean difference 0.00; a live shot at
+  session frame F is replay frame F + 172 to 176, the frames the session skipped while booting). The night
+  reference to judge colours on: N3's v4 check, lane C's R7 sub-capture test, the Odin's night replay. Heavy-both.
 - `a5b_r5.cap` (lane A's): S.S. Route 5 Reverse, the same race; 1,200 VBlanks after 300 of driving, scene records,
   the A5b game (flare markers around the flare pass). The warning capture: the pit entry's warning lamps blink
   through it; N4 uses it. `glow_r5.cap` (the A7 step 1a game) is the same stretch.
 
-All five, with `r5_ss_ab.notes.json`, are also kept in `C:/Users/julie/gt4-native-game/build/caps/`
+All six, with `r5_ss_ab.notes.json`, are also kept in `C:/Users/julie/gt4-native-game/build/caps/`
 (the originals in lanes F and A's `build/caps/`).
 
 The routes above start from GT mode's map: Professional Events, the event, regulations OK, the race, Entry, Don't
@@ -258,18 +265,19 @@ Clear, then B-spec. C.S. Route 5 Reverse is Beginner Events > Sunday Cup race 4 
 Route 5 forward is in the Arcade City row. A replay's first 300 to 500 frames show textures not yet uploaded again
 (a mid-session recording); counts leave them out.
 
-Colours in these replays are not always the game's (RISKS R7). The captures here were recorded mid-run: lane F's
-sessions boot from game start, but the recording starts at a trigger once the race runs (`lap_ssr5r` at VBlank
-9,926, `lap_csr5` at 9,478), and lane A's start after 300 VBlanks of driving, so each replay starts from a state
-snapshot. Some textures the live game drew are not right in it: in `lap_ssr5r` the lane markings and the edge
-line are green (frame 3,500) and the left kerb is cyan and garbled (frame 1,000), at every setting, even
-`--preset original` with the HD pack off; live shots at the same race times show white markings and a red and
-white kerb. Lane C is tracing which textures (RISKS R7). N3's hunts compared both runs on the same replay, so they
-agree with themselves, but v4 also reads the texture (its centre/rim ratio): on `lap_ssr5r`, some textures it judged
-have means that look wrong (256 x 256 at (0, 0, 0) beside the right (127, 127, 127)), while `lap_csr5` has almost
-none. Whether v4 decides the same live is checked on a live run, not on these replays. Don't judge colours from
-these replays, and record new references from game start (C10). The captures recorded from boot (`race_boot`,
-`race_grid43_r6`, `garage_r6`) are the ones to judge colours on.
+Colours in these replays, except `lap_ssr5r_boot`'s, are not always the game's (RISKS R7). The others were recorded
+mid-run: lane F's sessions boot from game start, but the recording starts at a trigger once the race runs
+(`lap_ssr5r` at VBlank 9,926, `lap_csr5` at 9,478), and lane A's start after 300 VBlanks of driving, so each replay
+starts from a state snapshot. Some textures the live game drew are not right in it: in `lap_ssr5r` the lane
+markings and the edge line are green (frame 3,500) and the left kerb is cyan and garbled (frame 1,000), at every
+setting, even `--preset original` with the HD pack off; live shots at the same race times show white markings and
+a red and white kerb. Lane C is tracing which textures (RISKS R7). N3's hunts compared both runs on the same
+replay, so they agree with themselves, but v4 also reads the texture (its centre/rim ratio): on `lap_ssr5r`, some
+textures it judged have means that look wrong (256 x 256 at (0, 0, 0) beside the right (127, 127, 127)), while
+`lap_csr5` has almost none. Whether v4 decides the same live is checked on a live run or on `lap_ssr5r_boot`, not
+on these replays. Don't judge colours from these replays, and record new references from game start (C10). The
+captures recorded from boot (`race_boot`, `race_grid43_r6`, `garage_r6`, and at night `lap_ssr5r_boot`) are the
+ones to judge colours on.
 
 The Arcade route below is the one the first, throttle-only sections captures used (`r5_sections*.cap`, no scene
 records; not references).
