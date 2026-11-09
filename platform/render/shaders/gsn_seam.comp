@@ -1,0 +1,40 @@
+#version 460
+// B16c (docs/modern/PLAN.md; CONTRACTS.md b.11): the motion vectors and depth of the picture a list makes for the
+// display, at GT4's post copy (gsn::findSeamAnchor). Each pixel of the displayed rectangle maps through the anchor's
+// composed copies back to the Light target's pixel it shows; its motion vector (GS pixels of the Light target,
+// previous less now, unjittered) is scaled into the made picture's GS pixels, and its depth is the Z buffer's, as b.11
+// gives it: GT4's Z times 2^-32 (reversed and infinite), turned back while the game holds the buffer inverted in place.
+// Outside the Light's scene area: no motion, the far plane.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D lightVelocity;   // the Light's motion vectors, kept past its scene stage
+layout(set = 0, binding = 1) uniform sampler2D lightDepth;      // its Z buffer's depth plane
+layout(set = 0, binding = 2, rg16f) uniform writeonly image2D seamVelocity;   // the made target's extent
+layout(set = 0, binding = 3, r32f) uniform writeonly image2D seamDepth;
+layout(push_constant) uniform Seam {
+    ivec2 origin, size;   // the displayed rectangle in the made target, its render pixels
+    vec2 madeScale;       // the made target's render pixels per GS pixel
+    vec2 lightScale;      // the motion vectors' render pixels per GS pixel (the Light target's)
+    vec2 depthScale;      // the Z buffer's
+    vec2 mapScale;        // a made GS pixel -> the Light target's: x mapScale + mapOffset
+    vec2 mapOffset;
+    vec2 lightSize;       // the Light's scene area, GS pixels from the target's corner
+    float depthMost;      // the Z format's largest value over 2^32 (inverted: depth = most - stored)
+    float inverted;       // 1: the buffer is inverted in place
+} seam;
+
+void main() {
+    const ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, seam.size))) return;
+    const ivec2 q = seam.origin + p;
+    const vec2 made = (vec2(q) + 0.5) / seam.madeScale;   // the pixel's centre, made GS pixels
+    const vec2 lit = made * seam.mapScale + seam.mapOffset;
+    vec2 velocity = vec2(0.0);
+    float depth = 0.0;
+    if (all(greaterThanEqual(lit, vec2(0.0))) && all(lessThan(lit, seam.lightSize))) {
+        velocity = texelFetch(lightVelocity, ivec2(lit * seam.lightScale), 0).xy / seam.mapScale;
+        depth = texelFetch(lightDepth, ivec2(lit * seam.depthScale), 0).r;
+        if (seam.inverted > 0.5) depth = seam.depthMost - depth;
+    }
+    imageStore(seamVelocity, q, vec4(velocity, 0.0, 0.0));
+    imageStore(seamDepth, q, vec4(depth, 0.0, 0.0, 0.0));
+}

@@ -99,6 +99,12 @@ public:
     // B8 (render.scene = hybrid, PLAN B8): the parity path's substitution plus the side channels (view-space normal,
     // material, view-space depth) written per GT4 depth partition for the scene stage to light with. Implies setParity.
     void setHybrid(bool on);
+    // B16c (PLAN B16c, CONTRACTS b.11): the display seam. At GT4's post copy of each progressive race frame
+    // (gsn::findSeamAnchor) the scene's motion vectors and depth are mapped onto the picture made for the display, and
+    // the display pass writes them (velocity as a fraction of the displayed rectangle, depth in b.11's convention); a
+    // picture without one gets velocity 0 and the far plane. Off: the display pass as before (velocity 0, no depth).
+    // GT4_B16C_SEAM=1 turns it on (testing, until FSR 2 takes the game's frames).
+    void setDisplaySeam(bool on);
     bool antiAliasesItself() const override;
 
     void prepare(const SceneFormats& formats) override;

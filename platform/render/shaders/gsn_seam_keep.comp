@@ -1,0 +1,13 @@
+#version 460
+// B16c: the seam plan's Light keeps its motion vectors past its scene stage. A copy through a sampler, so the
+// stage's velocity image (the members' work image or the render graph's transient) needs no transfer usage: it is
+// read as it is sampled anyway, into the kept image as storage (gsn_scene.cpp keepSeamVelocity).
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D velocity;
+layout(set = 0, binding = 1, rg16f) uniform writeonly image2D kept;
+
+void main() {
+    const ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, imageSize(kept)))) return;
+    imageStore(kept, p, vec4(texelFetch(velocity, p, 0).xy, 0.0, 0.0));
+}
