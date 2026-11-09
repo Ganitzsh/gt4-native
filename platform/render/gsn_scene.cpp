@@ -233,6 +233,13 @@ struct GsnScene::Impl {
     };
     std::vector<SkipSpan> skipSpans;
     std::vector<uint32_t> skipAt;
+    // ... and where they would have drawn: an R8 image at the scene's render size (gsn_mask.frag), drawn at a Light's
+    // relight, read by gsn_light at binding 10
+    vk::Pipeline maskPass;
+    vk::Image skipMask;
+    VkExtent2D skipMaskExtent{};
+    bool drawSkipMask(const gsn::FrameList::Lighting& l, size_t lightAt, vk::Image& colour, vk::Image& depth, uint32_t sx, uint32_t sy);
+    uint64_t n3MaskDraws = 0;
     uint64_t n3ItemsSkipped = 0, n3Frames = 0, n3OverParity = 0;   // n3OverParity: B7 spans a skip left undrawn
     uint64_t n3ItemsSeen = 0;   // items of main views on frames that pass the gate (the verdicts' denominator)
     uint64_t n3Misaligned = 0;  // views whose skip list isn't one per material (ignored: it's read by index)
@@ -294,7 +301,7 @@ struct GsnScene::Impl {
     uint64_t nightSplitSkipped = 0;   // Lights not relit: their target holds more than one main view (split screen)
     // gsn_light.comp's push constants from `night` on (offset 40): mirrored field for field.
     struct NightPush {
-        float night = 0.0f, pad0 = 0.0f;
+        float night = 0.0f, skipMasked = 0.0f;   // skipMasked: 1 when binding 9 holds the Light's skip mask (N3)
         float focal[2] = {1.0f, 1.0f}, centre[2] = {0.0f, 0.0f};
         float distanceA = 0.0f, distanceB = 0.0f, maxDistance = 0.0f, pad1 = 0.0f;
         float inset[4] = {1.0f, 1.0f, 0.0f, 0.0f};   // x1 < x0: no mirror
@@ -691,6 +698,8 @@ struct GsnScene::Impl {
         vk::destroy(device, gradeImage);
         for (auto& b : curveBuffers) vk::destroy(device, b);
         vk::destroy(device, velocityPass);
+        vk::destroy(device, maskPass);
+        vk::destroy(device, skipMask);
         vk::destroy(device, taaPass);
         for (vk::Pipeline* p : {&ssrPass, &ssrComposite, &fogPass, &blurPass, &dofPass, &gradePass}) vk::destroy(device, *p);
         vk::destroy(device, ssrImage);
@@ -1196,6 +1205,7 @@ struct GsnScene::Impl {
         // written, kPartMain the stage's result written, kPartCopy it copied back.
         WorkImages work;
         bool moving = false;         // the Light's motion vectors drawn (the temporal resolve and motion blur need them)
+        size_t lightAt = 0;          // the Light being staged (runStep), for its skip mask
         bool lightSkipped = false;   // the graph's passes of a Light: none of its scene stage runs (beginLight)
         std::function<void(const gsn::FrameList::Lighting&, int)> relight, reflect, haze, blur, focus;
         std::function<void(const gsn::FrameList::Lighting&)> antialias;
@@ -1429,6 +1439,95 @@ void GsnScene::Impl::segments(const gsn::FrameList& list, std::vector<Segment>& 
         out.push_back({Segment::Kind::Range, at, to});
         at = to;
     }
+}
+
+// N3 step 1: the skip mask of a Light: its target's skipped items drawn again, before the Light, into an R8 image (1 where
+// they would have shown: each draw's own depth test against the scene's Z, through gsn_velocity.vert's positions, the
+// same to the bit as the scene's), for the albedo's stand-in under them. False when nothing of this Light is skipped.
+bool GsnScene::Impl::drawSkipMask(const gsn::FrameList::Lighting& l, size_t lightAt, vk::Image& colour, vk::Image& depth, uint32_t sx,
+                                  uint32_t sy) {
+    const VkCommandBuffer command = ex.command;
+    vk::Barriers& b = ex.b;
+    bool any = false;
+    for (size_t at = 0; at < lightAt && at < frame.commands.size() && !any; ++at) {
+        const auto& cmd = frame.commands[at];
+        if (cmd.kind != gsn::FrameList::Command::Kind::Draw || cmd.index >= frame.draws.size()) continue;
+        any = frame.draws[cmd.index].target == l.target && cmd.index + 1 < skipAt.size() && skipAt[cmd.index] != skipAt[cmd.index + 1];
+    }
+    if (!any || !maskPass.valid()) return false;
+    ensureWork(skipMask, skipMaskExtent, colour.extent, VK_FORMAT_R8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+               "gsn skip mask");
+    vk::toColor(b, skipMask, true);
+    vk::toDepth(b, depth);
+    b.flush(command);
+    VkRenderingAttachmentInfo m{};
+    m.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    m.imageView = skipMask.view;
+    m.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    m.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    m.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    VkRenderingAttachmentInfo ds{};
+    ds.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    ds.imageView = depth.view;
+    ds.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    ds.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    ds.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    VkRenderingInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    info.renderArea = {{0, 0}, {std::min({colour.extent.width, depth.extent.width, skipMask.extent.width}),
+                                std::min({colour.extent.height, depth.extent.height, skipMask.extent.height})}};
+    info.layerCount = 1;
+    info.colorAttachmentCount = 1;
+    info.pColorAttachments = &m;
+    info.pDepthAttachment = &ds;
+    info.pStencilAttachment = &ds;
+    vkCmdBeginRendering(command, &info);
+    VkViewport viewport{0, 0, static_cast<float>(colour.extent.width), static_cast<float>(colour.extent.height), 0, 1};
+    vkCmdSetViewport(command, 0, 1, &viewport);
+    vk::bind(command, maskPass);
+    const VkDeviceSize zero = 0;
+    vkCmdBindVertexBuffers(command, 0, 1, &ex.vertices->buffer, &zero);
+    DrawConstants k{};
+    k.targetSize[0] = static_cast<float>(colour.extent.width);
+    k.targetSize[1] = static_cast<float>(colour.extent.height);
+    k.scale[0] = static_cast<float>(sx);
+    k.scale[1] = static_cast<float>(sy);
+    k.sourceScale[0] = k.scale[0];
+    k.sourceScale[1] = k.scale[1];
+    static const VkCompareOp zops[4] = {VK_COMPARE_OP_NEVER, VK_COMPARE_OP_ALWAYS, VK_COMPARE_OP_GREATER_OR_EQUAL, VK_COMPARE_OP_GREATER};
+    static const VkCompareOp invertedZops[4] = {VK_COMPARE_OP_NEVER, VK_COMPARE_OP_ALWAYS, VK_COMPARE_OP_LESS_OR_EQUAL, VK_COMPARE_OP_LESS};
+    for (size_t at = 0; at < lightAt && at < frame.commands.size(); ++at) {
+        const auto& cmd = frame.commands[at];
+        if (cmd.kind != gsn::FrameList::Command::Kind::Draw || cmd.index >= frame.draws.size()) continue;
+        if (cmd.index + 1 >= skipAt.size() || skipAt[cmd.index] == skipAt[cmd.index + 1]) continue;
+        const gsn::Draw& d = frame.draws[cmd.index];
+        if (d.target != l.target || !d.modeled) continue;
+        if (d.depth && d.depth != l.depth) continue;   // (another Z buffer: not this scene's)
+        const gfx::Context& c = d.state.c;
+        const bool zt = d.depth && c.depthTest;
+        vkCmdSetDepthTestEnable(command, zt ? VK_TRUE : VK_FALSE);
+        vkCmdSetDepthCompareOp(command, (d.depthInverted ? invertedZops : zops)[c.depthFunc & 3u]);
+        const uint32_t x0 = c.scissorX0, y0 = c.scissorY0;
+        const uint32_t right = std::min((uint32_t(c.scissorX1) + 1) * sx, info.renderArea.extent.width),
+                       bottom = std::min((uint32_t(c.scissorY1) + 1) * sy, info.renderArea.extent.height);
+        if (right <= x0 * sx || bottom <= y0 * sy) continue;
+        const VkRect2D scissor{{static_cast<int32_t>(x0 * sx), static_cast<int32_t>(y0 * sy)}, {right - x0 * sx, bottom - y0 * sy}};
+        vkCmdSetScissor(command, 0, 1, &scissor);
+        k.jitter[0] = ex.jittered[at] ? ex.phase[0] / float(sx) : 0.0f;
+        k.jitter[1] = ex.jittered[at] ? ex.phase[1] / float(sy) : 0.0f;
+        vk::pushConstants(command, maskPass, k);
+        for (uint32_t i = skipAt[cmd.index]; i < skipAt[cmd.index + 1]; ++i) {
+            const SkipSpan& s = skipSpans[i];
+            if (s.first < d.first || s.first + s.count > d.first + d.count) continue;
+            vkCmdDraw(command, s.count, 1, ex.modelBase + s.first, 0);
+            ++n3MaskDraws;
+        }
+    }
+    vkCmdEndRendering(command);
+    vk::toSampled(b, skipMask, vk::kCompute);
+    vk::toSampled(b, depth, vk::kCompute);
+    b.flush(command);
+    return true;
 }
 
 // N3 step 1 (PLAN N3, lane B's back end): the items whose draws the GS path leaves out, the lit-road layer v4 judged
@@ -1913,6 +2012,9 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
         if (part == kPartWhole || part == kPartMain) {
             vk::Image& ao = *w.ao;
             vk::Image& lit = *w.lit;
+            // N3: where the skipped items would have drawn (before the light pass, which reads it); the Z buffer back in
+            // its sampled layout after
+            const bool masked = night > 0.0f && !skipSpans.empty() && drawSkipMask(l, ex.lightAt, colour, *si.depth, si.sx, si.sy);
             if (own) {
                 vk::toSampled(b, ao, vk::kCompute);
                 vk::toStorage(b, lit, true);
@@ -1923,6 +2025,7 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
             NightPush nightPush;
             NightBuffers nightBuffers;
             const bool lamps = night > 0.0f && nightPrepare(l, si, colour.view, depthOnly, nightPush, nightBuffers);
+            nightPush.skipMasked = masked ? 1.0f : 0.0f;
             vk::bind(command, lightPass);
             vk::Descriptors()
                 .sampled(0, colour.view, samplers[0])
@@ -1936,6 +2039,7 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
                 .storageBuffer(7, nightIndices.buffer, 0,
                                sizeof(uint32_t) * render::kClusterCount * render::kMaxLightsPerCluster)
                 .sampled(8, lamps ? nightLocal.view : ao.view, samplers[0])
+                .sampled(9, masked ? skipMask.view : ao.view, samplers[0])
                 .push(command, lightPass);
             const LightPush k{{float(e.width), float(e.height)}, lighting.occlusion, kZScale, lighting.grade, 1.18f, 0.3f, 1.0f,
                               lightView, kAoStep, nightPush};
@@ -3432,7 +3536,7 @@ bool GsnScene::Impl::beginLight(VkCommandBuffer command, size_t at) {
 void GsnScene::Impl::runStep(int step, const gsn::FrameList::Lighting& l, size_t at, int part) {
     switch (step) {
         case kStepMotionVectors: ex.moving = ex.drawVelocity(l, at); break;
-        case kStepLighting: ex.relight(l, part); break;
+        case kStepLighting: ex.lightAt = at; ex.relight(l, part); break;
         case kStepReflections: ex.reflect(l, part); break;
         case kStepFog: ex.haze(l, part); break;
         case kStepTemporalResolve: if (ex.moving) ex.antialias(l); break;
@@ -4112,7 +4216,7 @@ void GsnScene::prepare(const SceneFormats& formats) {
                                          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
                                          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
+                                         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
                                         96, "gsn light");
     // lighting.night (PLAN.md F2): the local luminance pass, the cluster build and its buffers. The light pass reads
     // these bindings whether or not the night is on (the shader skips them), so they always exist.
@@ -4147,6 +4251,11 @@ void GsnScene::prepare(const SceneFormats& formats) {
         v.dynamics = {VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE, VK_DYNAMIC_STATE_DEPTH_COMPARE_OP};
         v.name = "gsn motion vectors";
         s.velocityPass = vk::createGraphics(s.device, v);
+        // N3: the skip mask, the same positions into an R8 image, each draw's own depth test, no depth written
+        v.fragment = shaders::gsn_mask_frag();
+        v.colors = {VK_FORMAT_R8_UNORM};
+        v.name = "gsn skip mask";
+        s.maskPass = vk::createGraphics(s.device, v);
     }
     const auto stage = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE};

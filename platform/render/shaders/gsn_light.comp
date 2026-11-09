@@ -23,6 +23,10 @@ layout(std430, set = 0, binding = 5) readonly buffer Lights { GpuLight lights[];
 layout(std430, set = 0, binding = 6) readonly buffer Cells { ClusterCell cells[]; };
 layout(std430, set = 0, binding = 7) readonly buffer Indices { uint indices[]; };
 layout(set = 0, binding = 8) uniform sampler2D localLuminance;   // gsn_night_lum.comp: (sum of log luminance, count) per 8 x 8
+// N3 step 1: 1 where a skipped item (the lit-road layer) would have drawn (gsn_mask.frag), 0 elsewhere; read only when
+// p.skipMasked is 1 (else a stand-in: nothing skipped). For the albedo's stand-in under skipped items (lane F);
+// GT4_LIGHT_VIEW=4 shows it.
+layout(set = 0, binding = 9) uniform sampler2D skipMask;
 layout(push_constant) uniform Light {
     vec2 size;
     float aoStrength;   // 0: no occlusion
@@ -32,7 +36,7 @@ layout(push_constant) uniform Light {
     uint view;          // debugging (GT4_LIGHT_VIEW): 1 the occlusion, 2 the view distance in 10 m bands
     uint aoStep;        // the occlusion's texels per pixel (gsn_ao.comp's step)
     float night;        // 0: no night relight; else its strength
-    float pad0;
+    float skipMasked;   // 1: skipMask holds this Light's skip mask; 0: nothing of it skipped (the mask reads 0)
     vec2 focal;         // render pixels: x = focal * v / d + centre (v view-space x or y, d the view distance)
     vec2 centre;
     float distanceA;    // view distance = distanceA / (Z + distanceB)
@@ -163,5 +167,6 @@ void main() {
     }
     if (p.view == 1u) linear = vec3(texelFetch(occlusion, q / int(p.aoStep), 0).r);
     if (p.view == 2u) { const float d = distanceAt(q); linear = vec3(d < 5.0 ? 1.0 : 0.0, d < 20.0 ? 1.0 : 0.0, d < 80.0 ? 1.0 : 0.0); }
+    if (p.view == 4u) linear = vec3(p.skipMasked > 0.0 ? texelFetch(skipMask, q, 0).r : 0.0);   // (N3: the skip mask)
     imageStore(result, q, vec4(pow(linear, vec3(1.0 / 2.2)), c.a));
 }
