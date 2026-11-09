@@ -154,6 +154,39 @@ deferral: a live race run, before and after, reports the ticks that landed mid-w
 0` with that count above 0, and frame pacing (the host's frame-time stats) unchanged within noise; with scene
 records off, the same run's link stream and timing unchanged from before (the deferral is off there).
 
+**A3b: Camera cuts, `kViewCut` (M, lane A; lane B reviews).** CONTRACTS' `kViewCut` (the camera moved discontinuously,
+so temporal history resets) is set by nothing today (lane B, 2026-11-09), yet TAA, B16's upscalers, B16c's reset,
+F2b's night level and N3's coverage gate all rely on it. A mid-race camera change, a replay's track-side cut or the
+start's flyover to the grid is caught only when the view drops out for a frame, and history ghosts across the cut.
+Both sources, each logged by which one fired: (a) the game's own signals, read where our copies already hold the race
+camera (`cam` = method 0xD0 right before the main view's `ViewBegin` in 0033EAB8's copy, which Photo Travel's preview
+reaches through 0033E368 with role `kViewPhoto` keeping its own history, and A12's 0033FD88 copy): the camera object's
+address changing, and the current camera entry (`cam + 0x9BC`) changing, through a hook `gt4_scene_main_camera(cam,
+entry)` before the view begins; (b) a safety net in the runtime's `ViewBegin`, which has `worldToView` and the
+Projection: per (role, `pass`), kept across frames, the camera predicted from its last two per VBlank (`FrameBegin`'s
+vblank, so a 30 fps race frame, a hitch or a dropped frame isn't read as a jump; those counted apart), a cut when the
+residual exceeds a distance, the view direction turns by more than an angle, or the field of view changes by more than
+a few percent; a view absent last frame counts as a cut, as the host does now. Hunting every switch alone would miss
+some (replay cuts, the flyover, the pause and photo cameras); a geometric test alone misses short cuts (bumper to
+cockpit is about a metre, to be measured in step 0) and needs tuning against speed. Step 0 (measurement): a debug game
+logging per frame the camera object, its entry, position, view direction and field of view, over a race with every
+view selected in turn (chase, bumper, cockpit, roof, TV), the start's flyover, a replay with its track-side cuts, a
+pause and resume, and Photo Mode's camera (photo shots from a replay) and Photo Travel's preview (001BD438, a path to
+observe, not a place to hook); it says which signal shows each visible cut and gives the residual distribution on
+continuous frames at speed for the thresholds. Step 1: the hook in the two copies (0033EAB8's, which Photo Travel's
+preview reaches through 0033E368, and 0033FD88's), the runtime test, `kViewCut` on `ViewBegin`, a counter per cause
+(camera object, entry, residual, angle, field of view, absent), and CONTRACTS' line saying who sets it. The flag fixes
+nothing until each consumer reads it, so step 1 also has (lane B): `GsnScene` resets the TAA history of a Light's
+target when any main view drawing into that target has `kViewCut` (in split screen either half's cut resets both, one
+frame of the other half's history, the safe side, until TAA keeps history per view as A12 asks); the night level does
+the same per (target, role, `pass`); B16c's `DisplaySceneState::reset` follows the anchor's Light. Consumers read the
+flag from `FrameList::scene`, which only the list carrying `FrameEnd` has, so a Light in a list cut before it (a.8:
+the flare's asynchronous read) sees no flag; those are counted. Depends: A3, A12 (it touches 0033EAB8's and 0033FD88's
+copies, so it follows A12). Acceptance: `REL`; `DIFFTEST`; `ORIG` and `STREAM` unchanged with records off; on step 0's
+sessions every visible cut flagged, and no flag on continuous frames at speed over a lap (target 0: a false flag costs
+one frame of history, a missed cut a ghost), and none on resuming from a pause whose camera didn't change; no TAA
+ghost on the first frame after a view change, on a capture with one. Ahead of B16c's part 4, which needs it.
+
 **A4: Object identity from 00455708 (S-M).** `game_src/func_00455708.cpp` (draft) sets a runtime-global model
 context (set, model index, level) that A2 reads (`kInstObjectKnown`). Depends: A2, RISKS R2 verdict on 00455708.
 Acceptance: `REL`; `ORIG`; on two race captures, the same static object keeps the same (set, model) over 100
