@@ -607,27 +607,29 @@ stay for the stall test); the engine on the host for replay and the test scene. 
 move: `host_settings` links `settings_menu.cpp` and drives the chord (`cmake/Host.cmake:313`): its chord cases
 (`tests/host_settings.cpp:29-45`) stay, its menu cases are replaced by M2's golden draw lists; `GT4_HOST_KEYS`
 (docs/RENDERING.md:70, `scriptedKeys`), how menu checks run unattended today, sends command 6 and the page's keys, and
-a session command `open_settings` does the same. The host gives the game the layout's inputs: the content's canvas
-width, and the prompt style of the controller in use (SDL's gamepad type: Xbox or PlayStation names; the keyboard's
-when it was used last; the coordinator, 2026-11-09). M9 also switches presets low to ultra to `ui.entry = integrated`
-and `ui.pause = native` (3.8; the default too), and `host_settings`' check that no preset sets them turns into the
-table's values. In three steps (lane M, 2026-11-09): M9d1, the host side (Esc, Guide and the chord send 6, and 7 while
-a page is open; `ChordGuard` kept, the dump chord's buttons kept apart, which a host test checks), with command 6
-opening at the next menu project until M9d2; M9d2, the copy of `RaceBasic::updatePlayCheckPause` of 3.2 point 5 (lane
-M's spike); M9d3, B-spec: the copy's gate takes run mode 1 as 0, so command 6 opens the mode's `RacePause` through
-GT4's Start branch as in play (DIFFTEST's existing case for 0038B0E0 covers the B-spec state's path to it; a B-spec
-session on a copy of the approved `saves-ss-r5`, whose Route 5 races run in B-spec). Then M9f in two commits (lane M):
-M9f1 deletes the old menu (`settings_menu.*`, its `main.cpp` handling, `renderer`'s menu drawing) and makes Guide, Esc
-and the chord open the game's pages over any live game, whatever `ui.entry`, which then governs only GT4's own ways
-in; M9f2 sets low to ultra and the default to `ui.entry = integrated` and `ui.pause = native` (`original` stays
-`hotkey` and `gt4`), with the README's controls and a release-note line (a settings.ini without ui lines gets the new
-values under low to ultra). Depends: M3, M4, M5. Acceptance: `CTEST`; `ORIG`; Guide and the chord in a race pause
-through GT4 and open Settings, with `ui.pause = native` and with `ui.pause = gt4`, in GT mode, a time trial, a single
-race and (M9d3) a B-spec race, a short Start alone still pauses GT4 (with `ui.pause = gt4`, `pause.strb`); command 6
-during the opening, a load or a movie, and before the start, changes nothing in the game (a session test); the replay
-and test scene open the host-run hub; the pages' sounds heard (moved from M5: in the game's own mix, `GT4_AUDIO_WAV`,
-the map's sequenced music hides a menu sound, GT4's own included), by an A/B of two runs with the same inputs, one
-moving a page's cursor and one not.
+a session command `settings` does the same. The host gives the game the layout's inputs: the content's canvas width,
+and the prompt style of the controller in use (SDL's gamepad type: Xbox or PlayStation names; the keyboard's when it
+was used last; the coordinator, 2026-11-09). M9 also switches presets low to ultra to `ui.entry = integrated` and
+`ui.pause = native` (3.8; the default too), and `host_settings`' check that no preset sets them turns into the table's
+values. In three steps (lane M, 2026-11-09): M9d1, the host side (Esc, Guide and the chord send 6, and 7 while a page
+is open; `ChordGuard` kept, the dump chord's buttons kept apart, which a host test checks), with command 6 opening at
+the next menu project until M9d2; M9d2, the copy of `RaceBasic::updatePlayCheckPause` of 3.2 point 5 (lane M's spike);
+M9d3, B-spec: the copy's gate takes run mode 1 as 0, so command 6 opens the mode's `RacePause` through GT4's Start
+branch as in play (DIFFTEST's existing case for 0038B0E0 covers the B-spec state's path to it; a B-spec session on a
+copy of the approved `saves-ss-r5`, whose Route 5 races run in B-spec). Then M9f in two commits (lane M): M9f1 deletes
+the old menu (`settings_menu.*`, its `main.cpp` handling, `renderer`'s menu drawing) and makes Guide, Esc and the
+chord open the game's pages over any live game, whatever `ui.entry`, which then governs only GT4's own ways in; M9f2
+sets low to ultra and the default to `ui.entry = integrated` and `ui.pause = native` (`original` stays `hotkey` and
+`gt4`), with the README's controls and a release-note line (a settings.ini without ui lines gets the new values under
+low to ultra). Depends: M3, M4, M5. Acceptance: `CTEST`; `ORIG`; Guide and the chord in a race pause through GT4 and
+open Settings, with `ui.pause = native` and with `ui.pause = gt4`, in GT mode, a time trial, a single race and (M9d3)
+a B-spec race, a short Start alone still pauses GT4 (with `ui.pause = gt4`, `pause.strb`); command 6 during the
+opening, a load or a movie, and before the start, changes nothing in the game (a session test); the replay and test
+scene open the host-run hub; the pages' sounds heard (moved from M5: in the game's own mix, `GT4_AUDIO_WAV`, the map's
+sequenced music hides a menu sound, GT4's own included), by an A/B of two runs with the same inputs, one moving a
+page's cursor and one not. M9f2 adds: a session with an old settings.ini that has no ui lines, under `high` and under
+`original`, showing what each gets (`integrated` / `native` under high, `hotkey` / `gt4` under original), so the
+release note's sentence is proven.
 
 **M10: Style guide and the first asset set (M).** `docs/modern/menu/STYLE.md` (section 5.1, extended), the prompts
 and assets of the hub and pause screens, the review of section 5.4, and the asset pipeline moved here from M3
