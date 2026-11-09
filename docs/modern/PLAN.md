@@ -1469,14 +1469,21 @@ Review: brake lamps brighten under braking on the car ahead, by day and at night
 with the switch on; on the warning capture the tint stays below N4's bar.
 
 Additions to existing tickets, with the same rules:
-- **A7 step 2**: tail and brake lights sent as lights with their state, so they light the car behind and the road
-  (F3). Sent from `RaceCarModel` virtual 35 itself, per lamp group and element (the glow lists keep no group):
-  `kSrcHeadlight`, `kSrcTailLight`, `kSrcBrakeLight` by group and flags, with GT4's own tests as the state (on: the
-  course flag 0x8000; brake: car + 0x590 > 0, its value as the intensity, to confirm on a run). The brake state is
-  sent every frame, day and night, read from car + 0x590 directly (F9's day brake glow), not only while GT4 draws the
-  lamp group. A step 0 names which group is which lamp on a capture, and confirms that method 0x3F0's 'on' is the
-  argument of virtual 35 that gates the brake-gated group (lane A); acceptance adds: under braking, the car behind is
-  lit red (review).
+- **A7 step 2**: headlights, tail and brake lights sent as lights with their state, so they light the road and the car
+  behind (F3). Step 0 done (lane A, 2026-11-09, a night B-spec race): `RaceCarModel` virtual 35's groups are group 0
+  the headlights (count at +0x18; usually 4 elements, two a side, each with a model-space point and a beam point ahead
+  of it (0.15-0.45 m on the two cars seen), and a size), group 1 the brake lamps (+0x28; the rear pair), group 2 the
+  tail lamps (+0x20; the same pair). The state: on is the course flag 0x8000 (`kFrameLampsOn`); the brake state is car
+  + 0x590, exactly 0 or 1; the brake lamps' intensity is k (RaceCarModel + 0x54), which GT4 ramps 0.25 a frame up from
+  the brake's start and down after its release, so it fades them over 4 frames. Each element goes out as
+  `kSrcHeadlight`, `kSrcBrakeLight` or `kSrcTailLight` by group, its points through the car instance's
+  `objectToWorld`. Every car with lamps sends them, whether or not virtual 35 draws that frame: in an Arcade time
+  trial at night the player's car logged no call (not drawn in that view, or an early return), and the player's
+  headlights matter most (F6), so the elements are read from the car model itself. The brake state and intensity are
+  sent every frame, day and night (F9's day brake glow); where virtual 35 doesn't run (by day), the intensity ramps
+  from car + 0x590 as GT4's k does. 0x3F0's 'on' matched 0x8000 on every logged call; a call-by-call proof is not
+  needed, since the lights read 0x8000 itself. Acceptance adds: under braking, the car behind lit red (review); the
+  player's headlights present in a time trial at night.
 - **F4**: lens flares and streaks from real lights: from the light list's brightest sources (occlusion from the depth
   buffer), replacing GT4's flare pass in `modern` (N4 suppresses it there); acceptance adds the flare's occlusion
   behind a car (review), no flare from a light outside the view, and on the warning capture the tint stays below N4's
