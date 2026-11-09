@@ -8,6 +8,7 @@
 // 4:3, or stretched. The R1 renderer will push the game's 2D GS primitives through the same mapping.
 #include "sdf_font.h"
 #include "settings.h"
+#include "ui_renderer.h"
 #include "vk.h"
 
 #include <array>
@@ -60,12 +61,17 @@ public:
     float uiText(float x, float top, float em, ui::FontFace face, std::string_view text, Color8 color);
     float uiTextWidth(ui::FontFace face, float em, std::string_view text);
     float uiLineHeight(ui::FontFace face, float em) const;
+    // The settings pages' layer (MENU_DESIGN M3): a page's draw list through ui::PageRenderer into this sink, drawn
+    // after the four batches above, in the order of its calls (a dialog's panel covers the page's text under it).
+    // Consecutive shapes, or texts, under one clip share a run (one bind); a clip is rounded inward to whole pixels
+    // and clamped to the target, and what it clips to nothing is not drawn. Cleared by begin().
+    ui::PageSink& page();
     // Uploads glyphs added while composing (call after composing, before record; waits for the device when the
     // atlas changed, which happens only for a character not drawn before).
     void uploadGlyphs();
     const ui::SdfFontStats& fontStats() const;
     const Canvas2D& canvas() const { return currentCanvas; }
-    // Records the draws into the currently bound swapchain rendering (viewport = whole target).
+    // Records the draws into the currently bound swapchain rendering (viewport = whole target), the page layer last.
     void record(VkCommandBuffer command);
 
 private:

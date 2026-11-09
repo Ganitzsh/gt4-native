@@ -375,6 +375,10 @@ add_executable(gt4_host
     platform/ui/host/settings_schema.cpp
     platform/ui/ui_records.cpp
     platform/ui/draw_list.cpp
+    platform/ui/menu_model.cpp
+    platform/ui/menu_layout.cpp
+    platform/ui/host/ui_renderer.cpp
+    platform/ui/host/page_test.cpp
     platform/render/upscale/fsr2.cpp
     platform/render/smaa_textures.cpp
     ${GT4_SHADER_OUT}/gt4_shaders.cpp
@@ -430,6 +434,17 @@ if(BUILD_TESTING)
     target_compile_options(gt4_ui_menu_test PRIVATE -Wall -Wextra -Wpedantic)
   endif()
   add_test(NAME ui_menu COMMAND gt4_ui_menu_test ${CMAKE_CURRENT_SOURCE_DIR}/tests/ui)
+
+  # The settings pages' renderer (M3): a draw list into output pixels on a recording sink, and M2's hub drawn whole.
+  add_executable(gt4_ui_renderer_test tests/ui_renderer.cpp platform/ui/host/ui_renderer.cpp
+                 platform/ui/menu_model.cpp platform/ui/menu_layout.cpp platform/ui/draw_list.cpp)
+  target_include_directories(gt4_ui_renderer_test PRIVATE platform/ui platform/ui/host)
+  if(MSVC)
+    target_compile_options(gt4_ui_renderer_test PRIVATE /W4)
+  else()
+    target_compile_options(gt4_ui_renderer_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  add_test(NAME ui_renderer COMMAND gt4_ui_renderer_test)
 
   # The settings bridge (M4): every option on a page or hidden, sets through setOption, apply classes, the save rule
   # on a real settings file.
@@ -760,6 +775,12 @@ add_test(NAME material_table COMMAND gt4_material_table_test)
     add_test(NAME replay_determinism
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/replay_determinism.py $<TARGET_FILE:gt4_host>)
     set_tests_properties(replay_determinism PROPERTIES SKIP_RETURN_CODE 77)
+    # The settings hub drawn by the host (MENU_DESIGN M3) at 720p, 1440p and 4K against tests/goldens/ui (a per-pixel
+    # tolerance and a cap on the pixels over it), and its white in HDR at display.hdr_paper_white = 200 as the PQ
+    # code. Needs a Vulkan GPU; skipped (77) without one.
+    add_test(NAME ui_page_goldens
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/ui_page_goldens.py $<TARGET_FILE:gt4_host>)
+    set_tests_properties(ui_page_goldens PROPERTIES SKIP_RETURN_CODE 77)
   endif()
   # The game runtime's whole-range test for game memory (runtime/guest.h).
   add_executable(gt4_guest_ram_test tests/guest_ram.cpp)

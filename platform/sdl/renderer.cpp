@@ -6,6 +6,7 @@
 #include "display.h"
 
 #include "overlay.h"
+#include "page_test.h"
 #include "pipeline.h"
 #include "test_scene.h"
 #include "vk.h"
@@ -241,6 +242,17 @@ struct Renderer::Impl {
     gt4::VSync presentedVsync = gt4::VSync::On;
     int presentedBits = 8;
     bool presentedHdr = false;   // the swapchain is HDR10 (display.hdr, and the display offers it)
+    // GT4_HDR_TEST=1 (headless, MENU_DESIGN M3): the headless target is 10-bit and the output PQ-encoded at
+    // display.hdr_paper_white, as an HDR10 swapchain would be (no HDR display on the desktop or the Odin).
+    // presentedBits stays display.output_bits as the target was made (the headless change check compares the two);
+    // the output's depth given to the pipeline is 10 under the test.
+    bool hdrTest = false;
+    // A settings page (setPage, MENU_DESIGN M3) and GT4_UI_PAGE_TEST's list, drawn last over everything.
+    std::optional<gt4::ui::DrawList> page;
+    gt4::ui::PageRenderer pageRenderer;
+    std::string pageTest = gt4::ui::pageTestSpec();
+    gt4::ui::DrawList pageTestList;
+    float pageTestWidth = 0.0f;   // the canvas width the test list was laid out for; 0 none yet
     bool wantedHdr = false;      // display.hdr as the swapchain was made
 
     std::unique_ptr<gt4::TestScene> scene;
@@ -494,7 +506,8 @@ struct Renderer::Impl {
             vkDeviceWaitIdle(device.device);
             releaseTarget();
             gt4::vk::ImageDesc desc;
-            desc.format = settings.outputBits == 10 ? VK_FORMAT_A2B10G10R10_UNORM_PACK32 : VK_FORMAT_B8G8R8A8_UNORM;
+            desc.format = settings.outputBits == 10 || hdrTest ? VK_FORMAT_A2B10G10R10_UNORM_PACK32
+                                                               : VK_FORMAT_B8G8R8A8_UNORM;
             desc.extent = headlessSize;
             desc.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
             desc.name = "headless output";
@@ -503,8 +516,9 @@ struct Renderer::Impl {
             format = desc.format;
             srgbFormat = false;
             presentedBits = settings.outputBits;
+            presentedHdr = hdrTest;
             overlay->prepare(format, srgbFormat);
-            pipeline->prepareOutput(format, srgbFormat, static_cast<uint32_t>(settings.outputBits));
+            pipeline->prepareOutput(format, srgbFormat, hdrTest ? 10u : static_cast<uint32_t>(settings.outputBits));
             resized = false;
             return true;
         }
@@ -638,7 +652,7 @@ struct Renderer::Impl {
         canvas.safeArea = settings.safeArea;
         overlay->setFilter(settings.uiFilter);
         overlay->begin(frameSlot, extent, canvas);
-        if (gameFrame) { composeReadout(); composeMessage(); composeMenu(); return; }
+        if (gameFrame) { composeReadout(); composeMessage(); composeMenu(); composePage(); return; }
         // Test HUD on the 640 x 480 canvas, anchored like a racing game's.
         const gt4::Color8 panel{8, 12, 20, 170}, white{240, 240, 240, 255}, accent{255, 190, 40, 255};
         overlay->canvasRect(16, 16, 150, 44, panel, gt4::Anchor::Left);
@@ -658,6 +672,39 @@ struct Renderer::Impl {
         composeReadout();
         composeMessage();
         composeMenu();
+        composePage();
+    }
+
+    // The settings page (MENU_DESIGN M3), last: over the readout and the old menu, in the content rectangle (the
+    // canvas follows the content's aspect, so at a ratio narrower than the window it stays inside the pillarbox).
+    void composePage() {
+        const VkRect2D content = pipeline->contentRect();
+        if (!content.extent.width || !content.extent.height) return;
+        const gt4::ui::DrawList* list = page ? &*page : nullptr;
+        if (!list && !pageTest.empty()) {
+            const float width = gt4::ui::kCanvasHeight * static_cast<float>(content.extent.width) /
+                                static_cast<float>(content.extent.height);
+            if (pageTestWidth != width) {
+                std::string error;
+                pageTestWidth = width;
+                if (!gt4::ui::pageTestList(pageTest, settings, width, pageTestList, error)) {
+                    std::printf("GT4_UI_PAGE_TEST: %s\n", error.c_str());
+                    pageTest.clear();
+                }
+            }
+            if (!pageTest.empty()) {
+                list = &pageTestList;
+                // Over a plain backdrop (the palette's ink): the hub's goldens stay small and do not move when the
+                // test scene's rendering does.
+                overlay->pixelRect(0, 0, static_cast<float>(extent.width), static_cast<float>(extent.height),
+                                   {11, 11, 12, 255});
+            }
+        }
+        if (!list) return;
+        pageRenderer.draw(*list,
+                          {static_cast<float>(content.offset.x), static_cast<float>(content.offset.y),
+                           static_cast<float>(content.extent.width), static_cast<float>(content.extent.height)},
+                          overlay->page());
     }
 
     // GT4_UI_TEXT_TEST=FRAME:TEXT (diagnostic, E5): from frame FRAME the message box shows TEXT, UTF-8 with \xHH
@@ -993,7 +1040,7 @@ struct Renderer::Impl {
         }
         gt4::SceneSource& active = gameFrame ? static_cast<gt4::SceneSource&>(*gsnScene) : static_cast<gt4::SceneSource&>(*scene);
         if (sceneSwitched) { GT4_STAGE_SCOPE("render: new scene source"); vkDeviceWaitIdle(device.device); pipeline.reset(); pipeline = std::make_unique<gt4::FramePipeline>(device, pool);
-                             pipeline->prepareOutput(format, srgbFormat, static_cast<uint32_t>(presentedBits)); sceneSwitched = false; }
+                             pipeline->prepareOutput(format, srgbFormat, hdrTest ? 10u : static_cast<uint32_t>(presentedBits)); sceneSwitched = false; }
         // Temporal anti-aliasing in the game's 3D scenes (motion vectors from its 3D renderers): for TAA, and for
         // FSR 2, whose temporal part it takes (the game's frames reach the pipeline whole, HUD included). Set before
         // configure, which reads it (antiAliasesItself: the display side's AA then stays off), so the first game frame
@@ -1153,6 +1200,9 @@ Renderer::Renderer(VkInstance instance, VkExtent2D size, const std::string& gpuR
     impl->instance = instance;
     impl->headless = true;
     impl->headlessSize = size;
+    const char* hdrTest = std::getenv("GT4_HDR_TEST");
+    impl->hdrTest = hdrTest && std::strcmp(hdrTest, "1") == 0;
+    if (impl->hdrTest) std::printf("GT4_HDR_TEST: a 10-bit headless target, PQ at display.hdr_paper_white\n");
     impl->settings = settings;
     impl->createDevice(gpuRequest);
 }
@@ -1165,6 +1215,10 @@ bool Renderer::headless() const { return impl->headless; }
 void Renderer::resizeHeadless(VkExtent2D size) { impl->headlessSize = size; impl->resized = true; }
 void Renderer::suspend(bool paused) { impl->suspended = paused; impl->resized = true; }
 void Renderer::apply(const gt4::Settings& settings) { impl->settings = settings; }
+void Renderer::setPage(const gt4::ui::DrawList* list) {
+    if (list) impl->page = *list;
+    else impl->page.reset();
+}
 bool Renderer::draw(float deltaSeconds) {
     GT4_CPU_SCOPE("render: frame");
     return impl->draw(deltaSeconds);

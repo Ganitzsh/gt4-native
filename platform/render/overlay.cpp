@@ -4,6 +4,7 @@
 #include "gt4_shaders.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <vector>
 
@@ -56,9 +57,27 @@ constexpr uint32_t kAtlasWidth = 16 * kCell, kAtlasHeight = 7 * kCell;
 constexpr uint32_t kMaxQuads = 32768;
 // canvasText's size is the 8 x 8 font's cell; the UI fonts' em at that size keeps capitals about as tall.
 constexpr float kCanvasEm = 1.2f;
+
+Color8 color8(ui::PageColor c) { return {c.r, c.g, c.b, c.a}; }
+
+// A page's clip in framebuffer pixels: rounded inward (a pixel only partly inside is clipped away) and clamped to
+// the target; an empty rectangle when nothing is left (Vulkan refuses a negative extent).
+VkRect2D inwardScissor(const ui::PageRect& clip, VkExtent2D target) {
+    const float x0 = std::max(0.0f, std::ceil(clip.x)), y0 = std::max(0.0f, std::ceil(clip.y));
+    const float x1 = std::min(static_cast<float>(target.width), std::floor(clip.x + clip.w));
+    const float y1 = std::min(static_cast<float>(target.height), std::floor(clip.y + clip.h));
+    if (x1 <= x0 || y1 <= y0) return {};
+    return {{static_cast<int32_t>(x0), static_cast<int32_t>(y0)},
+            {static_cast<uint32_t>(x1 - x0), static_cast<uint32_t>(y1 - y0)}};
 }
 
-struct Overlay::Impl {
+bool sameRect(const VkRect2D& a, const VkRect2D& b) {
+    return a.offset.x == b.offset.x && a.offset.y == b.offset.y && a.extent.width == b.extent.width &&
+           a.extent.height == b.extent.height;
+}
+}
+
+struct Overlay::Impl : ui::PageSink {
     const vk::Device& device;
     VkCommandPool pool;
     vk::Image atlas;
@@ -78,6 +97,15 @@ struct Overlay::Impl {
     VkExtent2D target{};
     bool srgbTarget = false;
     float paperWhite = 0.0f;   // HDR10 output (Overlay::setHdr)
+    // The page layer (M3): vertices and runs in call order, each run shapes or text under one scissor.
+    struct PageRun {
+        bool text = false;
+        VkRect2D scissor{};
+        uint32_t first = 0, count = 0;
+    };
+    std::vector<OverlayVertex> pageVertices;
+    std::vector<PageRun> pageRuns;
+    VkRect2D pageScissor{};   // the current clip; the whole target when none
 
     Impl(const vk::Device& d, VkCommandPool p) : device(d), pool(p) {
         std::vector<uint8_t> pixels(kAtlasWidth * kAtlasHeight * 4, 0);
@@ -163,16 +191,61 @@ struct Overlay::Impl {
     }
 
     static void quad(std::vector<OverlayVertex>& out, float x, float y, float w, float h, float u0, float v0, float u1, float v1, Color8 c) {
-        const float r = static_cast<float>(c.r) / 255.0f, g = static_cast<float>(c.g) / 255.0f;
-        const float b = static_cast<float>(c.b) / 255.0f, a = static_cast<float>(c.a) / 255.0f;
+        quad(out, x, y, w, h, u0, v0, u1, v1, c, c);
+    }
+
+    // `top` along the top edge, `bottom` along the bottom: interpolated per vertex (a page's gradient).
+    static void quad(std::vector<OverlayVertex>& out, float x, float y, float w, float h, float u0, float v0, float u1,
+                     float v1, Color8 top, Color8 bottom) {
+        const float r = static_cast<float>(top.r) / 255.0f, g = static_cast<float>(top.g) / 255.0f;
+        const float b = static_cast<float>(top.b) / 255.0f, a = static_cast<float>(top.a) / 255.0f;
+        const float r2 = static_cast<float>(bottom.r) / 255.0f, g2 = static_cast<float>(bottom.g) / 255.0f;
+        const float b2 = static_cast<float>(bottom.b) / 255.0f, a2 = static_cast<float>(bottom.a) / 255.0f;
         const OverlayVertex v00{x, y, u0, v0, r, g, b, a}, v10{x + w, y, u1, v0, r, g, b, a};
-        const OverlayVertex v01{x, y + h, u0, v1, r, g, b, a}, v11{x + w, y + h, u1, v1, r, g, b, a};
+        const OverlayVertex v01{x, y + h, u0, v1, r2, g2, b2, a2}, v11{x + w, y + h, u1, v1, r2, g2, b2, a2};
         out.insert(out.end(), {v00, v10, v11, v00, v11, v01});
     }
 
     static void solid(std::vector<OverlayVertex>& out, float x, float y, float w, float h, Color8 c) {
         const float u = 5.0f / kAtlasWidth, v = (6.0f * kCell + 5.0f) / kAtlasHeight;
         quad(out, x, y, w, h, u, v, u, v, c);
+    }
+
+    // The page layer's sink (ui::PageSink). Vertices go in only when the current clip leaves something; consecutive
+    // ones of one kind under one scissor extend the last run.
+    void pageRun(bool isText, size_t start) {
+        const auto first = static_cast<uint32_t>(start), count = static_cast<uint32_t>(pageVertices.size() - start);
+        if (!count) return;
+        if (!pageRuns.empty()) {
+            PageRun& last = pageRuns.back();
+            if (last.text == isText && sameRect(last.scissor, pageScissor) && last.first + last.count == first) {
+                last.count += count;
+                return;
+            }
+        }
+        pageRuns.push_back({isText, pageScissor, first, count});
+    }
+    bool pageVisible() const { return pageScissor.extent.width && pageScissor.extent.height; }
+
+    void rect(const ui::PageRect& r, ui::PageColor top, ui::PageColor bottom) override {
+        if (!pageVisible()) return;
+        const size_t start = pageVertices.size();
+        const float u = 5.0f / kAtlasWidth, v = (6.0f * kCell + 5.0f) / kAtlasHeight;
+        quad(pageVertices, r.x, r.y, r.w, r.h, u, v, u, v, color8(top), color8(bottom));
+        pageRun(false, start);
+    }
+    float textWidth(ui::FontFace face, float em, std::string_view string) override {
+        return font.measure(face, em, string);
+    }
+    float lineHeight(ui::FontFace face, float em) override { return font.lineHeight(face, em); }
+    void text(float x, float top, float em, ui::FontFace face, std::string_view string, ui::PageColor c) override {
+        if (!pageVisible()) return;
+        const size_t start = pageVertices.size();
+        text(pageVertices, x, top, em, face, string, color8(c));
+        pageRun(true, start);
+    }
+    void clip(const ui::PageRect* clip) override {
+        pageScissor = clip ? inwardScissor(*clip, target) : VkRect2D{{0, 0}, target};
     }
 
     static void glyph(std::vector<OverlayVertex>& out, float x, float y, float size, char character, Color8 c) {
@@ -218,8 +291,13 @@ void Overlay::begin(uint32_t slot, VkExtent2D target, const Canvas2D& canvas) {
     impl->pixelVertices.clear();
     impl->canvasTextVertices.clear();
     impl->pixelTextVertices.clear();
+    impl->pageVertices.clear();
+    impl->pageRuns.clear();
+    impl->pageScissor = {{0, 0}, target};
     currentCanvas = canvas;
 }
+
+ui::PageSink& Overlay::page() { return *impl; }
 
 void Overlay::canvasRect(float x, float y, float w, float h, Color8 color, Anchor anchor) {
     const float sx = currentCanvas.scaleX(), sy = currentCanvas.scaleY();
@@ -275,19 +353,21 @@ const ui::SdfFontStats& Overlay::fontStats() const { return impl->font.stats(); 
 
 void Overlay::record(VkCommandBuffer command) {
     auto& buffer = impl->buffers[impl->slot];
-    // Four batches in layer order: canvas shapes, canvas text, pixel-space shapes, pixel-space text.
-    const std::vector<OverlayVertex>* batches[4] = {&impl->canvasVertices, &impl->canvasTextVertices,
-                                                    &impl->pixelVertices, &impl->pixelTextVertices};
-    size_t counts[4] = {}, total = 0;
+    // Four batches in layer order: canvas shapes, canvas text, pixel-space shapes, pixel-space text; then the page
+    // layer (its runs, in order).
+    const std::vector<OverlayVertex>* batches[5] = {&impl->canvasVertices, &impl->canvasTextVertices,
+                                                    &impl->pixelVertices, &impl->pixelTextVertices,
+                                                    &impl->pageVertices};
+    size_t counts[5] = {}, total = 0;
     const size_t maxVertices = kMaxQuads * 6;
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < 5; ++i) {
         counts[i] = std::min(batches[i]->size(), maxVertices - total);
         total += counts[i];
     }
     if (total == 0) return;
     auto* out = static_cast<OverlayVertex*>(buffer.mapped);
-    size_t first[4] = {};
-    for (int i = 0, at = 0; i < 4; at += static_cast<int>(counts[i]), ++i) {
+    size_t first[5] = {};
+    for (int i = 0, at = 0; i < 5; at += static_cast<int>(counts[i]), ++i) {
         first[i] = static_cast<size_t>(at);
         std::copy_n(batches[i]->data(), counts[i], out + at);
     }
@@ -312,6 +392,25 @@ void Overlay::record(VkCommandBuffer command) {
         vk::Descriptors().sampled(0, text ? impl->textAtlas.view : impl->atlas.view, sampler).push(command, pipeline);
         vkCmdDraw(command, static_cast<uint32_t>(counts[i]), 1, static_cast<uint32_t>(first[i]), 0);
     }
+    // The page layer: each run with its scissor, shapes as the canvas shapes are drawn (linear, the white cell), text
+    // through the SDF pipeline; what the vertex budget cut off is not drawn.
+    const auto pageEnd = static_cast<uint32_t>(counts[4]);
+    int bound = -1;   // 0 shapes, 1 text: rebound only when the kind changes
+    for (const auto& run : impl->pageRuns) {
+        if (run.first >= pageEnd || !run.scissor.extent.width || !run.scissor.extent.height) continue;
+        const uint32_t count = std::min(run.count, pageEnd - run.first);
+        const vk::Pipeline& pipeline = run.text ? impl->textPipeline : impl->pipeline;
+        if (bound != (run.text ? 1 : 0)) {
+            bound = run.text ? 1 : 0;
+            vk::bind(command, pipeline);
+            vk::pushConstants(command, pipeline, push);
+            vk::Descriptors().sampled(0, run.text ? impl->textAtlas.view : impl->atlas.view, impl->linearSampler)
+                .push(command, pipeline);
+        }
+        vkCmdSetScissor(command, 0, 1, &run.scissor);
+        vkCmdDraw(command, count, 1, static_cast<uint32_t>(first[4]) + run.first, 0);
+    }
+    if (bound >= 0) vkCmdSetScissor(command, 0, 1, &scissor);   // the whole target again for what draws next
 }
 
 }  // namespace gt4

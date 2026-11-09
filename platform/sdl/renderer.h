@@ -4,6 +4,7 @@
 // from the native renderer (platform/render/gsn_scene.h), or by the test scene without a game.
 #include "gsn_scene.h"
 #include "render_graph.h"   // rg::PassTiming (passTimings)
+#include "draw_list.h"
 #include "settings.h"
 #include "settings_menu.h"
 
@@ -59,6 +60,11 @@ public:
     void setStatus(const std::string& text);  // extra lines for the on-screen readout
     // The settings menu drawn over the frame (platform/sdl/settings_menu.h); nullptr hides it.
     void setMenu(const gt4::MenuView* view);
+    // A settings page (MENU_DESIGN M3): its draw list, copied in, drawn over everything from the next frame in the
+    // content rectangle; nullptr clears it. Called on the thread that calls draw(), as setMenu is: the copy makes the
+    // list's lifetime safe, not a concurrent call (the live path decodes GT4_REC_UI on the stream's thread and hands
+    // the list over to the main thread).
+    void setPage(const gt4::ui::DrawList* list);
     // A short message at the bottom of the screen (a setting changed by a key), for `seconds`.
     void showMessage(const std::string& text, float seconds = 2.5f);
     gt4::TestScene& scene();
