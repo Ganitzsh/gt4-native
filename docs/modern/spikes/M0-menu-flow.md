@@ -128,7 +128,9 @@ Euro race 2, lane A's route) and `r5_saves` (Arcade, licenses), with `--set ui.p
 
 - **Which pause object.** Start (RaceInput bit 0x40) calls `pauseStart` with `RaceBasic + 0xE400`, a pointer to the
   mode's `RacePause`; bit 0x80 calls it with `+ 0xE404`, the `SimplePause` the `RaceSolitaire` family and
-  `RaceSinglePlayer` build, only before the start. Select is not 0x80: in a license test it changes the camera.
+  `RaceSinglePlayer` build. Corrected by M9d2's spike (2026-11-09, `RaceBasic::updatePlayCheckPause` 0038B0E0):
+  0x80 pauses through the `SimplePause` in B-spec and replays (run mode `R + 0xCC8` 1 or more), not before the start;
+  and the countdown is not checked, so Start pauses during it too. Select is not 0x80: in a license test it changes the camera.
   No run reached the `SimplePause`; it is GT4's by construction: entry 4 of its vtable at 00681B60 (8-byte entries,
   the function at + 0x24; entry 0 is the type_info header), the `vt[4]` both `updatePause`s call, holds 003C3A90
   (`SimplePause::update`, not copied), where entry 4 of `RacePause`'s, 00681B28, holds 003C3820 (read from the ELF).
