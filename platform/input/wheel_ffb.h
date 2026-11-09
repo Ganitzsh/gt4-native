@@ -52,6 +52,10 @@ struct WheelForces {
     int16_t constantLevel = 0;                     // -32767..32767, the sign as `constantSign` sets it
     WheelCondition spring, damper;            // the spring's center always 0 (above)
     int32_t springCentreRaw = 0;              // GT4's centre offset, as sent (not played)
+    // A vibration (SDL_HAPTIC_SINE): D8's kerbs and slip (wheel_physics.h); never set from GT4's effects
+    bool periodicOn = false;
+    int16_t periodicMagnitude = 0;                 // 0..32767
+    uint16_t periodicPeriodMs = 0;
     bool operator==(const WheelForces&) const = default;
 };
 
@@ -65,6 +69,10 @@ struct WheelFfbConfig {
 // GT4_REC_WHEEL_FX's effects to the forces: each effect by its block's type, running ones on. A second effect of a
 // kind already taken is ignored (GT4 downloads one of each).
 WheelForces wheelForces(const Gt4WheelFx& fx, const WheelFfbConfig& config);
+
+// GT4's constant force as it set it (effect A: its +0x0C, -255..255; 0 when it has none or doesn't run it), for D8's
+// comparison with the physics' aligning torque (PLAN.md D8).
+int32_t gt4ConstantMagnitude(const Gt4WheelFx& fx);
 
 // All off (the stops: PLAN.md D7).
 inline WheelForces wheelForcesOff() { return {}; }

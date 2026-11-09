@@ -12,6 +12,7 @@
 #include "gs_host.h"
 #include "wheel_dfp.h"
 #include "wheel_haptics.h"
+#include "wheel_physics.h"
 #include "cpu_profile.h"
 #include "ps2_pad.h"
 #include "input_map.h"
@@ -855,6 +856,19 @@ int run(const Options& options) {
     gt4::WheelHaptics wheelHaptics(wheelRecorder);
     uint64_t fxVblanks = 0;   // the game's clock as the watchdog last saw it change, and when
     Uint64 fxVblankAt = 0;
+    // PLAN.md D8: GT4_PHYSICS_FFB=1 (debugging, until D15's native mode) plays the physics' force feedback
+    // (wheel_physics.h) on the dfp wheel in place of GT4's effects; GT4_PHYSICS_FFB_ALPHA its alphaPeak (the fit).
+    // A session records each Vehicle record's inputs beside GT4's own A ("wheel_physics": D8's comparison).
+    const bool physicsFfb = [] {
+        const char* e = std::getenv("GT4_PHYSICS_FFB");
+        return e && *e && *e != '0';
+    }();
+    const float physicsAlpha = [] {
+        const char* e = std::getenv("GT4_PHYSICS_FFB_ALPHA");
+        const float a = e ? std::strtof(e, nullptr) : 0.0f;
+        return a > 0.0f ? a : gt4::input::PhysicsFfbConfig{}.alphaPeak;
+    }();
+    Uint64 physicsRecordedAt = 0;   // the Vehicle record a session last recorded
     SDL_JoystickID sessionPads[2] = {};   // a session's virtual pads as the ports last saw them
     bool pad2Sent = false;            // pad 2 sent as connected, so its removal is told to the game
     uint32_t rumbleApplied[2] = {};    // g_rumble as a session last recorded it
@@ -1578,7 +1592,7 @@ int run(const Options& options) {
                 gs->setGameOption(3, static_cast<uint32_t>(settings.raceFrames));  // kOptionRaceFrames
                 // kOptionSceneRecords (CONTRACTS a.1): 1 full, else 2 the Vehicles only for the haptics (D14), else 0
                 gs->setGameOption(5, gt4::sceneRecordsWanted(settings) ? 1u
-                                     : settings.hapticsMode == gt4::HapticsMode::Physics ? 2u : 0u);
+                                     : settings.hapticsMode == gt4::HapticsMode::Physics || physicsFfb ? 2u : 0u);
                 {   // kOptionAspect: the content's shape now (aspect.ratio, or the window's)
                     const VkExtent2D e = renderer->drawableExtent();
                     const float a = settings.aspect == gt4::AspectRatio::Window ? (e.height ? float(e.width) / float(e.height) : 0.0f)
@@ -1653,9 +1667,36 @@ int run(const Options& options) {
                             fx = g_wheelFx.fx;
                         }
                         const gt4::Settings& ws = pads.settingsFor(wheelPort, settings);
+                        const float strength = ws.wheelFfbStrength / 100.0f;
+                        gt4::input::WheelForces forces = gt4::input::wheelForces(fx, {strength, 1});
+                        if (physicsFfb) {   // (D8: the player's car, entrant 0, a quarter of a second old at most)
+                            const bool fresh = playerCarAt[0] && now - playerCarAt[0] < 250;
+                            const gt4::gfx::scene::Vehicle& car = playerCar[0];
+                            forces = fresh ? gt4::input::physicsForces(car, {strength, physicsAlpha, -1})
+                                           : gt4::input::WheelForces{};
+                            if (session && fresh && playerCarAt[0] != physicsRecordedAt) {
+                                physicsRecordedAt = playerCarAt[0];
+                                const auto& fl = car.wheel[0];
+                                const auto& fr = car.wheel[1];
+                                char fields[512];
+                                std::snprintf(fields, sizeof fields,
+                                              "\"vblank\":%llu,\"speed\":%.3f,\"a\":%d,\"mz\":%.4f,"
+                                              "\"fy\":[%.1f,%.1f],\"alpha\":[%.4f,%.4f],\"load\":[%.1f,%.1f],"
+                                              "\"ground\":[%d,%d],\"stroke\":[%.3f,%.3f],\"kerb\":%d,"
+                                              "\"slip\":%.3f,\"level\":%d,\"periodic\":%d",
+                                              static_cast<unsigned long long>(gs->vblanks()), car.speed,
+                                              static_cast<int>(gt4::input::gt4ConstantMagnitude(fx)),
+                                              gt4::input::aligningTorque(car, physicsAlpha), fl.forceLateral,
+                                              fr.forceLateral, fl.slipAngle, fr.slipAngle, fl.load, fr.load,
+                                              fl.onGround, fr.onGround, fl.strokeSpeed, fr.strokeSpeed,
+                                              gt4::input::kerbEvent(car) ? 1 : 0, gt4::input::slipVibration(car),
+                                              forces.constantLevel, forces.periodicOn ? forces.periodicMagnitude : 0);
+                                session->record("wheel_physics", fields);
+                            }
+                        }
                         if (pageShown || menu.isOpen() || hostHub.isOpen()) wheelHaptics.stop("a page is open");
                         else if (now - fxVblankAt >= 500) wheelHaptics.stop("the watchdog: no game frame for 0.5 s");
-                        else wheelHaptics.play(gt4::input::wheelForces(fx, {ws.wheelFfbStrength / 100.0f, 1}), now);
+                        else wheelHaptics.play(forces, now);
                     }
                 }
             }

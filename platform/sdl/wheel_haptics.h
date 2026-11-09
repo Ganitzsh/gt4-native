@@ -11,6 +11,8 @@
 //   wheel; Linux's Logitech driver starts with its own on), and the open line says which.
 // - The stops are the caller's (main.cpp: a page, a pause, the watchdog, no live game); stop() stops every effect and
 //   play() applies the latest forces again. A different wheel (another port, a new device) closes the old one first.
+// - D8's vibration (kerbs, slip: wheel_physics.h) is a sine with the constant force's length and renewal, so it too
+//   lapses with a stalled host.
 // - A wheel SDL gives no haptic for (a session's virtual wheel) is played on nothing: the forces are still worked out
 //   and, in a session, recorded, so the session test sees what a real wheel would get.
 #include "wheel_ffb.h"
@@ -53,13 +55,14 @@ private:
     SDL_JoystickID id_ = 0;
     SDL_Haptic* haptic_ = nullptr;
     uint32_t features_ = 0;
-    int constant_ = -1, spring_ = -1, damper_ = -1;          // effect ids (-1: not made)
-    bool constantRuns_ = false, springRuns_ = false, damperRuns_ = false;
+    int constant_ = -1, spring_ = -1, damper_ = -1, periodic_ = -1;   // effect ids (-1: not made)
+    bool constantRuns_ = false, springRuns_ = false, damperRuns_ = false, periodicRuns_ = false;
     input::WheelForces applied_{};                           // what the device has
     input::WheelForces recorded_{};                          // what a session last recorded
     bool stopped_ = true;
     uint64_t renewedAt_ = 0;                                 // the constant force's last run
     uint64_t playedAt_ = 0;                                  // the last play(): the host's frame time
+    uint64_t sineRenewedAt_ = 0;                             // the vibration's last run (its own 30 ms timer)
     bool centreLogged_ = false;
 };
 

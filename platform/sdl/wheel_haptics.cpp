@@ -22,6 +22,18 @@ SDL_HapticEffect constantEffect(int16_t level) {
     return e;
 }
 
+SDL_HapticEffect sineEffect(int16_t magnitude, uint16_t periodMs) {
+    SDL_HapticEffect e{};
+    e.type = SDL_HAPTIC_SINE;
+    e.periodic.type = SDL_HAPTIC_SINE;
+    e.periodic.direction.type = SDL_HAPTIC_CARTESIAN;
+    e.periodic.direction.dir[0] = 1;
+    e.periodic.length = input::kWheelConstantLengthMs;   // (renewed as the constant force is)
+    e.periodic.period = periodMs;
+    e.periodic.magnitude = magnitude;
+    return e;
+}
+
 SDL_HapticEffect conditionEffect(uint16_t type, const input::WheelCondition& c) {
     SDL_HapticEffect e{};
     e.type = type;
@@ -52,13 +64,15 @@ void WheelHaptics::record(const std::string& type, const std::string& fields) co
 bool WheelHaptics::sameForces(const input::WheelForces& a, const input::WheelForces& b) const {
     // (springCentreRaw is GT4's, not played: lane C)
     return a.constantOn == b.constantOn && a.constantLevel == b.constantLevel && a.springOn == b.springOn &&
-           a.spring == b.spring && a.damperOn == b.damperOn && a.damper == b.damper;
+           a.spring == b.spring && a.damperOn == b.damperOn && a.damper == b.damper &&
+           a.periodicOn == b.periodicOn && a.periodicMagnitude == b.periodicMagnitude &&
+           a.periodicPeriodMs == b.periodicPeriodMs;
 }
 
 void WheelHaptics::close() {
     if (haptic_) {
         SDL_StopHapticEffects(haptic_);
-        for (int* id : {&constant_, &spring_, &damper_})
+        for (int* id : {&constant_, &spring_, &damper_, &periodic_})
             if (*id >= 0) SDL_DestroyHapticEffect(haptic_, *id);
         SDL_CloseHaptic(haptic_);
         std::printf("Input: wheel force feedback closed\n");
@@ -68,8 +82,8 @@ void WheelHaptics::close() {
     joystick_ = nullptr;
     id_ = 0;
     features_ = 0;
-    constant_ = spring_ = damper_ = -1;
-    constantRuns_ = springRuns_ = damperRuns_ = false;
+    constant_ = spring_ = damper_ = periodic_ = -1;
+    constantRuns_ = springRuns_ = damperRuns_ = periodicRuns_ = false;
     applied_ = {};
     stopped_ = true;
 }
@@ -120,7 +134,10 @@ void WheelHaptics::play(const input::WheelForces& f, uint64_t nowMs) {
         record("wheel_ffb", "\"constant\":" + onOff(f.constantOn) + ",\"level\":" + std::to_string(f.constantLevel) +
                                 ",\"spring\":" + onOff(f.springOn) + ",\"spring_coeff\":" +
                                 std::to_string(f.spring.rightCoeff) + ",\"damper\":" + onOff(f.damperOn) +
-                                ",\"damper_coeff\":" + std::to_string(f.damper.rightCoeff));
+                                ",\"damper_coeff\":" + std::to_string(f.damper.rightCoeff) + ",\"periodic\":" +
+                                onOff(f.periodicOn) + ",\"periodic_magnitude\":" +
+                                std::to_string(f.periodicMagnitude) + ",\"periodic_ms\":" +
+                                std::to_string(f.periodicPeriodMs));
     }
     if (f.constantOn && !stopped_ && renewedAt_ && nowMs - renewedAt_ > input::kWheelConstantLengthMs)
         record("wheel_ffb_gap", "\"ms\":" + std::to_string(nowMs - renewedAt_) + ",\"frame_ms\":" +
@@ -156,15 +173,22 @@ void WheelHaptics::play(const input::WheelForces& f, uint64_t nowMs) {
           conditionEffect(SDL_HAPTIC_SPRING, f.spring));
     drive(SDL_HAPTIC_DAMPER, damper_, damperRuns_, f.damperOn, wasStopped || !(f.damper == applied_.damper), false,
           conditionEffect(SDL_HAPTIC_DAMPER, f.damper));
+    const bool sineChanged = f.periodicMagnitude != applied_.periodicMagnitude ||
+                             f.periodicPeriodMs != applied_.periodicPeriodMs;
+    const bool sineRenew = f.periodicOn && (wasStopped || sineChanged || !sineRenewedAt_ ||
+                                            nowMs - sineRenewedAt_ >= input::kWheelConstantRenewMs);
+    if (sineRenew) sineRenewedAt_ = nowMs;
+    drive(SDL_HAPTIC_SINE, periodic_, periodicRuns_, f.periodicOn, wasStopped || sineChanged, sineRenew,
+          sineEffect(f.periodicMagnitude, f.periodicPeriodMs));
     applied_ = f;
 }
 
 void WheelHaptics::stop(const char* why) {
     if (stopped_ || !joystick_) return;
     if (haptic_) SDL_StopHapticEffects(haptic_);
-    constantRuns_ = springRuns_ = damperRuns_ = false;
+    constantRuns_ = springRuns_ = damperRuns_ = periodicRuns_ = false;
     stopped_ = true;
-    renewedAt_ = 0;
+    renewedAt_ = sineRenewedAt_ = 0;
     std::printf("Input: wheel force feedback stopped: %s\n", why);
     std::fflush(stdout);
     record("wheel_ffb", std::string("\"stopped\":\"") + why + "\"");

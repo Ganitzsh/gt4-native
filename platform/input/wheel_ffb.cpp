@@ -41,6 +41,15 @@ WheelEffectKind wheelEffectKind(uint8_t type) {
     }
 }
 
+int32_t gt4ConstantMagnitude(const Gt4WheelFx& fx) {
+    const uint32_t count = std::min<uint32_t>(fx.count, GT4_WHEEL_FX_EFFECTS);
+    for (uint32_t i = 0; i < count; ++i)
+        if (fx.effects[i].state == GT4_WHEEL_FX_RUNNING &&
+            wheelEffectKind(fx.effects[i].block[0]) == WheelEffectKind::Constant)
+            return std::clamp(word(fx.effects[i].block, 0x0C), -255, 255);
+    return 0;
+}
+
 WheelForces wheelForces(const Gt4WheelFx& fx, const WheelFfbConfig& config) {
     WheelForces out;
     bool seenConstant = false, seenSpring = false, seenDamper = false;

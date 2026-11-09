@@ -413,7 +413,7 @@ endif()
 # calls, its headers).
 add_library(gt4_input STATIC platform/input/input_map.cpp platform/input/response.cpp platform/input/devices.cpp
     platform/input/haptics.cpp platform/input/wheel_ffb.cpp
-    platform/input/wheel_dfp.cpp)
+    platform/input/wheel_dfp.cpp platform/input/wheel_physics.cpp)
 target_include_directories(gt4_input PUBLIC platform/input platform/gs include)
 target_link_libraries(gt4_input PUBLIC SDL3::Headers)
 target_compile_features(gt4_input PUBLIC cxx_std_20)
@@ -717,6 +717,10 @@ add_test(NAME material_table COMMAND gt4_material_table_test)
   add_executable(gt4_input_wheel_dfp_test tests/input_wheel_dfp.cpp)
   target_link_libraries(gt4_input_wheel_dfp_test PRIVATE gt4_input)
   add_test(NAME input_wheel_dfp COMMAND gt4_input_wheel_dfp_test)
+  # A wheel's force feedback from the physics (PLAN.md D8): the torque's shape, kerbs, slip, the summed ceiling.
+  add_executable(gt4_input_wheel_physics_test tests/input_wheel_physics.cpp)
+  target_link_libraries(gt4_input_wheel_physics_test PRIVATE gt4_input)
+  add_test(NAME input_wheel_physics COMMAND gt4_input_wheel_physics_test)
 
   # The cards behind the game's libmc calls (runtime/save_folder.cpp, built here on its own): cut writes,
   # hidden copies and backups, backup rotation, the second slot. Works in the build folder.
