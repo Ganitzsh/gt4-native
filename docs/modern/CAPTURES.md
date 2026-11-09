@@ -260,17 +260,24 @@ these, each recorded in B-spec (the game drives) from a fresh copy of the approv
   game exactly: 13 live shots spread over the lap equal the replay's frames (mean difference 0.00; a live shot at
   session frame F is replay frame F + 172 to 176, the frames the session skipped while booting). The night
   reference to judge colours on: N3's v4 check, lane C's R7 sub-capture test, the Odin's night replay. Heavy-both.
+- `lap_ssr5f_boot.cap`: Special Stage Route 5 in the forward direction (the `route5` layout), Beginner Events > FR
+  Challenge race 3 in B-spec, recorded from game start the same way, 20,200 frames (8.4 GB): the race from about
+  frame 7,970, a full lap and part of the second. Release game and host from empty folders at 44beef5 (with A7 step
+  2's lamp records), scene records, `original`, 1280 x 720. 183 of 184 frames sampled every 100 from 1,900 are lit
+  (6,900, a load, is not); 13 live shots over the lap equal the replay's frames (mean difference 0.00; placed by
+  the session's clock, VBlank = ms x 0.06 - 2 to 3). N3's v4 hunt on the forward layout. Heavy-both.
 - `a5b_r5.cap` (lane A's): S.S. Route 5 Reverse, the same race; 1,200 VBlanks after 300 of driving, scene records,
   the A5b game (flare markers around the flare pass). The warning capture: the pit entry's warning lamps blink
   through it; N4 uses it. `glow_r5.cap` (the A7 step 1a game) is the same stretch.
 
-All six, with `r5_ss_ab.notes.json`, are also kept in `C:/Users/julie/gt4-native-game/build/caps/`
+All seven, with `r5_ss_ab.notes.json`, are also kept in `C:/Users/julie/gt4-native-game/build/caps/`
 (the originals in lanes F and A's `build/caps/`).
 
 The routes above start from GT mode's map: Professional Events, the event, regulations OK, the race, Entry, Don't
 Clear, then B-spec. C.S. Route 5 Reverse is Beginner Events > Sunday Cup race 4 (or Reverse at step 10 below); S.S.
-Route 5 forward is in the Arcade City row. A replay's first 300 to 500 frames show textures not yet uploaded again
-(a mid-session recording); counts leave them out.
+Route 5 forward is Beginner Events > FR Challenge race 3 (the hall's third event; also the Arcade City row). A
+replay's first 300 to 500 frames show textures not yet uploaded again (a mid-session recording); counts leave them
+out.
 
 Colours in these replays, except `lap_ssr5r_boot`'s, are not always the game's (RISKS R7). The others were recorded
 mid-run: lane F's sessions boot from game start, but the recording starts at a trigger once the race runs
