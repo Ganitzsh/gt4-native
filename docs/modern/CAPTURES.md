@@ -276,11 +276,18 @@ these, each recorded in B-spec (the game drives) from a fresh copy of the approv
   then the results. Release game and host from empty folders at 790c25c, scene records, `original`, 1280 x 720.
   Lit on all 19 frames sampled every 1,000 from 2,000; 13 live shots over the race equal the replay's frames (mean
   difference 0.00, placed by the session's clock). N3's v4 hunt on C.S. Reverse with true colours. Heavy-both.
+- `lap_ssr5r_prog.cap`: `lap_ssr5r`'s race (Race of NA Sports race 4, B-spec, the approved save `saves-ss-r5`) with
+  the owner's Odin settings (`odin_settings_20261109.ini` plus `field_mode = blend`: ultra, 16:9, the HD pack on), so
+  the game ran with progressive race frames (game option 3 = 1) and a 16:9 picture (option 4 = 1778), scene records
+  on (option 5 = 1). Recorded mid-run by the trigger at VBlank 9,819 (race time 0:12.8; the race started at about
+  9,050), 4,200 frames (2.1 GB); game and host a75a6c2. Live shots every 100 VBlanks beside it in lane F's
+  `build/sessions/lap_ssr5r_prog/frames` (live00000 = VBlank 9,819). The progressive night capture: lane B's B16c
+  share, and the Odin's strip test (C6b). As a mid-run capture, R7's note below applies to its colours.
 - `a5b_r5.cap` (lane A's): S.S. Route 5 Reverse, the same race; 1,200 VBlanks after 300 of driving, scene records,
   the A5b game (flare markers around the flare pass). The warning capture: the pit entry's warning lamps blink
   through it; N4 uses it. `glow_r5.cap` (the A7 step 1a game) is the same stretch.
 
-All eight, with `r5_ss_ab.notes.json`, are also kept in `C:/Users/julie/gt4-native-game/build/caps/`
+All nine, with `r5_ss_ab.notes.json`, are also kept in `C:/Users/julie/gt4-native-game/build/caps/`
 (the originals in lanes F and A's `build/caps/`).
 
 The routes above start from GT mode's map: Professional Events, the event, regulations OK, the race, Entry, Don't
