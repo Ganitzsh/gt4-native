@@ -285,16 +285,19 @@ void main() {
     const float r = 1.0 / inW;
     const vec4 colour = (inHomogeneous & 2u) != 0u ? inFlatColour : homogeneous ? inColourW * r : inColour;
 #else
+    // DEBUG (Odin strips, never for main): every interpolated value rounded as a 16-bit float, as a GPU that
+    // interpolates varyings at half precision would leave them, before the 3D path's divide by w (the architect)
     const bool homogeneous = inHomogeneous != 0u;
-    const float r = 1.0 / inW;
-    const vec4 colour = homogeneous ? inColourW * r : inColour;
+    const float wHalf = unpackHalf2x16(packHalf2x16(vec2(inW, 0.0))).x;
+    const float r = 1.0 / wHalf;
+    const vec4 cwHalf = vec4(unpackHalf2x16(packHalf2x16(inColourW.xy)), unpackHalf2x16(packHalf2x16(inColourW.zw)));
+    const vec4 cHalf = vec4(unpackHalf2x16(packHalf2x16(inColour.xy)), unpackHalf2x16(packHalf2x16(inColour.zw)));
+    const vec4 colour = homogeneous ? cwHalf * r : cHalf;
 #endif
-    vec3 stqIn = homogeneous ? inStqW * r : inStq;
-    // DEBUG (Odin strips, never for main): the interpolated colour and STQ rounded as 16-bit floats, as a GPU that
-    // interpolates varyings at half precision would leave them
-    const vec4 colourHalf = vec4(unpackHalf2x16(packHalf2x16(colour.xy)), unpackHalf2x16(packHalf2x16(colour.zw)));
-    stqIn = vec3(unpackHalf2x16(packHalf2x16(stqIn.xy)), unpackHalf2x16(packHalf2x16(vec2(stqIn.z, 0.0))).x);
-    const vec4 cv = floor(colourHalf * 255.0 + 0.5);
+    const vec3 sqwHalf = vec3(unpackHalf2x16(packHalf2x16(inStqW.xy)), unpackHalf2x16(packHalf2x16(vec2(inStqW.z, 0.0))).x);
+    const vec3 sqHalf = vec3(unpackHalf2x16(packHalf2x16(inStq.xy)), unpackHalf2x16(packHalf2x16(vec2(inStq.z, 0.0))).x);
+    const vec3 stqIn = homogeneous ? sqwHalf * r : sqHalf;
+    const vec4 cv = floor(colour * 255.0 + 0.5);
     vec4 c = cv;
     if ((draw.flags & kTextured) != 0u) {
         const vec3 stq = atGsPoint(stqIn);
