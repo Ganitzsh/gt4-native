@@ -146,6 +146,13 @@ static_assert(sizeof(Prefix) == 4);
 enum FrameFlags : uint32_t {
     kFrameField = 1, kFrameOddField = 2,   // the race's 224-line fields
     kFrameVehiclesOnly = 4,                // kOptionSceneRecords 2 (a.1): only Vehicles, no view; not a scene to draw
+    kFrameLampsOn = 8,     // GT4's car-lamp switch for the course scene: the course flag word (course + 0x80, + 0x10)
+                           //   bit 0x8000, as 0033EAB8 reads it to light the cars' lamps (lane A, 2026-11-09). Set on
+                           //   the four Route 5 layouts and Hong Kong at dusk, and on the Arcade menus' 3D background
+                           //   (drawn outside scene frames: no views, so no reader sees it); clear by day. Sent with
+                           //   scene records on (a.1). The one switch for 'lamps on': A7 step 2's on state, F6's
+                           //   headlight shadows, F7's beams, F9's emissive (and N3's skip, if it takes it) all read
+                           //   it, so they can't disagree
 };
 struct FrameBegin {
     Prefix prefix;
@@ -1142,6 +1149,9 @@ enum LightFlags : uint32_t {
     kNoSpecular = 4,
     kGameGlow = 8,         // GT4 draws its own glow sprite for it: do not add one
     kFromGame = 16,        // from a scene::Light record (else synthesised by the host)
+    // bits 8-15: the light's profile index (F7's cookie array, 0 none); bits 16-27: its shadow-atlas slot (F6 and
+    // B11's atlas, 0 none). So GpuLight stays 64 bytes.
+    kProfileShift = 8, kProfileMask = 0xFF00, kShadowSlotShift = 16, kShadowSlotMask = 0x0FFF0000,
 };
 
 struct GpuLight {                       // 64 bytes
