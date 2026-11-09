@@ -170,13 +170,16 @@ SeamAnchor findSeamAnchor(const FrameList& list) {
             if (list.commands[at].kind == FrameList::Command::Kind::Light && list.commands[at].index < list.lights.size() &&
                 list.lights[list.commands[at].index].target == p->source)
                 lit = long(at);
-        // The last pass into the source before this one: it must sample a target and cover what this one read. One
-        // after the Light means the picture this pass read is that pass's, not the Light's: followed, not the Light.
+        // The last pass into the source before this one that samples a target, passes that sample none (glows, fades:
+        // they draw over the picture, they don't replace it) skipped; not looked for before the Light. It must cover
+        // what this one read. One after the Light means the picture this pass read is that pass's (and the glows'
+        // over it), not the Light's: followed, not the Light.
         const Pass* next = nullptr;
         for (size_t i = passes.size(); i-- > 0;) {
             const Pass& q = passes[i];
-            if (q.dest != p->source || q.last >= p->first || q.kind == Pass::k3D) continue;
-            if (q.source && covers(q, p->u0, p->v0, p->u1, p->v1, 0.9f)) next = &q;
+            if (q.dest != p->source || q.last >= p->first || q.kind == Pass::k3D || !q.source) continue;
+            if (lit >= 0 && long(q.first) < lit) break;
+            if (covers(q, p->u0, p->v0, p->u1, p->v1, 0.9f)) next = &q;
             break;
         }
         if (lit >= 0 && next && long(next->first) > lit) lit = -1;

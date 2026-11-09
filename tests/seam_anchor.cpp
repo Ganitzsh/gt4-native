@@ -224,6 +224,19 @@ int main() {
         const gsn::SeamAnchor a = gsn::findSeamAnchor(l);
         check(a.outcome == Outcome::NoLight && a.hops == 2, "a composite after the Light: followed, no Light");
     }
+    {   // Both (lane A): the composite after the Light, then a plain glow over it, then the copy. The glow doesn't hide the
+        // composite: the chain still follows it and ends at no Light.
+        gsn::FrameList l;
+        addTargets(l);
+        setDisplay(l);
+        draw3d(l, 4, 5);
+        light(l, 4, 5);
+        sprite(l, 4, 0, 0, 640, 448, 20, 0, 0, 640, 448);   // the composite
+        sprite(l, 4, 100, 100, 200, 200);                   // a glow over it, sampling nothing
+        sprite(l, 15, 0, 0, 640, 448, 4, 0, 0, 640, 448);   // the copy
+        const gsn::SeamAnchor a = gsn::findSeamAnchor(l);
+        check(a.outcome == Outcome::NoLight && a.hops == 2, "a composite, then a glow, after the Light: followed, no Light");
+    }
     {   // ... and a plain glow pass after the Light (it samples no target) leaves the Light the source.
         gsn::FrameList l;
         addTargets(l);
