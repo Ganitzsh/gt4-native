@@ -98,7 +98,9 @@ vec3 nightLight(ivec2 q, ivec2 last, vec3 linear) {
         return vec3(0.0);   // the rear-view mirror: another view (step 2: unlit)
     const float d = nightDistance(q);
     if (!(d > 0.0 && d < p.maxDistance)) return vec3(0.0);
-    const float local = p.view >= 10u ? nightViewLevel() : nightLocal(q);   // LOCAL N3 DEBUG: >= 10 the view-wide level
+    // LOCAL N3 DEBUG: 10..19 the view-wide level; 20..29 lane B's floor, max(block level, k x view level), k = (view - 20) / 10
+    const float local = p.view >= 20u ? max(nightLocal(q), float(p.view - 20u) / 10.0 * nightViewLevel())
+                      : (p.view >= 10u ? nightViewLevel() : nightLocal(q));
     if (p.view >= 10u && !(nightLocal(q) > 0.0)) return vec3(0.0);           // (still no light where no geometry)
     if (!(local > 0.0)) return vec3(0.0);
     const vec3 albedo = clamp(linear / max(local, 1e-3) * 0.18, vec3(0.0), vec3(0.9));

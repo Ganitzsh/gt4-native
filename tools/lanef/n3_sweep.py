@@ -12,7 +12,7 @@ from pathlib import Path
 T = Path(__file__).resolve().parent
 CLONE = Path("C:/Users/julie/gt4-lane-F")
 CAPS = CLONE / "build" / "caps"
-HOST = CLONE / "build" / "lanef_run" / ({"3": "gt4_host_n3knobs2.exe", "4": "gt4_host_n3knobs2.exe", "5": "gt4_host_n3knobs5.exe"}.get(sys.argv[1], "gt4_host_n3knobs.exe"))
+HOST = CLONE / "build" / "lanef_run" / ({"3": "gt4_host_n3knobs2.exe", "4": "gt4_host_n3knobs2.exe", "5": "gt4_host_n3knobs5.exe", "6": "gt4_host_n3knobs6.exe"}.get(sys.argv[1], "gt4_host_n3knobs.exe"))
 VARIANTS = {
     "base": ("", ""),
     "d": ("", "GT4_N3_V4NARROW=20"),
@@ -38,13 +38,16 @@ VARIANTS = {
     "vl65x2": ("GT4_LIGHT_VIEW=10;GT4_N3_GLOW_BATWING=65;GT4_N3_GLOW_RANGE=40;GT4_N3_GLOW_INTENSITY=2", ""),
     "vl65x4": ("GT4_LIGHT_VIEW=10;GT4_N3_GLOW_BATWING=65;GT4_N3_GLOW_RANGE=40;GT4_N3_GLOW_INTENSITY=4", ""),
     "vl65x8": ("GT4_LIGHT_VIEW=10;GT4_N3_GLOW_BATWING=65;GT4_N3_GLOW_RANGE=40;GT4_N3_GLOW_INTENSITY=8", ""),
+    # phase 6 (knobs6 host): lane B's floor, max(block level, 0.5 x view level) (GT4_LIGHT_VIEW=25), batwing 65
+    "fl65x3": ("GT4_LIGHT_VIEW=25;GT4_N3_GLOW_BATWING=65;GT4_N3_GLOW_RANGE=40;GT4_N3_GLOW_INTENSITY=3", ""),
+    "fl65x6": ("GT4_LIGHT_VIEW=25;GT4_N3_GLOW_BATWING=65;GT4_N3_GLOW_RANGE=40;GT4_N3_GLOW_INTENSITY=6", ""),
 }
 LAPS = {"lapc": ("lap_csr5.cap", 9000), "laps": ("lap_ssr5r.cap", 10200), "lapcr": ("lap_csr5r.cap", 7500)}
 
 phase = sys.argv[1]
 if phase == "1":
     jobs = [("lapc", 5000, v) for v in list(VARIANTS)[:7]]
-elif phase in ("3", "4", "5"):   # 3: the phase-3 set on lap_csr5 600-5000; 4 VARIANT...: given variants there (knobs2 host)
+elif phase in ("3", "4", "5", "6"):   # 3: the phase-3 set on lap_csr5 600-5000; 4 VARIANT...: given variants there (knobs2 host)
     jobs = [("lapc", 5000, v) for v in (sys.argv[2:] or ["bw55", "bw60", "bw65", "r9x12", "r15x23"])]
 else:
     jobs = [(lap, frames, v) for v in sys.argv[2:] for lap, (_, frames) in LAPS.items()]
