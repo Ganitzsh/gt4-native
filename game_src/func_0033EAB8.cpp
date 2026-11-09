@@ -92,6 +92,18 @@ extern "C" void func_0033EAB8(char *self, void *buf, void *cur, void *aux, f32 t
     func_004A7454();
     { V *e = entry(cam, 0x18); ((FnF)e->fn)(cam + e->d, t); }
     gt4_logf("a3b cam %p entry %d", (void *)cam, I(cam, 0x9BC));   /* A3b DEBUG (never for main) */
+    {   /* A3b DEBUG: the camera object's small-integer fields that change (a mode or index; floats never look like
+         * small integers), over its first 0xC00 bytes, compared with the previous frame of the same object */
+        static unsigned prev[0x300];
+        static char *prevCam = 0;
+        const unsigned *w = (const unsigned *)cam;
+        for (int i = 0; i < 0x300; ++i) {
+            if (prevCam == cam && w[i] != prev[i] && w[i] < 256u && prev[i] < 256u)
+                gt4_logf("a3b camfield +%x %u -> %u", i * 4, prev[i], w[i]);
+            prev[i] = w[i];
+        }
+        prevCam = cam;
+    }
     gt4_scene_view_begin(spr_base(), 1, 4, 0);   /* kViewMain, kViewCameraKnown: the camera is set 0 now */
     func_00397CE0(scene);
     if (I(self, 0xE340)) {
