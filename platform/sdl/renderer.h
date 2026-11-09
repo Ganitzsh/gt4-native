@@ -9,6 +9,7 @@
 
 #include <volk.h>
 
+#include <functional>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -49,6 +50,12 @@ public:
     VkExtent2D drawableExtent() const;
     void setControls(float horizontal, bool action);
     void capture(const std::string& path);
+    // --record (platform/sdl/recorder.h): every presented frame to `sink` once the GPU has finished it, a frame or two
+    // later, so the frame itself never waits: its pixels (rows of width * 4 bytes), width, height, VkFormat and the
+    // steady-clock second it was drawn. An empty sink turns it off.
+    using FrameSink = std::function<void(const uint8_t* pixels, uint32_t width, uint32_t height, int format, double seconds)>;
+    void setFrameSink(FrameSink sink);
+    void flushFrameSink();   // the frames still in flight handed over (before a recording stops or the renderer goes)
     void setStatus(const std::string& text);  // extra lines for the on-screen readout
     // The settings menu drawn over the frame (platform/sdl/settings_menu.h); nullptr hides it.
     void setMenu(const gt4::MenuView* view);

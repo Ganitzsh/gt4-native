@@ -15,6 +15,7 @@
 #include "input_map.h"
 #include "pad_devices.h"
 #include "chord_guard.h"
+#include "recorder.h"
 #include "renderer.h"
 #include "save_import.h"
 #include "session.h"
@@ -80,6 +81,10 @@ const char* kUsage =
     "                       passes (GPU and CPU) and transient memory, the GS back end's GPU stages and the host's\n"
     "                       CPU stages (tools/perf_report.py); measure with\n"
     "                       display.frame_interpolation=off (an interpolated present repeats the last GS frame's)\n"
+    "  --record PATH        record what is presented, with the game's sound, to PATH (.mkv, .mp4...) in real time\n"
+    "                       through the ffmpeg on PATH (or --record-ffmpeg EXE); --record-args \"ARGS\" replaces\n"
+    "                       the video encoder's options (default -c:v libx264 -preset veryfast -crf 18\n"
+    "                       -pix_fmt yuv420p); a fixed-step replay records each drawn frame (docs/RECORDING.md)\n"
     "  --session-dir PATH   attach a virtual gamepad, process commands, record frames/audio/events\n"
     "  --no-audio           disable playback and WAV capture for a session\n"
     "  --fixed-step         advance exactly one 60 Hz tick per frame (default for headless and sessions)\n"
@@ -158,6 +163,7 @@ struct Options {
     FrameList captureFrames;    // --capture-frames: the frames written to --capture-dir
     std::string captureDir;
     std::string profileJson;    // --profile-json: one line of timings per presented frame
+    std::string record, recordArgs, recordFfmpeg;   // --record PATH, --record-args, --record-ffmpeg (recorder.h)
     VkExtent2D size{0, 0};   // headless output; 0 = the window size setting
     std::string gpu, settingsPath, sessionDirectory, capture, importSave, exportSave, exportName, saves;
     std::vector<std::pair<std::string, std::string>> sets;
@@ -230,6 +236,9 @@ Options parse(int argc, char** argv) {
         else if (a == "--capture-frames") o.captureFrames = parseFrameList(value(i));
         else if (a == "--capture-dir") o.captureDir = value(i);
         else if (a == "--profile-json") o.profileJson = value(i);
+        else if (a == "--record") o.record = value(i);
+        else if (a == "--record-args") o.recordArgs = value(i);
+        else if (a == "--record-ffmpeg") o.recordFfmpeg = value(i);
         else if (a == "--game") o.game = value(i);
         else if (a == "--game-args") o.gameArgs = splitArguments(value(i));
         else if (a == "--replay") o.replay = value(i);
@@ -621,9 +630,27 @@ int run(const Options& options) {
     // Headless output: --size, or the size a window would have.
     const VkExtent2D headlessSize = options.size.width ? options.size
         : VkExtent2D{static_cast<uint32_t>(settings.windowWidth), static_cast<uint32_t>(settings.windowHeight)};
+    // --record (recorder.h): the presented frames and the game's sound. A fixed-step replay draws one VBlank a frame,
+    // as fast as it can: each drawn frame is then one video frame; otherwise frames are placed by when they were drawn.
+    std::unique_ptr<gt4::Recorder> recorder;
+    uint64_t recordedFrames = 0;
+    if (!options.record.empty()) {
+        gt4::Recorder::Options r;
+        r.path = options.record;
+        if (!options.recordFfmpeg.empty()) r.ffmpeg = options.recordFfmpeg;
+        r.videoArgs = options.recordArgs;
+        recorder = std::make_unique<gt4::Recorder>(r);
+    }
+    const bool recordByFrame = !options.replay.empty() && options.fixedStep;
     auto makeRenderer = [&](const std::string& gpu) {
         auto made = windowed ? std::make_unique<Renderer>(sdlWindow, instance.instance, gpu, settings)
                              : std::make_unique<Renderer>(instance.instance, headlessSize, gpu, settings);
+        if (recorder)
+            made->setFrameSink([&recorder, &recordedFrames, recordByFrame](const uint8_t* pixels, uint32_t width,
+                                                                           uint32_t height, int format, double seconds) {
+                recorder->frame(pixels, width, height, format,
+                                recordByFrame ? static_cast<double>(recordedFrames++) / 60.0 : seconds);
+            });
         // --fixed-step (replays, sessions): frame interpolation by the presents, not the wall clock, so a run gives the
         // same frames every time with display.frame_interpolation on. Live sessions (--session-dir without --realtime)
         // too, on purpose: they are scripted tests that want the same frames, so each present shows the newest game
@@ -716,6 +743,15 @@ int run(const Options& options) {
                     if (SDL_GetAudioStreamQueued(stream) > 48000 * 4 * 15 / 100) return;
                     SDL_PutAudioStreamData(stream, frames, static_cast<int>(count * 4));
                 };
+        }
+        // --record: the same sound (the host's output mix, either audio.mixer) to the recording, also headless or in a
+        // session, where nothing plays it.
+        if (recorder && options.audio) {
+            gsOptions.audio = [play = std::move(gsOptions.audio), rec = recorder.get()](uint32_t rate, const int16_t* frames,
+                                                                                      size_t count) {
+                if (play) play(rate, frames, count);
+                rec->audio(rate, frames, count);
+            };
         }
         std::string error;
         gs = gt4::gs::GsHost::create(gsOptions, error);
@@ -1102,6 +1138,7 @@ int run(const Options& options) {
             std::printf("display.gpu = %s: recreating the renderer\n", settings.gpu.c_str());
             renderer->abandonReadbacks();   // (the game's asynchronous reads answered first)
             sendReadAnswers();
+            renderer->flushFrameSink();     // (--record: its frames in flight)
             renderer.reset();
             renderer = makeRenderer(settings.gpu);
             activeGpu = settings.gpu;
@@ -1548,6 +1585,13 @@ int run(const Options& options) {
                 nextFrame = current;
             }
         }
+    }
+    if (recorder) {   // --record: the frames in flight, then ffmpeg finished and the sound muxed in
+        renderer->setFrameSink({});
+        std::string report;
+        const bool recorded = recorder->stop(report);
+        std::fprintf(recorded ? stdout : stderr, "%s\n", report.c_str());
+        recorder.reset();
     }
     if (options.frames && frames < options.frames && !gameExited)
         throw std::runtime_error("Window closed before the requested frames were presented");

@@ -354,6 +354,7 @@ add_executable(gt4_host
     platform/sdl/main.cpp
     platform/sdl/disc_setup.cpp
     platform/sdl/renderer.cpp
+    platform/sdl/recorder.cpp
     platform/sdl/session.cpp
     platform/sdl/pad_devices.cpp
     platform/sdl/device_settings.cpp
@@ -549,6 +550,15 @@ add_test(NAME material_table COMMAND gt4_material_table_test)
     target_compile_options(gt4_host_mixer_test PRIVATE -Wall -Wextra -Wpedantic)
   endif()
   add_test(NAME host_mixer COMMAND gt4_host_mixer_test)
+  # --record's frame pacing (platform/sdl/recorder.h): a fixed-rate video from frames presented early, on time and late.
+  add_executable(gt4_recorder_pacer_test tests/recorder_pacer.cpp)
+  target_include_directories(gt4_recorder_pacer_test PRIVATE platform/sdl)
+  if(MSVC)
+    target_compile_options(gt4_recorder_pacer_test PRIVATE /W4)
+  else()
+    target_compile_options(gt4_recorder_pacer_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  add_test(NAME recorder_pacer COMMAND gt4_recorder_pacer_test)
 
   # The input action map: the original map against the host's mapping before it, for every input.
   add_executable(gt4_input_map_test tests/input_map.cpp)

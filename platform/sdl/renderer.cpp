@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -256,6 +257,17 @@ struct Renderer::Impl {
     bool fixedClock = false;   // setFixedClock: the GS scene's interpolation phase from presents (--fixed-step)
     std::vector<std::string> capturePaths;   // this frame written to each (a session's capture and --capture-frames can meet)
     gt4::vk::Buffer readback;
+    // --record: each slot's frame copied to its own buffer, handed to the sink when that slot's fence is next waited
+    Renderer::FrameSink frameSink;
+    struct RecordedFrame {
+        bool pending = false;
+        uint32_t width = 0, height = 0;
+        VkFormat format = VK_FORMAT_UNDEFINED;
+        double seconds = 0.0;
+    };
+    std::array<gt4::vk::Buffer, kFramesInFlight> recordBuffers{};
+    std::array<RecordedFrame, kFramesInFlight> recorded{};
+    bool recordFormatWarned = false;
 
     ~Impl() {
         if (device.device) vkDeviceWaitIdle(device.device);
@@ -279,6 +291,8 @@ struct Renderer::Impl {
             return;
         }
         gt4::vk::destroy(device, readback);
+        for (uint32_t k = 0; k < kFramesInFlight; ++k) deliverRecorded((slot + k) % kFramesInFlight);   // oldest first; idle
+        for (auto& b : recordBuffers) gt4::vk::destroy(device, b);
         releaseTarget();
         for (auto& f : frames) {
             if (f.fence) vkDestroyFence(device.device, f.fence, nullptr);
@@ -873,6 +887,56 @@ struct Renderer::Impl {
         gt4::vk::destroy(device, readback);
     }
 
+    // --record: the presented image copied to this slot's buffer; it reaches the sink once the slot's fence signals
+    // (deliverRecorded at the slot's next use), so the frame doesn't wait for the copy.
+    void recordFrame(VkCommandBuffer command, gt4::vk::Image& target, uint32_t frameSlot) {
+        const bool supported = target.format == VK_FORMAT_B8G8R8A8_UNORM || target.format == VK_FORMAT_B8G8R8A8_SRGB ||
+            target.format == VK_FORMAT_R8G8B8A8_UNORM || target.format == VK_FORMAT_R8G8B8A8_SRGB ||
+            target.format == VK_FORMAT_A2B10G10R10_UNORM_PACK32 || target.format == VK_FORMAT_A2R10G10B10_UNORM_PACK32;
+        if (!supported) {
+            if (!recordFormatWarned) std::fprintf(stderr, "Recording: the output format %d can't be recorded\n", target.format);
+            recordFormatWarned = true;
+            return;
+        }
+        const VkDeviceSize size = static_cast<VkDeviceSize>(target.extent.width) * target.extent.height * 4;
+        gt4::vk::Buffer& buffer = recordBuffers[frameSlot];
+        if (!buffer.buffer || buffer.size != size) {
+            gt4::vk::destroy(device, buffer);
+            buffer = gt4::vk::createBuffer(device, size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, true);
+        }
+        gt4::vk::Barriers b;
+        b.image(target, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, gt4::vk::kTransfer, VK_ACCESS_2_TRANSFER_READ_BIT);
+        b.flush(command);
+        VkBufferImageCopy copy{};
+        copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        copy.imageExtent = {target.extent.width, target.extent.height, 1};
+        vkCmdCopyImageToBuffer(command, target.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer.buffer, 1, &copy);
+        VkMemoryBarrier2 host{};
+        host.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
+        host.srcStageMask = gt4::vk::kTransfer;
+        host.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        host.dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT;
+        host.dstAccessMask = VK_ACCESS_2_HOST_READ_BIT;
+        VkDependencyInfo dependency{};
+        dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        dependency.memoryBarrierCount = 1;
+        dependency.pMemoryBarriers = &host;
+        vkCmdPipelineBarrier2(command, &dependency);
+        const double seconds =
+            std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        recorded[frameSlot] = RecordedFrame{true, target.extent.width, target.extent.height, target.format, seconds};
+    }
+
+    // Hands a recorded frame to the sink; its slot's fence must have signalled.
+    void deliverRecorded(uint32_t frameSlot) {
+        RecordedFrame& r = recorded[frameSlot];
+        if (!r.pending) return;
+        r.pending = false;
+        if (frameSink && recordBuffers[frameSlot].mapped)
+            frameSink(static_cast<const uint8_t*>(recordBuffers[frameSlot].mapped), r.width, r.height,
+                      static_cast<int>(r.format), r.seconds);
+    }
+
     void readTimestamps(Frame& frame, uint32_t frameSlot) {
         if (!timestampsSupported || !frame.timed) return;
         uint64_t values[2] = {};
@@ -899,6 +963,7 @@ struct Renderer::Impl {
             GT4_STAGE_SCOPE("render: waiting for the GPU (frame slot)");
             check(vkWaitForFences(device.device, 1, &frame.fence, VK_TRUE, UINT64_MAX), "vkWaitForFences");
         }
+        deliverRecorded(slot);   // --record: this slot's last frame, finished
         readTimestamps(frame, slot);
         if (pipeline && passTimingWanted) {   // (its fence has signalled)
             GT4_STAGE_SCOPE("render: the render graph's timings (--profile-json)");
@@ -1021,6 +1086,7 @@ struct Renderer::Impl {
         }
         const bool capturing = !capturePaths.empty();
         if (capturing) recordCapture(frame.command, target);
+        if (frameSink) recordFrame(frame.command, target, slot);
         if (!headless) {
             gt4::vk::Barriers b;
             b.image(target, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, VK_ACCESS_2_NONE);
@@ -1113,6 +1179,18 @@ void Renderer::capture(const std::string& path) {
     // get that frame; one of them used to stop the host ("already pending") when another had asked first.
     auto& paths = impl->capturePaths;
     if (std::find(paths.begin(), paths.end(), path) == paths.end()) paths.push_back(path);
+}
+void Renderer::setFrameSink(FrameSink sink) {
+    if (!sink) flushFrameSink();
+    impl->frameSink = std::move(sink);
+}
+void Renderer::flushFrameSink() {
+    for (uint32_t k = 0; k < kFramesInFlight; ++k) {   // oldest first: the next slot to draw holds the older frame
+        const uint32_t s = (impl->slot + k) % kFramesInFlight;
+        if (!impl->recorded[s].pending) continue;
+        check(vkWaitForFences(impl->device.device, 1, &impl->frames[s].fence, VK_TRUE, UINT64_MAX), "vkWaitForFences(record)");
+        impl->deliverRecorded(s);
+    }
 }
 void Renderer::setStatus(const std::string& text) { impl->status = text; }
 void Renderer::setMenu(const gt4::MenuView* view) {
