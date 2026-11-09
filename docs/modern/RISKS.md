@@ -199,6 +199,15 @@ frames (b.10's re-baseline and R6's pairing on `race_grid43` stand). The night l
 - **Fix: B25** (PLAN 96ea9ab): the snapshot reads the depth buffers back in their GS formats (Z24, Z32, Z16 through
   GsMemory's Z swizzle), counted, and a lockstep replay's recording gets its targets too. The regression test:
   `lap_ssr5r_boot`'s sub-capture pair, 36 of 36 frames identical (lane C), with `ORIG` unchanged.
+- **B25 (e) parked (lane B, 2026-11-09; `parked/b25-depth-start`): the Z buffer aliases the display buffer.** Built
+  and run, it changed no pixel of the pair. The 3D's Z buffer (bp0000, 640x448, pages 0-139) has its top half
+  (pages 0-69) under the display buffer bp0 (640x224), which owns them in the page table, so the snapshot can't carry
+  that half, and GS memory there holds the shown picture, not Z. On the PS2 the display copy overwrites that Z each
+  frame and GT4's Z24 pass turns it round in place; our Z is a GPU image of its own, which the copy never touches,
+  so its history isn't in GS memory for any snapshot to carry. The cause above stands. A fix needs colour and Z to
+  share memory (an aliasing model, its own question for the architect), which may move from-boot `ORIG` (it can't
+  see the difference while every draw covers what it tests; a measure of how often GT4 doesn't says). Until then
+  references come from game start.
 
 ---
 
