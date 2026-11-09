@@ -81,6 +81,11 @@ void SceneCounters::add(const SceneCounters& o) {
     fallbackReadPending += o.fallbackReadPending; meshesNew += o.meshesNew; meshesPending += o.meshesPending;
     materialsNew += o.materialsNew; meshesSkinned += o.meshesSkinned; meshesPerFrame += o.meshesPerFrame;
     meshesOutOfBinding += o.meshesOutOfBinding;
+    n3Judged += o.n3Judged;
+    n3Skipped += o.n3Skipped;
+    n3LaterFail += o.n3LaterFail;
+    n3SkipGatedOff += o.n3SkipGatedOff;
+    n3Misaligned += o.n3Misaligned;
 }
 
 namespace {
@@ -297,6 +302,7 @@ void SceneDecoder::package(const ViewData& v) {
     std::shared_ptr<SceneView> p = sceneViewFromPool();
     p->view = v;
     const SceneFrame& f = *frame_;
+    p->frameFlags = f.flags;
     p->instances.clear();   // (its own: an instance of another view inside it is not one of them)
     for (size_t k = v.firstInstance; k < f.instances.size(); ++k)
         if (f.instances[k].view == v.id) p->instances.push_back(f.instances[k]);

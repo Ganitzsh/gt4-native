@@ -1404,7 +1404,9 @@ std::string GsHost::summary() const {
                 << (s.sceneFrames ? s.sceneCacheCpuMicroseconds / double(s.sceneFrames) : 0.0)
                 << " us a scene frame, cycles calibrated once against the steady clock); instances' meshes new " << s.meshesNew << ", pending " << s.meshesPending << ", skinned "
                 << s.meshesSkinned << ", per-frame " << s.meshesPerFrame << ", out of the binding " << s.meshesOutOfBinding
-                << ", materials new " << s.materialsNew
+                << ", materials new " << s.materialsNew << "; n3 items judged " << s.n3Judged << ", flagged to skip "
+                << s.n3Skipped << ", later fails " << s.n3LaterFail << ", candidates gated off " << s.n3SkipGatedOff
+                << ", views misaligned " << s.n3Misaligned
                 << "; meshes " << m.decoded << " decoded, " << m.hits << " hits, " << m.perFrame << " per-frame, "
                 << m.evicted << " evicted, " << (m.bytes >> 20) << " MiB held; materials " << t.created << " made, " << t.held
                 << " held; objects " << o.objects << ", sightings with the same ids " << o.objectsSame << ", another mesh "
