@@ -1218,22 +1218,29 @@ renderer, the same shader functions run in the deferred lighting pass with G-buf
 changes between the two.
 
 **The albedo estimate (F2 step 2, lane F's design, agreed 2026-11-08).** The GS path has no albedo, only GT4's lit
-colour. It assumes GT4's lighting varies slowly over the screen and the textures quickly. So:
-`albedo = colour_linear / L_local * 0.18`, clamped to [0, 0.9]. `L_local` is a 1/8-resolution image of the
-log-average luminance, sampled bilinearly. That keeps texture and hue without GT4's dark night exposure. A fixed
-grey with GT4's chroma would lose the road markings, and colour times a gain would saturate lit areas.
-- `L_local` counts only pixels with geometry (GT4's Z inside the view's depth range): the sky and the clear colour
-  are left out, so they don't pull it, and they get no added light. The log average keeps small bright spots (lamp
-  heads, headlights) from lifting it. A floor of 1e-3 keeps black areas finite; the clamp does the rest.
-- Each 1/8 block stores the sum of its pixels' log luminance and their count. Both are sampled bilinearly and
-  divided after, so a block with no geometry weighs 0 near the skyline. A pixel whose four neighbouring blocks are
-  all empty gets no added light.
-- `L_local` is not smoothed over time in step 2: the N1 acceptance shows whether it has to be, and a history buffer
-  waits for that evidence.
+colour. So: `albedo = colour_linear / L_view * 0.18`, clamped to [0, 0.9], with `L_view` one log-average
+luminance for the whole view. That keeps texture and hue without GT4's dark night exposure. A fixed grey with GT4's
+chroma would lose the road markings, and colour times a gain would saturate lit areas.
+- One level for the view, not a local one (F2b amendment, 2026-11-09). Step 2 divided by a 1/8-resolution local
+  level, which lifted every block towards mid-grey: lane F's split on `lap_csr5` gave the road an albedo of 0.5-0.7
+  (real asphalt 0.1-0.2), highest on the dimmest far blocks, and I0 compensated. One level keeps the road's
+  relative darkness; its absolute scale is absorbed by I0, calibrated against GT4's baked level. B10's modern path
+  replaces the estimate with the material's texture colour.
+- `L_view` counts only pixels with geometry (GT4's Z inside the view's depth range): the sky, the clear colour and
+  the rear-view mirror's inset (another view) are left out, so they don't pull it, and they get no added light.
+  The log average keeps small bright spots (lamp heads, headlights) from lifting it. A floor of 1e-3 keeps black
+  areas finite; the clamp does the rest.
+- `gsn_night_lum.comp` stores, per 1/8 block, the sum of its pixels' log luminance and their count;
+  `gsn_night_level.comp`, one workgroup, adds them all up, so each geometry pixel weighs the same.
+- `L_view` is smoothed over time, so lamps entering the view don't make it pump: per view, keyed by its target,
+  role and pass (split screen's halves are two main views in one target, A12),
+  `L = mix(L_previous, L_frame, 1 - exp(-dt / 0.5 s))`, with dt from the list's VBlanks (a replay's frames don't
+  depend on its speed). It is reset to the frame's level for a new view, one not lit last frame, `kViewCut` (no
+  record sends it yet), a frame after one without geometry, and a jump of over a factor of 2 in one frame (a cut).
 - The light is added in `gsn_light.comp`, in its linear light (its 2.2 decode): after the occlusion multiply
   (lamp light is not ambient), before the host's enhanced grade, and before GT4's own grade and post effects.
   The per-pixel cluster loop (Lambert, `light_list.glsl`'s falloff and cone) runs in that same pass. So the cost is
-  one 1/8 luminance pass plus the existing full pass.
+  one 1/8 luminance pass and a one-workgroup reduction, plus the existing full pass.
 - Positions and distances come from the view's `ProjectionData` only (its projection and viewport give GT4's
   exact Z for a distance, R1), not `gsn_ao.comp`'s measured `1.6e6 / d`, which is about 8 % off at 100 m and would
   shift the falloff. There are no lights without scene records, so no fallback to `lighting.tanX/tanY` is needed.
