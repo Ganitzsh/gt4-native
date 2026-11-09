@@ -894,8 +894,80 @@ early.
 **D6: Vehicle state discovery (L).** RISKS R14, then the fields of `scene::Vehicle`. Depends: R14. Acceptance: per
 wheel load and slip plotted over a lap, consistent with the car's motion; documented addresses.
 
-**D7: Wheels through LGDEV (L).** `iop.cpp:278-290` DFP emulation to `SDL_Haptic`. Depends: R15. Acceptance: a
-wheel works in GT4's menus and races with its force feedback.
+**D7: Wheels through LGDEV (L).** GT4 sees a Logitech Driving Force Pro through LGDEV, and drives its three effects
+on the host's wheel through `SDL_Haptic` (the effects and the interface: spikes/R15-lgdev-effects.md). Depends: R15.
+- Settings, per device (D13): `input.wheel.mode` = `pad` | `dfp` (D15 adds `native`).
+  - `pad` is the behaviour before D7: the wheel is a DualShock 2 through its profile.
+  - `dfp` is the PS2's behaviour. It is the default for a device SDL types as a wheel, in every preset, `original`
+    included; a gamepad never becomes a wheel.
+  - In `dfp` the wheel's input goes to LGDEV alone. Its port keeps only what else is bound there (the keyboard on
+    pad 1), so GT4 never sees the wheel twice.
+- `input.wheel.ffb_strength`, 0-100 % (D15's name), scales the three effects and caps them: A's level, and the
+  spring's and the damper's coefficients and saturations, never exceed it.
+  - A hard ceiling in code that no setting passes: 60 % of the device's full scale until the live check has
+    measured a wheel.
+  - The first live run is at 15 %.
+- The link: two new kinds, and `GT4_LINK_VERSION` 6 (or the next free number if another lane's bump lands first;
+  kinds 18 and 69 are free on main at d0ad4a3).
+  - Host to game, `GT4_REC_WHEEL` = 69, every host frame like `GT4_REC_PAD`: the wheel's index (0; D15's second
+    wheel needs no other bump), connected, the steering (s16), the two pedal axes (u16), the hat (0-7, 8 none),
+    and the buttons in the DFP's bits 16-29 (the inverse of `func_005665E8`).
+  - Game to host, `GT4_REC_WHEEL_FX` = 18, when an effect changes (at most once a frame): the wheel's index, then
+    per effect its state (none, stopped, running) and its 60-byte block.
+  - An older game never meets `dfp`: the game links only at its own version exactly (`runtime/link.cpp`), so a
+    newer host and an older game don't link at all, and the bump alone keeps the player from a wheel the game
+    would ignore.
+- Input: the D13 profile binds the steering and the two pedals as it binds any action. It normalises the rest
+  position and the full travel: pedals often rest at the axis's maximum, and some wheels report the two pedals
+  combined on one axis.
+  - Two additions to the binding:
+    - a range form, -1..1 to 0..1, with an inverted variant;
+    - a combined pedal axis as two bindings, one on each half.
+  - Raw joystick axes for a wheel SDL has no gamepad mapping for.
+  - D12's response curve is skipped: GT4 applies its own.
+- The game (`runtime/iop.cpp`): the LGDEV stub reports one wheel while the host says one is connected. It answers
+  the input read (fno 6) from `GT4_REC_WHEEL`, and keeps the three effects' blocks and states for
+  `GT4_REC_WHEEL_FX`.
+  - At a plug or unplug the stub writes 1 to the notify area (the EE address fno 12 gives at `+0x5C`), and GT4
+    rescans (`func_005552B8`, `func_00560A88`).
+  - `GT4_FAKE_DFP=1` stays as the bench: the same path, with pad 1 as the source.
+  - What GT4's property 4 = 1 selects on the DFP (perhaps its 900-degree mode) is logged in the session test; the
+    host never changes the physical wheel's rotation range.
+- The host: `platform/input/wheel_ffb` (no SDL) translates the blocks into effects, with its `CTEST`. The host keeps
+  one constant, one spring and one damper effect on the wheel's `SDL_Haptic`; a wheel that lacks one gets the
+  others.
+  - A: a constant force at magnitude / 255 x strength, on one axis; its sign is the first acceptance check. A
+    lasts 100 ms, renewed on each update and on each host frame while it runs, so a stalled host lets it lapse.
+  - C: a spring, its centre from `+0x0C`.
+  - B: a damper.
+  - The spring and the damper are passive and run without end.
+- Stops, the host's alone: every effect stops at a settings page, a pause, a link drop, a port change, the host's
+  exit, an unplug, and when the game's frames stop for 0.5 s while an effect runs (a hang, a debugger, a long
+  load).
+  - 'A pause' is one the host sees: our pause page, or the host's pause (command 2). GT4's own pause
+    (`pause.strb`, with `ui.pause = gt4`) is GT4's to handle; the session test logs what GT4 does to A in it, and
+    if A keeps running there, D7 asks before it ships.
+  - The game's effect state does not change. On resume the host applies the latest blocks and states again, so
+    GT4 and the wheel agree.
+  - In a replay (no live game) the host applies no `GT4_REC_WHEEL_FX` and opens no haptic.
+- Menus:
+  - While one of our settings pages is open, the wheel drives it through its D13 profile, as a pad would. A
+    wheel-only player can open Settings (Guide, or the chord through the profile) and use it.
+  - If GT4's own menus turn out not to read LGDEV's buttons, the wheel's buttons go to its pad port outside a race,
+    never both at once; this entry then says which GT4 does.
+- Scope: one wheel, LGDEV index 0. A second wheel (split screen, index 1) is D15's or later.
+- Acceptance, in order:
+  - A's sign and the pedals' order (the code doesn't settle which axis accelerates) on the `GT4_FAKE_DFP` bench,
+    against the steering in its log.
+  - A session test. A virtual SDL wheel drives GT4's menus and a race through LGDEV, and the effect stream is
+    logged. Every stop is proved: page, pause, link drop, port change, exit, unplug, the 0.5 s watchdog (a game
+    that stops sending frames), and A lapsing to zero within about 0.1 s when the host's main thread freezes for
+    1 s (a hung host). A replay of a capture holding FX records opens no haptic.
+  - `CTEST`: the translation, on fields recorded from R15's race (numbers only), and the binding forms.
+  - The gates: release build, `ORIG` and `STREAM` with no wheel (nothing changes), and `DIFFTEST` if the files
+    are in its list.
+  - Live, on the owner's wheel, at 15 % first. It must pull towards the centre and never away, in GT4's menus and
+    a race.
 
 **D8: Physics force feedback (M).** Depends: D6, D7. Acceptance as the audit's section 4 states, with session
 tests. (D10 and D11 moved to lane C.)
