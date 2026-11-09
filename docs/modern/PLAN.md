@@ -1702,25 +1702,32 @@ draw numbers are those of replay 2514, and the draws are found by what they are,
 - **The coverage gate** (the architect, 2026-11-09, from lane F's never-dark phases; lane B's review): a skip also
   needs a lamp that replaces the light it removes, so the road is never darker than GT4's where nothing of ours lights
   it (a tunnel's lights are not lamp billboards). It decides at execute time in `GsnScene`, with the frame's own
-  lamps, since a draw knows its instance only as an index into its own frame's list: (a) the front end passes a skip
-  candidate through as draws carrying their instance (no merge across a change of instance, which adds draws on the
-  lamp-pool items only) instead of dropping it; (b) `GsnScene` promotes the lamps at `executeBegin`, per main view
-  keyed by view id, and `nightPrepare` reuses that result, so lamps are not promoted twice and `LampTotals` don't
-  double (a Light whose target no view binds gets no lamps, as today); (c) each candidate's footprint, the centre and
-  radius of its v4 items' up-facing triangles, is a property of the item, cached in object space by
-  `InstanceData::object` (set, model, LOD) and the item (instances exist per frame, and a record's serial is not
-  trusted), and taken through the instance's `objectToView` each frame. The disc test runs in view space, where the
+  lamps: (a) a skip is a vertex span per item, and `planSkips` finds each item's instance through `ViewOnList::ids`
+  (`firstMaterial`, `materialCount`), so the front end's merging stays as it is (lane B); (b) `GsnScene` promotes the
+  lamps at `executeBegin`, per main view keyed by view id, and `nightPrepare` reuses that result, so lamps are not
+  promoted twice and `LampTotals` don't double (a Light whose target no view binds gets no lamps, as today); (c) each
+  candidate's footprint, the centre and radius of all of its item's decoded vertices in object space (the skip removes
+  the whole item), is kept in lane F's verdict entry, whose key (`MaterialId`, `MeshKey`, item) fixes the geometry,
+  and delivered as `ViewOnList::skipFootprint`, one float4 per material parallel to `skip` and written at
+  `firstMaterial` like it (0 where `skip` is 0); the back end takes the centre through the instance's `objectToView`
+  each frame and the radius times the instance's largest axis scale. The disc test runs in view space, where the
   Lights already are (`gfx::scene::Light`, kept so by `promote()`): no inverse is needed. A candidate's draws are
   skipped only if one lamp's ground disc holds the whole footprint (distance from the lamp's foot plus the footprint's
-  radius at most the disc's radius, (lamp height - centre height) x tan(theta_c), the heights and the lamp's foot
-  measured along world up as seen in view space (the view's worldToView applied to (0, 1, 0)), not along view y, which
-  tilts with the camera's pitch); otherwise GT4's baked draw stays. Everything stays baked on a frame where the view's
-  lamps can't be trusted: a view not seen last frame (matched by role and `pass`, as `previousWorldToView` is), a
-  scene switch, `kViewCut` once something sends it (nothing sets it today, so a mid-race camera change is caught only
-  when the view drops out for a frame), and a list cut before `FrameEnd` (a.8: the flare's asynchronous read), which
-  has no scene frame and no lamps. Counters per frame: candidates, skipped, held back for no covering disc, and held
-  back for a partial list or a view not yet trusted, apart, so a flicker on read frames doesn't read as a gate fault.
-  The cached verdict above is unchanged; the gate is an extra test on top of it.
+  radius at most the disc's radius, min(h x tan(theta_c), sqrt(range^2 - h^2)) with h the lamp's height above the
+  footprint's centre: theta_c from the light's own cone, `cosInner` = cos(theta_c), where the lamp is at full
+  strength, not the roll-off's end, and range the light's own, or its source's default when the record has none
+  (gfx.h's 0, unknown), as the gather uses, so the disc never reaches past where the lamp lights the ground (h above
+  the range: no disc, held); a lamp without the street-lamp profile, as F2b's point lights are until the batwing lands
+  with the skip, gives no disc, so nothing is skipped and every candidate counts as held for no disc; the level where
+  our lamp falls below the baked pool's replaces this geometric rule once the stand-in run measures it; the heights
+  and the lamp's foot measured along world up as seen in view space (the view's worldToView applied to (0, 1, 0)), not
+  along view y, which tilts with the camera's pitch); otherwise GT4's baked draw stays. Everything stays baked on a
+  frame where the view's lamps can't be trusted: a view not seen last frame (matched by role and `pass`, as
+  `previousWorldToView` is), a scene switch, `kViewCut` once something sends it (nothing sets it today, so a mid-race
+  camera change is caught only when the view drops out for a frame), and a list cut before `FrameEnd` (a.8: the
+  flare's asynchronous read), which has no scene frame and no lamps. Counters per frame: candidates, skipped, held
+  back for no covering disc, and held back for a partial list or a view not yet trusted, apart, so a flicker on read
+  frames doesn't read as a gate fault. The cached verdict above is unchanged; the gate is an extra test on top of it.
 - **The albedo under a skipped pool** (2026-11-09, from lane F's never-dark phases 4-5): any albedo estimated from the
   picture after the skip is circular, since the skip has just taken the road's light out of it (with the skip, lane
   F's split: near road 0.50-0.52, far road 0.52-0.70, highest where the skip left the darkest blocks), so no lamp
