@@ -1106,8 +1106,44 @@ on the host's wheel through `SDL_Haptic` (the effects and the interface: spikes/
     open line (the SDL backend, which of constant, spring and damper the wheel has, and autocentre off or not). The
     owner has no wheel (the coordinator, 2026-11-09), so D7 ends at the session test until someone has one.
 
-**D8: Physics force feedback (M).** Depends: D6, D7. Acceptance as the audit's section 4 states, with session
-tests. (D10 and D11 moved to lane C.)
+**D8: Physics force feedback (M).** A modern wheel signal from GT4's physics (the audit, section 4.1 design point 3:
+the self-aligning torque from the front tyres' lateral force and pneumatic trail, kerb and road texture, lock-up and
+slip vibration). Depends: D6, D7. (D10 and D11 moved to lane C.)
+- Scope: wheels only. In `dfp`, GT4 already plays its own aligning torque: `func_00353EE8` writes it into byte 2 of
+  the feedback packet, which is LGDEV's effect A (R14, R15). So D8 is the signal for D15's `native` mode. Pads stay
+  D14's: a motor has no direction, so a steady weight there reads as noise.
+- It lands before D15 behind `GT4_PHYSICS_FFB=1` (an environment switch, off: rule 10; no setting and no preset
+  until D15 makes it visible), played through D7's `WheelHaptics` in place of GT4's effects, and recorded in a
+  session.
+- The signal, from the Vehicle record (D6), in `platform/input/wheel_physics` (no SDL):
+  - Aligning torque: Mz is the front wheels' sum of `forceLateral` x t(`slipAngle`), the pneumatic trail
+    t = t0 x max(0, 1 - |alpha| / alpha_peak), normalised by the front axle's grip (front loads x 1.0). It falls
+    to nothing as the front tyres saturate: the loss of weight at understeer. alpha_peak is fitted to GT4's own A
+    over the recorded lap (where A fades against the front slip angle), and the fitted value and its lap are written
+    here; 0.15 rad (R14's slip angles at 11-14 m/s2) only starts the fit. Played as the constant force, with D7's
+    sign and its 200 ms renewal.
+  - `steeringTorque` isn't filled (R14 open 1): Mz comes from the tyre forces until it is, and if R14 later finds
+    GT4's own rack torque, D8 is compared against it.
+  - Kerb and road texture: a periodic effect from the front wheels' stroke speed, as D14's `roadTexture`; its
+    frequency follows the speed.
+  - Lock-up and wheelspin: a periodic vibration from D14's `lockUp` and `wheelspin`.
+  - Low speed: a centring spring and a damper fading in below 10 km/h, where no aligning torque builds.
+  - `input.wheel.ffb_strength`, D7's 60 % ceiling and D7's stops apply unchanged.
+- Acceptance:
+  - `CTEST`, on synthetic records: the formula's shape (Mz fades past alpha_peak at a constant lateral force; zero
+    when stopped or in the air).
+  - `CTEST`, on fields recorded from a lap (numbers only, as R15's), at its worst frames (a kerb at the limit of
+    grip): the constant force plus the periodic effects never exceed the strength and the ceiling together.
+  - Against GT4's own aligning torque (effect A, recorded with the same lap): Mz has A's sign on at least 95 % of
+    frames where both are above 5 % of their range; their correlation is reported, with where they part (the
+    understeer fade past alpha_peak, kerbs) said to be on purpose or not.
+  - A session test over a lap with `GT4_PHYSICS_FFB=1` and a virtual wheel, the effect stream recorded:
+    - kerb pulses line up within a frame with D6's kerb events (a front wheel on the ground with |`strokeSpeed`|
+      over 0.15 m/s, the start of `roadTexture`'s ramp);
+    - slip pulses line up with lock-up and wheelspin frames (`lockUp` or `wheelspin` above 0);
+    - D7's stops all hold.
+  - D11: each effect at most one frame behind its Vehicle record.
+  - Live: none here (no wheel). The loss of weight at understeer and kerbs are D15's live items.
 
 **D9: Spatial audio (L, lane D).** The audit (section 4.2, design 3) gives the design but no acceptance; this is it
 (the architect, 2026-11-08; lane D reviewed). `audio.spatial = original | stereo | hrtf`, behind `audio.mixer =
