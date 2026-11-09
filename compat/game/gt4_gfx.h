@@ -95,6 +95,12 @@ void gt4_scene_marker(void *context, int kind);
  * the car lamps and the course's light sources (warning lamps), as 0033EAB8 has them for the glow pass after the main
  * view (a.5 rule 4). */
 void gt4_scene_glow_lights(void *context, unsigned int view, const void *glow);
+/* A7 step 2: after a main view and its glow pass (0033EAB8, `race` its RacePS2Base), every car's lamps as spot
+ * Lights of that view (`view`; 0: the frame's main view), from each car's RaceCarModel through its Vehicle
+ * bodyToWorld, every frame, day and night. gt4_scene_car_drawn, from RaceCarModel's virtual 35 (003911D0) once its
+ * matrix is loaded, calibrates the car's model-to-body offset from where GT4 draws it. */
+void gt4_scene_car_lamps(void *context, unsigned int view, const void *race);
+void gt4_scene_car_drawn(void *context, const void *model);
 /* A7 step 1b: BillboardSet__render's group draws open (on 1) and close (on 0) a billboard context, in which each batch run
  * gets an Instance of its own (kInstBillboard); gt4_scene_billboard keeps a billboard's world centre, half sizes and
  * item colour (the address of the item's vertex colours), and gt4_scene_billboard_flush, after each 0049BBF0, sends

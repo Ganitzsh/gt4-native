@@ -106,6 +106,17 @@ void filtering() {
         expect(car.known && car.lights && car.range == sourceDefaults(gfx::scene::kSrcTailLight).range && other.range == 10.0f,
                "a car lamp of unknown group reaches as far as a tail lamp; 'other' keeps its general reach");
     }
+    {   // A7 step 2's car lamps arrive but don't light until F6 / F9 tune them; step 1a's kSrcCarLamp lights them
+        std::vector<Light> lamps;
+        for (uint8_t source : {gfx::scene::kSrcHeadlight, gfx::scene::kSrcTailLight, gfx::scene::kSrcBrakeLight})
+            lamps.push_back(record(1, source, 0, 0, -5));
+        lamps.push_back(record(1, gfx::scene::kSrcCarLamp, 0, 0, -5));
+        std::vector<GpuLight> lit;
+        GatherStats ls;
+        gatherLights(lamps.data(), lamps.size(), 1, 0.5f, 500.0f, 1.0f, lit, ls);
+        expect(ls.notLights == 3 && ls.kept == 1,
+               "headlights, tail and brake lamps counted as not lights; kSrcCarLamp lit");
+    }
     expect(s.invalid == 1, "a NaN position is invalid");
     expect(s.dark == 2, "black and intensity 0 are dark lamps, counted apart");
     expect(s.kept == 1 && out.size() == 1, "one light kept");
@@ -115,7 +126,8 @@ void filtering() {
 
 void spotsAndDirectional() {
     std::vector<Light> r;
-    Light spotUnknown = record(1, gfx::scene::kSrcHeadlight, 0, 0, -2);
+    // (a lit source: the car lamps' spots don't light yet)
+    Light spotUnknown = record(1, gfx::scene::kSrcOther, 0, 0, -2);
     spotUnknown.kind = gfx::scene::kLightSpot;
     spotUnknown.direction[2] = -2.0f;   // not unit
     r.push_back(spotUnknown);
@@ -161,14 +173,16 @@ void overLimit() {
     expect(s.droppedAround == 0, "none of the dropped spheres holds the camera");
 
     // Ranked by the sphere, not the centre: a head lamp 30 m away with a 40 m range is kept before tail lamps 5 m away
-    // with a 4 m range.
+    // with a 4 m range (lit sources with those ranges in the record: kSrcHeadlight and kSrcTailLight don't light yet).
     r.clear();
     for (uint32_t i = 0; i < kMaxLights; ++i) {
-        Light t = record(1, gfx::scene::kSrcTailLight, 0, 0, -5.0f);
+        Light t = record(1, gfx::scene::kSrcOther, 0, 0, -5.0f);
+        t.range = 4.0f;
         t.id = 100 + i;
         r.push_back(t);
     }
-    Light head = record(1, gfx::scene::kSrcHeadlight, 0, 0, -30.0f);
+    Light head = record(1, gfx::scene::kSrcOther, 0, 0, -30.0f);
+    head.range = 40.0f;
     head.id = 1;
     r.push_back(head);
     gatherLights(r.data(), r.size(), 1, 0.5f, 500.0f, 1.0f, out, s);

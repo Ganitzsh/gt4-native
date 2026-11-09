@@ -181,6 +181,9 @@ extern "C" void func_0033EAB8(char *self, void *buf, void *cur, void *aux, f32 t
         gt4_scene_marker(spr_base(), 8);   /* kMarkFlareEnd */
         if (!Pitmen__isNotRenderOthersPeriod(self + 0x3628, index)) func_003C2838(self + 0x3238);
     }
+    /* A7 step 2: every car's lamps as Lights of the main view, after the glow pass (method 0x3F0 runs each car's
+     * virtual 35, which draws with this frame's brake level and calibrates the lamp offset) */
+    gt4_scene_car_lamps(spr_base(), 0, self);
     { V *e = method(self, 0x3E8); ((FnPPPF)e->fn)(self + e->d, buf, cur, aux, t); }
     func_001057F8(buf);
 }

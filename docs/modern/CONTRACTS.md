@@ -283,7 +283,12 @@ enum LightKind : uint8_t { kLightPoint = 1, kLightSpot = 2, kLightDirectional = 
 enum LightSource : uint8_t {
     kSrcCourseGlow = 1,      // the course's lamps: the street lamps the host finds in the course meshes (F2b, not
                              //   a record), and the rare entries2[] sources whose blink is 0 (A7 step 1a)
-    kSrcHeadlight = 2, kSrcTailLight = 3, kSrcBrakeLight = 4,
+    kSrcHeadlight = 2, kSrcTailLight = 3, kSrcBrakeLight = 4,   // every car's lamps, every frame, day and night
+                             //   (A7 step 2, after each kViewMain's ViewEnd): spots, a headlight along its beam, the
+                             //   tail and brake lamps backwards; range and cone 0. Intensity: headlights and tail
+                             //   lamps 1 with kFrameLampsOn, else 0 (sent, so the host keeps their ids); brake lamps
+                             //   GT4's level with kFrameLampsOn, else a ramp of 0.25 a frame from the car's brake
+                             //   flag
     kSrcCarLightReflection = 5,   // 0x00341A30: not sent as lights (reflections; N3 handles their sprites)
     kSrcSun = 6,
     kSrcWarning = 7,         // 003B88C8's entries2[], a source with blink > 0 (warning lamps; A7 step 1a)
@@ -296,9 +301,12 @@ enum LightSource : uint8_t {
 };
 struct Light {
     Prefix prefix;
-    uint16_t view;               // the view whose space position / direction are in
+    uint16_t view;               // the view whose space position / direction are in; a consumer that wants world
+                                 //   space goes back through that view's ViewBegin::worldToView
     uint8_t kind, source;        // LightKind, LightSource
-    uint32_t id;                 // the game's light object address, or entrant << 8 | lamp index
+    uint32_t id;                 // the game's light object address; a car lamp (kSrcHeadlight, kSrcTailLight,
+                                 //   kSrcBrakeLight) entrant << 8 | group << 5 | index (group 0 headlights, 1 brake,
+                                 //   2 tail lamps), stable while the car is in the race
     uint32_t entrant;            // 0xFFFFFFFF none
     float position[3];           // view space (point, spot)
     float width;                 // glow quad half width as the game drew it, 0 none

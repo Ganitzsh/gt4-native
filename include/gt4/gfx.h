@@ -950,7 +950,9 @@ struct Light {
     Prefix prefix;
     uint16_t view;               // the view whose space position / direction are in
     uint8_t kind, source;        // LightKind, LightSource
-    uint32_t id;                 // the game's light object address, or entrant << 8 | lamp index
+    uint32_t id;                 // the game's light object address; a car lamp (headlight, tail, brake: A7 step 2)
+                                 //   entrant << 8 | group << 5 | index (group 0 headlights, 1 brake, 2 tail lamps),
+                                 //   stable while the car is in the race
     uint32_t entrant;            // 0xFFFFFFFF none
     float position[3];           // view space (point, spot)
     float width;                 // glow quad half width as the game drew it, 0 none

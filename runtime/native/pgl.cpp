@@ -11,6 +11,7 @@
 #include "../log.h"
 #include "../runtime.h"
 #include "../shared_state.h"
+#include "../vehicle.h"
 #include "gt4/link/protocol.h"
 #include "gt4/gfx.h"
 #include "gt4/unpack.h"
@@ -392,6 +393,8 @@ struct SceneFrameState {
     uint16_t billboardCount = 0;   // the flush's billboards kept (g_billboards)
     uint16_t openView = 0, viewInstances = 0;
     uint16_t mainView = 0;   // the frame's last kViewMain view (A7: the glow pass's lights name it)
+    float mainWorldToView[16] = {};   // that view's worldToView, as its ViewBegin sent it (A7 step 2's car lamps)
+    bool haveMainWorldToView = false;
     int mainRole = 0;        // R6: the role a kViewMain request opens with instead (gt4_scene_main_role; 0 none)
     bool haveProjection = false;
     float clip[16] = {}, viewport[12] = {};   // the last Projection sent
@@ -544,7 +547,11 @@ uint32_t gt4_scene_view_begin(uint32_t context, int role, int flags, uint32_t pa
     sceneAppend(context, &r, sizeof r);
     g_scene.openView = view;
     g_scene.viewInstances = 0;
-    if (role == scene::kViewMain) g_scene.mainView = view;
+    if (role == scene::kViewMain) {
+        g_scene.mainView = view;
+        std::memcpy(g_scene.mainWorldToView, r.worldToView, sizeof g_scene.mainWorldToView);
+        g_scene.haveMainWorldToView = (r.flags & scene::kViewCameraKnown) != 0;
+    }
     return view;
 }
 
@@ -676,6 +683,239 @@ void gt4_scene_glow_lights(uint32_t context, uint32_t view, uint32_t glow) {
             r.intensity = std::sin((guest_ref<float>(params + 0x34) + guest_ref<float>(source + 0x1C)) * 6.2831855f) * 0.5f + 0.5f;
         sceneAppend(context, &r, sizeof r);
     }
+}
+
+}  // extern "C"
+
+// A7 step 2 (CONTRACTS.md a.4, PLAN A7 step 2): every car's lamps as Lights of the main view, every frame, drawn or
+// not.
+// A car's lamps are its RaceCarModel's (RaceEntryCar + 0x11F0) element groups, *(*(model + 0x18) + 0x10): the
+// headlights (count +0x18, elements +0x1C), the tail lamps (+0x20 / +0x24), the brake lamps (+0x28 / +0x2C); an element
+// is 0x70 bytes, its model-space point at +0x30, its beam point at +0x48, its colour at +0x54, its glow size at +0x40 /
+// +0x44 (as step 1a reads them). A model point (x, y, z) is the body point (-z + offset, x, y) (CONTRACTS.md's Vehicle
+// bodyToWorld, d0ad4a3), the offset along row 0 per car: gt4_scene_car_drawn calibrates it the first time GT4 draws the
+// car in the main view (the model's origin through the current object-to-view, back through the main view, into the
+// car's body); until then kDefaultLampOffset (the six cars measured: 0 to -0.39 m), counted.
+namespace {
+constexpr float kDefaultLampOffset = -0.31f;
+constexpr uint32_t kEntryModel = 0x11F0, kEntryVehicle = 0x18, kModelGroups = 0x18, kModelBrakeLevel = 0x54;
+constexpr uint32_t kElementBytes = 0x70, kCarBrake = 0x590;
+struct LampCar {
+    uint32_t model = 0;          // the model it was calibrated on (another car in the slot recalibrates)
+    float offset = kDefaultLampOffset;
+    bool calibrated = false;
+    float ramp = 0.0f;           // the brake lamps' intensity while GT4's own isn't kept (by day): 0.25 a frame
+    uint32_t rampFrame = 0;      // the frame the ramp last moved (once a frame, whatever the views)
+    int lamps = -1;              // its lamp count last time (a change of its ids shows as a count change)
+};
+LampCar g_lampCars[car::kMaxCars];
+struct LampCounters {
+    uint64_t calls = 0, noRace = 0, frames = 0, cars = 0, lamps = 0, atZero = 0, uncalibrated = 0, noLamps = 0,
+             countChanges = 0, calibrations = 0, calibrationsRejected = 0;
+} g_lampCounters;
+
+uint32_t guestWord(uint32_t at) { return at && in_guest_ram(at, 4) ? guest_ref<uint32_t>(at) : 0u; }
+
+// The entrant of an entry car (its conductor car at +0x18, as D9's entrant_of), 0xFF none; `vehicle` that car.
+uint8_t lampEntrant(uint32_t entryCar, uint32_t &vehicle) {
+    vehicle = guestWord(entryCar + kEntryVehicle);
+    const uint32_t conductor = vehicle_conductor();
+    if (!conductor || vehicle < conductor + car::kCarsOffset) return 0xFF;
+    const uint32_t offset = vehicle - (conductor + car::kCarsOffset);
+    if (offset % car::kCarStride || offset / car::kCarStride >= car::kMaxCars) return 0xFF;
+    return static_cast<uint8_t>(offset / car::kCarStride);
+}
+
+// Row vectors (v . M, the translation in row 3): the GS's and the Vehicle record's convention.
+void rowTimes(const float v[3], const float *m, float out[3], bool point) {
+    for (int j = 0; j < 3; ++j) out[j] = v[0] * m[j] + v[1] * m[4 + j] + v[2] * m[8 + j] + (point ? m[12 + j] : 0.0f);
+}
+bool invert4(const float m[16], float out[16]) {   // (Gauss-Jordan)
+    double a[4][8];
+    for (int i = 0; i < 4; ++i)
+        for (int j = 0; j < 8; ++j) a[i][j] = j < 4 ? m[i * 4 + j] : (j - 4 == i ? 1.0 : 0.0);
+    for (int c = 0; c < 4; ++c) {
+        int p = c;
+        for (int r = c + 1; r < 4; ++r)
+            if (std::fabs(a[r][c]) > std::fabs(a[p][c])) p = r;
+        if (std::fabs(a[p][c]) < 1e-12) return false;
+        for (int j = 0; j < 8; ++j) std::swap(a[c][j], a[p][j]);
+        const double d = a[c][c];
+        for (int j = 0; j < 8; ++j) a[c][j] /= d;
+        for (int r = 0; r < 4; ++r)
+            if (r != c) {
+                const double f = a[r][c];
+                for (int j = 0; j < 8; ++j) a[r][j] -= f * a[c][j];
+            }
+    }
+    for (int i = 0; i < 4; ++i)
+        for (int j = 0; j < 4; ++j) out[i * 4 + j] = static_cast<float>(a[i][j + 4]);
+    return true;
+}
+}  // namespace
+
+extern "C" {
+
+// From the game_src copy of RaceCarModel's virtual 35 (003911D0), once its car's matrix is loaded (set 0, the model's
+// object-to-view): the car's row-0 offset, where GT4 draws the model's origin, in the car's body. 0033EAB8 calls it
+// through method 0x3F0 after the main view has closed, with that view's camera (step 1a's lamps are in its space);
+// never while another view is open (the mirror's camera). Once per car and model; a result off row 0 is rejected
+// (counted).
+void gt4_scene_car_drawn(uint32_t context, uint32_t model) {
+    (void)context;
+    if (!gt4_scene_on() || !g_scene.inFrame || !g_scene.haveMainWorldToView || !model ||
+        (g_scene.openView != 0 && g_scene.openView != g_scene.mainView))
+        return;
+    uint32_t vehicle = 0;
+    const uint8_t entrant = lampEntrant(model - kEntryModel, vehicle);
+    if (entrant == 0xFF) return;
+    LampCar &c = g_lampCars[entrant];
+    if (c.calibrated && c.model == model) return;
+    float set0[16], set1[16], viewToWorld[16];
+    currentSets(set0, set1);
+    if (!invert4(g_scene.mainWorldToView, viewToWorld)) return;
+    float world[3];
+    rowTimes(set0 + 12, viewToWorld, world, true);   // (the origin, view space, back to world)
+    const gfx::scene::Vehicle v = decode_vehicle(static_cast<const uint8_t *>(guest_ptr(vehicle)), entrant);
+    float d[3], body[3];
+    for (int i = 0; i < 3; ++i) d[i] = world[i] - v.bodyToWorld[3][i];
+    for (int r = 0; r < 3; ++r)
+        body[r] = d[0] * v.bodyToWorld[r][0] + d[1] * v.bodyToWorld[r][1] + d[2] * v.bodyToWorld[r][2];
+    if (std::fabs(body[1]) > 0.05f || std::fabs(body[2]) > 0.05f || std::fabs(body[0]) > 1.5f) {
+        ++g_lampCounters.calibrationsRejected;   // (kept on the default)
+        static uint32_t logged = 0;
+        if (logged++ < 8)
+            log_warn("pgl: car lamps: entrant %u's model origin at body %.3f %.3f %.3f, not on row 0: offset not taken",
+                     entrant, body[0], body[1], body[2]);
+        return;
+    }
+    c.model = model;
+    c.offset = body[0];
+    c.calibrated = true;
+    ++g_lampCounters.calibrations;
+    log_info("pgl: car lamps: entrant %u calibrated: offset %.3f m along row 0 (off it: %.3f %.3f)", entrant, body[0],
+             body[1], body[2]);
+}
+
+// After a main view and its glow pass (0033EAB8's copy, once per render_world: per half in 2 Player Battle; after
+// method 0x3F0, whose virtual 35 calls drew with this frame's brake level and calibrated the offsets), naming the view
+// (`view`; 0: the frame's last kViewMain): one Light per lamp element of every car in the race's list (RacePS2Base
+// `race` + 0x6C, + 0x60), spots (headlights along their beam, tail and brake lamps backwards; range and cone 0,
+// unknown), id entrant << 8 | group << 5 | index (group 0 headlights, 1 brake, 2 tail), every frame, day and night.
+// Intensity: the headlights and tail lamps 1 with GT4's lamp switch on (the course scene's 0x8000, kFrameLampsOn),
+// else 0; the brake lamps GT4's own level (model + 0x54) with the switch on, else a ramp of 0.25 a frame from the
+// car's brake flag (+0x590), as GT4 has no level for them by day. No race: returns at once, counted.
+void gt4_scene_car_lamps(uint32_t context, uint32_t view, uint32_t race) {
+    namespace scene = gfx::scene;
+    ++g_lampCounters.calls;
+    if (!view) view = g_scene.mainView;
+    if (!gt4_scene_on() || !g_scene.inFrame || !view || !g_scene.haveMainWorldToView || !race) {
+        ++g_lampCounters.noRace;
+        return;
+    }
+    const uint32_t base = guestWord(race + 0x6C), list = guestWord(base + 0x60);
+    const uint32_t course = guestWord(guestWord(base + 0x80) + 4);
+    const uint32_t sceneFlags = guestWord(guestWord(course + 0x80) + 0x10);
+    if (!list || !in_guest_ram(list, 12) || !vehicle_conductor()) {
+        ++g_lampCounters.noRace;
+        return;
+    }
+    const bool on = (sceneFlags & 0x8000u) != 0;
+    const int32_t count = guest_ref<int32_t>(list);
+    const uint32_t items = guest_ref<uint32_t>(list + 8);
+    if (count < 1 || count > 16 || !in_guest_ram(items, 4u * static_cast<uint32_t>(count))) {
+        ++g_lampCounters.noRace;
+        return;
+    }
+    ++g_lampCounters.frames;
+    const uint32_t glow = race + 0xDA0;   // (the glow pass's colour scale at +0x21F0, as step 1a's car lamps)
+    static const struct { uint32_t count, elements; uint8_t source; } kGroups[3] = {
+        {0x18, 0x1C, scene::kSrcHeadlight}, {0x28, 0x2C, scene::kSrcBrakeLight}, {0x20, 0x24, scene::kSrcTailLight}};
+    for (int32_t k = 0; k < count; ++k) {
+        const uint32_t entryCar = guest_ref<uint32_t>(items + 4u * static_cast<uint32_t>(k));
+        uint32_t vehicle = 0;
+        const uint8_t entrant = entryCar ? lampEntrant(entryCar, vehicle) : 0xFF;
+        const uint32_t model = entryCar + kEntryModel;
+        const uint32_t holder = entrant == 0xFF ? 0 : guestWord(model + kModelGroups);
+        // (virtual 35's vtbl[10], virtual 09 at 00390540: func_00450FB0, the holder's +0x10; +0x14 is virtual 10's)
+        const uint32_t groups = guestWord(holder + 0x10);
+        if (!groups || !in_guest_ram(groups, 0x30)) {
+            ++g_lampCounters.noLamps;
+            continue;
+        }
+        ++g_lampCounters.cars;
+        LampCar &c = g_lampCars[entrant];
+        if (c.model != model) c.calibrated = false;
+        if (!c.calibrated) ++g_lampCounters.uncalibrated;
+        const float offset = c.calibrated ? c.offset : kDefaultLampOffset;
+        const scene::Vehicle v = decode_vehicle(static_cast<const uint8_t *>(guest_ptr(vehicle)), entrant);
+        if (c.rampFrame != g_sceneFrames) {   // (once a frame: 2 Player Battle's second half doesn't move it again)
+            c.rampFrame = g_sceneFrames;
+            const bool braking = guest_ref<float>(vehicle + kCarBrake) > 0.0f;
+            c.ramp = braking ? std::min(1.0f, c.ramp + 0.25f) : std::max(0.0f, c.ramp - 0.25f);
+        }
+        const float brake = on ? guest_ref<float>(model + kModelBrakeLevel) : c.ramp;
+        int lamps = 0;
+        for (uint32_t g = 0; g < 3; ++g) {
+            const int32_t n = guest_ref<int32_t>(groups + kGroups[g].count);
+            const uint32_t elements = guestWord(groups + kGroups[g].elements);
+            if (n < 1 || n > 31 || !elements || !in_guest_ram(elements, kElementBytes * static_cast<uint32_t>(n)))
+                continue;
+            const bool headlight = kGroups[g].source == scene::kSrcHeadlight;
+            for (int32_t i = 0; i < n; ++i) {
+                const uint32_t e = elements + kElementBytes * static_cast<uint32_t>(i);
+                const float mx = guest_ref<float>(e + 0x30), my = guest_ref<float>(e + 0x34);
+                const float mz = guest_ref<float>(e + 0x38);
+                const float body[3] = {-mz + offset, mx, my};
+                float dir[3] = {headlight ? 1.0f : -1.0f, 0.0f, 0.0f};   // (body space: forward, or backwards)
+                if (headlight) {   // along its beam point when it has one
+                    const float bx = guest_ref<float>(e + 0x48) - mx, by = guest_ref<float>(e + 0x4C) - my,
+                                bz = guest_ref<float>(e + 0x50) - mz;
+                    const float len = std::sqrt(bx * bx + by * by + bz * bz);
+                    if (len > 1e-4f) {
+                        dir[0] = -bz / len;
+                        dir[1] = bx / len;
+                        dir[2] = by / len;
+                    }
+                }
+                float world[3], worldDir[3];
+                rowTimes(body, &v.bodyToWorld[0][0], world, true);
+                rowTimes(dir, &v.bodyToWorld[0][0], worldDir, false);
+                scene::Light r{};
+                r.prefix = {scene::kLight, scene::kVersion};
+                r.view = static_cast<uint16_t>(view);
+                r.kind = scene::kLightSpot;
+                r.source = kGroups[g].source;
+                r.id = static_cast<uint32_t>(entrant) << 8 | g << 5 | static_cast<uint32_t>(i);
+                r.entrant = entrant;
+                rowTimes(world, g_scene.mainWorldToView, r.position, true);
+                rowTimes(worldDir, g_scene.mainWorldToView, r.direction, false);
+                const float l = std::sqrt(r.direction[0] * r.direction[0] + r.direction[1] * r.direction[1] +
+                                          r.direction[2] * r.direction[2]);
+                for (float &x : r.direction) x = l > 0.0f ? x / l : 0.0f;
+                for (int j = 0; j < 3; ++j)
+                    r.colour[j] = guest_ref<float>(e + 0x54 + 4u * j) * guest_ref<float>(glow + 0x21F0 + 4u * j);
+                r.width = guest_ref<float>(e + 0x40);
+                r.height = guest_ref<float>(e + 0x44);
+                r.intensity = kGroups[g].source == scene::kSrcBrakeLight ? brake : (on ? 1.0f : 0.0f);
+                if (!(r.intensity > 0.0f)) ++g_lampCounters.atZero;
+                sceneAppend(context, &r, sizeof r);
+                ++lamps;
+                ++g_lampCounters.lamps;
+            }
+        }
+        if (c.lamps >= 0 && c.lamps != lamps) ++g_lampCounters.countChanges;
+        c.lamps = lamps;
+    }
+    if (g_lampCounters.frames % 600 == 1)
+        log_info("pgl: car lamps (A7 step 2): %llu views, %llu car-views, %llu lamps (%llu at 0; switch %s), %llu "
+                 "car-views on the default offset, %llu calibrations (%llu rejected), %llu cars without lamps, "
+                 "%llu lamp count changes, %llu calls without a race",
+                 (unsigned long long)g_lampCounters.frames, (unsigned long long)g_lampCounters.cars,
+                 (unsigned long long)g_lampCounters.lamps, (unsigned long long)g_lampCounters.atZero, on ? "on" : "off",
+                 (unsigned long long)g_lampCounters.uncalibrated, (unsigned long long)g_lampCounters.calibrations,
+                 (unsigned long long)g_lampCounters.calibrationsRejected, (unsigned long long)g_lampCounters.noLamps,
+                 (unsigned long long)g_lampCounters.countChanges, (unsigned long long)g_lampCounters.noRace);
 }
 
 // Inside the course bracket (and not paused): kInstCourse at the bracket's own matrix-stack depth, its world-space
