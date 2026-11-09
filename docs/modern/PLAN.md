@@ -1007,9 +1007,10 @@ display as privileged packets, the game's own GIF as it came), 2D first (enough 
 `tools/pcsx2_gsdump.py` playing it in PCSX2's player at 1x with a side-by-side compare; 3D through the read-back last.
 A dump holds game content (GS memory, textures), so it stays on the owner's machines like a capture, never committed
 or served. The `.gs` format is the version PCSX2's player reads (lane C has read state version 9). Depends: B25.
-Acceptance: `CTEST` round trip on a synthetic frame (written, parsed back, every register and vertex equal); a HUD
-frame and, after the 3D step, a race frame rendered by PCSX2's software GS from our dump, against our renderer at
-`original` 1x, with the differences listed by draw; B24's exact mode then judged on it.
+Acceptance: `CTEST` round trip on a synthetic frame (written, read back through `GsFrontend::gif`, which needs no GPU,
+and the FrameLists compared: every register and vertex equal); a HUD frame and, after the 3D step, a race frame
+rendered by PCSX2's software GS from our dump, against our renderer at `original` 1x, with the differences listed by
+draw; B24's exact mode then judged on it.
 
 ### Lane D: systems
 
