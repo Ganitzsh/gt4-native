@@ -1,4 +1,4 @@
-// Select + Start opens the settings menu on a pad (main.cpp). Whichever of the two goes down first reaches the game
+// Select + Start opens Settings on a pad (main.cpp). Whichever of the two goes down first reaches the game
 // only once no chord can follow: released within kChordMs, it is sent as a short press after its release; held alone
 // longer, it is sent from then on. A chord sends neither until both are up. (A Start that reached the game before the
 // chord completed paused the race under the menu.)

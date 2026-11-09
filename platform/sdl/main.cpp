@@ -512,9 +512,9 @@ struct WheelFxMailbox {
 // game has sent any, bit 8 the small motor, bits 0-7 the large one.
 std::atomic<uint32_t> g_rumble[2];
 
-// GT4_HOST_KEYS=FRAME:KEY,... (unattended checks of the settings menu): presses KEY (escape up down left right
-// return backspace pageup pagedown f1) when FRAME frames have been presented. It also enables the menu
-// without a window.
+// GT4_HOST_KEYS=FRAME:KEY,... (unattended checks of the settings pages): presses KEY (escape up down left right
+// return backspace pageup pagedown f1) when FRAME frames have been presented. It also enables the
+// pages without a window.
 struct ScriptedKey { uint32_t frame; SDL_Keycode key; };
 std::vector<ScriptedKey> keyScript() {
     static const std::pair<const char*, SDL_Keycode> names[] = {
@@ -602,7 +602,7 @@ int run(const Options& options) {
     // The PS2 frame fills a 4:3 TV picture (640 x 448 with non-square pixels); --set aspect.ratio overrides.
     const bool gsMode = !options.game.empty() || !options.replay.empty();
     if (gsMode && settings.aspect == gt4::AspectRatio::Window) gt4::setOption(settings, "aspect.ratio", "4:3");
-    // Over the game, the settings readout only on request (F1, or the settings menu).
+    // Over the game, the settings readout only on request (F1, or Settings).
     if (gsMode) settings.overlayText = false;
     for (const auto& [key, value] : options.sets) {
         const std::string error = gt4::setOption(settings, key, value);

@@ -47,7 +47,7 @@ void *kernel_make_wait_timer();
 
 // Ticks of the PS2 bus clock (147.456 MHz) since boot, from the host's monotonic clock.
 uint64_t kernel_bus_cycles();
-void kernel_set_paused(bool paused);  // the host's settings menu: stops the bus clock (frames, alarms)
+void kernel_set_paused(bool paused);  // the host's stall MS: stops the bus clock (frames, alarms)
 bool kernel_paused();
 uint32_t kernel_frame_count();
 // Takes time the game did not run (a debugging tool's own cost) off the bus clock; safe in an

@@ -1,6 +1,6 @@
 # Lighting: ambient occlusion and the enhanced grade
 
-Two options of the settings menu (GRAPHICS) relight the game's 3D scenes, neither of which the PS2 had:
+Two options in Settings (Graphics) relight the game's 3D scenes, neither of which the PS2 had:
 
 - **Ambient occlusion** (`effects.ambient_occlusion`: off, low, medium, high, ultra; `original` is off):
   geometry that hides the sky darkens what it hides (under and around cars, wheel arches, tyre walls,

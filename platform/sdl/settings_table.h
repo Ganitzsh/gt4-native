@@ -7,7 +7,7 @@
 //   settings_lighting.cpp  lighting.* (night lighting, lane F)
 //   settings_input.cpp     input.* (lane D)
 //   settings_audio.cpp     audio.* (lane D)
-//   settings_ui.cpp        ui.* (the settings menu itself, lane M)
+//   settings_ui.cpp        ui.* (how Settings opens, lane M)
 // The order of the parts and of the options in them is the order of the settings file: an option goes after the
 // others of its section, in its module's part. Internal to the settings: not for other code.
 #include "settings.h"

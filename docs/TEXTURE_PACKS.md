@@ -21,7 +21,7 @@ takes the first that has replacements:
 
 A pack in versions (3.0, then 3.0.1 to 3.0.4) is installed in order, each one's files over the last.
 
-The settings menu's "HD textures" row (GRAPHICS) switches the pack on and off while the game runs; it reads
+The "HD textures" row in Settings (Graphics) switches the pack on and off while the game runs; it reads
 "Not installed" when no pack was found at start-up. The setting is `texture.hd_pack` (on by default).
 
 ## How it works

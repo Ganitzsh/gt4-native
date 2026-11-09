@@ -520,7 +520,7 @@ void kernel_post_callback(void (*fn)(uint32_t), uint32_t arg) {
     SetEvent(g_irq_wake);
 }
 
-// The host's settings menu pauses the game (GT4_REC_HOST_CMD 2 / 3): the bus clock stands still, so no
+// The host pauses the game (GT4_REC_HOST_CMD 2 / 3; the session's stall MS): the bus clock stands still, so no
 // frame, alarm or timer comes due, and the time spent paused is left out afterwards.
 namespace {
 std::atomic<bool> g_paused{false};

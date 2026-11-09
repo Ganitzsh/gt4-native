@@ -2,7 +2,7 @@
 
 **Gran Turismo 4 running as a native PC program, from your own copy of the game.** The game's code comes from the
 [gt4-decomp](https://github.com/gustavocanepa/gt4-decomp) decompilation, compiled for the PC, with a Vulkan renderer,
-native sound, native saves and a settings menu of its own. There is no PS2 emulator in it.
+native sound, native saves and settings pages of its own. There is no PS2 emulator in it.
 
 It runs on Windows, and on Linux through Proton: Steam Deck, or an ARM handheld such as the AYN Odin 3 (Proton with
 FEX).
@@ -238,7 +238,7 @@ belong upstream in [gt4-decomp](https://github.com/gustavocanepa/gt4-decomp); ch
 - The [gt4-decomp contributors](https://github.com/gustavocanepa/gt4-decomp/graphs/contributors) and the Gran
   Turismo modding and reverse-engineering community.
 - **[Julien Ganichot](https://github.com/Ganitzsh)**: this fork's playable build (the native game runtime, renderer,
-  sound, saves, settings menu, packaging and Proton support).
+  sound, saves, settings pages, packaging and Proton support).
 - Third-party libraries (SDL3, FSR, glslang and others): [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 More in [CREDITS.md](CREDITS.md).

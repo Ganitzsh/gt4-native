@@ -70,7 +70,7 @@ public:
     // The wheel GT4 sees through LGDEV (GT4_REC_WHEEL, PLAN.md D7): every host frame while one is in dfp mode, and
     // once disconnected when it leaves.
     void sendWheel(const Gt4LinkWheel& wheel);
-    // Stops or restarts the game's clock (its VBlanks, alarms and timers): the in-game settings menu.
+    // Stops or restarts the game's clock (its VBlanks, alarms and timers): the session's stall MS.
     void setPaused(bool paused);
     // The settings pages: a GT4_REC_SETTINGS payload (schema, values, a request's result: ui_records.h), and host
     // command 6 (open the settings at the next safe point) or 7 (close them). Ignored without a live game.

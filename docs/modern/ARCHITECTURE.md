@@ -231,7 +231,7 @@ New keys (the settings table is lane C's, options in per-module files after E1):
 | `input.*`, `audio.*`, `saves.*` | lane D | PS2 behaviour | per lane |
 | `ui.*` | lane M (MENU_DESIGN.md section 3.8) | `ui.entry = hotkey`, `ui.pause = gt4` | `integrated`, `native` |
 
-Each option states which renderer uses it; the settings menu greys out the ones the current `render.scene` does
+Each option states which renderer uses it; the settings pages grey out the ones the current `render.scene` does
 not use (extends `1b495a6`).
 
 ---
