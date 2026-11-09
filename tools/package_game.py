@@ -30,6 +30,7 @@ build/host-windows-arm64-Release, tools/build_windows.cmd with GT4_ARCH=arm64, a
 CI, PLAN.md C4):
     GT4-Native-VERSION/gt4_host.exe, gt4_game.exe, msvcp140.dll, vcruntime140*.dll
     GT4-Native-VERSION/settings.ini, settings-handheld.ini   the desktop and handheld profiles
+    GT4-Native-VERSION/settings-playtest.ini   docs/modern/settings-playtest.ini: the opt-in work, to try
     GT4-Native-VERSION/README.txt, LICENSE, THIRD_PARTY_NOTICES.md, CREDITS.md, BUILD-INFO.txt
     GT4-Native-VERSION/textures/SCUS-97328/HOW-TO.txt     where an HD texture pack goes
     GT4-Native-VERSION/game/PUT-YOUR-GAME-HERE.txt           the player's disc image goes here; gt4_host.exe makes
@@ -105,6 +106,8 @@ data. Full instructions, controls, settings and known issues: https://github.com
 3. Settings menu: Escape, or Select+Start on the pad.
 
 Handheld (Steam Deck, ARM handhelds under Proton): rename settings-handheld.ini to settings.ini first.
+To try the work that is in no preset yet: settings-playtest.ini (each line says what to look for), copied over
+settings.ini after keeping a copy of yours.
 PS2 saves: gt4_host.exe --import-save "path\\to\\Mcd001.ps2" copies them into the saves folder.
 HD texture packs go in textures\\SCUS-97328.
 Problems: report them with host.log and game.log from this folder.
@@ -133,6 +136,8 @@ an ARM handheld runs it through FEX. Steam with a Proton installed is all it nee
 GT4_PROTON=/path/to/a/Proton/folder ./gt4-native.sh uses that Proton (by default the newest Steam has, then
 ~/.steam/root/compatibilitytools.d and /usr/share/steam/compatibilitytools.d).
 Handheld: rename settings-handheld.ini to settings.ini first.
+To try the work that is in no preset yet: settings-playtest.ini (each line says what to look for), copied over
+settings.ini after keeping a copy of yours.
 PS2 saves: ./gt4_host --import-save /path/to/Mcd001.ps2 copies them into the saves folder.
 HD texture packs go in textures/SCUS-97328.
 Problems: report them with host.log and game.log from this folder.
@@ -210,6 +215,14 @@ On the first start gt4_host.exe makes CORE.GT4.elf here from it.
 # What a release archive may contain beside the programs: anything else (a disc image, an executable taken from the
 # game, a save) stops the packaging.
 RELEASE_DOCS = ("LICENSE", "THIRD_PARTY_NOTICES.md", "CREDITS.md")
+# Shipped beside settings-handheld.ini when the tree has it: the work in no preset yet, switched on to try, each line
+# saying what to look for (not a preset; the owner's playtest, 2026-11-09).
+PLAYTEST = os.path.join("docs", "modern", "settings-playtest.ini")
+
+
+def playtest_text(root):
+    path = os.path.join(root, PLAYTEST)
+    return open(path, encoding="utf-8").read() if os.path.isfile(path) else None
 
 
 def git_head(folder):
@@ -379,6 +392,8 @@ def release(a):
         "game/PUT-YOUR-GAME-HERE.txt": (GAME_FOLDER_NOTE, "\r\n"),
         "textures/SCUS-97328/HOW-TO.txt": (TEXTURES_NOTE, "\r\n"),
     }
+    if playtest_text(root) is not None:
+        texts["settings-playtest.ini"] = (playtest_text(root), "\n")
     print(f"writing {archive}")
     with zipfile.ZipFile(archive + ".part", "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         for path, arc in files:
@@ -421,6 +436,8 @@ def linux_release(a, name, host, game, root, info, sources):
         "game/PUT-YOUR-GAME-HERE.txt": (GAME_FOLDER_NOTE, 0o644),
         "textures/SCUS-97328/HOW-TO.txt": (TEXTURES_NOTE, 0o644),
     }
+    if playtest_text(root) is not None:
+        texts["settings-playtest.ini"] = (playtest_text(root), 0o644)
     now = int(time.time())
     print(f"writing {archive}")
     with tarfile.open(archive + ".part", "w:gz", compresslevel=9, format=tarfile.PAX_FORMAT) as z:
