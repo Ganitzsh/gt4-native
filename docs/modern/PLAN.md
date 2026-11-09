@@ -796,9 +796,15 @@ builds).
 Step 1 done (lane C, 2026-11-09): the SDK's FSR 3.1 upscaler vendored unmodified, the upscaler only, with no frame
 generation, and a manifest of upstream hashes (6157b187); `gt4_fsr3` built on every host platform from our glslang's
 SPIR-V in both FFX_HALF variants, its bindings reflected, the variant logged per device, a compile-time check that the
-SDK's private context fits the public size, and linked into nothing (7d17cd5a). Step 2: the backend behind
-`upscale::Upscaler`, `render.upscaler = fsr3` in no preset, reaching the test scene and the modern scene until B16c's
-part 4.
+SDK's private context fits the public size, and linked into nothing (7d17cd5a). Step 2 done (lane C, 2026-11-09;
+fd2b8d6d, 32ad5c26, 26479c48): the backend behind `upscale::Upscaler`, `render.upscaler = fsr3` in no preset, reaching
+the test scene and the modern scene until B16c's part 4; VAL with no messages in both FFX_HALF variants, a failed
+create falling back to FSR 1 (FSR 2's now too), `PRESETS` identical, and `PERF` at 2560 x 1440 ultra about FSR 2's
+(559 against 583 us at native AA, 356 against 351 upscaling). On the way: the frame-generation link gap (a refusing
+stub), twelve FSR 2 and SDK name clashes (renamed), the SDK's null KHR lookup (served as its core function), the
+16-bit features enabled only when supported, and the SDK GLSL's luma-history format (a patched copy, AMD issue #161)
+(the stub, the renames and the patched header listed in third_party/README). Left: the game's frames (B16c),
+fractional scales (B16b), the Odin run (C6b: the variant Turnip gets, the memory line).
 
 **B18: GPU particles from emitters (M).** Depends: A8, B22. Acceptance: `VAL`; smoke and sparks at the emitters
 (review against the GS path's sprites); in the reactive mask.
