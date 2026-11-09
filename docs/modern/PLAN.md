@@ -1150,6 +1150,11 @@ N2a (blending grading and fog parameters) is dropped and N2 is not designed.
   of 9.8-31 %). N2's 1 % bar is its acceptance after a fix, not this detection test. If one shows it, N2 reopens
   with that capture: its source is found by RISKS R10's method, then this ticket is designed from what
   it finds. Otherwise N2 stays parked.
+- **Checked** (lane F, 2026-11-09): Clubman Stage Route 5 in the Normal direction (`lap_csr5.cap`, B-spec, over two
+  laps, the GS path at `original`, every frame from 600): 31 level shifts of 5 % or more, none with one frame carrying
+  70 % (the largest share 57 %, at +5.9 %; the largest shift, the tunnel's -70.5 %, carries 18 % in one frame), so the
+  lap-repeat test isn't reached and N2 stays parked. The night set is the Route 5 layouts (N3), so with Route 5
+  Reverse (R10) and Clubman forward the reopening check is done, unless `kFrameNight` shows another night layout.
 - Candidates kept for a reopening: *b, prelit colour* (a per-section gain from the course instances' prelit
   luminance, normalised to the neighbouring sections and blended near the boundary, applied where prelit colour
   enters as baked lighting in B10; needs A11b), *c, lighting constants* (the per-section light matrices blended over
