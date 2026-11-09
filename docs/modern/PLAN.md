@@ -1624,6 +1624,17 @@ draw numbers are those of replay 2514, and the draws are found by what they are,
   has no scene frame and no lamps. Counters per frame: candidates, skipped, held back for no covering disc, and held
   back for a partial list or a view not yet trusted, apart, so a flicker on read frames doesn't read as a gate fault.
   The cached verdict above is unchanged; the gate is an extra test on top of it.
+- **The albedo under a skipped pool** (2026-11-09, from lane F's never-dark phases 4-5): any albedo estimated from the
+  picture after the skip is circular, since the skip has just taken the road's light out of it (with the skip, lane
+  F's split: near road 0.50-0.52, far road 0.52-0.70, highest where the skip left the darkest blocks), so no lamp
+  intensity passes never-dark on both sides with F2b's estimate (per block: the far road lifted; one level: the lit
+  road washed out). Under a skipped item the relight takes the albedo of the base surface beneath it, which stays
+  drawn (the skipped item is GT4's light layer, so its own texture is the light's colour). Its first piece is lane
+  B's: an R8 mask of the skip's per-pixel coverage, written by the candidate draws and read by `gsn_light`, built as
+  part of step 1, not as debug code. On it, lane F measures with a stand-in (the course's road base textures' mean
+  colour, linear, from the texture summaries) and runs never-dark on all three laps. If that passes, the shipped
+  albedo is a side channel written by the base surfaces where they are drawn (B8's side passes), which keeps the
+  markings' detail; if not, N3's skip waits for B10's material colour.
 Depends: R11, A7, B4, B6, F2, F2b. Acceptance: the step 0 hunt repeated on the lap of every course with the flag (Hong
 Kong at dusk included) with the mechanism in place of the debug skip (only lamp light changes, every marking and the
 checkers kept); v4's verdicts judged on what the live game draws, not a mid-run replay's textures (v4 reads the
@@ -1739,6 +1750,15 @@ entries, game-side, with exact centres and sizes, and the host keeps those whose
   ms budget; `ORIG` identical to the R6 hash lists on race7, race_grid43 and race_boot; with records off the scene
   cache is never created and the lamp pass runs 0 times. Before `lighting.night = enhanced` enters a preset: the
   Odin's measurement of B6's span (B6c, C6b), as for hybrid.
+- **The relight's albedo** (2026-11-09): the estimate (colour over the 8x8 block's log-average, times 0.18) inflates
+  the albedo to about 0.7-0.8 on near and far road alike without N3's skip (lane B's review images; near 0.83, far
+  0.71): a global scale, which F2b's calibrated I0 already absorbs, so F2b's look needs no amendment. Tried and not
+  landed: one level for the whole view (`parked/f2b-view-level`, 6d077a0), which made our light land hardest where GT4
+  already lit, washing out the lit road (lane B's review images), and a floor under the block level at a fraction of
+  the view's (k 0.3-0.7; `parked/f2b-albedo-floor`, 8a655b5), which barely binds, since a dim road block's log-average
+  is above half the view's. Left as a possible small change: a lower key (0.09) with I0 doubled, the same picture with
+  fewer pixels at the 0.9 clamp, texture kept in the brightest lit areas, with its own images. The true albedo, which
+  N3's skip needs, comes from the surfaces' own colour (N3 step 1, B10).
 
 **F3: Clustered lighting in the deferred and forward passes (M).** Depends: F1, B10, B22. Acceptance: `VAL`;
 `PERF`; the same lights as F2 in `modern`, with G-buffer normals.
