@@ -1,4 +1,4 @@
-// The host UI's SDF text (platform/ui/sdf_font, PLAN.md E5): the embedded fonts load, layout and measure agree and
+// The host UI's SDF text (platform/ui/host/sdf_font, PLAN.md E5): the embedded fonts load, layout and measure agree and
 // scale with the size, UTF-8 decodes (malformed bytes as U+FFFD), a codepoint none of the fonts has is a box counted
 // once, and the atlas reports new glyphs. Prints the build's cost (E5: reported in the commit).
 #include "sdf_font.h"

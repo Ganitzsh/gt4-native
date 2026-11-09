@@ -1,7 +1,7 @@
 #version 460
 #extension GL_GOOGLE_include_directive : require
 #include "common.glsl"
-// The 2D layer's text (PLAN.md E5): glyphs as signed distance fields (platform/ui/sdf_font.cpp, 0.5 at the edge),
+// The 2D layer's text (PLAN.md E5): glyphs as signed distance fields (platform/ui/host/sdf_font.cpp, 0.5 at the edge),
 // anti-aliased over about one output pixel whatever the size, so text stays sharp from 720p to 4K.
 layout(set = 0, binding = 0) uniform sampler2D atlas;   // r = distance (0.5 on the outline, more inside)
 layout(location = 0) in vec2 inUv;
