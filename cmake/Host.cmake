@@ -754,6 +754,10 @@ add_test(NAME material_table COMMAND gt4_material_table_test)
     # The frame comparison tool (tools/frame_diff.py, ticket C1) on synthetic frames, with and without numpy.
     add_test(NAME frame_diff_selftest
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/frame_diff.py --selftest)
+    # The night bands' triage score (tools/band_measure.py, C6b): a smooth synthetic frame scores 0, five bands are
+    # found where they are; its PPM and PNG readers (all five PNG filters); numpy and plain Python agree.
+    add_test(NAME band_measure_selftest
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/band_measure.py --self-test)
     # The machine's slots (tools/slot.py): a live holder kept, a dead or reused one removed, on a temporary folder.
     add_test(NAME slot_selftest COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/slot.py --self-test)
     # The sources the game shares with the host (platform/ui, platform/audio/spu): none includes a host-only header,
