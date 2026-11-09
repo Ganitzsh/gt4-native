@@ -1042,7 +1042,9 @@ on the host's wheel through `SDL_Haptic` (the effects and the interface: spikes/
 - Acceptance, in order:
   - A's sign and the pedals' order (the code doesn't settle which axis accelerates) on the `GT4_FAKE_DFP` bench,
     against the steering in its log. The pedals are settled (lane D): pedal 0 (`+0x7E`) accelerates, pedal 1
-    (`+0x80`) brakes.
+    (`+0x80`) brakes. A has the steering's sign (left negative); the host plays -A as the force (towards the
+    centre): in SDL's convention, a constant force from cartesian direction (1, 0, 0) at level +A pushes left. That
+    rests on the bench and SDL's documented convention until a real wheel confirms it at 15 %, on Windows and Linux.
   - A session test. A virtual SDL wheel drives GT4's menus and a race through LGDEV, and the effect stream is
     logged. Every stop is proved: page, pause, link drop, port change, exit, unplug, the 0.5 s watchdog (a game
     that stops sending frames), and A lapsing to zero within about 0.1 s when the host's main thread freezes for
