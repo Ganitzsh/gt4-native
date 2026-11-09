@@ -253,7 +253,9 @@ struct Projector {
         auto row = [&](int i) { return o.matrix[0][i] * p.x + o.matrix[1][i] * p.y + o.matrix[2][i] * p.z + o.matrix[3][i]; };
         const float x = row(0), y = row(1), w = row(3);
         if (!(w > 1e-6f) || !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(w)) return {};
-        return {o.offset.x * w + o.scale.x * x, o.offset.y * w + o.scale.y * y, w, 0.0f};
+        // (clamped as this frame's point is (projected): the drawn positions' motion, not the unclamped point's)
+        const float cx = std::min(x, c.clamp.x), cy = std::min(y, c.clamp.y);
+        return {o.offset.x * w + o.scale.x * cx, o.offset.y * w + o.scale.y * cy, w, 0.0f};
     }
     // A vertex's motion: its history over this frame's w (q = 1/w).
     static void withHistory(GsVertex& v, const Vec4& h, float q) {

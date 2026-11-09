@@ -177,7 +177,9 @@ void main() {
         if (previous) {   // where the previous frame's transform put it, over this frame's w
             const vec4 r = P[0] * p.x + P[1] * p.y + P[2] * p.z + P[3];
             if (r.w > 1e-6 && !isinf(r.x) && !isinf(r.y) && !isinf(r.w) && !isnan(r.x) && !isnan(r.y) && !isnan(r.w) && q > 0.0 && q < kMax) {
-                const vec3 m = vec3(previousOffset.x * r.w + previousScale.x * r.x, previousOffset.y * r.w + previousScale.y * r.y, r.w) * q;
+                // (clamped as this frame's point is (gt4Transform): the drawn positions' motion, not the unclamped point's)
+                const vec2 rc = min(r.xy, job.clampLimit.xy);
+                const vec3 m = vec3(previousOffset.x * r.w + previousScale.x * rc.x, previousOffset.y * r.w + previousScale.y * rc.y, r.w) * q;
                 if (!any(isinf(m)) && !any(isnan(m)) && m.z > 0.0) motion = m;
             }
         }
