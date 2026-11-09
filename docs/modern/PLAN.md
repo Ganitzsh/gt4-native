@@ -405,10 +405,13 @@ F6's player per half (its followed-entrant field). Depends: A3, A7 step 2. Accep
 `STREAM` unchanged (records off); on a 2 Player Battle capture (Arcade, Mode Selection, 2 Player Battle, pad 2 from
 the session), every frame opened, two `kViewMain` views with `kViewSplit`, each with its scissor, and two mirror views
 each with its half's `pass` and `kViewSplit`, at 16:9 and at 4:3, both cars' lamps on their glow points, and
-`lighting.night` and `render.scene = hybrid` running in both halves without validation messages, each half lit and
-substituted inside its own scissor only (lane B reviews it), and each half's picture its own (no history shared
-between them). Priority: ahead of lane A's queue (the coordinator, 2026-11-09); A7 step 2's battle check waits on it,
-blocked rather than failed.
+`render.scene = hybrid` running in both halves without validation messages, each half substituted inside its own
+scissor only (lane B reviews it); the night relight is guarded off on a target holding more than one main view (split
+screen's halves; also the tiled photo capture: lane B's 3e6fa5e, since it would light both halves with the first
+half's view) until it runs per view, a lane B follow-up, so 2 Player Battle at night shows GT4's own lamps; and each
+half's picture its own, except where TAA, which keeps one history per target, reprojects across the split line, until
+the per-view follow-up clamps `gsn_taa`'s reprojection to the half's scissor (lane B). Priority: ahead of lane A's
+queue (the coordinator, 2026-11-09); A7 step 2's battle check waits on it, blocked rather than failed.
 
 ### Lane B: renderer
 
