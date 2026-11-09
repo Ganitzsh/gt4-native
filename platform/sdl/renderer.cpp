@@ -399,6 +399,11 @@ struct Renderer::Impl {
         std::printf("Device: parity path: last provoking vertex %s\n",
                     device.provokingLast ? "yes (VK_EXT_provoking_vertex, per pipeline)"
                                          : "no (or not per pipeline: triangles rotated, Z may differ from the GS path's)");
+        // (the destination alpha test's two paths differ by device: C6b's night bands)
+        std::printf("Device: destination alpha test: stencil export %s\n",
+                    device.stencilExport ? "yes (VK_EXT_shader_stencil_export)"
+                    : exportOff          ? "off (GT4_STENCIL_EXPORT=0: the stencil copy rebuilt after alpha writes)"
+                                         : "no (the device lacks VK_EXT_shader_stencil_export: the stencil copy rebuilt after alpha writes)");
         float priority = 1.0f;
         VkDeviceQueueCreateInfo queue{};
         queue.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
