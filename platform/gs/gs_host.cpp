@@ -1165,7 +1165,7 @@ void GsHost::setAudioInterpolation(uint32_t mode) {
 }
 
 void GsHost::setAudioSpatial(uint32_t mode) {
-    if (impl->mixer && mode <= 1) impl->mixer->setSpatial(static_cast<audio::Spatial>(mode));
+    if (impl->mixer && mode <= 2) impl->mixer->setSpatial(static_cast<audio::Spatial>(mode));
 }
 
 void GsHost::setGameOption(uint32_t id, uint32_t value) {
@@ -1253,6 +1253,10 @@ std::string GsHost::summary() const {
             << m.framesWithoutTags << " frames without; voices a frame: " << m.voicesTagged / runs << " tagged ("
             << m.voicesPanned / runs << " panned), " << m.voicesUntagged / runs << " untagged, "
             << m.voicesNoPosition / runs << " tagged without a direction";
+        if (m.hrtfFrames)   // audio.spatial = hrtf (D9 step 3): the HRTF's part of the mix's time
+            out << "; hrtf: " << static_cast<double>(m.hrtfBuses) / static_cast<double>(m.hrtfFrames)
+                << " buses a frame (at most " << m.hrtfBusesMax << "), " << m.hrtfMicroseconds / m.hrtfFrames
+                << " us a frame (at most " << m.hrtfMicrosecondsMax << ")";
     }
     if (h.target && h.target->frontend().stats.named) {
         const auto& s = h.target->frontend().stats;

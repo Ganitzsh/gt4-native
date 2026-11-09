@@ -100,15 +100,27 @@ public:
     // mix()'s volumes in place of a voice's VOLL / VOLR (the host's audio.spatial, PLAN.md D9), by hardware voice
     // (core * 24 + voice): `on` takes `left` and `right` (Q15, as the registers' volumes) for the dry and the effect
     // sends alike; with `ramp`, the gains go linearly from leftFrom / rightFrom to left / right across the block, so a
-    // voice whose gains change between blocks doesn't step at the block's edge. Null (the game, audio.spatial =
-    // original): every voice mixes with its registers, as always.
+    // voice whose gains change between blocks doesn't step at the block's edge. With routes > 0 (the host's hrtf),
+    // the voice's dry sound goes instead to up to four mono buses (bus[r], 1..busCount), each at a gain ramped
+    // linearly across the block from from[r] to to[r], and its effect sends ramp from wetLeftFrom / wetRightFrom to
+    // wetLeft / wetRight; with `ramp` too, its dry sound also goes to the stereo mix, ramped from leftFrom / rightFrom
+    // to left / right (a voice crossing between the bed and the buses fades from one to the other). Null (the game,
+    // audio.spatial = original): every voice mixes with its registers, as always.
     struct VoiceGain {
         bool on = false;
         int32_t left = 0, right = 0;
         bool ramp = false;
         int32_t leftFrom = 0, rightFrom = 0;
+        uint8_t routes = 0;
+        uint8_t bus[4] = {0, 0, 0, 0};
+        int32_t from[4] = {0, 0, 0, 0}, to[4] = {0, 0, 0, 0};
+        int32_t wetLeft = 0, wetRight = 0, wetLeftFrom = 0, wetRightFrom = 0;
     };
     const VoiceGain* gains = nullptr;
+    // mix()'s mono buses (VoiceGain::bus): busCount runs of n samples each, bus b at buses + (b - 1) * n, which mix()
+    // adds to; the caller clears them and reads them after.
+    int32_t* buses = nullptr;
+    int busCount = 0;
     // The next frame (the frame clock's): the key-on gaps below count frames.
     void tick() { ++counters.frame; }
 

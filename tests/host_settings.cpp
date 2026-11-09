@@ -100,7 +100,9 @@ int main() {
               "audio.spatial used with audio.mixer = host");
         check(setOption(a, "audio.spatial", "stereo").empty() && a.audioSpatial == AudioSpatial::Stereo,
               "audio.spatial parses");
-        check(!setOption(a, "audio.spatial", "hrtf").empty(), "audio.spatial has no hrtf yet (D9 step 3)");
+        check(setOption(a, "audio.spatial", "hrtf").empty() && a.audioSpatial == AudioSpatial::Hrtf,
+              "audio.spatial hrtf parses (D9 step 3)");
+        check(!setOption(a, "audio.spatial", "surround").empty(), "an unknown audio.spatial is refused");
         for (Preset preset : {Preset::Original, Preset::Low, Preset::Medium, Preset::High, Preset::Ultra}) {
             Settings t;
             applyPreset(t, preset);

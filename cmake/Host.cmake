@@ -313,7 +313,8 @@ add_library(gt4_spu STATIC platform/audio/spu/spu2.cpp)
 target_include_directories(gt4_spu PUBLIC platform/audio)
 target_compile_features(gt4_spu PUBLIC cxx_std_20)
 # The host's SPU2 mixer (audio.mixer = host; the game's own mix otherwise), fed by gs_host's record dispatch.
-add_library(gt4_audio STATIC platform/audio/host_mixer.cpp)
+add_library(gt4_audio STATIC platform/audio/host_mixer.cpp platform/audio/spatial/fft.cpp
+                             platform/audio/spatial/hrtf.cpp)
 target_include_directories(gt4_audio PUBLIC platform/audio PRIVATE include)
 target_link_libraries(gt4_audio PUBLIC gt4_spu)
 target_compile_definitions(gt4_audio PRIVATE $<$<BOOL:${WIN32}>:_CRT_SECURE_NO_WARNINGS>)   # (getenv, fopen)
@@ -559,6 +560,15 @@ add_test(NAME material_table COMMAND gt4_material_table_test)
     target_compile_options(gt4_recorder_pacer_test PRIVATE -Wall -Wextra -Wpedantic)
   endif()
   add_test(NAME recorder_pacer COMMAND gt4_recorder_pacer_test)
+  # D9's HRTF renderer (platform/audio/spatial): its FFT against a DFT, its overlap-add against direct convolution
+  add_executable(gt4_hrtf_test tests/hrtf.cpp)
+  target_link_libraries(gt4_hrtf_test PRIVATE gt4_audio)
+  if(MSVC)
+    target_compile_options(gt4_hrtf_test PRIVATE /W4)
+  else()
+    target_compile_options(gt4_hrtf_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  add_test(NAME hrtf COMMAND gt4_hrtf_test)
 
   # The input action map: the original map against the host's mapping before it, for every input.
   add_executable(gt4_input_map_test tests/input_map.cpp)

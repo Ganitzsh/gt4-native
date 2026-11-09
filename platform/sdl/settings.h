@@ -46,7 +46,7 @@ enum class AudioMixer : uint8_t { Game, Host };
 // The host mixer's interpolation between a voice's samples (audio.interpolation; platform/audio/spu Interpolation).
 enum class AudioInterpolation : uint8_t { Original, Cubic, Sinc };
 // How the host mixer places the cars' sounds (audio.spatial; platform/audio/host_mixer.h Spatial; PLAN.md D9).
-enum class AudioSpatial : uint8_t { Original, Stereo };
+enum class AudioSpatial : uint8_t { Original, Stereo, Hrtf };
 // The sticks' and pedals' response (input.response, platform/input/response.h; PLAN.md D12).
 enum class InputResponse : uint8_t { Original, Modern };
 // Gamepad haptics (input.haptics, platform/input/haptics.h; PLAN.md D14): original = GT4's own rumble only (D2).

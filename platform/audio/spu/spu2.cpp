@@ -346,6 +346,59 @@ template <bool kMix> void Spu2::run(int32_t* mix, int n, bool dryOnly) {
                 const bool wet_l = cr.vmixel >> k & 1, wet_r = cr.vmixer >> k & 1;
                 const VoiceGain* g = gains && gains[24 * c + k].on ? &gains[24 * c + k] : nullptr;
                 const int32_t vl = g ? g->left : volume(v.voll), vr = g ? g->right : volume(v.volr);
+                if (g && g->routes && buses && n > 0) {
+                    // to mono buses (the host's hrtf), each gain ramped across the block: dry if either side is
+                    // (without the reverb, an effect-only voice at the effect return volume), the effect sends at
+                    // wetLeft / wetRight
+                    const bool dry = dry_l || dry_r, wet_any = wet_l || wet_r;
+                    const int32_t back = (std::abs(cr.evol[0]) + std::abs(cr.evol[1])) >> 1;
+                    const int64_t scale = dry ? 32768 : (!fx && wet_any) ? back : 0;
+                    int32_t* out[4] = {};
+                    int64_t at[4] = {}, step[4] = {};   // the gain in Q15 << 16, and its step a sample
+                    int routes = 0;
+                    for (int r = 0; r < g->routes && r < 4; ++r) {
+                        if (!g->bus[r] || g->bus[r] > busCount) continue;
+                        out[routes] = buses + (g->bus[r] - 1) * n;
+                        at[routes] = (g->from[r] * scale >> 15) << 16;
+                        step[routes] = (((g->to[r] * scale >> 15) << 16) - at[routes]) / n;
+                        ++routes;
+                    }
+                    // the effect sends, and with `ramp` the stereo dry part (fading in or out of the bed), ramped as
+                    // the stereo path does: [0] [1] dry left / right, [2] [3] effect left / right
+                    int32_t a[4], b[4];
+                    a[0] = g->ramp && dry_l ? g->leftFrom : 0;
+                    a[1] = g->ramp && dry_r ? g->rightFrom : 0;
+                    b[0] = g->ramp && dry_l ? g->left : 0;
+                    b[1] = g->ramp && dry_r ? g->right : 0;
+                    a[2] = fx && wet_l ? g->wetLeftFrom : 0;
+                    a[3] = fx && wet_r ? g->wetRightFrom : 0;
+                    b[2] = fx && wet_l ? g->wetLeft : 0;
+                    b[3] = fx && wet_r ? g->wetRight : 0;
+                    int64_t sat[4], sstep[4];
+                    for (int j = 0; j < 4; ++j) {
+                        sat[j] = static_cast<int64_t>(a[j]) << 16;
+                        sstep[j] = ((static_cast<int64_t>(b[j]) << 16) - sat[j]) / n;
+                    }
+                    const bool fade = a[0] || a[1] || b[0] || b[1], sends = a[2] || a[3] || b[2] || b[3];
+                    for (int i = 0; i < n && v.phase != kOff; ++i) {
+                        const int64_t s = voiceSample<kMix>(cr, k, v) * v.env >> 15;
+                        envelope(v);
+                        for (int r = 0; r < routes; ++r) {
+                            out[r][i] += static_cast<int32_t>(s * (at[r] >> 16) >> 15);
+                            at[r] += step[r];
+                        }
+                        if (fade) {   // (only a voice crossing into or out of the bed)
+                            mix[2 * i] += static_cast<int32_t>(s * (sat[0] >> 16) >> 15);
+                            mix[2 * i + 1] += static_cast<int32_t>(s * (sat[1] >> 16) >> 15);
+                        }
+                        if (sends) {
+                            wet[2 * i] += static_cast<int32_t>(s * (sat[2] >> 16) >> 15);
+                            wet[2 * i + 1] += static_cast<int32_t>(s * (sat[3] >> 16) >> 15);
+                        }
+                        for (int j = 0; j < 4; ++j) sat[j] += sstep[j];
+                    }
+                    continue;
+                }
                 if (g && g->ramp && n > 0) {
                     // the dry and effect gains at both ends of the block (as below), then linearly between
                     auto route = [&](int32_t l, int32_t r, int32_t out[4]) {

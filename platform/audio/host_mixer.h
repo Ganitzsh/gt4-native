@@ -11,7 +11,12 @@
 // tagged voice with equal power from that direction, at the power sum of GT4's VOLL / VOLR: GT4's level and distance
 // gain kept, its pan and its phase inversion behind the listener dropped. Untagged voices, voices without a
 // direction, voices in sweep mode, and every voice when the image came without tags (an older game) are the bed,
-// mixed as `original` mixes them. `original`: no voice changed, the D5 mix bit for bit.
+// mixed as `original` mixes them. `original`: no voice changed, the D5 mix bit for bit. `hrtf` (step 3, for
+// headphones): a tagged voice goes to the two of 72 azimuth buses around its direction, equal power, at the same
+// power, its gains ramped across the block from the last frame's, and the buses are convolved with MIT KEMAR's HRIRs
+// (platform/audio/spatial/hrtf.h); its effect sends go centred, at the same power.
+// GT4_HRTF_BUSES=N (debugging, the Odin's knob): at most N buses a frame, the loudest (the nearest cars) kept; a voice
+// on a dropped bus moves to its other bus, or to the nearest kept one.
 //
 // GT4_TRACE_D9 (debugging, D9's direction and distance checks): a line a frame mixed and car, with the count of
 // register images seen so far (the game's GT4_TRACE_D9=3 lines carry the same count): the car's tagged voices' level
@@ -20,6 +25,7 @@
 // GT4_HOST_AUDIO_WAV=path writes what goes to the output to a WAV file (with the game's GT4_AUDIO_WAV, the two mixes of
 // one run compared: D5's -60 dB check). Not thread-safe: one thread feeds it (the GS thread's record dispatch).
 #include "gt4/link/protocol.h"
+#include "spatial/hrtf.h"
 #include "spu/spu2.h"
 
 #include <array>
@@ -28,11 +34,12 @@
 #include <cstdio>
 #include <deque>
 #include <functional>
+#include <memory>
 #include <vector>
 
 namespace gt4::audio {
 
-enum class Spatial : uint8_t { kOriginal, kStereo };   // audio.spatial
+enum class Spatial : uint8_t { kOriginal, kStereo, kHrtf };   // audio.spatial
 
 // A tagged voice's gains under `stereo` (Q15): the power sum of the registers' volumes `left` and `right` (signs
 // dropped), panned with equal power from `direction` (x right, z ahead negative; only the left-right part counts).
@@ -62,7 +69,10 @@ public:
         uint64_t tagRecords = 0, tagBytes = 0, framesWithoutTags = 0;
         uint64_t voicesTagged = 0, voicesUntagged = 0, voicesNoPosition = 0;
         uint64_t voicesPanned = 0;   // the tagged voices `stereo` panned (not in sweep mode)
-        double mixMicroseconds = 0, mixMicrosecondsMax = 0;   // the SPU2's mix of a frame (PERF)
+        double mixMicroseconds = 0, mixMicrosecondsMax = 0;   // the SPU2's mix of a frame, the HRTF's included (PERF)
+        // hrtf: the frames rendered, the buses convolved over them, the convolution's time (in the mix's)
+        uint64_t hrtfFrames = 0, hrtfBuses = 0, hrtfBusesMax = 0;
+        double hrtfMicroseconds = 0, hrtfMicrosecondsMax = 0;
     };
     // audio.interpolation (any thread; the next frame mixed uses it). kLinear, the original, unless set.
     void setInterpolation(spu::Interpolation mode) { interpolation_.store(static_cast<uint8_t>(mode)); }
@@ -95,8 +105,24 @@ private:
     struct Last {
         bool on = false, panned = false;
         int32_t left = 0, right = 0;
+        int32_t wetLeft = 0, wetRight = 0;   // (hrtf: the effect sends it ended the block at)
     };
     std::array<Last, GT4_SPU2_TAG_VOICES> last_{};
+    // hrtf: the renderer (made when first used), its buses, and each voice's buses and gains last frame
+    struct Route {
+        bool valid = false;
+        uint8_t entrant = 0xFF, group = 0xFF;
+        uint8_t bus[2] = {0, 0};
+        int32_t gain[2] = {0, 0};
+    };
+    std::unique_ptr<spatial::HrtfRenderer> hrtf_;
+    std::vector<int32_t> buses_;
+    std::array<uint8_t, spatial::kHrtfBuses> active_{};
+    std::array<Route, GT4_SPU2_TAG_VOICES> routes_{};
+    int busCap_ = spatial::kHrtfBuses;
+    void hrtfRoute(uint32_t hw, const spu::Voice& v, const Gt4Spu2Tag& t, bool fromBed, const Last& before);
+    void hrtfToBed(uint32_t hw, const spu::Voice& v, const Last& before);
+    void capBuses();
     std::FILE* wav_ = nullptr;
     uint32_t wavBytes_ = 0;
     Stats stats_;

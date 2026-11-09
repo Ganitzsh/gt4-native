@@ -257,6 +257,20 @@ int main() {
             const Run steady = session(audio::Spatial::kStereo, true, 1);
             expect(steady.out == carStereo.out, "stereo: a steady voice is not ramped (the same gains every block)");
         }
+        // hrtf (step 3): an older game and the bed alone as original mixes them; the car's voice on its side, at its
+        // power (the HRIR pairs are power-normalised; within 1.5 dB on this broadband sample)
+        expect(session(audio::Spatial::kHrtf, false, 3).out == plain.out,
+               "hrtf from an older game (no tags): every voice in the bed, the D5 mix");
+        expect(session(audio::Spatial::kHrtf, true, 3, 1).out == session(audio::Spatial::kOriginal, true, 3, 1).out,
+               "the bed alone: hrtf is original, bit for bit");
+        const Run carHrtf = session(audio::Spatial::kHrtf, true, 1);
+        const double hl = power(carHrtf.out, 0), hr = power(carHrtf.out, 1);
+        std::printf("host_mixer: hrtf's car voice: right %.1f dB over left, %.2f dB against original's power; "
+                    "%llu buses over %llu frames\n", 10 * std::log10(hr / hl), 10 * std::log10((hl + hr) / (ol + orr)),
+                    static_cast<unsigned long long>(carHrtf.stats.hrtfBuses),
+                    static_cast<unsigned long long>(carHrtf.stats.hrtfFrames));
+        expect(hr > 2.0 * hl, "hrtf: the car's voice is louder on its side");
+        expect(std::fabs(10 * std::log10((hl + hr) / (ol + orr))) < 1.5, "hrtf keeps the voice's power, within 1.5 dB");
         // the gains themselves
         const float right[3] = {1, 0, 0}, ahead[3] = {0, 0, -1}, none[3] = {0, 0, 0};
         const spu::Spu2::VoiceGain r = audio::stereoGain(0x6000, -0x2000, right);
