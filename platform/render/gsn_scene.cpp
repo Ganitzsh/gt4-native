@@ -226,6 +226,16 @@ struct GsnScene::Impl {
     std::vector<render::ParityCopy> parityCopies;
     std::vector<render::ParitySpan> paritySpans;
     std::vector<uint32_t> parityAt;   // per draw (FrameList::draws), and one past: [parityAt[d], parityAt[d + 1]) its spans
+    // N3 step 1: the modeled vertices of skipped items (ViewOnList::skip, or GT4_N3_SKIP_ALL_GLOW), by draw as parityAt;
+    // the draws are recorded around them, in the scene and in its motion vectors
+    struct SkipSpan {
+        uint32_t draw = 0, first = 0, count = 0;
+    };
+    std::vector<SkipSpan> skipSpans;
+    std::vector<uint32_t> skipAt;
+    uint64_t n3ItemsSkipped = 0, n3Frames = 0, n3OverParity = 0;   // n3OverParity: B7 spans a skip left undrawn
+    uint64_t n3ItemsSeen = 0;   // items of main views on frames that pass the gate (the verdicts' denominator)
+    void planSkips();
     std::unordered_map<uint32_t, vk::Pipeline> parityPipelines;
     uint64_t paritySpansOutside = 0;   // spans not inside their draw's vertices (drawn on the GS path; should be 0)
     bool parityPlanned = false;        // a list planned this frame (endPending ends the view's frame then)
@@ -605,6 +615,12 @@ struct GsnScene::Impl {
                         static_cast<unsigned long long>(t.merged), static_cast<unsigned long long>(t.mergedAgain),
                         t.microseconds / double(t.frames));
         }
+        if (n3Frames)
+            std::printf("N3: %llu frames with the lamps on and a main view (%llu items), %llu items skipped, %llu of them B7 "
+                        "would have substituted%s\n",
+                        static_cast<unsigned long long>(n3Frames), static_cast<unsigned long long>(n3ItemsSeen),
+                        static_cast<unsigned long long>(n3ItemsSkipped), static_cast<unsigned long long>(n3OverParity),
+                        std::getenv("GT4_N3_SKIP_TEST") ? " (GT4_N3_SKIP_TEST)" : "");
         if (nightSplitSkipped)
             std::printf("Night relight: %llu Lights without our lamps, their target holding more than one main view "
                         "(split screen: one light pass per half not yet)\n",
@@ -1411,6 +1427,48 @@ void GsnScene::Impl::segments(const gsn::FrameList& list, std::vector<Segment>& 
     }
 }
 
+// N3 step 1 (PLAN N3, lane B's back end): the items whose draws the GS path leaves out, the lit-road layer v4 judged
+// (ViewOnList::skip, lane F's verdicts), in a kViewMain view on a kFrameLampsOn frame with lighting.night on; nothing
+// else. GT4_N3_SKIP_TEST (debugging, until the verdicts land): 'glow', every item of a glow-class material; 'all',
+// every item of the main view (the course and the cars go, the billboards stay), so the machinery shows. Each item is
+// its job's vertices in its draw (ViewOnList::items, as B7's spans), so a draw merging several items keeps the others.
+void GsnScene::Impl::planSkips() {
+    skipSpans.clear();
+    skipAt.assign(frame.draws.size() + 1, 0);
+    if (!(night > 0.0f) || !frame.scene || !(frame.scene->flags & gfx::scene::kFrameLampsOn) || frame.views.empty()) return;
+    static const int test = [] {
+        const char* e = std::getenv("GT4_N3_SKIP_TEST");
+        return !e ? 0 : std::string(e) == "glow" ? 1 : std::string(e) == "all" ? 2 : 0;
+    }();
+    const std::shared_ptr<const scene::SceneCache> cache = frame.sceneCache;
+    bool mainView = false;
+    for (const gsn::FrameList::ViewOnList& view : frame.views) {
+        if (!view.package || view.package->view.role != gfx::scene::kViewMain) continue;
+        mainView = true;
+        for (const scene::InstanceIds& ids : view.ids) n3ItemsSeen += ids.mesh ? ids.materialCount : 0;
+        if (view.skip.empty() && !test) continue;
+        for (const scene::InstanceIds& ids : view.ids) {
+            if (!ids.mesh) continue;
+            for (uint32_t j = 0; j < ids.materialCount; ++j) {
+                const size_t at = size_t(ids.firstMaterial) + j;
+                if (at >= view.items.size() || at >= view.materials.size()) break;
+                bool skip = test == 2 || (at < view.skip.size() && view.skip[at] != 0);
+                if (!skip && test == 1 && cache) skip = (cache->materials().classes(view.materials[at]) & 1u) != 0;
+                const gsn::FrameList::ViewOnList::ItemRef& ref = view.items[at];
+                if (!skip || ref.draw >= frame.draws.size() || !ref.modelVertexCount) continue;
+                skipSpans.push_back({ref.draw, ref.firstModelVertex, ref.modelVertexCount});
+            }
+        }
+    }
+    if (mainView) ++n3Frames;
+    if (skipSpans.empty()) return;
+    std::sort(skipSpans.begin(), skipSpans.end(),
+              [](const SkipSpan& a, const SkipSpan& b) { return a.draw != b.draw ? a.draw < b.draw : a.first < b.first; });
+    for (const SkipSpan& s : skipSpans) ++skipAt[s.draw + 1];
+    for (size_t d = 1; d < skipAt.size(); ++d) skipAt[d] += skipAt[d - 1];
+    n3ItemsSkipped += skipSpans.size();
+}
+
 // B7's parity path: the list's items the mesh cache draws (paritySpans, parityAt by draw), and the uploads of the meshes
 // it draws for the first time, copied into their device-local blocks here, before any of the list's draws.
 void GsnScene::Impl::planParity() {
@@ -1620,6 +1678,7 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
         tally("3D batches on the GPU", frame.models.size());
     }
     planParity();   // (B7: which of the list's jobs the mesh cache draws; none unless render.scene = parity)
+    planSkips();    // (N3 step 1: the lit-road layer's items, skipped)
     // (the commands' state: ex, made anew above)
     // GT4_GPU_PROFILE=2: a render pass's time under its target's name (block address, size in GS pixels, format).
     ex.passLabel = [this](uint32_t id) -> const char* {
@@ -1986,7 +2045,19 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
             k.jitter[0] = jittered[at] ? phase[0] / float(sx) : 0.0f;
             k.jitter[1] = jittered[at] ? phase[1] / float(sy) : 0.0f;
             vk::pushConstants(command, velocityPass, k);
-            vkCmdDraw(command, d.count, 1, d.modeled ? modelBase + d.first : d.first, 0);
+            if (d.modeled && cmd.index + 1 < skipAt.size() && skipAt[cmd.index] != skipAt[cmd.index + 1]) {
+                uint32_t cursor = d.first;   // (N3: a skipped item has no motion vectors, as it has no pixels)
+                const uint32_t end = d.first + d.count;
+                for (uint32_t i = skipAt[cmd.index]; i < skipAt[cmd.index + 1]; ++i) {
+                    const SkipSpan& s = skipSpans[i];
+                    if (s.first < cursor || s.first + s.count > end) continue;
+                    if (s.first > cursor) vkCmdDraw(command, s.first - cursor, 1, modelBase + cursor, 0);
+                    cursor = s.first + s.count;
+                }
+                if (end > cursor) vkCmdDraw(command, end - cursor, 1, modelBase + cursor, 0);
+            } else {
+                vkCmdDraw(command, d.count, 1, d.modeled ? modelBase + d.first : d.first, 0);
+            }
         }
         vkCmdEndRendering(command);
         if (seamOn && seamPlan.found() && seamPlan.lightAt == lightAt) keepSeamVelocity(command, velocity);   // (B16c)
@@ -2813,7 +2884,8 @@ void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t
                 recorded.pushed = true;
                 tally("constant pushes");
             }
-            if (d.modeled && cmd.index + 1 < parityAt.size() && parityAt[cmd.index] != parityAt[cmd.index + 1]) {
+            const bool skips = d.modeled && cmd.index + 1 < skipAt.size() && skipAt[cmd.index] != skipAt[cmd.index + 1];
+            if (skips || (d.modeled && cmd.index + 1 < parityAt.size() && parityAt[cmd.index] != parityAt[cmd.index + 1])) {
                 // B7: the draw's jobs drawn from the mesh cache where the plan has them, the rest from gsn_models.comp's
                 // vertices, in the draw's own order (each job's vertices are contiguous, in the runs' order)
                 uint32_t cursor = d.first;
@@ -2831,8 +2903,31 @@ void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t
                     vkCmdDraw(command, to - from, 1, modelBase + from, 0);
                     tally("draws");
                 };
-                for (uint32_t i = parityAt[cmd.index]; i < parityAt[cmd.index + 1]; ++i) {
+                // N3: a skipped item's vertices drawn by neither path (its spans in the draw's order with B7's)
+                uint32_t skipNext = skips ? skipAt[cmd.index] : 0;
+                const uint32_t skipEnd = skips ? skipAt[cmd.index + 1] : 0;
+                auto skipUpTo = [&](uint32_t limit) {
+                    while (skipNext < skipEnd && skipSpans[skipNext].first < limit) {
+                        const SkipSpan& s = skipSpans[skipNext++];
+                        if (s.first < cursor || s.first + s.count > end) continue;   // (outside the draw: drawn)
+                        gsRange(cursor, s.first);
+                        cursor = s.first + s.count;
+                    }
+                };
+                const uint32_t parityFrom = cmd.index + 1 < parityAt.size() ? parityAt[cmd.index] : 0;
+                const uint32_t parityTo = cmd.index + 1 < parityAt.size() ? parityAt[cmd.index + 1] : 0;
+                for (uint32_t i = parityFrom; i < parityTo; ++i) {
                     const render::ParitySpan& sp = paritySpans[i];
+                    skipUpTo(sp.first);
+                    // (an item both substituted and skipped: the skip wins, neither path draws it; lane A)
+                    if (skipNext < skipEnd && skipSpans[skipNext].first == sp.first && sp.first >= cursor &&
+                        sp.first + sp.count <= end) {
+                        const SkipSpan& k = skipSpans[skipNext++];
+                        gsRange(cursor, k.first);
+                        cursor = std::max(k.first + k.count, sp.first + sp.count);
+                        if (pass == 0) ++n3OverParity;
+                        continue;
+                    }
                     if (sp.first < cursor || sp.first + sp.count > end) {   // (not inside the draw: left to the GS path)
                         if (pass == 0) ++paritySpansOutside;
                         continue;
@@ -2859,6 +2954,7 @@ void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t
                     tally("parity draws");
                     cursor = sp.first + sp.count;
                 }
+                skipUpTo(end);
                 gsRange(cursor, end);
                 // (the parity pipeline's bindings and constants differ: the next draw binds and pushes its own)
                 recorded.view = VK_NULL_HANDLE;

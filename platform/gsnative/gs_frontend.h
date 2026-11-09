@@ -260,6 +260,10 @@ struct FrameList {
             uint32_t firstModelVertex = 0, modelVertexCount = 0;   // the job's triangles x 3, from its start
         };
         std::vector<ItemRef> items;
+        // N3 step 1 (PLAN N3; lane F fills it from the verdict map in GsFrontend::sceneView): per item, parallel to
+        // `materials`, 1 = the lit-road layer, whose draws the back end skips in a kViewMain view on a kFrameLampsOn
+        // frame with lighting.night = enhanced. Empty: no verdicts, nothing skipped.
+        std::vector<uint8_t> skip;
     };
     // (B6: the views' ids and materials vectors, emptied by clear() with their capacity, for the next views on this list)
     std::vector<std::vector<scene::InstanceIds>> spareIds;
