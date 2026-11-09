@@ -710,8 +710,19 @@ class Device:
                 "pass_line": "no underrun in a 5-minute race at each (device); hrtf's time against the frame"}
 
     def game_log(self):
+        """game.log's path and its modification time before a run (None: no file yet), for game_log_since()."""
         p = os.path.join(self.package, "game.log")
-        return p, (os.path.getsize(p) if os.path.isfile(p) else 0)
+        return p, (os.stat(p).st_mtime_ns if os.path.isfile(p) else None)
+
+    @staticmethod
+    def game_log_since(path, before):
+        """The game's log of the run since game_log(): the game opens game.log with "w" on every start
+        (runtime/log.cpp), so after a run the whole file is that run's, whatever its length against an earlier
+        run's. Unchanged since game_log() means the game never started: nothing, not an earlier run's log."""
+        if not os.path.isfile(path) or os.stat(path).st_mtime_ns == before:
+            return ""
+        with open(path, "rb") as f:
+            return f.read().decode("utf-8", "replace")
 
     def live_game_args(self):
         """The host's arguments that start the package's game in a session: with --session-dir the host doesn't
@@ -747,7 +758,7 @@ class Device:
         cmds = [c for c in cmds if not c.startswith("capture ")] + ["vwait 600", "quit"]
         for k, c in enumerate(cmds):
             open(os.path.join(session, "commands", f"{k:020d}-route.cmd"), "w").write(c + "\n")
-        glog, offset = self.game_log()
+        glog, before = self.game_log()
         env = dict(os.environ, GT4_LOAD_STATS="1")
         cmd = [self.launcher, "--headless", "--no-audio", "--size", "640x448", "--session-dir", session, "--saves",
                saves, "--preset", "original"] + FIXED + live
@@ -757,11 +768,7 @@ class Device:
             out, code = r.stdout + r.stderr, r.returncode
         except subprocess.TimeoutExpired as x:
             out, code = (x.stdout or "") + "\n(timed out)", -1
-        game = ""
-        if os.path.isfile(glog):
-            with open(glog, "rb") as f:
-                f.seek(offset)
-                game = f.read().decode("utf-8", "replace")
+        game = self.game_log_since(glog, before)
         self.log("load_times.log", f"$ {' '.join(cmd)}\nexit {code}\n{out}\n--- game.log (this run)\n{game}")
         shutil.rmtree(saves, ignore_errors=True)
         shutil.rmtree(session, ignore_errors=True)   # (its frames folder: no captures were asked, but never keep it)
