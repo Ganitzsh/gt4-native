@@ -2,7 +2,21 @@
 """Vertical bands in a frame: a triage score for the owner's night bands (C6b's device item, 2026-11-09).
 
     py tools/band_measure.py FRAME_OR_DIR... [--json] [--rows 0.45-0.72] [--threshold 6] [--window 33]
+    py tools/band_measure.py --steps FRAME_OR_DIR... --against REF_FRAME_OR_DIR [--json] [--grid 64] [--rows 0.45-0.72]
     py tools/band_measure.py --self-test
+
+--steps --against: the night bands on the device, in detail. steps() below on difference() is PLAN section 2's
+structure measure; tools/orig_compare.py calls it and gives the verdict (section 2's thresholds), and this mode
+shows the detail: which boundaries, how big, how a step sits across frames. The Odin's frames of a replay against
+the desktop's frames of the same replay, by file name: steps of the difference's column profile at every grid
+boundary (--grid 64 output pixels at 1280 wide, 32 GS pixels at 2x, scaled with the width) against everywhere else.
+The owner's bands are 2 to 5 level steps on that grid. The difference removes the scene, so only what the two GPUs
+drew differently is left. A directory given to --against is paired by the frame's stem (the device's .ppm with a
+reference's .png). --steps without --against measures a single frame, and that does NOT separate the bands from a
+clean frame: GT4's own frames have steps on the same grid (desktop live frames, ratio of boundary to elsewhere
+median 2.6; the owner's 132 clip frames 2.1, their video compression blurring the steps): for looking only.
+--stat mean takes means where steps() takes medians by default; --content X0-X1 gives the picture's columns when it
+sits between side bars.
 
 Per frame, over the road (rows 45 % to 72 % of the height by default: below the horizon, above the gauges of
 the bumper and chase views): the mean luma of each column (Rec.601 weights on the 8-bit values), less a running
@@ -192,6 +206,97 @@ def measure(w, h, rgb, rows=(0.45, 0.72), threshold=6.0, window=33):
     return {"width": w, "height": h, "score": round(n / w, 4), "columns": n, "runs": runs}
 
 
+def median(values):
+    v = sorted(values)
+    n = len(v)
+    return 0.0 if not n else (v[n // 2] if n % 2 else (v[n // 2 - 1] + v[n // 2]) / 2)
+
+
+def steps(w, h, rgb, rows=(0.45, 0.72), grid=64.0, k=8, slabs=6, stat="median", content=None):
+    """The step mode (--steps): brightness steps on a fixed grid of columns, the bands GT4's strip-drawn passes leave
+    when a GPU draws each strip a little differently (the Odin's night bands: 32-GS-pixel strips, every 64 output
+    pixels at 1280 wide). The column profile's step at x is the mean of the k columns from x less the mean of the k
+    before it, less the mean of the same step k columns either side (so a ramp, a lamp pool's slope, gives 0 and a
+    hard edge keeps its height), taken in six bands of rows and their median kept (a band runs down every row; a
+    car's edge, a post, covers only some). At each grid boundary (grid and k given at 1280 wide, scaled with the
+    width) the largest |step| within one column of it; elsewhere, every x farther than 2k from a boundary (an edge's
+    step reaches 2k). Reported: the median |step| at the boundaries and elsewhere, their ratio, the largest at a
+    boundary, and the boundaries over 2 levels (a size to look at, not a bound). A frame with the grid has boundary
+    steps well above the rest; edges in the scene fall anywhere and raise both.
+    stat "mean" puts means in boundary_median and elsewhere_median (the keys keep their names; "stat" says which).
+    content=(x0, x1): the picture's columns when it sits between side bars (a 4:3 picture at 1280 x 800): the grid
+    starts at x0 and scales with x1 - x0 (64 at 1280 wide: a boundary every (x1 - x0) / 20), k too, and only the
+    columns inside count; default the whole width.
+    ratio is None when the elsewhere statistic is under 1e-6: an UNBOUNDED ratio, not a missing one. A difference
+    that steps at the boundaries and nowhere else (add_strips on a clean twin) is exactly the bands' signature, so
+    None with boundary_median over a floor means bands.
+    This is PLAN section 2's structure measure: tools/orig_compare.py calls it on difference(device, reference)
+    and applies section 2's thresholds to boundary_median and ratio; keep the keys stable."""
+    x0, x1 = content if content else (0, w)
+    x0, x1 = max(0, int(x0)), min(w, int(x1))
+    cw = x1 - x0
+    g, kk = grid * cw / 1280.0, max(2, int(round(k * cw / 1280.0)))
+    slab_steps = []
+    for j in range(slabs):   # the rows in `slabs` bands: a band runs down all of them, a car's edge only some
+        r0 = rows[0] + (rows[1] - rows[0]) * j / slabs
+        prof = column_profile(w, h, rgb, (r0, r0 + (rows[1] - rows[0]) / slabs))
+        acc = [0.0]
+        for v in prof:
+            acc.append(acc[-1] + v)
+        raw = {x: (acc[x + kk] - acc[x]) / kk - (acc[x] - acc[x - kk]) / kk for x in range(x0 + kk, x1 - kk + 1)}
+        slab_steps.append({x: raw[x] - (raw[x - kk] + raw[x + kk]) / 2
+                           for x in range(x0 + 2 * kk, x1 - 2 * kk + 1)})
+    step = {x: median([s[x] for s in slab_steps]) for x in slab_steps[0]}
+    bounds = [b for b in (x0 + int(round(i * g)) for i in range(1, int(cw / g) + 1))
+              if x0 + 2 * kk + 1 <= b <= x1 - 2 * kk - 1]
+    at = []
+    for b in bounds:
+        x = max((b - 1, b, b + 1), key=lambda x: abs(step[x]))
+        at.append((b, round(step[x], 2)))
+    far = [abs(s) for x, s in step.items() if min((abs(x - b) for b in bounds), default=w) > 2 * kk]
+    summary = median if stat == "median" else (lambda v: sum(v) / len(v) if v else 0.0)
+    mb, me = summary([abs(s) for _, s in at]), summary(far)
+    over = [[b, s] for b, s in at if abs(s) > 2.0]
+    return {"width": w, "height": h, "grid": round(g, 2), "boundary_median": round(mb, 2),
+            "elsewhere_median": round(me, 2), "ratio": round(mb / me, 2) if me > 1e-6 else None,
+            "boundary_max": round(max((abs(s) for _, s in at), default=0.0), 2), "boundaries": len(at),
+            "over_2": sorted(over, key=lambda t: -abs(t[1])), "at": at, "stat": stat}
+
+
+def add_strips(w, rgb, levels, grid=64.0, content=None):
+    """A test frame: rgb with every other grid-wide strip of columns (grid at 1280 wide, scaled) raised by `levels`
+    (clamped), so every boundary steps by `levels`: the owner's bands' shape, to measure against the clean frame.
+    content=(x0, x1) as for steps(): the strips inside the picture's columns only."""
+    x0, x1 = content if content else (0, w)
+    g = grid * (x1 - x0) / 1280.0
+    off = [int(round(levels)) if x0 <= x < x1 and int((x - x0) // g) % 2 else 0 for x in range(w)]
+    out = bytearray(rgb)
+    for i in range(len(out)):
+        out[i] = max(0, min(255, out[i] + off[(i // 3) % w]))
+    return bytes(out)
+
+
+def difference(a, b):
+    """RGB bytes 128 + a - b per channel (clamped): the step mode on it sees only where two renderings of the same
+    frame differ (the Odin's replay frame against the desktop's), not the scene's own edges."""
+    if np is not None:
+        d = np.frombuffer(a, np.uint8).astype(np.int16) - np.frombuffer(b, np.uint8).astype(np.int16) + 128
+        return d.clip(0, 255).astype(np.uint8).tobytes()
+    return bytes(max(0, min(255, 128 + x - y)) for x, y in zip(a, b))
+
+
+def steps_over_frames(results):
+    """Across frames of one size: each boundary's median |step| (a band stays at its x, the scene's edges move), the
+    median of those, and the boundaries whose median is over 2 levels."""
+    per = {}
+    for r in results:
+        for b, s in r["at"]:
+            per.setdefault(b, []).append(abs(s))
+    meds = {b: median(v) for b, v in per.items()}
+    return {"frames": len(results), "boundary_median": round(median(list(meds.values())), 2),
+            "over_2": sorted([[b, round(m, 2)] for b, m in meds.items() if m > 2.0], key=lambda t: -t[1])}
+
+
 def frames_in(paths):
     for p in paths:
         if os.path.isdir(p):
@@ -302,6 +407,45 @@ def self_test():
         np = saved
     same = saved is None or (r2["columns"] == r1["columns"]
                              and sorted(r[:2] for r in r2["runs"]) == sorted(r[:2] for r in r1["runs"]))
+    # the step mode: 64-pixel strips each 2 to 5 levels off their neighbours (the Odin's night bands) against the
+    # smooth frame (a lamp pool's slope) and against hard edges off the grid (a car, a post)
+    strips = frame([(i * 64, i * 64 + 63, (2 + i % 4) * (1 if i % 2 else -1)) for i in range(20)])
+    edges = frame([(100, 140, 12), (500, 530, -10), (935, 990, 15)])
+    s0, s1, s2 = steps(w, h, smooth), steps(w, h, strips), steps(w, h, edges)
+    step_ok = (s0["boundary_median"] < 1.0 and s1["boundary_median"] >= 2.0 and (s1["ratio"] or 0) >= 3
+               and len(s1["over_2"]) == s1["boundaries"] and s2["boundary_median"] < 1.0 and (s2["ratio"] or 0) < 2)
+    # --against: the strips' frame against the same frame without them finds every boundary; a frame against itself,
+    # edges and all, finds none
+    d1 = steps(w, h, difference(strips, smooth))
+    d0 = steps(w, h, difference(edges, edges))
+    step_ok &= len(d1["over_2"]) == d1["boundaries"] and d0["boundary_max"] == 0.0
+    # add_strips at 4 levels on the edges frame, against it, either statistic; and stat=mean keeps the keys
+    s2l = add_strips(w, edges, 4)
+    m1 = steps(w, h, difference(s2l, edges), stat="mean")
+    d3 = steps(w, h, difference(s2l, edges))
+    step_ok &= (m1["stat"] == "mean" and set(m1) == set(d3) and 3.5 <= m1["boundary_median"] <= 4.5
+                and 3.5 <= d3["boundary_median"] <= 4.5)
+    # a picture between side bars (columns 160-1120): strips on its own grid are found with content=, and the
+    # whole-width grid (the wrong origin and spacing) sees far fewer of them
+    bars = bytes(v if 160 <= (i // 3) % w < 1120 else 0 for i, v in enumerate(edges))
+    sb = add_strips(w, bars, 4, content=(160, 1120))
+    c1 = steps(w, h, difference(sb, bars), content=(160, 1120))
+    c2 = steps(w, h, difference(sb, bars))
+    step_ok &= c1["boundaries"] == 19 and len(c1["over_2"]) == 19 and len(c2["over_2"]) < c2["boundaries"] // 2
+    saved2, np = np, None
+    try:
+        s3 = steps(w, h, strips)
+        d2 = steps(w, h, difference(strips, smooth))
+    finally:
+        np = saved2
+    step_ok &= (s3["over_2"] == s1["over_2"] and s3["boundary_median"] == s1["boundary_median"]
+                and d2["over_2"] == d1["over_2"])
+    ok &= step_ok
+    print(f"steps: smooth boundary median {s0['boundary_median']} (ratio {s0['ratio']}); strips "
+          f"{s1['boundary_median']}"
+          f" (ratio {s1['ratio']}, {len(s1['over_2'])} of {s1['boundaries']} boundaries over 2); edges off the grid "
+          f"{s2['boundary_median']} (ratio {s2['ratio']}); against a reference: strips {len(d1['over_2'])} of "
+          f"{d1['boundaries']}, itself {d0['boundary_max']}: {'right' if step_ok else 'WRONG'}")
     print(f"PNG reader (RGB and RGBA, the five filters): {'right' if png_ok else 'WRONG'}")
     print(f"smooth: {r0['columns']} columns over; banded: score {r1['score']}, runs {found}")
     print(f"numpy {'and plain Python agree' if same else 'and plain Python DIFFER'}"
@@ -313,11 +457,25 @@ def self_test():
 def main(argv):
     if "--self-test" in argv:
         return self_test()
-    rows, threshold, window, as_json, paths = (0.45, 0.72), 6.0, 33, False, []
+    rows, threshold, window, as_json, paths = None, 6.0, 33, False, []
+    step_mode, grid, against, stat, content = False, 64.0, None, "median", None
     it = iter(argv)
     for a in it:
         if a == "--json":
             as_json = True
+        elif a == "--steps":
+            step_mode = True
+        elif a == "--grid":
+            grid = float(next(it))
+        elif a == "--against":
+            against = next(it)
+        elif a == "--content":
+            content = tuple(int(v) for v in next(it).split("-"))
+        elif a == "--stat":
+            stat = next(it)
+            if stat not in ("median", "mean"):
+                print("--stat is median or mean")
+                return 2
         elif a == "--rows":
             rows = tuple(float(v) for v in next(it).split("-"))
         elif a == "--threshold":
@@ -329,9 +487,38 @@ def main(argv):
     if not paths:
         print(__doc__)
         return 2
+    step_results = {}
     for p in frames_in(paths):
         w, h, rgb = read_frame(p)
-        r = measure(w, h, rgb, rows, threshold, window)
+        if step_mode and against:
+            ref = against
+            if os.path.isdir(against):   # paired by the name's stem: the device's .ppm against a reference's .png
+                stem = os.path.splitext(os.path.basename(p))[0]
+                ref = next((os.path.join(against, stem + e) for e in (".ppm", ".png", ".PPM", ".PNG")
+                            if os.path.exists(os.path.join(against, stem + e))), os.path.join(against, stem))
+            if not os.path.exists(ref):
+                print(f"{os.path.basename(p)}: no reference frame {ref}", flush=True)
+                continue
+            rw, rh, rrgb = read_frame(ref)
+            if (rw, rh) != (w, h):
+                print(f"{os.path.basename(p)}: {w}x{h} against a {rw}x{rh} reference: skipped", flush=True)
+                continue
+            rgb = difference(rgb, rrgb)
+        if step_mode:
+            r = {"frame": os.path.basename(p),
+                 **steps(w, h, rgb, rows or (0.45, 0.72), grid, stat=stat, content=content)}
+            step_results.setdefault((w, h), []).append(r)
+            r = {k: v for k, v in r.items() if k != "at"}
+            if as_json:
+                print(json.dumps(r), flush=True)
+            else:
+                top = ", ".join(f"x {b} {s:+.1f}" for b, s in r["over_2"][:6])
+                print(f"{r['frame']}: steps on the {r['grid']}-pixel grid: median {r['boundary_median']} against "
+                      f"{r['elsewhere_median']} elsewhere (ratio {r['ratio']}), largest {r['boundary_max']}; "
+                      f"{len(r['over_2'])} of {r['boundaries']} boundaries over 2 levels{': ' + top if top else ''}",
+                      flush=True)
+            continue
+        r = measure(w, h, rgb, rows or (0.45, 0.72), threshold, window)
         r = {"frame": os.path.basename(p), **r}
         if as_json:
             print(json.dumps(r), flush=True)
@@ -340,6 +527,16 @@ def main(argv):
             more = f" (+{len(r['runs']) - 6} more)" if len(r["runs"]) > 6 else ""
             print(f"{r['frame']}: score {r['score']:.4f}, {r['columns']} columns; {runs or 'no runs'}{more}",
                   flush=True)
+    for (w, h), results in step_results.items():
+        if len(results) > 1:
+            a = steps_over_frames(results)
+            if as_json:
+                print(json.dumps({"over_frames": f"{w}x{h}", **a}), flush=True)
+            else:
+                top = ", ".join(f"x {b} {m}" for b, m in a["over_2"][:8])
+                print(f"over {a['frames']} frames ({w}x{h}): each boundary's median step, their median "
+                      f"{a['boundary_median']}; {len(a['over_2'])} boundaries over 2 levels"
+                      f"{': ' + top if top else ''}")
     return 0
 
 
