@@ -13,7 +13,8 @@
 //   share the one periodic effect, the larger and its period.
 // - Low speed: a centring spring and a damper fading in below 10 km/h, where no aligning torque builds.
 // - The strength scales all of it, and the constant force plus the vibration never exceed the strength and the
-//   ceiling together (wheel_ffb.h's kWheelForceCeiling): the vibration gives way first.
+//   ceiling together (wheel_ffb.h's kWheelForceCeiling): the vibration gives way first, and the spring and the damper
+//   get only the room left (budgetForces, PLAN D7's budget).
 #include "gt4/gfx.h"
 #include "wheel_ffb.h"
 

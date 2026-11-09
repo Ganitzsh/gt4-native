@@ -86,19 +86,22 @@ WheelForces physicsForces(const scene::Vehicle& v, const PhysicsFfbConfig& c) {
     // low speed: a centring spring and a damper fade in (both passive: the ceiling is their saturation)
     const float slow = lowSpeed(v);
     if (slow > 0.0f) {
-        const auto condition = [&](float share) {
+        // each its share of the budget (spring 0.6, damper 0.4: both fit when nothing else plays), and budgetForces
+        // trims them to the room the active effects leave
+        const auto condition = [&](float share, float budgetShare) {
             WheelCondition w;
             const float s = std::min(share * slow * strength, kWheelForceCeiling);
             w.rightCoeff = w.leftCoeff = static_cast<int16_t>(std::lround(s * 32767.0f));
-            const float saturation = std::min(strength, kWheelForceCeiling);
-            w.rightSat = w.leftSat = static_cast<uint16_t>(std::lround(saturation * 65535.0f));
+            const float saturation = budgetShare * budget;
+            w.rightSat = w.leftSat = static_cast<uint16_t>(std::floor(saturation * 65535.0f));
             return w;
         };
         out.springOn = true;
-        out.spring = condition(0.5f);
+        out.spring = condition(0.5f, 0.6f);
         out.damperOn = true;
-        out.damper = condition(0.3f);
+        out.damper = condition(0.3f, 0.4f);
     }
+    budgetForces(out, c.strength);   // the conditions get only the room the active effects leave (PLAN D7)
     return out;
 }
 

@@ -32,6 +32,25 @@ WheelCondition condition(const uint8_t* block, float strength) {
 
 }  // namespace
 
+void budgetForces(WheelForces& f, float strength) {
+    const float budget = std::min(std::clamp(strength, 0.0f, 1.0f), kWheelForceCeiling);
+    float used = 0.0f;
+    if (f.constantOn) used += std::abs(static_cast<float>(f.constantLevel)) / 32767.0f;
+    if (f.periodicOn) used += static_cast<float>(f.periodicMagnitude) / 32767.0f;
+    const float step = budget / 16.0f;
+    float room = step > 0.0f ? std::floor(std::max(0.0f, budget - used) / step + 1e-4f) * step : 0.0f;
+    room = std::min(room, std::max(0.0f, budget - used));   // (never past the exact room either)
+    const auto take = [&](bool on, WheelCondition& c) {
+        if (!on) return;
+        const uint16_t cap = static_cast<uint16_t>(std::floor(room * 65535.0f));
+        c.rightSat = std::min(c.rightSat, cap);
+        c.leftSat = std::min(c.leftSat, cap);
+        room = std::max(0.0f, room - static_cast<float>(std::max(c.rightSat, c.leftSat)) / 65535.0f);
+    };
+    take(f.springOn, f.spring);   // the centring first
+    take(f.damperOn, f.damper);
+}
+
 WheelEffectKind wheelEffectKind(uint8_t type) {
     switch (type) {
     case 0x00: return WheelEffectKind::Constant;
@@ -86,6 +105,7 @@ WheelForces wheelForces(const Gt4WheelFx& fx, const WheelFfbConfig& config) {
             break;
         }
     }
+    budgetForces(out, config.strength);
     return out;
 }
 

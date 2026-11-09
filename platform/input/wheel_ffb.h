@@ -70,6 +70,14 @@ struct WheelFfbConfig {
 // kind already taken is ignored (GT4 downloads one of each).
 WheelForces wheelForces(const Gt4WheelFx& fx, const WheelFfbConfig& config);
 
+// The budget (PLAN.md D7, for D7 and D8 alike): the device's whole output stays within min(strength, ceiling).
+// The active effects (the constant force, the vibration) take it first; the spring's and then the damper's
+// saturations get only the room they leave, so the sum of every effect's maximum output never exceeds it (a device
+// clips the sum at its own maximum, so effects capped one by one could still ask for 100 %). The room is rounded down
+// to sixteenths of the budget, so the conditions change on the device only when it crosses a step, not with every
+// frame's constant force. Coefficients are left alone: a condition's output is bounded by its saturation.
+void budgetForces(WheelForces& forces, float strength);
+
 // GT4's constant force as it set it (effect A: its +0x0C, -255..255; 0 when it has none or doesn't run it), for D8's
 // comparison with the physics' aligning torque (PLAN.md D8).
 int32_t gt4ConstantMagnitude(const Gt4WheelFx& fx);

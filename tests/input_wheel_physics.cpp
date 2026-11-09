@@ -127,6 +127,28 @@ int main() {
         expect(absLevel(f.constantLevel) + (f.periodicOn ? f.periodicMagnitude : 0) <= budget + 1.0f, what);
         expect(f.spring.rightCoeff <= kWheelForceCeiling * 32767.0f + 1.0f, "the spring within the ceiling");
     }
+    // PLAN D7's budget, the conditions included, at low speed where they fade in: on a kerb at 5 km/h with the
+    // fronts loaded, at every strength, the constant force, the vibration and the spring's and the damper's largest
+    // saturations together within min(strength, ceiling)
+    for (float strength : {0.15f, 0.5f, 1.0f, 3.0f})
+        for (float speed : {0.0f, 0.7f, 1.4f, 2.5f}) {
+            scene::Vehicle slow = cornering(5000.0f, 0.02f, speed);
+            slow.wheel[0].strokeSpeed = 0.8f;
+            const WheelForces f = physicsForces(slow, {strength, 0.15f, 1});
+            const float sum = absLevel(f.constantLevel) / 32767.0f +
+                              (f.periodicOn ? f.periodicMagnitude / 32767.0f : 0.0f) +
+                              std::max(f.spring.rightSat, f.spring.leftSat) / 65535.0f +
+                              std::max(f.damper.rightSat, f.damper.leftSat) / 65535.0f;
+            char what[112];
+            std::snprintf(what, sizeof what, "the budget with the conditions at %.1f m/s, strength %.2f: %.4f", speed,
+                          strength, sum);
+            expect(sum <= std::fmin(std::fmin(strength, 1.0f), kWheelForceCeiling) + 1e-4f, what);
+        }
+    {   // stopped and unloaded: the conditions get the whole budget, the spring first
+        const WheelForces f = physicsForces(cornering(0.0f, 0.0f, 0.0f), full);
+        expect(f.springOn && f.spring.rightSat > 0 && f.damperOn && f.damper.rightSat > 0,
+               "stopped: the spring and the damper both in the budget");
+    }
     {   // the vibration gives way first: a moderate Mz keeps its level on a kerb
         scene::Vehicle v = cornering(2000.0f, 0.02f);
         const int16_t alone = physicsForces(v, full).constantLevel;

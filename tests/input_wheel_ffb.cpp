@@ -7,10 +7,12 @@
 // spring is played centred whatever GT4's offset (its scale unknown), the offset reported.
 #include "wheel_ffb.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 
 using namespace gt4::input;
 
@@ -75,26 +77,48 @@ int main() {
         expect(near(top.constantLevel, std::lround(0.60 * 32767.0)), "A at 255: held at the 60 % ceiling");
         const WheelForces low = wheelForces(race(-205), {1.0f, 1});
         expect(near(low.constantLevel, -std::lround(0.60 * 32767.0)), "A at -205 (80 %): held at the ceiling, negative");
-        // the damper: coefficients 32, saturations 128 and 255 (the last at the ceiling)
+        // the coefficients as GT4 set them (the budget leaves coefficients alone): B 32, C 128
         expect(near(f.damper.rightCoeff, std::lround(32.0 / 255.0 * 32767.0)) &&
                    near(f.damper.leftCoeff, std::lround(32.0 / 255.0 * 32767.0)), "B's coefficients 32");
-        expect(near(f.damper.rightSat, std::lround(128.0 / 255.0 * 65535.0)), "B's positive saturation 128");
-        expect(near(f.damper.leftSat, std::lround(0.60 * 65535.0)), "B's negative saturation 255: at the ceiling");
         expect(f.damper.center == 0, "a damper has no centre");
-        // the spring: 128 on all four
         expect(near(f.spring.rightCoeff, std::lround(128.0 / 255.0 * 32767.0)) &&
-                   near(f.spring.leftCoeff, f.spring.rightCoeff) &&
-                   near(f.spring.rightSat, std::lround(128.0 / 255.0 * 65535.0)) &&
-                   near(f.spring.leftSat, f.spring.rightSat), "C at 128");
+                   near(f.spring.leftCoeff, f.spring.rightCoeff), "C's coefficients 128");
         expect(f.spring.center == 0, "C centred");
+        // the saturations within the budget (PLAN D7): A at 55 of 255 takes 0.216 of the 0.6; the room, 0.384, is
+        // rounded down to ten sixteenths (0.375) and the spring takes it (its 128 is 0.502); the damper gets none
+        expect(near(f.spring.rightSat, std::lround(0.375 * 65535.0), 2) && f.spring.leftSat == f.spring.rightSat,
+               "C's saturations: the room A leaves, in sixteenths");
+        expect(f.damper.rightSat == 0 && f.damper.leftSat == 0, "B's saturations: no room left after C");
+        // A not running: the whole budget for the conditions, the spring's 128 first, the damper the rest
+        const WheelForces still = wheelForces(race(55, GT4_WHEEL_FX_STOPPED), {1.0f, 1});
+        expect(near(still.spring.rightSat, std::lround(128.0 / 255.0 * 65535.0)), "A stopped: C's 128 whole");
+        expect(near(still.damper.leftSat, std::lround((0.60 - 128.0 / 255.0) * 65535.0), 2) &&
+                   still.damper.rightSat <= still.damper.leftSat, "A stopped: B in what C leaves");
+        // A at the ceiling: nothing for the conditions
+        expect(top.spring.rightSat == 0 && top.damper.leftSat == 0, "A at the ceiling: no room for B or C");
     }
     // the first live run's 15 %: everything scaled, nothing near the ceiling
     {
         const WheelForces f = wheelForces(race(-205), {0.15f, 1});
         expect(near(f.constantLevel, -std::lround(205.0 / 255.0 * 0.15 * 32767.0)), "A at -205, 15 %");
-        expect(near(f.damper.leftSat, std::lround(0.15 * 65535.0)), "B's 255 saturation at 15 %");
         expect(near(f.spring.rightCoeff, std::lround(128.0 / 255.0 * 0.15 * 32767.0)), "C at 15 %");
     }
+    // the budget's sum on every magnitude GT4 can send, at the strengths a player can set (PLAN D7): A plus C's and
+    // B's largest saturations never over min(strength, ceiling)
+    for (float strength : {0.15f, 0.5f, 0.6f, 1.0f, 5.0f})
+        for (int magnitude = -255; magnitude <= 255; magnitude += 5)
+            for (uint32_t stateA : {GT4_WHEEL_FX_RUNNING, GT4_WHEEL_FX_STOPPED}) {
+                const WheelForces f = wheelForces(race(magnitude, stateA), {strength, 1});
+                const double sum = (f.constantOn ? std::abs(f.constantLevel) / 32767.0 : 0.0) +
+                                   std::max(f.spring.rightSat, f.spring.leftSat) / 65535.0 +
+                                   std::max(f.damper.rightSat, f.damper.leftSat) / 65535.0;
+                if (sum > std::min(std::min(strength, 1.0f), 0.60f) + 1e-4) {
+                    char what[96];
+                    std::snprintf(what, sizeof what, "the sum %.4f over the budget at strength %.2f, A %d", sum,
+                                  strength, magnitude);
+                    expect(false, what);
+                }
+            }
     // the strength's range: 0 is silence, past 1 is still 1 (the ceiling holds)
     {
         const WheelForces zero = wheelForces(race(255), {0.0f, 1});
