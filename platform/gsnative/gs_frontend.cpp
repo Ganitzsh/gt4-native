@@ -1885,6 +1885,37 @@ TextureSource GsFrontend::textureFor(const DrawState& s) {
                 std::fclose(f);
             }
         }
+        // (DEBUG lane C, replay colours: GT4_TEXTRACE=1 prints each indexed texture decoded from memory)
+        static const bool texTrace = std::getenv("GT4_TEXTRACE") != nullptr;
+        if (texTrace && (t.psm == 0x13 || t.psm == 0x14 || t.psm == 0x1B || t.psm == 0x24 || t.psm == 0x2C)) {
+            double sum[3] = {};
+            const size_t count = size_t(w) * h;
+            for (size_t k = 0; k < count; ++k)
+                for (int ch = 0; ch < 3; ++ch) sum[ch] += (image.pixels[k] >> (8 * ch)) & 0xFF;
+            // the same texture with its palette loaded fresh from GS memory at its CBP (as CLD 1 would), on a copy
+            double fresh[3] = {};
+            if (levelCount >= 1) {
+                static GsMemory tmp;
+                tmp = mem;
+                GsMemory::Tex0 lt = t;
+                lt.cld = 1;
+                tmp.tex0Written(lt);
+                std::vector<uint32_t> px(size_t(levels[0].w) * levels[0].h);
+                GsMemory::Tex0 l0 = lt;
+                l0.tbp = levels[0].tbp;
+                l0.tbw = levels[0].tbw;
+                tmp.decode(l0, texa, 0, 0, levels[0].w, levels[0].h, px.data());
+                for (uint32_t p : px)
+                    for (int ch = 0; ch < 3; ++ch) fresh[ch] += (p >> (8 * ch)) & 0xFF;
+                for (double& f : fresh) f /= px.empty() ? 1.0 : double(px.size());
+            }
+            std::fprintf(stderr, "textrace: frame %llu id %u tbp %04x tbw %u psm %02x %ux%u cbp %04x cpsm %02x csm %u csa %u "
+                         "cld %u clutLoads %llu mean %.0f %.0f %.0f fresh %.0f %.0f %.0f\n",
+                         static_cast<unsigned long long>(frameCount), c.id, t.tbp, t.tbw, t.psm, w, h, t.cbp, t.cpsm,
+                         t.csm, t.csa, t.cld, static_cast<unsigned long long>(mem.clutLoads),
+                         count ? sum[0] / count : 0.0, count ? sum[1] / count : 0.0, count ? sum[2] / count : 0.0,
+                         fresh[0], fresh[1], fresh[2]);
+        }
         summarize(textureIdentity(c.id), image);   // (F2b; a stream's later contents keep the first's, as its identity does)
         frame.textures.push_back(std::move(image));
         ++stats.decoded;
