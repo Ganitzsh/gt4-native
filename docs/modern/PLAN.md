@@ -1670,10 +1670,16 @@ draw numbers are those of replay 2514, and the draws are found by what they are,
   imaged against the base, and only lamp light changes (on mid-run replays; their verdicts are rechecked per the
   acceptance below). Every other course with the flag (C.S. Route 5 Reverse, S.S. Route 5 forward, Hong Kong at dusk)
   is hunted the same way (B-spec if an event runs there, else throttle segments) before N3 counts as proven there: the
-  same textures, but other geometry, so other items. A pool sliver under the width stays baked (0.058 % of pool area),
-  the safe miss. The texture-locator fallback is parked in the spike; no hash list exists. The debug host and tools of
-  the hunts and the never-dark sweep are on origin as `debug/f-n3-debug` (README in `tools/lanef/`), deleted when N3
-  closes.
+  same textures, but other geometry, so other items. S.S. Route 5 forward is hunted (lane F, 2026-11-10, on
+  `lap_ssr5f_boot`, from game start): 196 items in 50 identities, the same three families; orange bands under an
+  overpass (frame 9,725) traced by bisection to the amber pool texture a93b91b4da486282, already proven lamp light on
+  the reverse layout, its items passing every v4 test with room, so the band shape is the geometry between the
+  overpass's beams. C.S. Route 5 Reverse is hunted on its mid-run lap (`lap_csr5r`: 230 items skipped in 38
+  identities, the same families, only the road's light layer changing in the 305 changed frames), the true-colour
+  rerun on `lap_csr5r_boot` pending; Hong Kong at dusk waits for a driven lap. A pool sliver under the width stays
+  baked (0.058 % of pool area), the safe miss. The texture-locator fallback is parked in the spike; no hash list
+  exists. The debug host and tools of the hunts and the never-dark sweep are on origin as `debug/f-n3-debug` (README
+  in `tools/lanef/`), deleted when N3 closes.
 - **Step 1, the mechanism** (lanes F and B write it together, lane B the back end's skip; lane A the flag): the
   verdict per (material, mesh item) in `SceneCache` (`platform/scene/scene_cache.h`), beside the `MaterialTable`: a
   map keyed by (`MaterialId`, the mesh's `MeshKey`, item index), filled in `SceneCache::assign` at each view's
