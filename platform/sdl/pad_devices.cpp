@@ -4,6 +4,7 @@
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_joystick.h>
 #include <SDL3/SDL_keyboard.h>
+#include <SDL3/SDL_sensor.h>
 #include <SDL3/SDL_timer.h>
 
 #include <algorithm>
@@ -29,6 +30,20 @@ std::string rumbleCaps(SDL_Gamepad* pad) {
     const bool triggers = SDL_GetBooleanProperty(props, SDL_PROP_GAMEPAD_CAP_TRIGGER_RUMBLE_BOOLEAN, false);
     return std::string("rumble supported ") + (rumble ? "yes" : "no") + ", trigger rumble " +
            (triggers ? "yes" : "no");
+}
+
+// A pad's motion sensors as SDL reports them, for host.log (PLAN.md D16: whether the Odin's gyro reaches SDL through
+// Steam Input): "gyro yes (N Hz), accelerometer no"; a rate SDL doesn't know reads "rate unknown".
+std::string sensorCaps(SDL_Gamepad* pad) {
+    const auto one = [&](SDL_SensorType type, const char* name) {
+        if (!SDL_GamepadHasSensor(pad, type)) return std::string(name) + " no";
+        const float rate = SDL_GetGamepadSensorDataRate(pad, type);
+        char text[48];
+        if (rate > 0.0f) std::snprintf(text, sizeof text, "%s yes (%.0f Hz)", name, static_cast<double>(rate));
+        else std::snprintf(text, sizeof text, "%s yes (rate unknown)", name);
+        return std::string(text);
+    };
+    return one(SDL_SENSOR_GYRO, "gyro") + ", " + one(SDL_SENSOR_ACCEL, "accelerometer");
 }
 
 // SDL_RumbleGamepad with its result as text: "ok", or "failed: " and SDL's error.
@@ -179,6 +194,7 @@ void PadDevices::take(SDL_Gamepad* pad, int port) {
     else
         std::printf("Input: port %d: %s; a rumble call at zero strength: %s\n", port + 1, rumbleCaps(pad).c_str(),
                     rumble(pad, 0, 0, 0).c_str());
+    std::printf("Input: port %d: %s\n", port + 1, sensorCaps(pad).c_str());
     std::fflush(stdout);
 }
 
@@ -570,8 +586,8 @@ int rumbleTestOnly() {
         }
         char guid[33] = {};
         SDL_GUIDToString(SDL_GetGamepadGUIDForID(ids[i]), guid, sizeof guid);
-        std::printf("Input: gamepad %d: %s (id %u, %s): %s\n", i + 1, SDL_GetGamepadName(pad),
-                    static_cast<unsigned>(ids[i]), guid, rumbleCaps(pad).c_str());
+        std::printf("Input: gamepad %d: %s (id %u, %s): %s; %s\n", i + 1, SDL_GetGamepadName(pad),
+                    static_cast<unsigned>(ids[i]), guid, rumbleCaps(pad).c_str(), sensorCaps(pad).c_str());
         const std::string low = rumble(pad, 0xFFFF, 0, 600);
         std::printf("Input: gamepad %d: the low-frequency motor for 0.5 s: %s\n", i + 1, low.c_str());
         std::fflush(stdout);
