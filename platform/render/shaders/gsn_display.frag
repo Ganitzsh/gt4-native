@@ -14,6 +14,7 @@ layout(push_constant) uniform Display {
     float blend;   // how much of the other field
     float clean;   // display.field_mode = clean (1) or blend (0)
     float line;    // one GS line of the displayed rectangle, normalised
+    float side;    // the field's side by its VBlank's parity (+1 / -1), where the rectangles don't tell it
 } display;
 layout(location = 0) in vec2 inUv;
 layout(location = 0) out vec4 outColor;
@@ -49,6 +50,10 @@ float fieldLuma(sampler2D t, vec2 offset, vec2 size, bool lower, vec2 uv) {
 // field's own motion two fields later).
 const vec2 kFieldStep = vec2(3.0 / 1280.0, 2.0 / 720.0);
 
+// How far a field shown alone is moved towards the other's lines, in its own lines (display.field_mode = clean): the two
+// fields sit one frame line apart, half of one of their own lines, so each moves a quarter of its line to meet halfway.
+const float kAloneShift = 0.25;
+
 float fieldsDiffer(bool currentLower, bool otherLower) {
     float moved = 0.0;
     for (int i = -1; i <= 1; ++i) {
@@ -81,14 +86,23 @@ void main() {
     if (blended) {
         const vec2 q = fieldPoint(otherField, display.otherOffset, display.otherSize, otherLower, inUv);
         const vec3 o = clamp(textureLod(otherField, q, 0.0).rgb, 0.0, 1.0);
-        float w = display.blend;
+        const vec3 still = mix(c, o, display.blend);
         if (display.clean > 0.5) {
-            // Where something moved between the two fields (a menu line sliding in), the blend would show it twice:
-            // there this field alone.
-            const float moved = fieldsDiffer(currentLower, otherLower);
-            w *= 1.0 - smoothstep(0.10, 0.20, moved);
+            // Where something moved between the two fields (a menu line sliding in, a video), the blend would show it
+            // twice: there this field alone. Alone at its own lines it sits half a line from the other field, so a
+            // moving area bobbed a line every frame (the Odin's menu shake, 27f5729); it is moved half way towards
+            // the other field's lines instead, where the blend puts a still picture: its line mixed with the next
+            // one on the other field's side.
+            const float moved = smoothstep(0.10, 0.20, fieldsDiffer(currentLower, otherLower));
+            // (the rectangles tell which field is lower when they start on different lines; else the field's parity)
+            const float towards = currentLower != otherLower ? (currentLower ? -1.0 : 1.0) : display.side;
+            const vec2 next = fieldPoint(frame, display.offset, display.size, currentLower,
+                                         inUv + vec2(0.0, towards * display.line / display.size.y));
+            const vec3 alone = mix(c, clamp(textureLod(frame, next, 0.0).rgb, 0.0, 1.0), kAloneShift);
+            c = mix(still, alone, moved);
+        } else {
+            c = still;
         }
-        c = mix(c, o, w);
     }
     outColor = vec4(linearFromSrgb(c), 1.0);
     outVelocity = vec2(0.0);

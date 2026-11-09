@@ -510,6 +510,7 @@ struct GsnScene::Impl {
     float fieldBlend = 0.0f;
     float fieldLine = 0.0f;    // one GS line of the displayed rectangle, normalised (the clean field mode)
     bool fieldClean = false;   // display.field_mode = clean (setFieldMode)
+    uint64_t shownVblank = 0;  // the displayed list's VBlank: its parity is the field's (clean's field shown alone)
     bool warnedBlend = false;
 
     Impl(const vk::Device& d, VkCommandPool p) : device(d), pool(p) {
@@ -3326,6 +3327,7 @@ void GsnScene::Impl::executeFinish(VkCommandBuffer command, uint32_t /*slot*/) {
         if (!backBuffer && shownByGame == gameShown && targets.count(shownBefore)) displayTarget = shownBefore;
     }
     gameShown = shownByGame;
+    shownVblank = frame.vblank;
     auto shown = targets.find(displayTarget);
     if (shown != targets.end()) {
         const gfx::DisplayCircuit& c = frame.display.record.circuit[frame.display.target2 ? 1 : 0];
@@ -4542,6 +4544,10 @@ void GsnScene::recordMain(VkCommandBuffer command, const SceneView& view) {
     constants[8] = other != s.targets.end() ? s.fieldBlend : 0.0f;
     constants[9] = s.fieldClean ? 1.0f : 0.0f;
     constants[10] = s.fieldLine;
+    // the field's side (+1 / -1) by its VBlank's parity: where the two fields' rectangles start on the same line (GT4
+    // draws each field half a line apart inside its own buffer) it tells which way a field shown alone moves
+    // (the sign measured: the opposite one doubles the bob on menus_boot's title window)
+    constants[11] = (s.shownVblank & 1u) ? 1.0f : -1.0f;
     vk::pushConstants(command, s.display, constants, sizeof constants);
     vkCmdDraw(command, 3, 1, 0, 0);
 }
