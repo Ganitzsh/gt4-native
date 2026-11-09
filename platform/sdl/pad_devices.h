@@ -41,6 +41,13 @@ public:
     // one) and the physics' haptics (D14), the larger per motor; sent when they change and every second while on
     // (SDL's rumble lasts as long as asked). Triggers: an Xbox pad's impulse triggers, or a DualSense's adaptive ones.
     void feel(int port, uint32_t gt4Rumble, const input::HapticsOut& haptics, uint64_t nowMs);
+    // host.log says, per pad: at its open, SDL's rumble capabilities and a zero-strength call's result; the first time
+    // GT4's rumble and the physics' haptics each turn its motors on, with SDL's result; the first failure.
+    // The rumble test (the Odin's report, 2026-11-09): every pad's low-frequency motor for 0.5 s, then its
+    // high-frequency one, each result logged. rumbleTest starts it (`why`: what asked, for the log); rumbleTestStep,
+    // called every main-loop pass, runs it; feel() leaves the motors to it meanwhile.
+    void rumbleTest(uint64_t nowMs, const char* why);
+    void rumbleTestStep(uint64_t nowMs);
     // The settings `port` runs with: the globals with its devices' own (device_settings.h, gated by the globals'
     // original). The globals themselves when its devices have none (the usual case: no copy), else the port's copy,
     // valid until the next call for that port.
@@ -91,8 +98,11 @@ private:
         bool noImpulseTriggers = false;   // SDL said no (XInput, Bluetooth): said once, not tried again
         uint8_t ds5Brake = 0, ds5Throttle = 0;   // a DualSense's trigger effects, in 16 steps (0: off)
         bool ds5Sent = false;
+        bool gt4Said = false, physicsSaid = false, failSaid = false;   // (host.log's lines, once each)
+        int testPhase = 2;   // the rumble test: -1 to start, 0 the low motor, 1 the high one, 2 done
     };
     void take(SDL_Gamepad* pad, int port);
+    uint64_t testAt_ = 0;   // the rumble test's start
     int profileFor(SDL_JoystickID id);   // found or added (the type's defaults)
     void rebuild(int port);
     void save() const;
@@ -115,5 +125,10 @@ private:
     int profileIndex(const std::string& key) const;
     void watchCapture(const input::Snapshot& s, bool keyboard, const std::string& key);
 };
+
+// --rumble-test: every gamepad SDL finds (within 2 s) opened, its rumble capabilities logged, its low-frequency motor
+// run for 0.5 s then its high-frequency one, each result logged, and closed. SDL's gamepad subsystem must be up; no
+// game, no window. Exit status: 0 every pulse ok, 1 a pad failed, 3 no gamepad found.
+int rumbleTestOnly();
 
 }  // namespace gt4

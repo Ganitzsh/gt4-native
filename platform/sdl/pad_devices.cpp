@@ -1,8 +1,10 @@
 // The host's input devices for the game's pads (pad_devices.h).
 #include "pad_devices.h"
 
+#include <SDL3/SDL_events.h>
 #include <SDL3/SDL_joystick.h>
 #include <SDL3/SDL_keyboard.h>
+#include <SDL3/SDL_timer.h>
 
 #include <algorithm>
 #include <cmath>
@@ -18,6 +20,24 @@ namespace gt4 {
 namespace {
 
 void calm(SDL_Gamepad* pad, bool ds5Sent);   // (below: before a pad is closed)
+
+// A pad's rumble as SDL describes it, for host.log. A pad behind Steam Input and Wine (the Odin's report, 2026-11-09)
+// may say yes and accept every call while nothing reaches the motors: these lines and the rumble test tell them apart.
+std::string rumbleCaps(SDL_Gamepad* pad) {
+    const SDL_PropertiesID props = SDL_GetGamepadProperties(pad);
+    const bool rumble = SDL_GetBooleanProperty(props, SDL_PROP_GAMEPAD_CAP_RUMBLE_BOOLEAN, false);
+    const bool triggers = SDL_GetBooleanProperty(props, SDL_PROP_GAMEPAD_CAP_TRIGGER_RUMBLE_BOOLEAN, false);
+    return std::string("rumble supported ") + (rumble ? "yes" : "no") + ", trigger rumble " +
+           (triggers ? "yes" : "no");
+}
+
+// SDL_RumbleGamepad with its result as text: "ok", or "failed: " and SDL's error.
+std::string rumble(SDL_Gamepad* pad, uint16_t low, uint16_t high, uint32_t ms) {
+    SDL_ClearError();
+    if (SDL_RumbleGamepad(pad, low, high, ms)) return "ok";
+    const char* e = SDL_GetError();
+    return std::string("failed: ") + (e && *e ? e : "(no error given)");
+}
 
 // The keyboard and one gamepad now (standard layout), for the pad map (platform/input/input_map.h).
 input::Snapshot readInput(SDL_Gamepad* gamepad) {
@@ -145,11 +165,21 @@ void PadDevices::take(SDL_Gamepad* pad, int port) {
     p.noImpulseTriggers = false;
     p.ds5Brake = p.ds5Throttle = 0;
     p.ds5Sent = false;
+    p.gt4Said = p.physicsSaid = p.failSaid = false;
+    p.testPhase = 2;   // (a rumble test under way when it arrived is not run on it)
     port_[port].gamepad = pad;
     port_[port].profile = profileFor(SDL_GetGamepadID(pad));
     rebuild(port);
     std::printf("Input: port %d: %s (id %u, %s)\n", port + 1, SDL_GetGamepadName(pad),
                 static_cast<unsigned>(SDL_GetGamepadID(pad)), profiles_[port_[port].profile].key.c_str());
+    // what SDL says of its rumble, and whether a rumble call goes through: at zero strength, so nothing is felt at
+    // each start and reconnect (lane C; the rumble test runs the motors). A session's virtual pads get no call.
+    if (SDL_IsJoystickVirtual(SDL_GetGamepadID(pad)))
+        std::printf("Input: port %d: %s (virtual: no call)\n", port + 1, rumbleCaps(pad).c_str());
+    else
+        std::printf("Input: port %d: %s; a rumble call at zero strength: %s\n", port + 1, rumbleCaps(pad).c_str(),
+                    rumble(pad, 0, 0, 0).c_str());
+    std::fflush(stdout);
 }
 
 int PadDevices::profileFor(SDL_JoystickID id) {
@@ -404,8 +434,27 @@ void PadDevices::feel(int port, uint32_t gt4Rumble, const input::HapticsOut& h, 
     const uint16_t low = std::max(static_cast<uint16_t>((gt4Rumble & 0xFF) * 257), to16(h.low));
     const uint16_t high = std::max(static_cast<uint16_t>((gt4Rumble & 0x100) ? 0xFFFF : 0), to16(h.high));
     const bool on = low || high;
-    if (low != p.low || high != p.high || (on && now - p.motorsAt >= 1000)) {
-        SDL_RumbleGamepad(pad, low, high, on ? 2000 : 0);
+    if (p.testPhase < 2) {
+        // a rumble test has the motors
+    } else if (low != p.low || high != p.high || (on && now - p.motorsAt >= 1000)) {
+        const std::string result = rumble(pad, low, high, on ? 2000 : 0);
+        // host.log: the first time each source asks for the motors, and the first failure (the Odin's report)
+        if ((gt4Rumble & 0x1FF) && !p.gt4Said) {
+            p.gt4Said = true;
+            std::printf("Input: port %d: GT4's rumble, first on (large %u, small %u): %s\n", port + 1,
+                        static_cast<unsigned>(gt4Rumble & 0xFF), static_cast<unsigned>((gt4Rumble >> 8) & 1),
+                        result.c_str());
+        }
+        if ((h.low > 0.0f || h.high > 0.0f) && !p.physicsSaid) {
+            p.physicsSaid = true;
+            std::printf("Input: port %d: the physics' haptics, first on (low %.2f, high %.2f): %s\n", port + 1,
+                        h.low, h.high, result.c_str());
+        }
+        if (result != "ok" && !p.failSaid) {
+            p.failSaid = true;
+            std::printf("Input: port %d: %s: SDL_RumbleGamepad %s (said once)\n", port + 1, SDL_GetGamepadName(pad),
+                        result.c_str());
+        }
         p.low = low;
         p.high = high;
         p.motorsAt = now;
@@ -440,6 +489,79 @@ void PadDevices::feel(int port, uint32_t gt4Rumble, const input::HapticsOut& h, 
     p.triggerLeft = tl;
     p.triggerRight = tr;
     p.triggersAt = now;
+}
+
+void PadDevices::rumbleTest(uint64_t nowMs, const char* why) {
+    testAt_ = nowMs;
+    int pads = 0;
+    for (Port& p : port_) {
+        p.testPhase = p.gamepad ? -1 : 2;
+        pads += p.gamepad != nullptr;
+    }
+    std::printf("Input: rumble test (%s): %d pad%s\n", why, pads, pads == 1 ? "" : "s");
+    std::fflush(stdout);
+}
+
+void PadDevices::rumbleTestStep(uint64_t nowMs) {
+    for (int port = 0; port < input::Ports::kPorts; ++port) {
+        Port& p = port_[port];
+        if (p.testPhase >= 2 || !p.gamepad) continue;
+        const int phase = static_cast<int>(std::min<uint64_t>((nowMs - testAt_) / 500, 2));
+        if (phase == p.testPhase) continue;
+        p.testPhase = phase;
+        if (phase < 2) {
+            std::printf("Input: port %d: rumble test, the %s motor for 0.5 s: %s\n", port + 1,
+                        phase == 0 ? "low-frequency" : "high-frequency",
+                        rumble(p.gamepad, phase == 0 ? 0xFFFF : 0, phase == 1 ? 0xFFFF : 0, 600).c_str());
+        } else {
+            std::printf("Input: port %d: rumble test done: %s\n", port + 1, rumble(p.gamepad, 0, 0, 0).c_str());
+            p.low = p.high = 0;   // (the game's and the physics' values are sent again from here)
+            p.motorsAt = 0;
+        }
+        std::fflush(stdout);
+    }
+}
+
+int rumbleTestOnly() {
+    // SDL finds some pads a moment after its start (Wine's bus, Steam's virtual pads): events for up to 2 s
+    const uint64_t start = SDL_GetTicks();
+    int count = 0;
+    SDL_JoystickID* ids = nullptr;
+    while (SDL_GetTicks() - start < 2000) {
+        SDL_PumpEvents();
+        SDL_free(ids);
+        ids = SDL_GetGamepads(&count);
+        if (count > 0 && SDL_GetTicks() - start >= 500) break;
+        SDL_Delay(50);
+    }
+    std::printf("Input: rumble test (--rumble-test): %d gamepad%s\n", count, count == 1 ? "" : "s");
+    int failed = 0;
+    for (int i = 0; i < count; ++i) {
+        SDL_Gamepad* pad = SDL_OpenGamepad(ids[i]);
+        if (!pad) {
+            std::printf("Input: gamepad %d: cannot open: %s\n", i + 1, SDL_GetError());
+            ++failed;
+            continue;
+        }
+        char guid[33] = {};
+        SDL_GUIDToString(SDL_GetGamepadGUIDForID(ids[i]), guid, sizeof guid);
+        std::printf("Input: gamepad %d: %s (id %u, %s): %s\n", i + 1, SDL_GetGamepadName(pad),
+                    static_cast<unsigned>(ids[i]), guid, rumbleCaps(pad).c_str());
+        const std::string low = rumble(pad, 0xFFFF, 0, 600);
+        std::printf("Input: gamepad %d: the low-frequency motor for 0.5 s: %s\n", i + 1, low.c_str());
+        std::fflush(stdout);
+        SDL_Delay(500);
+        const std::string high = rumble(pad, 0, 0xFFFF, 600);
+        std::printf("Input: gamepad %d: the high-frequency motor for 0.5 s: %s\n", i + 1, high.c_str());
+        std::fflush(stdout);
+        SDL_Delay(500);
+        rumble(pad, 0, 0, 0);
+        failed += low != "ok" || high != "ok";
+        SDL_CloseGamepad(pad);
+    }
+    SDL_free(ids);
+    std::fflush(stdout);
+    return count == 0 ? 3 : failed ? 1 : 0;
 }
 
 void PadDevices::save() const {

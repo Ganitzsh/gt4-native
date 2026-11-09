@@ -68,6 +68,8 @@ const char* kUsage =
     "  --list-gpus          list Vulkan devices and whether they can run the host\n"
     "  --list-displays      list displays and their fullscreen modes\n"
     "  --list-options       list every setting with its value, allowed values and help\n"
+    "  --rumble-test        open every gamepad, log its rumble support, run each motor for 0.5 s, log the results,\n"
+    "                       then exit (no game, no window; exit 0 all ok, 1 a pad failed, 3 none found)\n"
     "Options:\n"
     "  --headless           render offscreen (no window, surface or swapchain); default GPU: discrete\n"
     "  --size WxH           headless output size (default: display.window_width x display.window_height)\n"
@@ -161,6 +163,7 @@ FrameList parseFrameList(const std::string& text) {
 struct Options {
     bool probe = false, smoke = false, headless = false, listGpus = false, listDisplays = false, listOptions = false;
     bool fixedStep = false, audio = true, replayLoop = false, realtime = false, force = false;
+    bool rumbleTest = false;   // --rumble-test
     std::string game, replay;
     std::vector<std::string> gameArgs;
     uint32_t frames = 0;
@@ -228,6 +231,7 @@ Options parse(int argc, char** argv) {
         else if (a == "--list-gpus") o.listGpus = true;
         else if (a == "--list-displays") o.listDisplays = true;
         else if (a == "--list-options") o.listOptions = true;
+        else if (a == "--rumble-test") o.rumbleTest = true;
         else if (a == "--fixed-step") o.fixedStep = true;
         else if (a == "--realtime") o.realtime = true;
         else if (a == "--no-audio") o.audio = false;
@@ -556,6 +560,10 @@ int run(const Options& options) {
         std::printf("Saves: %s\n", r.message.c_str());
         for (const std::string& name : r.imported) std::printf("  %s\n", name.c_str());
         return r.ok ? 0 : 1;
+    }
+    if (options.rumbleTest) {   // (the Odin's report, 2026-11-09: no window, so it runs over SSH too)
+        SdlRuntime sdl(SDL_INIT_GAMEPAD);
+        return gt4::rumbleTestOnly();
     }
     // Settings: defaults, then the file, then the command line.
     gt4::Settings settings;
@@ -1047,7 +1055,26 @@ int run(const Options& options) {
         const char* e = std::getenv("GT4_PAD_SAMPLING");
         return !(e && std::strcmp(e, "frame") == 0);
     }();
+    // The rumble test on request (the Odin's report, 2026-11-09): a file named rumble-test beside settings.ini, looked
+    // for once a second and deleted (over SSH: touch it), or Ctrl + F10. PadDevices::rumbleTest logs each result.
+    const std::filesystem::path rumbleTestFile =
+        settingsPath.empty() ? std::filesystem::path()
+                             : std::filesystem::path(std::u8string(settingsPath.begin(), settingsPath.end()))
+                                   .replace_filename(u8"rumble-test");
+    Uint64 rumbleTestLookedAt = 0;
     while (running) {
+        {
+            const Uint64 now = SDL_GetTicks();
+            if (!rumbleTestFile.empty() && now - rumbleTestLookedAt >= 1000) {
+                rumbleTestLookedAt = now;
+                std::error_code error;
+                if (std::filesystem::exists(rumbleTestFile, error)) {
+                    std::filesystem::remove(rumbleTestFile, error);
+                    pads.rumbleTest(now, "the rumble-test file");
+                }
+            }
+            pads.rumbleTestStep(now);
+        }
         for (; nextScriptedKey < scriptedKeys.size() && scriptedKeys[nextScriptedKey].frame <= frames; ++nextScriptedKey) {
             SDL_Event key{};
             key.type = SDL_EVENT_KEY_DOWN;
@@ -1126,8 +1153,12 @@ int run(const Options& options) {
                     if (!event.key.repeat) dumpWanted = true;
                     break;
                 }
+                if (event.key.key == SDLK_F10 && (event.key.mod & SDL_KMOD_CTRL)) {   // the rumble test
+                    if (!event.key.repeat) pads.rumbleTest(SDL_GetTicks(), "Ctrl + F10");
+                    break;
+                }
                 // The prompts follow the keyboard only for keys that reach the game or a page: not the host's F-key
-                // toggles, Alt + Enter, Ctrl + F12's dump or a modifier alone (lane C)
+                // toggles, Alt + Enter, Ctrl + F12's dump, Ctrl + F10's rumble test or a modifier alone (lane C)
                 if (!(event.key.key >= SDLK_F1 && event.key.key <= SDLK_F12) &&
                     !(event.key.mod & (SDL_KMOD_ALT | SDL_KMOD_CTRL | SDL_KMOD_GUI)) &&
                     !(event.key.key >= SDLK_LCTRL && event.key.key <= SDLK_RGUI))
@@ -1809,7 +1840,7 @@ int run(const Options& options) {
 // checks a package without a window.
 void usePackagedGame(Options& o) {
     if (!o.game.empty() || !o.replay.empty() || o.probe || o.smoke || o.listGpus || o.listDisplays || o.listOptions ||
-        !o.sessionDirectory.empty())
+        o.rumbleTest || !o.sessionDirectory.empty())
         return;
     const char* basePath = SDL_GetBasePath();
     if (!basePath) return;
