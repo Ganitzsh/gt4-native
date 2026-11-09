@@ -3214,6 +3214,30 @@ bool GsnScene::Impl::nightPrepare(const gsn::FrameList::Lighting& l, const Scene
         t.merged += ls.merged;
         t.mergedAgain += ls.mergedAgain;
     }
+    {   // LOCAL N3 DEBUG, never committed: GT4_N3_LAMPLOG=1, the course lamps F2b sends this frame, by distance from the
+        // camera (view space, metres; the view looks down -z); GT4_N3_LAMPLOG_FRAME=V lists VBlank V's lamps on screen
+        static const bool lampLog = [] { const char* e = std::getenv("GT4_N3_LAMPLOG"); return e && *e == '1'; }();
+        static const long lampFrame = [] { const char* e = std::getenv("GT4_N3_LAMPLOG_FRAME"); return e ? std::atol(e) : -1L; }();
+        if (lampLog) {
+            unsigned n = 0, near20 = 0, behind = 0, front30 = 0;
+            float nearest = 1e9f;
+            for (const gfx::scene::Light& r : nightRecords) {
+                if (r.view != view->id || r.source != gfx::scene::kSrcCourseGlow) continue;
+                const float x = r.position[0], y = r.position[1], z = r.position[2];
+                const float d = std::sqrt(x * x + y * y + z * z);
+                ++n;
+                near20 += d < 20.0f;
+                behind += z > 0.0f;
+                front30 += z < 0.0f && d < 30.0f;
+                nearest = std::min(nearest, d);
+                if (long(frame.vblank) == lampFrame && z < -0.1f)
+                    std::printf("F2b lamp at: vblank %u view %.2f %.2f %.2f d %.1f screen %.1f %.1f\n", unsigned(frame.vblank), x, y, z,
+                                d, k.centre[0] + k.focal[0] * x / -z, k.centre[1] + k.focal[1] * y / -z);
+            }
+            std::printf("F2b lamps: vblank %u view %u n %u near20 %u behind %u front30 %u nearest %.1f\n",
+                        unsigned(frame.vblank), unsigned(view->id), n, near20, behind, front30, n ? nearest : -1.0f);
+        }
+    }
     if (const uint32_t n = render::testLightCount()) {
         const std::vector<gfx::scene::Light> test = render::testLights(view->id, n);
         nightRecords.insert(nightRecords.end(), test.begin(), test.end());

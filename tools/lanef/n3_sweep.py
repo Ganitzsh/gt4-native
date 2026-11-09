@@ -12,7 +12,7 @@ from pathlib import Path
 T = Path(__file__).resolve().parent
 CLONE = Path("C:/Users/julie/gt4-lane-F")
 CAPS = CLONE / "build" / "caps"
-HOST = CLONE / "build" / "lanef_run" / ("gt4_host_n3knobs2.exe" if sys.argv[1] in ("3", "4") else "gt4_host_n3knobs.exe")
+HOST = CLONE / "build" / "lanef_run" / ({"3": "gt4_host_n3knobs2.exe", "4": "gt4_host_n3knobs2.exe", "5": "gt4_host_n3knobs5.exe"}.get(sys.argv[1], "gt4_host_n3knobs.exe"))
 VARIANTS = {
     "base": ("", ""),
     "d": ("", "GT4_N3_V4NARROW=20"),
@@ -28,13 +28,23 @@ VARIANTS = {
     "bw65": ("GT4_N3_GLOW_BATWING=65;GT4_N3_GLOW_RANGE=40", ""),
     "r9x12": ("GT4_N3_GLOW_RADIUS=9;GT4_N3_GLOW_RANGE=40;GT4_N3_GLOW_INTENSITY=12", ""),
     "r15x23": ("GT4_N3_GLOW_RADIUS=15;GT4_N3_GLOW_RANGE=40;GT4_N3_GLOW_INTENSITY=23", ""),
+    # phase 4: the batwing at lower I0 (phase 3 at 6 overshot by +31 to +47 levels on the patch mean)
+    "bw60x1.5": ("GT4_N3_GLOW_BATWING=60;GT4_N3_GLOW_RANGE=40;GT4_N3_GLOW_INTENSITY=1.5", ""),
+    "bw60x2.5": ("GT4_N3_GLOW_BATWING=60;GT4_N3_GLOW_RANGE=40;GT4_N3_GLOW_INTENSITY=2.5", ""),
+    "bw60x3.5": ("GT4_N3_GLOW_BATWING=60;GT4_N3_GLOW_RANGE=40;GT4_N3_GLOW_INTENSITY=3.5", ""),
+    "bw65x2.5": ("GT4_N3_GLOW_BATWING=65;GT4_N3_GLOW_RANGE=40;GT4_N3_GLOW_INTENSITY=2.5", ""),
+    # phase 5 (knobs5 host): the albedo over one view-wide level (GT4_LIGHT_VIEW=10), batwing 65, I0 swept
+    "vl65x1": ("GT4_LIGHT_VIEW=10;GT4_N3_GLOW_BATWING=65;GT4_N3_GLOW_RANGE=40;GT4_N3_GLOW_INTENSITY=1", ""),
+    "vl65x2": ("GT4_LIGHT_VIEW=10;GT4_N3_GLOW_BATWING=65;GT4_N3_GLOW_RANGE=40;GT4_N3_GLOW_INTENSITY=2", ""),
+    "vl65x4": ("GT4_LIGHT_VIEW=10;GT4_N3_GLOW_BATWING=65;GT4_N3_GLOW_RANGE=40;GT4_N3_GLOW_INTENSITY=4", ""),
+    "vl65x8": ("GT4_LIGHT_VIEW=10;GT4_N3_GLOW_BATWING=65;GT4_N3_GLOW_RANGE=40;GT4_N3_GLOW_INTENSITY=8", ""),
 }
 LAPS = {"lapc": ("lap_csr5.cap", 9000), "laps": ("lap_ssr5r.cap", 10200), "lapcr": ("lap_csr5r.cap", 7500)}
 
 phase = sys.argv[1]
 if phase == "1":
     jobs = [("lapc", 5000, v) for v in list(VARIANTS)[:7]]
-elif phase in ("3", "4"):   # 3: the phase-3 set on lap_csr5 600-5000; 4 VARIANT...: given variants there (knobs2 host)
+elif phase in ("3", "4", "5"):   # 3: the phase-3 set on lap_csr5 600-5000; 4 VARIANT...: given variants there (knobs2 host)
     jobs = [("lapc", 5000, v) for v in (sys.argv[2:] or ["bw55", "bw60", "bw65", "r9x12", "r15x23"])]
 else:
     jobs = [(lap, frames, v) for v in sys.argv[2:] for lap, (_, frames) in LAPS.items()]
