@@ -1036,12 +1036,13 @@ on the host's wheel through `SDL_Haptic` (the effects and the interface: spikes/
 - Menus:
   - While one of our settings pages is open, the wheel drives it through its D13 profile, as a pad would. A
     wheel-only player can open Settings (Guide, or the chord through the profile) and use it.
-  - If GT4's own menus turn out not to read LGDEV's buttons, the wheel's buttons go to its pad port outside a race,
-    never both at once; this entry then says which GT4 does.
+  - GT4's own menus read LGDEV's buttons (lane D, 2026-11-09: a virtual wheel in `dfp` took the whole GT-mode route
+    to the race on its buttons alone, pad 1 untouched), so the wheel's buttons never go to its pad port.
 - Scope: one wheel, LGDEV index 0. A second wheel (split screen, index 1) is D15's or later.
 - Acceptance, in order:
   - A's sign and the pedals' order (the code doesn't settle which axis accelerates) on the `GT4_FAKE_DFP` bench,
-    against the steering in its log.
+    against the steering in its log. The pedals are settled (lane D): pedal 0 (`+0x7E`) accelerates, pedal 1
+    (`+0x80`) brakes.
   - A session test. A virtual SDL wheel drives GT4's menus and a race through LGDEV, and the effect stream is
     logged. Every stop is proved: page, pause, link drop, port change, exit, unplug, the 0.5 s watchdog (a game
     that stops sending frames), and A lapsing to zero within about 0.1 s when the host's main thread freezes for
