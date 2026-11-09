@@ -10,12 +10,15 @@ bool starts(std::string_view s, std::string_view prefix) { return s.substr(0, pr
 // Which gate a setting is under: the response's or the haptics'.
 bool responseSetting(std::string_view s) { return s == "response" || starts(s, "steer.") || starts(s, "pedal."); }
 bool hapticsSetting(std::string_view s) { return s == "haptics" || starts(s, "haptics.") || s == "trigger_effects"; }
+// A wheel's (PLAN.md D7): under no gate, as a wheel's mode is not an enhancement
+bool wheelSetting(std::string_view s) { return starts(s, "wheel."); }
 
 }  // namespace
 
 bool deviceSetting(std::string_view setting) {
     if (setting == "steer.game_band") return false;   // GT4's, one value for the game
-    return (responseSetting(setting) || hapticsSetting(setting)) && !getOption(Settings{}, "input." + std::string(setting)).empty();
+    return (responseSetting(setting) || hapticsSetting(setting) || wheelSetting(setting)) &&
+           !getOption(Settings{}, "input." + std::string(setting)).empty();
 }
 
 std::string checkDeviceSetting(std::string_view setting, std::string_view value) {

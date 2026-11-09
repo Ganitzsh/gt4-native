@@ -35,6 +35,9 @@ struct Binding {
     int code = 0;          // SDL_Scancode, SDL_GamepadButton or SDL_GamepadAxis
     float scale = 1.0f;    // stick actions: the sign of a key, the direction of an axis
     float deadZone = 0.0f; // axes: |value| below it reads 0
+    // An axis over its whole travel to 0..1 (PLAN.md D7's pedals): (value x scale + 1) / 2, so a pedal that rests at
+    // one end reads 0 there and 1 at the other (scale -1: one resting at the top). The dead zone is then on 0..1.
+    bool full = false;
 };
 
 // The pad's inputs: the 16 buttons (ps2::PadButton), then the four stick axes.

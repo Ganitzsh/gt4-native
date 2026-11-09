@@ -66,6 +66,14 @@ void inputOptions(std::vector<Option>& o) {
         "With input.haptics = physics: the low-frequency motor and the throttle's trigger effects when a wheel spins."));
     o.push_back(boolOption("input.haptics.kerbs", &Settings::hapticsKerbs,
         "With input.haptics = physics: the high-frequency motor on kerbs and rough ground."));
+    o.push_back(enumOption("input.wheel.mode", &Settings::wheelMode, {"pad", "dfp"},
+        "A steering wheel (a device the system reports as a wheel; a gamepad never is). pad = the wheel works as a "
+        "DualShock 2, through its bindings. dfp = GT4 sees a Logitech Driving Force Pro, as on the PS2: the wheel's "
+        "steering, pedals and buttons go to GT4 as that wheel's, and GT4 drives its force feedback (its steering "
+        "force, centring spring and damper). Only with a wheel connected."));
+    o.push_back(floatOption("input.wheel.ffb_strength", &Settings::wheelFfbStrength, 0.0f, 100.0f,
+        "With input.wheel.mode = dfp: how strong the wheel's force feedback is, percent. The host also caps every "
+        "force at 60 % of the wheel's full strength until wheels have been measured. Only with a wheel connected."));
     o.push_back(boolOption("input.trigger_effects", &Settings::triggerEffects,
         "With input.haptics = physics: an Xbox pad's impulse triggers (lock-up on the left, wheelspin on the right; over "
         "USB or the Xbox Wireless Adapter only) and a DualSense's adaptive triggers (the brake's resistance as the front "

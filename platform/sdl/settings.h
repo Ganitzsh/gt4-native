@@ -51,6 +51,9 @@ enum class AudioSpatial : uint8_t { Original, Stereo, Hrtf };
 enum class InputResponse : uint8_t { Original, Modern };
 // Gamepad haptics (input.haptics, platform/input/haptics.h; PLAN.md D14): original = GT4's own rumble only (D2).
 enum class HapticsMode : uint8_t { Original, Physics };
+// A wheel (a device SDL types as one; PLAN.md D7): pad = a DualShock 2 through its profile, dfp = the Driving Force
+// Pro GT4 sees through LGDEV, with GT4's own force effects.
+enum class WheelMode : uint8_t { Pad, Dfp };
 // How the settings menu opens (ui.entry, settings_ui.cpp; docs/modern/MENU_DESIGN.md 3.2, 3.8): hotkey = the host's
 // keys only, integrated = GT4's own Options items too (the game's hooks, runtime/menu/menu_host.cpp).
 enum class UiEntry : uint8_t { Hotkey, Integrated };
@@ -172,6 +175,10 @@ struct Settings {
     float hapticsStrength = 100.0f;     // percent
     bool triggerEffects = true;
     bool hapticsUndersteer = true, hapticsLockUp = true, hapticsWheelspin = true, hapticsKerbs = true;
+    // A wheel (PLAN.md D7; not a preset member). pad until D7's force feedback lands (rule 10: off until finished),
+    // then dfp, the PS2's behaviour.
+    WheelMode wheelMode = WheelMode::Pad;
+    float wheelFfbStrength = 100.0f;    // percent; never past platform/input/wheel_ffb.h's ceiling
 
     // [scene] (test scene only; not saved)
     bool animate = true;

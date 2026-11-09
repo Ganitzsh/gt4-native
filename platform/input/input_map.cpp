@@ -14,6 +14,10 @@ Binding axis(SDL_GamepadAxis a, float deadZone = 0.0f, float scale = 1.0f) { ret
 
 float axisValue(const Binding& b, const Snapshot& s) {
     const float v = s.axes[b.code];
+    if (b.full) {
+        const float x = std::clamp((v * b.scale + 1.0f) * 0.5f, 0.0f, 1.0f);
+        return x < b.deadZone ? 0.0f : x;
+    }
     return (std::fabs(v) < b.deadZone ? 0.0f : v) * b.scale;
 }
 

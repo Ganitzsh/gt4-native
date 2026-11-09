@@ -74,7 +74,8 @@ std::string number(float v) {
 }
 
 bool sameBinding(const Binding& a, const Binding& b) {
-    return a.source == b.source && a.code == b.code && a.scale == b.scale && a.deadZone == b.deadZone;
+    return a.source == b.source && a.code == b.code && a.scale == b.scale && a.deadZone == b.deadZone &&
+           a.full == b.full;
 }
 
 bool sameBindings(const std::vector<Binding>& a, const std::vector<Binding>& b) {
@@ -147,6 +148,7 @@ std::string bindingText(const std::vector<Binding>& bindings) {
         case Source::Axis: out += std::string("axis:") + (b.code >= 0 && b.code < SDL_GAMEPAD_AXIS_COUNT ? kAxes[b.code] : "?"); break;
         }
         if (b.scale != 1.0f) out += ":" + number(b.scale);
+        if (b.full) out += ":full";
         if (b.deadZone != 0.0f) out += "@" + number(b.deadZone);
     }
     return out;
@@ -176,6 +178,11 @@ bool parseBindings(std::string_view text, std::vector<Binding>& out, std::string
         if (c1 == std::string_view::npos) return fail("expected key:, button: or axis: in '" + std::string(token) + "'");
         const std::string_view source = token.substr(0, c1);
         std::string_view name = token.substr(c1 + 1);
+        if (name.size() > 5 && name.substr(name.size() - 5) == ":full") {   // an axis over its whole travel
+            if (source != "axis") return fail(":full is for an axis, in '" + std::string(token) + "'");
+            b.full = true;
+            name = name.substr(0, name.size() - 5);
+        }
         if (const size_t c2 = name.find(':'); c2 != std::string_view::npos) {
             char* end = nullptr;
             const std::string scale(name.substr(c2 + 1));

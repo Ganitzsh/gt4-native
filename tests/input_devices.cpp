@@ -26,7 +26,9 @@ bool sameMap(const Map& a, const Map& b) {
         if (a.bindings[k].size() != b.bindings[k].size()) return false;
         for (size_t i = 0; i < a.bindings[k].size(); ++i) {
             const Binding &x = a.bindings[k][i], &y = b.bindings[k][i];
-            if (x.source != y.source || x.code != y.code || x.scale != y.scale || x.deadZone != y.deadZone) return false;
+            if (x.source != y.source || x.code != y.code || x.scale != y.scale || x.deadZone != y.deadZone ||
+                x.full != y.full)
+                return false;
         }
     }
     return true;
@@ -153,6 +155,33 @@ int main() {
         expect(twins.disconnect(1) == 0 && twins.connect(5, "ds") == 0 && twins.portOf(2) == 1,
                "one of the twins reconnects: the free port of the two");
         expect(twins.connect(5, "ds") == 0, "connect is idempotent");
+    }
+
+    // PLAN.md D7's pedals: an axis over its whole travel (:full), resting at either end, and one axis split in two
+    {
+        std::vector<Binding> b;
+        std::string error;
+        expect(parseBindings("axis:lefty:-1:full@0.05 axis:righty:full", b, &error) && b.size() == 2 && b[0].full &&
+                   b[0].scale == -1.0f && b[0].deadZone == 0.05f && b[1].full && b[1].scale == 1.0f,
+               ":full parsed, with a scale and a dead zone");
+        expect(bindingText(b) == "axis:lefty:-1:full@0.05 axis:righty:full", ":full written back as read");
+        expect(!parseBindings("button:south:full", b, &error), ":full only for an axis");
+        Map m;
+        parseBindings("axis:lefty:-1:full", m.bindings[ps2::PadR2]);   // a pedal resting at the top (+1)
+        parseBindings("axis:righty:-1", m.bindings[ps2::PadL2]);       // a combined axis: brake on its negative half
+        parseBindings("axis:righty", m.bindings[ps2::PadL1]);          // and the other pedal on its positive half
+        Snapshot s;
+        s.gamepad = true;
+        auto at = [&](float lefty, float righty) {
+            s.axes[SDL_GAMEPAD_AXIS_LEFTY] = lefty;
+            s.axes[SDL_GAMEPAD_AXIS_RIGHTY] = righty;
+            return apply(m, s);
+        };
+        expect(at(1.0f, 0.0f).button[ps2::PadR2] == 0.0f, ":full, scale -1: at rest (+1) reads 0");
+        expect(at(-1.0f, 0.0f).button[ps2::PadR2] == 1.0f, ":full, scale -1: fully pressed (-1) reads 1");
+        expect(at(0.0f, 0.0f).button[ps2::PadR2] == 0.5f, ":full: half travel reads half");
+        const ps2::PadInput split = at(1.0f, -0.6f);
+        expect(split.button[ps2::PadL2] > 0.59f && split.button[ps2::PadL1] == 0.0f, "a combined axis: one half each");
     }
 
     if (failures) return 1;
