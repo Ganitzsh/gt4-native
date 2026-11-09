@@ -529,7 +529,22 @@ front end); the Odin's device run (the provoking vertex, logged).
 **B9: Mirror, env-map, reflection, showroom and photo views (M).** The road reflection is no view today
 (`kInstReflection`, out of the binding, A6): B9 first measures its readers on a wet course and makes it a
 `kViewReflection` view only if a substituted view needs it redrawn (a.5 then allows that one nesting, or the main
-view splits around it). Depends: A6, B8. Acceptance: `PARITY` per view role on its captures.
+view splits around it). From R6 (lane A, on main since bb66156):
+- **The showroom car** (garage, showroom, dealers) is `kViewMenu` (00217058), its supersampling passes
+  `kMarkJitterPassBegin`/`End` pairs inside the view (`garage_r6v.cap`: two views a frame, 3 and 5 pairs). B8's
+  role filter keeps every `kViewMenu` view on the GS path, so B9 lifts it for the showroom car only (menu views
+  holding jitter-pass pairs, or a sub-role); the other menus' 3D stays on the GS path. B9 substitutes each pass
+  with its offset (`kOriginParts`' super, the PS2's average: the `PARITY` mode), and may offer the first pass
+  alone with the repeats and their accumulation skipped (the modern AA in place of the supersampling), measured
+  against the each-pass mode as a known term.
+- **Photo Travel's preview** is `kViewPhoto` (pass 0) with a `kMarkDof` pair after it (`pt_r6v.cap`, 69 frames).
+  Before substituting it, B9 identifies what the race frames don't have: 2 instances a frame outside the view, 1
+  untagged job in it and 7 runs after an instance (lane A's guess: photo mode's own draws 003C7BB0 / 003C73C0
+  after the depth of field). The shot sends no frames yet: whether its tile and jitter passes become views
+  (inside their frames, `kViewPhoto` with pass = the jitter pass and the tile in a spare field) or one view with
+  TAA is B9's design.
+- Depends: A6, B8. Acceptance: `PARITY` per view role on its captures (`garage_r6v` in the each-pass mode,
+  `pt_r6v`).
 
 **B10: G-buffer, deferred lighting, material classes (L, lane B).** Modern lighting at the scene stage from B8's
 side channels, behind `lighting.materials = pbr`: in no preset until its acceptance and the owner's review;
