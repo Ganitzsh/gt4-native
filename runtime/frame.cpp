@@ -116,11 +116,11 @@ int64_t qpc_now() {
     QueryPerformanceCounter(&t);
     return t.QuadPart;
 }
-void timed_send(WalkTimes &times, uint32_t type, const void *payload, uint32_t size, const void *extra = nullptr,
+// (WalkTimes.send was two clock reads a record, about 6,000 a frame in a race: now the walk's waits for ring room,
+// which link_send times only when it waits, read once at each end of the walk)
+void timed_send(WalkTimes &, uint32_t type, const void *payload, uint32_t size, const void *extra = nullptr,
                 uint32_t extra_size = 0) {
-    const int64_t start = qpc_now();
     link_send(type, payload, size, extra, extra_size);
-    times.send += qpc_now() - start;
 }
 
 void send_data(WalkTimes &times, uint32_t source, uint32_t bytes) {
@@ -409,12 +409,15 @@ void log_tick_counts() {
     static LARGE_INTEGER rate{};
     if (!rate.QuadPart) QueryPerformanceFrequency(&rate);
     const double ms = 1000.0 / static_cast<double>(rate.QuadPart);
-    log_info("frame: ticks during a walk %u (deferred %u, the longest by %.3f ms; past the ring %u, merged %u); walks %u, over "
-             "16 ms %u, over 50 ms %u, the longest %.3f ms at VBlank %u (%.3f in link_send, %.3f in reads); the longest synchronous "
-             "read %.3f ms at VBlank %u (%u qwords into %08x); nested kicks %u",
+    const LinkSendCounts sent = link_send_counts();
+    log_info("frame: ticks during a walk %u (deferred %u, the longest by %.3f ms; past the ring %u, merged %u); "
+             "walks %u, over 16 ms %u, over 50 ms %u, the longest %.3f ms at VBlank %u (%.3f waiting for ring room, "
+             "%.3f in reads); the longest synchronous read %.3f ms at VBlank %u (%u qwords into %08x); nested kicks "
+             "%u; link records %llu in %llu publishes",
              g_ticks_mid_walk.load(), g_ticks_deferred.load(), g_longest_deferral.load() * ms, g_ticks_overflowed.load(),
              g_ticks_merged.load(), g_walks.load(), g_walks_over16.load(), g_walks_over50.load(), longest * ms, longestAt,
-             longestSend * ms, longestRead * ms, read * ms, readAt, readQwords, readDestination, g_kicks_nested.load());
+             longestSend * ms, longestRead * ms, read * ms, readAt, readQwords, readDestination, g_kicks_nested.load(),
+             static_cast<unsigned long long>(sent.records), static_cast<unsigned long long>(sent.publishes));
     if (const uint32_t calls = g_vehicle_calls.load())
         log_info("frame: vehicles only (kOptionSceneRecords 2): %u kicks, %u blocks sent; %.1f us a kick on average, the "
                  "longest %.1f us", calls, g_vehicle_blocks.load(), g_vehicle_ticks.load() * ms * 1000.0 / calls,
@@ -597,7 +600,12 @@ extern "C" void gt4_replace_func_004A11F8(uint32_t pair) {
     const uint32_t vblank = kernel_frame_count();
     const int64_t start = qpc_now();
     ++g_in_walk;
-    if (const uint32_t list = guest_ref<uint32_t>(pair)) walk(times, list);
+    const int64_t waited = link_send_wait_ticks();
+    if (const uint32_t list = guest_ref<uint32_t>(pair)) {
+        LinkBatch batch;   // (the walk's records published in batches; the rest at its end)
+        walk(times, list);
+    }
+    times.send = link_send_wait_ticks() - waited;
     --g_in_walk;
     const int64_t took = qpc_now() - start;
     {

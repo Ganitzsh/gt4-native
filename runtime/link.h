@@ -24,6 +24,26 @@ bool link_connected();                    // a live host (--link), which reports
 void link_send(uint32_t type, const void *payload, uint32_t size, const void *extra = nullptr,
                uint32_t extra_size = 0);
 
+// While one is open on a thread, its GT4_REC_GFX and GT4_REC_GFX_DATA records reach the host in batches (link.cpp's
+// g_head: by size and count, or when another kind of record goes, or before a wait for room); closing the last one
+// publishes the rest. For the frame walk (runtime/frame.cpp), whose records are many and small. The rule to keep:
+// publish before any wait on the host. Nothing inside a batch may wait for an answer to a record still held back
+// (today the walk's only waits are link_read_image, after its GS_READ, which publishes, and link_send's wait for
+// ring room, which publishes first).
+struct LinkBatch {
+    LinkBatch();
+    ~LinkBatch();
+    LinkBatch(const LinkBatch &) = delete;
+    LinkBatch &operator=(const LinkBatch &) = delete;
+};
+// The QPC ticks the calling thread has spent in link_send waiting for room in the ring, since its start.
+int64_t link_send_wait_ticks();
+// Records sent to the host and the publishes that made them visible, since the start.
+struct LinkSendCounts {
+    uint64_t records, publishes;
+};
+LinkSendCounts link_send_counts();
+
 // Host -> game records, polled at each frame by the kernel's frame clock.
 void link_poll();
 

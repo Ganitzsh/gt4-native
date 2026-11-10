@@ -23,6 +23,26 @@ uint8_t *g_g2h = nullptr, *g_h2g = nullptr;
 FILE *g_capture = nullptr;
 std::mutex g_send_mutex;
 uint64_t g_seq = 0;
+// The game->host ring's head as written (g_head) and as the host can see it (g_published), the tail as last read
+// (g_tail_seen: the host only moves it on, so an old value only understates the room), all under g_send_mutex; the
+// game is the head's only writer. The frame walk's records (GT4_REC_GFX and GT4_REC_GFX_DATA, about 3,000 a frame of
+// some 60 bytes each in a race) are written as they come but published in batches while a LinkBatch is open on the
+// sending thread (PLAN.md D5's profile, (3): each publish is a store the host's reader takes from this core's cache):
+// at kBatchBytes or kBatchRecords, when the batch closes, when another kind of record is sent (a GS read request,
+// which the game then waits for, a VSYNC, anything outside the walk), and before any wait for room (the host drains
+// only what it can see). The bytes, their order and the sequence numbers are as before. GT4_LINK_BATCH=0: every
+// record published at once, as before (the comparison).
+uint64_t g_head = 0, g_published = 0, g_tail_seen = 0;
+uint32_t g_unpublished = 0;
+uint64_t g_records = 0, g_publishes = 0;   // (link_send_counts)
+constexpr uint64_t kBatchBytes = 16 * 1024;
+constexpr uint32_t kBatchRecords = 128;
+thread_local int t_batch = 0;              // LinkBatch scopes open on this thread
+thread_local int64_t t_send_wait = 0;      // QPC ticks this thread has waited in link_send for room
+const bool g_batch_on = [] {
+    const char *e = getenv("GT4_LINK_BATCH");
+    return !(e && *e == '0');
+}();
 uint8_t g_pad[2][18];
 bool g_pad_valid[2];
 Gt4LinkWheel g_wheel;   // GT4_REC_WHEEL index 0, under g_pad_mutex (PLAN.md D7); connected 0 until the host says
@@ -146,6 +166,22 @@ void ring_read(const uint8_t *data, uint32_t size, uint64_t pos, void *dst, uint
 uint64_t load_index(const volatile uint64_t *index) { return __atomic_load_n(index, __ATOMIC_ACQUIRE); }
 void store_index(volatile uint64_t *index, uint64_t value) { __atomic_store_n(index, value, __ATOMIC_RELEASE); }
 
+// What has been written becomes the host's to read (g_send_mutex held).
+void publish_locked() {
+    if (g_head == g_published) return;
+    MemoryBarrier();
+    store_index(&g_hdr->g2h.head, g_head);
+    g_published = g_head;
+    g_unpublished = 0;
+    ++g_publishes;
+}
+
+int64_t qpc_ticks() {
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
+    return t.QuadPart;
+}
+
 }  // namespace
 
 bool link_open(const char *name) {
@@ -210,6 +246,11 @@ bool link_open(const char *name) {
     }
     g_g2h = static_cast<uint8_t *>(view) + g_hdr->g2h_offset;
     g_h2g = static_cast<uint8_t *>(view) + g_hdr->h2g_offset;
+    {
+        std::lock_guard<std::mutex> lock(g_send_mutex);
+        g_head = g_published = load_index(&g_hdr->g2h.head);
+        g_tail_seen = load_index(&g_hdr->g2h.tail);
+    }
     g_hdr->game_pid = GetCurrentProcessId();
     g_hdr->game_state = 1;
     log_info("link: connected to %s", name);
@@ -297,21 +338,26 @@ void link_send(uint32_t type, const void *payload, uint32_t size, const void *ex
         log_warn("link: record of %u bytes dropped (ring %u)", total, ring);
         return;
     }
-    uint64_t head = load_index(&g_hdr->g2h.head);
+    const uint64_t head = g_head;
     // Wait for room (the host drains continuously). Not forever: some records are sent while the game holds its
     // kernel lock (GFX records from the frame callbacks), and an endless wait there stops every guest thread, VBlanks
-    // included (seen with a host throttled behind the game). After a second the record is dropped, loudly.
-    if (head + total - load_index(&g_hdr->g2h.tail) > ring) {
+    // included (seen with a host throttled behind the game). After a second the record is dropped, loudly. The tail is
+    // read again only when the room last seen is short, and what is written is published before waiting.
+    if (head + total - g_tail_seen > ring && head + total - (g_tail_seen = load_index(&g_hdr->g2h.tail)) > ring) {
+        publish_locked();
+        const int64_t waited = qpc_ticks();
         const DWORD since = GetTickCount();
-        while (head + total - load_index(&g_hdr->g2h.tail) > ring) {
+        while (head + total - (g_tail_seen = load_index(&g_hdr->g2h.tail)) > ring) {
             Sleep(1);
             if (GetTickCount() - since >= 1000) {
                 static uint32_t dropped = 0;
                 log_warn("link: the host drained nothing for 1 s; a record of type %u (%u bytes) DROPPED (%u so far)", type,
                          total, ++dropped);
+                t_send_wait += qpc_ticks() - waited;
                 return;
             }
         }
+        t_send_wait += qpc_ticks() - waited;
     }
     if (type == GT4_REC_VSYNC && size >= 8) {
         uint32_t count;
@@ -321,8 +367,28 @@ void link_send(uint32_t type, const void *payload, uint32_t size, const void *ex
     ring_write(g_g2h, ring, head, &rec, sizeof rec);
     if (size) ring_write(g_g2h, ring, head + sizeof rec, payload, size);
     if (extra_size) ring_write(g_g2h, ring, head + sizeof rec + size, extra, extra_size);
-    MemoryBarrier();
-    store_index(&g_hdr->g2h.head, head + total);
+    g_head = head + total;
+    ++g_unpublished;
+    ++g_records;
+    const bool held = g_batch_on && t_batch > 0 && (type == GT4_REC_GFX || type == GT4_REC_GFX_DATA) &&
+                      g_head - g_published < kBatchBytes && g_unpublished < kBatchRecords;
+    if (!held) publish_locked();
+}
+
+LinkBatch::LinkBatch() { ++t_batch; }
+
+LinkBatch::~LinkBatch() {
+    if (--t_batch > 0 || !g_hdr) return;
+    KernelScope ks;   // (as link_send: no interrupt freezes this thread holding the send mutex)
+    std::lock_guard<std::mutex> lock(g_send_mutex);
+    publish_locked();
+}
+
+int64_t link_send_wait_ticks() { return t_send_wait; }
+
+LinkSendCounts link_send_counts() {
+    std::lock_guard<std::mutex> lock(g_send_mutex);
+    return {g_records, g_publishes};
 }
 
 void link_poll() {
