@@ -8,6 +8,8 @@ Versions follow [semantic versioning](https://semver.org). Each release is tagge
   pause. Under `low` to `ultra`, GT4's Options items and Start on the GT mode map open them too, and the race pause
   is the new pause page. Existing settings files take this on the first start, and the first start logs it in
   `host.log`. The `original` preset keeps GT4's own screens and pause; Escape there now opens the pages too.
+- Fixed: vertical bands across the road under headlights and street lamps at night (at every render scale except
+  1:1; most visible on handhelds).
 
 ## 0.1.0 - 2026-11-04
 
