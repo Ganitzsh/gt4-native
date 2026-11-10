@@ -3664,6 +3664,50 @@ const std::vector<gfx::scene::Light>& GsnScene::Impl::lampsOf(const scene::Scene
         t.merged += ls.merged;
         t.mergedAgain += ls.mergedAgain;
     }
+    // F7's street-lamp profile (PLAN.md F7, N3's coverage gate): each of the view's course lamps, a point light at its
+    // glow until here, becomes a spot pointing down the world's up axis as the view sees it, with the street lamp's
+    // profile, so the road under it is lit evenly out to its cone. GT4_LAMP_PROFILE=RANGE,SCALE,INNER,OUTER (metres;
+    // the intensity's factor; the cone's half angles in degrees) while it is tuned against N3's never-dark measure
+    // (rule 10); unset: the point lights as before.
+    static const struct LampProfile {
+        bool on = false;
+        float range = 0.0f, scale = 1.0f, cosInner = 0.0f, cosOuter = 0.0f;
+        LampProfile() {
+            const char* e = std::getenv("GT4_LAMP_PROFILE");
+            float r = 0.0f, s = 0.0f, a = 0.0f, b = 0.0f;
+            if (e && std::sscanf(e, "%f,%f,%f,%f", &r, &s, &a, &b) == 4 && r > 0.0f && s > 0.0f && a > 0.0f && b > a && b < 90.0f) {
+                on = true;
+                range = r;
+                scale = s;
+                cosInner = std::cos(a * 3.14159265f / 180.0f);
+                cosOuter = std::cos(b * 3.14159265f / 180.0f);
+            }
+        }
+    } lampProfile;
+    if (lampProfile.on) {
+        const scene::ViewData* vd = nullptr;
+        for (const scene::ViewData& candidate : sf.views)
+            if (candidate.id == view) vd = &candidate;
+        if (vd) {
+            // world down, (0, -1, 0), in view space (row vectors: v x worldToView)
+            const float (&m)[4][4] = vd->worldToView.m;
+            float down[3] = {-m[1][0], -m[1][1], -m[1][2]};
+            const float len = std::sqrt(down[0] * down[0] + down[1] * down[1] + down[2] * down[2]);
+            if (len > 1e-6f) {
+                for (float& c : down) c /= len;
+                for (gfx::scene::Light& lamp : v.records) {
+                    if (lamp.source != gfx::scene::kSrcCourseGlow || lamp.view != view) continue;
+                    lamp.kind = gfx::scene::kLightSpot;
+                    std::memcpy(lamp.direction, down, sizeof down);
+                    lamp.cosInner = lampProfile.cosInner;
+                    lamp.cosOuter = lampProfile.cosOuter;
+                    lamp.range = lampProfile.range;
+                    lamp.intensity *= lampProfile.scale;
+                    lamp.reserved = render::kProfileStreetLamp;
+                }
+            }
+        }
+    }
     return v.records;
 }
 

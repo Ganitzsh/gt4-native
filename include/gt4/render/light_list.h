@@ -26,6 +26,14 @@ enum LightFlags : uint32_t {
     kGameGlow = 8,         // GT4 draws its own glow sprite for it: do not add one
     kFromGame = 16,        // from a scene::Light record (else synthesised by the host)
 };
+// The flags' bits 8-15: the light's profile (PLAN.md F7), 0 none. A profile shapes a spot's intensity by the angle
+// from its axis, on top of its cone.
+inline constexpr uint32_t kProfileShift = 8, kProfileMask = 0xFF;
+enum LightProfile : uint32_t {
+    kProfileNone = 0,
+    kProfileStreetLamp = 1,   // a road luminaire's 'batwing': more intensity off the axis, so the ground under a lamp
+                              // pointing down is lit evenly out to its cone, not in a hot spot below it
+};
 
 struct GpuLight {                       // 64 bytes
     float position[3]; float range;     // view space, metres; range: where the light reaches 0
@@ -63,6 +71,19 @@ inline float spotOffset(float cosInner, float cosOuter) { return -cosOuter * spo
 inline float lightCone(float cosAngle, float scale, float offset) {
     const float c = std::clamp(cosAngle * scale + offset, 0.0f, 1.0f);
     return c * c;
+}
+
+// --- Profiles (F7) -----------------------------------------------------------------------------------------
+// The intensity's factor at cosAngle = dot(-L, direction) for a profile; 1 for none or one this build doesn't know.
+// kProfileStreetLamp: 1 / cos^3, held at kStreetLampMaxGain. A lamp at height h pointing down lights the ground at
+// horizontal distance r with intensity x cos^3 / h^2 (the inverse square and the ground's own cosine), so this factor
+// makes it intensity / h^2 everywhere inside the cone, as a road luminaire's optics do; the cone ends it. The bound
+// is the gain at about 67 degrees, where such optics cut off (glare), and keeps the factor finite at the horizon.
+inline constexpr float kStreetLampMaxGain = 16.0f;
+inline float lightProfile(uint32_t profile, float cosAngle) {
+    if (profile != kProfileStreetLamp) return 1.0f;
+    const float c = std::max(cosAngle, 1e-3f);
+    return std::min(1.0f / (c * c * c), kStreetLampMaxGain);
 }
 
 // --- Distance attenuation --------------------------------------------------------------------------------

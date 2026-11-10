@@ -73,6 +73,8 @@ LightListHeader gatherLights(const gfx::scene::Light* records, size_t count, uin
         g.spotOffset = cone ? spotOffset(r.cosInner, r.cosOuter) : 0.0f;
         g.range = isDirectional ? 0.0f : ((r.range > 0.0f && std::isfinite(r.range)) ? r.range : d.range);
         g.flags = (i < hostFrom ? kFromGame : 0u) | ((r.width > 0.0f || r.height > 0.0f) ? kGameGlow : 0u);
+        // The profile (F7): the host's, in the record's reserved word (the game sends 0: none); a spot's only.
+        if (cone) g.flags |= (r.reserved & kProfileMask) << kProfileShift;
         g.sourceRadius = d.sourceRadius;
         g.id = r.id;
         (isDirectional ? directional : local).push_back(g);

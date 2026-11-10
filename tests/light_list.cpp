@@ -54,6 +54,16 @@ void checkCpuFunctions() {
     const float s = spotScale(0.9f, 0.7f), o = spotOffset(0.9f, 0.7f);
     expect(lightCone(0.95f, s, o) == 1.0f && lightCone(0.6f, s, o) == 0.0f, "cone: 1 inside, 0 outside");
     expect(std::fabs(lightCone(0.8f, s, o) - 0.25f) < 1e-5f, "cone: (1/2)^2 halfway");
+    // F7's profiles: none is 1; the street lamp's 1 / cos^3 makes the ground under a lamp pointing down evenly lit
+    // (intensity x gain x cos^3 / h^2 the same below the lamp and 60 degrees off its axis), and is held at its bound.
+    expect(lightProfile(kProfileNone, 0.3f) == 1.0f && lightProfile(77u, 0.3f) == 1.0f, "no profile, or an unknown one: 1");
+    expect(lightProfile(kProfileStreetLamp, 1.0f) == 1.0f, "street lamp: 1 on its axis");
+    {
+        const float c = 0.5f;   // 60 degrees
+        expect(std::fabs(lightProfile(kProfileStreetLamp, c) * c * c * c - 1.0f) < 1e-5f, "street lamp: even ground light");
+    }
+    expect(lightProfile(kProfileStreetLamp, 0.1f) == kStreetLampMaxGain && lightProfile(kProfileStreetLamp, 0.0f) == kStreetLampMaxGain &&
+           lightProfile(kProfileStreetLamp, -1.0f) == kStreetLampMaxGain, "street lamp: held at its bound towards the horizon");
     const LightListHeader h = makeHeader(0, 0, 0.1f, 1000.0f);
     expect(clusterSlice(0.1f * 1.0001f, h.sliceScale, h.sliceBias) == 0, "slice 0 at zNear");
     expect(clusterSlice(999.0f, h.sliceScale, h.sliceBias) == kClusterZ - 1, "last slice at zFar");

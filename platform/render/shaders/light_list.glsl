@@ -13,6 +13,8 @@ const uint kClusterCount = kClusterX * kClusterY * kClusterZ;
 
 const uint kPoint = 0u, kSpot = 1u, kDirectional = 2u;                          // LightType
 const uint kCastsShadow = 1u, kVolumetric = 2u, kNoSpecular = 4u, kGameGlow = 8u, kFromGame = 16u;   // LightFlags
+const uint kProfileShift = 8u, kProfileMask = 0xFFu;                            // the flags' profile (F7), 0 none
+const uint kProfileNone = 0u, kProfileStreetLamp = 1u;                          // LightProfile
 
 struct GpuLight {          // 64 bytes
     vec3 position; float range;        // view space, metres
@@ -37,6 +39,15 @@ struct ClusterCell { uint offset; uint count; };
 float lightCone(float cosAngle, float scale, float offset) {
     const float c = clamp(cosAngle * scale + offset, 0.0, 1.0);
     return c * c;
+}
+
+// The intensity's factor at cosAngle for a profile (light_list.h): the street lamp's 1 / cos^3, held at
+// kStreetLampMaxGain; 1 for none.
+const float kStreetLampMaxGain = 16.0;
+float lightProfile(uint profile, float cosAngle) {
+    if (profile != kProfileStreetLamp) return 1.0;
+    const float c = max(cosAngle, 1e-3);
+    return min(1.0 / (c * c * c), kStreetLampMaxGain);
 }
 
 // saturate(1 - (d / range)^4)^2 / (d^2 + sourceRadius^2); 0 for a range that is not positive, the
@@ -72,7 +83,11 @@ float lightAttenuation(GpuLight light, vec3 p, out vec3 L) {
     const float d = length(toLight);
     L = d > 0.0 ? toLight / d : vec3(0.0, 0.0, 1.0);
     float a = lightFalloff(d, light.range, light.sourceRadius);
-    if (light.type == kSpot) a *= lightCone(dot(-L, light.direction), light.spotScale, light.spotOffset);
+    if (light.type == kSpot) {
+        const float cosAngle = dot(-L, light.direction);
+        a *= lightCone(cosAngle, light.spotScale, light.spotOffset) *
+             lightProfile((light.flags >> kProfileShift) & kProfileMask, cosAngle);
+    }
     return a;
 }
 
