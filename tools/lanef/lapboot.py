@@ -75,10 +75,14 @@ if git("rev-parse", "--short=7", "HEAD") != head:
 env = {k: v for k, v in os.environ.items() if k != "LANEF_SETTINGS"}   # preset original, as C10 has it
 env.update(LANEF_HOST=str(host), LANEF_GAME=str(game_dir / "gt4_game.exe"), LANEF_RECORD_FROM_BOOT="1",
            LANEF_SLOT="heavy-both")
-r = subprocess.run([sys.executable, "-u", str(T / "run_save_job.py"), "record", "lap_ssr5r_boot", "--cap",
-                    "lap_ssr5r_boot", "--count", "20200", "--course", "ssr5b", "--after", "0", "--tail", "10400",
-                    "--shots", "100", "--size", "1280x720"], env=env, creationflags=NW)
+CAP = sys.argv[1] if len(sys.argv) > 1 else "lap_ssr5r_boot"      # lapboot.py [CAP COURSE COUNT TAIL]
+COURSE = sys.argv[2] if len(sys.argv) > 2 else "ssr5b"
+COUNT = sys.argv[3] if len(sys.argv) > 3 else "20200"
+TAIL = sys.argv[4] if len(sys.argv) > 4 else "10400"
+r = subprocess.run([sys.executable, "-u", str(T / "run_save_job.py"), "record", CAP, "--cap", CAP, "--count", COUNT,
+                    "--course", COURSE, "--after", "0", "--tail", TAIL, "--shots", "100", "--size", "1280x720"],
+                   env=env, creationflags=NW)
 log(f"record exit {r.returncode}")
-cap = CLONE / "build" / "caps" / "lap_ssr5r_boot.cap"
+cap = CLONE / "build" / "caps" / (CAP + ".cap")
 if cap.exists():
     log(f"{cap.name}: {cap.stat().st_size / 1e9:.2f} GB")

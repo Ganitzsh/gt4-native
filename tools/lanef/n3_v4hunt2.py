@@ -33,10 +33,10 @@ for name, skip in (("base", False), ("skip", True)):
         env["GT4_N3_V4SKIP"] = "1"
     locks = take_slot(f"N3 v4 hunt (v4 itself) {tag}: {name}")
     try:
-        r = subprocess.run([str(CLONE / "build/lanef_run/gt4_host_n3orient.exe"), "--headless", "--size", "640x360", "--replay", cap,
+        r = subprocess.run([os.environ.get("N3_HUNT_HOST", str(CLONE / "build/lanef_run/gt4_host_n3orient.exe")), "--headless", "--size", "640x360", "--replay", cap,
                             "--frames", str(frames), "--fixed-step", "--preset", "original", "--set", "display.frame_interpolation=off",
                             "--set", "texture.hd_pack=off", "--set", "lighting.night=enhanced", "--capture-frames",
-                            f"300-{frames}/25,{dense}", "--capture-dir", str(d)],
+                            f"{os.environ.get('N3_HUNT_FROM', '300')}-{frames}/25,{dense}", "--capture-dir", str(d)],
                            capture_output=True, text=True, env=env, creationflags=subprocess.CREATE_NO_WINDOW)
         if skip:
             (out / "v4.log").write_text("\n".join(l for l in r.stdout.splitlines() if l.startswith("N3 v4:")) + "\n",

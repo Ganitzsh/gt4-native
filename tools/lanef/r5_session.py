@@ -61,6 +61,51 @@ def _mkdir_lock(name, what):
     return path
 
 
+SLOTLOG = CLONE / "build" / "slot_jobs.log"   # every slot lane F's scripts take, for lane C's scans (2026-11-09)
+_held = []
+
+
+def _slotlog(text):
+    with open(SLOTLOG, "a", encoding="utf-8") as f:
+        f.write(f"{datetime.datetime.now().astimezone().isoformat(timespec='seconds')} pid {os.getpid()} {text}\n")
+
+
+def _install_slot_log():
+    """Wrap tools/slot.py's take() for this process (scripts that import slot themselves get the same module): each take
+    logs its slots, task, wait and free memory; at exit, how long each was held and whether its locks were released."""
+    import atexit
+    sys.path.insert(0, str(CLONE / "tools"))
+    import slot  # noqa: E402
+    if getattr(slot.take, "_lanef_logged", False):
+        return
+    original = slot.take
+
+    def take(kinds, what, *args, **kwargs):
+        started = time.time()
+        paths = original(kinds, what, *args, **kwargs)
+        _slotlog(f"take {'+'.join(os.path.basename(p) for p in paths)} after {time.time() - started:.0f} s wait, "
+                 f"{free_gb():.1f} GB free: {what}")
+        _held.append((paths, what, time.time()))
+        return paths
+
+    take._lanef_logged = True
+    slot.take = take
+
+    def still_mine(p):
+        """The lock folder exists AND names this process (another job may hold the same slot by now)."""
+        try:
+            return f"pid={os.getpid()} " in (Path(p) / "owner.txt").read_text(encoding="utf-8", errors="replace") + " "
+        except OSError:
+            return False
+
+    def at_exit():
+        for paths, what, t in _held:
+            left = [p for p in paths if still_mine(p)]
+            _slotlog(f"exit: held up to {time.time() - t:.0f} s, {'released' if not left else 'NOT released: ' + str(left)}, "
+                     f"{free_gb():.1f} GB free: {what}")
+    atexit.register(at_exit)
+
+
 def take_slot(what, live=False):
     """A heavy slot through the shared runner tools/slot.py (lane C, 2a189dd: it removes locks whose holder died, and
     writes the holder's pid); with live, live-game as well. Returns the locks taken (rmtree them to give back)."""
@@ -70,6 +115,9 @@ def take_slot(what, live=False):
     paths = slot.take([kind] + (["live-game"] if live else []), what, min_gb=7.0)   # (the coordinator's floor for all)
     log(f"slot {', '.join(os.path.basename(p) for p in paths)}, {free_gb():.1f} GB free")
     return paths
+
+_install_slot_log()
+
 
 class _JobLimits(ctypes.Structure):
     _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
@@ -311,6 +359,30 @@ def to_race_bspec(s, event="na4", spec="b"):
         s.shot("r_bspec_a")
         log("B-spec race running (Sunday Cup race 4)")
         return
+    if event == "fr3":   # Beginner Events > FR Challenge race 3: Special Stage Route 5 (direction to check on the race screen)
+        s.queue("vwait 1400")
+        s.press("start", 600)
+        if is_home(s.shot("r_home")):
+            s.press("triangle", 600)
+        for m in ("dpdown", "dpright"):                        # the map pointer to Beginner Events
+            s.queue(f"button {m} 1", "vwait 4", f"button {m} 0", "vwait 60")
+        s.shot("r_map_beginner")
+        s.press("cross", 500)                                  # the hall, Sunday Cup first
+        s.press("dpdown", 120, "dpdown", 120)                  # FF Challenge, FR Challenge
+        s.shot("r_hall_fr")
+        s.press("cross", 500, "cross", 600)                    # regulations (OK), the event page (race 1)
+        s.press("dpright", 60, "dpright", 60)                  # race 3: Special Stage Route 5
+        s.shot("r_fr_race3")
+        s.press("cross", 500, "cross", 500, "cross", 700)      # Entry, 'clear the records?', Don't Clear
+        s.shot("r_race_screen")
+        if spec == "screen":
+            log("FR Challenge race 3: the race screen (probe only)")
+            return
+        s.press("dpright", 60, "cross", 1500)                  # B-spec, the start sequence
+        s.press("cross", 120)
+        s.shot("r_bspec_a")
+        log("B-spec race running (FR Challenge race 3)")
+        return
     if event == "club4":
         s.queue("vwait 1400")
         s.press("start", 600)
@@ -391,10 +463,11 @@ def to_grid(s):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("job", choices=["scan", "record", "hold", "gridhold", "gridprobe", "boot", "mapprobe", "clubprobe", "hallprobe", "viewprobe"])
+    ap.add_argument("job", choices=["scan", "record", "hold", "gridhold", "gridprobe", "boot", "mapprobe", "clubprobe", "hallprobe", "viewprobe", "raceprobe"])
+    ap.add_argument("--event", default="fr3", help="raceprobe: the event route (fr3)")
     ap.add_argument("--moves", default="", help="mapprobe: comma-separated d-pad taps from Home on the GT map")
     ap.add_argument("--saves-dir", help="a save folder used in place (default: a fresh copy of build/r5_saves)")
-    ap.add_argument("--course", default="csr5", choices=["ssr5b", "csr5b", "csr5rb"] + CITY_ORDER,
+    ap.add_argument("--course", default="csr5", choices=["ssr5b", "csr5b", "csr5rb", "ssr5fb"] + CITY_ORDER,
                     help="ssr5 needs --saves-dir pointing at a copy of build/saves-ss-r5")
     ap.add_argument("--throttle", default="cross", choices=["cross", "r2"],
                     help="the accelerator in the save's controller setup (saves-ss-r5: R2; Cross brakes)")
@@ -446,6 +519,9 @@ def main():
                 if s.proc.poll() is not None:
                     break
                 time.sleep(2)
+            return
+        if a.job == "raceprobe":   # to a race screen only (--event fr3): which course and direction
+            to_race_bspec(s, a.event, spec="screen")
             return
         if a.job == "viewprobe":
             # an Arcade single race at night on --course (cars on the grid), throttle held: two shots a view, then the
@@ -539,6 +615,8 @@ def main():
             to_race_bspec(s, "club4")
         elif a.course == "csr5rb":
             to_race_bspec(s, "sunday4")
+        elif a.course == "ssr5fb":
+            to_race_bspec(s, "fr3")
         elif a.course == "ssr5":
             to_grid_ss(s, a.mode)
         elif a.course != "csr5" or a.saves_dir:
@@ -547,7 +625,7 @@ def main():
             to_grid(s)
         go, stop = (("axis righttrigger 32767", "axis righttrigger -32768") if a.throttle == "r2"
                     else ("button cross 1", "button cross 0"))
-        if a.course in ("ssr5b", "csr5b", "csr5rb"):
+        if a.course in ("ssr5b", "csr5b", "csr5rb", "ssr5fb"):
             go, stop = "vwait 1", "vwait 1"      # B-spec: the game drives; no pedal
         if a.job == "scan":
             cmds = [go]

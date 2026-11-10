@@ -19,19 +19,23 @@ from r5_session import log, CLONE  # noqa: E402
 import frame_metrics as fm  # noqa: E402
 import slot  # noqa: E402
 
-cap = CLONE / "build/caps/lap_ssr5r_boot.cap"
-host = CLONE / "build/lanef_run/gt4_host_boot_95a639b.exe"
+NAME = os.environ.get("LAPBOOT_NAME", "lap_ssr5r_boot")
+cap = CLONE / "build/caps" / (NAME + ".cap")
+host = CLONE / "build/lanef_run" / os.environ.get("LAPBOOT_HOST", "gt4_host_boot_95a639b.exe")
+BYMS = os.environ.get("LAPBOOT_BYMS")   # place each shot by its wall-clock ms: VBlank = ms x 0.06 - BYMS
 import json
-ev = [json.loads(l) for l in (CLONE / "build/sessions/lap_ssr5r_boot/events.jsonl").read_text(encoding="utf-8").splitlines()
+ev = [json.loads(l) for l in (CLONE / "build/sessions" / NAME / "events.jsonl").read_text(encoding="utf-8").splitlines()
       if l.startswith("{") and "\"capture\"" in l]
-shot_at = {e["file"][:-4]: e["frame"] for e in ev if e.get("type") == "capture" and e["file"].startswith("live")}
+shot_at = {e["file"][:-4]: (round(e["ms"] * 0.06) - int(BYMS) if BYMS else e["frame"]) for e in ev
+           if e.get("type") == "capture" and e["file"].startswith("live")}
 OFF = int(os.environ.get("LAPBOOT_OFFSET", "0"))   # replay VBlank = session frame + OFF (frames skipped at boot)
 W = int(os.environ.get("LAPBOOT_WINDOW", "1"))
 pick = sorted(shot_at.items(), key=lambda kv: kv[1])
-pick = pick[::max(1, len(pick) // 12)] if OFF else pick
+pick = pick[::max(1, len(pick) // 12)] if OFF or BYMS else pick
 shot_at = dict(pick)
-grid = ("" if OFF else "1900-20200/100,") + ",".join(f"{f + OFF - W}-{f + OFF + W}" for _, f in pick if f + OFF + W <= 20200)
-out = CLONE / "build/sessions" / ("lapboot_align" if OFF else "lapboot_check")
+grid = "1900-20200/100,"
+grid = ("" if OFF and not BYMS else grid) + ",".join(f"{f + OFF - W}-{f + OFF + W}" for _, f in pick if f + OFF + W <= 20200)
+out = CLONE / "build/sessions" / (NAME + ("_align" if OFF or BYMS else "_check"))
 shutil.rmtree(out, ignore_errors=True)
 out.mkdir(parents=True)
 locks = slot.take(["heavy-both"], "lane F: lap_ssr5r_boot replay check (8 GB capture)", min_gb=7.0)
@@ -51,7 +55,7 @@ sampled = [n for n in range(1900, 20201, 100) if n in frames]
 lit = [n for n in sampled if (read(frames[n]).max(axis=2) > 8).mean() > 0.05]
 dark = sorted(set(sampled) - set(lit))
 print(f"sampled {len(sampled)} (1900-20200 every 100), lit {len(lit)}; not lit: {dark}")
-live = sorted((T.parent / "sessions/lap_ssr5r_boot/frames").glob("live*.ppm"))
+live = sorted((T.parent / "sessions" / NAME / "frames").glob("live*.ppm"))
 rows = []
 for p in live:
     f = shot_at.get(p.stem)
