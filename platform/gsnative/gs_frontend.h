@@ -663,6 +663,12 @@ private:
     std::unordered_map<uint64_t, std::vector<uint8_t>> setPageBytes;   // (content, page) -> its 8 KiB (materializePage)
 public:
     void materializeAll() { for (uint32_t page = 0; page < 512; ++page) materializePage(page, kForOther); }
+    // A texture set's content the front end keeps (by hash), its uploads' bytes in order; nullptr if not kept. (The GS
+    // dump's texture sets the runtime didn't resend: PLAN.md C12.)
+    const std::vector<uint8_t>* keptSetBytes(uint64_t hash) const {
+        auto it = setContents.find(hash);
+        return it == setContents.end() ? nullptr : &it->second.bytes;
+    }
 private:
     // Scene records (A10's front-end half): the frame between its FrameBegin and FrameEnd, each view's bound target (by
     // view id - 1), whether it has tagged draws in the list being built (a cut marks those views), the frame's cuts.

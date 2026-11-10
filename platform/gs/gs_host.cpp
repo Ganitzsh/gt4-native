@@ -8,6 +8,8 @@
 #include <windows.h>   // GetThreadTimes (the summary's CPU times)
 #endif
 #include "gs_host.h"
+
+#include "gsdump_encoder.h"
 #include "cpu_profile.h"
 
 #include "glow_classifier.h"   // (F2b: the scene cache's material classifier)
@@ -79,7 +81,14 @@ public:
             scene::TextureSummary s;
             return g->classify(item, fe->textureSummary(item.texture, s) ? &s : nullptr);
         });
+        // GT4_GSDUMP=PATH,FROM,COUNT (PLAN.md C12): the GS input as a PCSX2 .gs dump (gsdump_encoder.h). Read once; with
+        // it unset `gsDump` stays null and every record pays only that test.
+        if (gs::GsDumpEncoder::Options o; gs::GsDumpEncoder::parse(std::getenv("GT4_GSDUMP"), o)) {
+            gsDump = std::make_unique<gs::GsDumpEncoder>(std::move(o));
+            if (gsDump->opensAtStart()) gsDump->open(nullptr, "zero (VBlank 0: the console's, nothing drawn yet)");
+        }
     }
+    std::string dumpSummary() const { return gsDump ? gsDump->summary() : std::string(); }
     const render::GlowClassifier& glowClassifier() const { return *glow; }
     std::atomic<bool> splitWanted{false};   // GsHost::setSceneSplit (any thread); applied at the next vsync
     void setEventSink(gsn::GsFrontend::EventSink sink) { native->setEventSink(std::move(sink)); }
@@ -110,19 +119,43 @@ public:
         return true;
     }
     gsn::GsFrontend& frontend() { return *native; }
-    void gif(uint32_t path, const uint8_t* data, size_t bytes) override { native->gif(path, data, bytes); }
-    void state(const gfx::StateRecord& r) override { native->applyState(r); }
-    void upload(const gfx::UploadRecord& u, const uint8_t* data, size_t bytes) override { native->upload(u, data, bytes); }
-    void draw(const gfx::DrawRecord& d, const gfx::Vertex* vertices) override { native->draw(d, vertices); }
-    void read(const gfx::ReadRecord& r) override { native->read(r); }
-    void texSet(const uint8_t* payload, size_t bytes) override { native->texSet(payload, bytes); }
+    void gif(uint32_t path, const uint8_t* data, size_t bytes) override {
+        if (gsDump) gsDump->gif(path, data, bytes);
+        native->gif(path, data, bytes);
+    }
+    void state(const gfx::StateRecord& r) override {
+        if (gsDump) gsDump->state(r);
+        native->applyState(r);
+    }
+    void upload(const gfx::UploadRecord& u, const uint8_t* data, size_t bytes) override {
+        if (gsDump) gsDump->upload(u, data, bytes);
+        native->upload(u, data, bytes);
+    }
+    void draw(const gfx::DrawRecord& d, const gfx::Vertex* vertices) override {
+        if (gsDump) gsDump->draw(d, vertices);
+        native->draw(d, vertices);
+    }
+    void read(const gfx::ReadRecord& r) override {
+        if (gsDump) gsDump->read(r);
+        native->read(r);
+    }
+    void texSet(const uint8_t* payload, size_t bytes) override {
+        if (gsDump) gsDump->texSet(payload, bytes, [fe = native.get()](uint64_t hash) { return fe->keptSetBytes(hash); });
+        native->texSet(payload, bytes);
+    }
     // GT4_GPU_MODELS=0: the 3D renderers on the CPU, as before
     bool models() const override {
         static const bool on = [] { const char* e = std::getenv("GT4_GPU_MODELS"); return !(e && *e == '0'); }();
         return on;
     }
-    void model(const gfx::ModelJob& job, const uint32_t* words) override { native->model(job, words); }
-    void effect(const gfx::EffectRecord& r) override { native->effect(r); }
+    void model(const gfx::ModelJob& job, const uint32_t* words) override {
+        if (gsDump) gsDump->model();
+        native->model(job, words);
+    }
+    void effect(const gfx::EffectRecord& r) override {
+        if (gsDump) gsDump->effect(r);
+        native->effect(r);
+    }
     // Scene records (CONTRACTS.md a.8): the front end follows the frames (cuts inside one), binds views to targets and
     // puts each closed frame on the FrameList that receives its FrameEnd.
     void scene(const uint8_t* payload, size_t bytes) override { native->sceneRecord(payload, bytes); }
@@ -134,6 +167,7 @@ public:
     void sceneView(std::shared_ptr<const scene::SceneView> view) override { native->sceneView(std::move(view)); }
     void primitives(const ps2::GsPrimitives& p) override {
         GT4_CPU_SCOPE("front end: the renderers' primitives");
+        if (gsDump) gsDump->primitives(p);
         if (p.setPrim) native->setPrim(p.prim);
         static thread_local std::vector<gsn::GsFrontend::InputVertex> run;
         run.resize(p.count);
@@ -157,6 +191,7 @@ public:
                 c.format = static_cast<uint8_t>(psm);
             }
         }
+        if (gsDump) gsDump->display(d);   // (the game's, not GT4_DISPFB's)
         native->display(shown);
     }
     // One line per draw batch of a frame's list, every target (texture fields decoded, extents): GT4_GSN_DRAWS=all
@@ -198,7 +233,18 @@ public:
         dumpDir = dir;
     }
     void vsync(uint32_t field, uint32_t count) override {
-        (void)field;
+        if (gsDump) {
+            gsDump->vsync(field);
+            if (gsDump->opensAt(count)) {   // GS memory as it stands: the drawn targets read back where the host can
+                std::vector<uint8_t> vram(gsn::GsMemory::kBytes);
+                const size_t drawn = readVramWithTargets(vram.data());
+                const std::string source = serveRead ? "the front end's memory and " + std::to_string(drawn) +
+                                                           " drawn targets read back from the GPU (no Z)"
+                                                     : std::string("the front end's memory only (no read-back here: pixels "
+                                                                   "the GPU drew before are not in it)");
+                gsDump->open(vram.data(), source.c_str());
+            }
+        }
         {
             // GT4_GSN_VRAM=N: the front end's GS memory at the end of the frame before VBlank N (gsn_vram_N.bin).
             static const long dumpAt = std::getenv("GT4_GSN_VRAM") ? std::strtol(std::getenv("GT4_GSN_VRAM"), nullptr, 10) : -1;
@@ -423,6 +469,7 @@ private:
     Answer answer;
     ReadService serveRead;
     std::unique_ptr<gsn::GsFrontend> native;
+    std::unique_ptr<gs::GsDumpEncoder> gsDump;   // GT4_GSDUMP (null when unset)
     gsn::FrameList list;
     bool stats = false;
     bool splitFromEnv = false;   // GT4_GSN_SCENE_SPLIT=1
@@ -1339,6 +1386,9 @@ std::string GsHost::summary() const {
             << s.setPagesByCause[4] / f << "), " << s.uploadBytes / 1024.0 / f << " KiB sent, " << s.copyBytes / 1024.0 / f << " KiB copied, "
             << s.clutLoads / f << " CLUT loads; " << s.depthTextures << " Z buffers read as Z textures (GPU), " << s.readFallbacks
             << " reads of a target from memory (fallbacks)";
+    }
+    if (h.target) {   // (GT4_GSDUMP: the dump's counts)
+        if (const std::string dump = h.target->dumpSummary(); !dump.empty()) out << "; " << dump;
     }
     if (h.target && h.target->frontend().stats.spriteRuns) {   // (the sprite runs: one image's pieces filtered as one)
         const auto& s = h.target->frontend().stats;
