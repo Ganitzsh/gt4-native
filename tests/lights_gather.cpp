@@ -132,6 +132,18 @@ void filtering() {
         expect(ls.notLights == 1 && ls.kept == 1 && lit.size() == 1 && lit[0].type == kSpot &&
                    ((lit[0].flags >> kProfileShift) & kProfileMask) == kProfileLowBeam,
                "a headlight with its beam lights, as a spot with the low-beam profile; one without doesn't");
+        // F9: a brake lamp with its cone lights too, with no profile and the source's own range
+        Light brake = record(1, gfx::scene::kSrcBrakeLight, 0, 0, -5);
+        brake.kind = gfx::scene::kLightSpot;
+        brake.direction[2] = 1.0f;
+        brake.cosInner = 0.64f;
+        brake.cosOuter = 0.09f;
+        std::vector<Light> rear{lamps[2], brake};
+        gatherLights(rear.data(), rear.size(), 1, 0.5f, 500.0f, 1.0f, lit, ls);
+        expect(ls.notLights == 1 && ls.kept == 1 && lit.size() == 1 && lit[0].type == kSpot &&
+                   ((lit[0].flags >> kProfileShift) & kProfileMask) == kProfileNone &&
+                   lit[0].range == sourceDefaults(gfx::scene::kSrcBrakeLight).range,
+               "a brake lamp with its cone lights, as a plain spot with the source's range; one without doesn't");
     }
     expect(s.invalid == 1, "a NaN position is invalid");
     expect(s.dark == 2, "black and intensity 0 are dark lamps, counted apart");

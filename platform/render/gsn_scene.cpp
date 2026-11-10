@@ -3915,6 +3915,32 @@ const std::vector<gfx::scene::Light>& GsnScene::Impl::lampsOf(const scene::Scene
                     lamp.intensity *= headlights;
                     lamp.reserved = render::kProfileLowBeam;
                 }
+                // F9, its lights (PLAN.md): each car's tail and brake lamps (A7 step 2's spots pointing backwards, sent
+                // without a cone) as wide spots: full to 50 degrees, ending at 85. On a frame GT4 lights its lamps in
+                // only, for now: by day a brake lamp's light is a few levels on a sunlit road, and the relight's other
+                // parts (the layers' colours) run on night frames. GT4_REAR_LAMPS=off: not lit; a number: the factor.
+                static const float rearLamps = [] {
+                    const char* e = std::getenv("GT4_REAR_LAMPS");
+                    if (!e) return 1.0f;
+                    char* end = nullptr;
+                    const float value = std::strtof(e, &end);
+                    return end != e && value > 0.0f ? value : 0.0f;
+                }();
+                const bool lampsOn = (sf.flags & gfx::scene::kFrameLampsOn) != 0;
+                for (gfx::scene::Light& lamp : v.records) {
+                    if ((lamp.source != gfx::scene::kSrcTailLight && lamp.source != gfx::scene::kSrcBrakeLight) || lamp.view != view ||
+                        !hybrid || !lampsOn || !(rearLamps > 0.0f))
+                        continue;
+                    const float own = std::sqrt(lamp.direction[0] * lamp.direction[0] + lamp.direction[1] * lamp.direction[1] +
+                                                lamp.direction[2] * lamp.direction[2]);
+                    if (!(own > 0.5f) || !std::isfinite(own)) continue;   // (no direction: left without a cone, not lit)
+                    for (float& c : lamp.direction) c /= own;
+                    lamp.kind = gfx::scene::kLightSpot;
+                    lamp.cosInner = 0.642788f;   // (cos 50 degrees)
+                    lamp.cosOuter = 0.087156f;   // (cos 85 degrees)
+                    lamp.range = 0.0f;           // (the source's: light_sources.cpp)
+                    lamp.intensity *= rearLamps;
+                }
                 for (gfx::scene::Light& lamp : v.records) {
                     if (lamp.source != gfx::scene::kSrcCourseGlow || lamp.view != view) continue;
                     lamp.kind = gfx::scene::kLightSpot;

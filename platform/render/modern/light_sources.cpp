@@ -15,10 +15,12 @@ SourceDefaults sourceDefaults(uint8_t source) {
     // profile on the night's modern path, GsnScene::lampsOf); as the game sends it, without a cone, the gather counts
     // it under notLights: a point light at the lamp would light all round the car.
     case kSrcHeadlight: return {50.0f, 20.0f, 0.1f, true, true};
-    // Sent by A7 step 2, not lit until F9 (brake, tail) tunes them, like step 1a's kSrcCarLamp at the same lamps
-    // (below). The gather counts them under notLights; the values are F9's starting points.
-    case kSrcTailLight: return {4.0f, 1.0f, 0.05f, false, true};
-    case kSrcBrakeLight: return {5.0f, 2.0f, 0.05f, false, true};
+    // The tail and brake lamps (A7 step 2; F9): as the headlights, lit once the host gives the record its cone (the
+    // night's modern path, GsnScene::lampsOf: a wide spot backwards); without one the gather counts them under
+    // notLights. Short ranges and low strengths: a tail lamp tints what is right behind the car, a brake lamp reaches
+    // the car following.
+    case kSrcTailLight: return {4.0f, 0.6f, 0.05f, true, true};
+    case kSrcBrakeLight: return {8.0f, 2.0f, 0.05f, true, true};
     case kSrcCarLightReflection: return {0.0f, 0.0f, 0.0f, false, true};   // GT4's picture of a light, not a light
     case kSrcSun: return {0.0f, 1.0f, 0.0f, true, true};
     case kSrcWarning: return {6.0f, 2.0f, 0.1f, true, true};
