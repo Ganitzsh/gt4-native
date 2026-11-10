@@ -62,6 +62,12 @@ public:
     // The items whose material passed the draw-state and texture tests, without judging anything new: n3SkipGatedOff's
     // count, for a view where the skip is off (by day, another view, the setting off).
     size_t litRoadCandidates(const MaterialId* materials, size_t count) const;
+    // N3's albedo stand-in (lit_road.h's roadBaseState / roadBaseVerdict; measuring only, off by default): while on,
+    // litRoad also judges the items of the road base, once per (MaterialId, MeshKey, item) like the verdicts, and
+    // roadBaseAlbedo gives their textures' mean colour in linear light, weighted by each item's up-facing world area,
+    // over the items seen in the last kLitRoadFrames frames (the course's). False while none is known.
+    void setRoadBase(bool on) { roadBaseOn = on; }
+    bool roadBaseAlbedo(float (&rgb)[3]) const;
 
     MeshCache& meshes() { return meshCache; }
     MaterialTable& materials() { return materialTable; }
@@ -93,9 +99,10 @@ private:
     MaterialTable materialTable;
     std::vector<BatchRef> refs;   // (assign's, kept)
 
-    // N3's verdicts (litRoad): per material, its draw state and texture (1 fails, 2 passes); per (material, mesh, item),
-    // the item's verdict with the rotation it was judged at and the frame it was last seen (dropped after kLitRoadFrames
-    // frames unseen, as the caches drop theirs).
+    // N3's verdicts (litRoad): per material, its draw state and texture (1 fails, 2 passes, 3 a road base candidate);
+    // per (material, mesh, item), the item's verdict with the rotation it was judged at and the frame it was last seen
+    // (dropped after kLitRoadFrames frames unseen, as the caches drop theirs), and a road base item's share of the
+    // stand-in (its texture's linear mean x its up-facing area, and the area; 0 for any other).
     struct LitRoadKey {
         MaterialId material = 0;
         MeshKey mesh{};
@@ -111,8 +118,11 @@ private:
         uint8_t skip = 0;
         float rotation[3][3] = {};
         uint64_t lastFrame = 0;
+        float base[4] = {};
     };
     static constexpr uint64_t kLitRoadFrames = 600;
+    bool roadBaseOn = false;
+    double roadBase[4] = {};   // the entries' base[] summed
     std::unordered_map<MaterialId, uint8_t> litRoadMaterials;
     std::unordered_map<LitRoadKey, LitRoadEntry, LitRoadKeyHash> litRoadVerdicts;
     std::vector<uint8_t> litRoadCandidate;   // (litRoad's, kept)

@@ -161,8 +161,20 @@ void SceneCache::endFrame() {
     materialTable.endFrame();
     ++frames;
     if (frames % kLitRoadFrames == 0)   // (N3's verdicts unseen for kLitRoadFrames frames: another course's, dropped)
-        for (auto it = litRoadVerdicts.begin(); it != litRoadVerdicts.end();)
-            it = frames - it->second.lastFrame >= kLitRoadFrames ? litRoadVerdicts.erase(it) : std::next(it);
+        for (auto it = litRoadVerdicts.begin(); it != litRoadVerdicts.end();) {
+            if (frames - it->second.lastFrame < kLitRoadFrames) {
+                ++it;
+                continue;
+            }
+            for (int k = 0; k < 4; ++k) roadBase[k] -= it->second.base[k];
+            it = litRoadVerdicts.erase(it);
+        }
+}
+
+bool SceneCache::roadBaseAlbedo(float (&rgb)[3]) const {
+    if (!(roadBase[3] > 1e-3)) return false;
+    for (int k = 0; k < 3; ++k) rgb[k] = float(std::clamp(roadBase[k] / roadBase[3], 0.0, 1.0));
+    return true;
 }
 
 namespace {
@@ -190,8 +202,10 @@ void SceneCache::litRoad(const InstanceData& instance, const ItemSource* items, 
             TextureSummary ts;
             const bool known = summaries && summaries(items[i].texture, ts) && ts.known && ts.width && ts.height;
             it->second = litRoadState(items[i]) && known && ts.centreToRim < 3.0f ? 2 : 1;
+            if (it->second == 1 && known && roadBaseState(items[i]))
+                it->second = 3;   // (judged only while roadBaseOn)
         }
-        litRoadCandidate[i] = it->second == 2;
+        litRoadCandidate[i] = it->second == 2 || (it->second == 3 && roadBaseOn) ? it->second : 0;
         any |= litRoadCandidate[i] != 0;
     }
     if (!any) return;
@@ -205,6 +219,23 @@ void SceneCache::litRoad(const InstanceData& instance, const ItemSource* items, 
         if (!litRoadCandidate[i]) continue;
         const LitRoadKey key{materials[i], mesh, uint32_t(i)};
         auto it = litRoadVerdicts.find(key);
+        if (litRoadCandidate[i] == 3) {   // the stand-in's road base: its share once per key, never a skip
+            if (it == litRoadVerdicts.end()) {
+                LitRoadEntry e;
+                TextureSummary ts;
+                const bool known = summaries && summaries(items[i].texture, ts) && ts.known;
+                const DecodedBatch batch = decodeBatch(*items[i].batch.job, items[i].batch.words);
+                const LitRoadMeasure measure = measureLitRoad(batch, instance.objectToWorld.m, known ? &ts : nullptr);
+                if (known && roadBaseVerdict(measure)) {
+                    for (int k = 0; k < 3; ++k) e.base[k] = float(std::pow(ts.mean[k] / 255.0, 2.2) * measure.upArea);
+                    e.base[3] = measure.upArea;
+                    for (int k = 0; k < 4; ++k) roadBase[k] += e.base[k];
+                }
+                it = litRoadVerdicts.emplace(key, e).first;
+            }
+            it->second.lastFrame = frames;
+            continue;
+        }
         if (it == litRoadVerdicts.end()) {
             LitRoadEntry e;
             TextureSummary ts;

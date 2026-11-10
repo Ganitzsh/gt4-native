@@ -24,6 +24,7 @@ struct LitRoadMeasure {
     float upShare = 0.0f;           // the share of the item's world area with |n.y| >= 0.9
     float width = 0.0f;             // metres: 2 x area / perimeter of each up-facing piece, area-weighted
     float texel = 0.0f;             // metres per texel: max(|dP/ds| / width, |dP/dt| / height), area-weighted
+    float upArea = 0.0f;            // square metres: the up-facing pieces' world area
 };
 
 // Measures an item: its decoded batch through objectToWorld (row vectors: [p 1] x M, metres), with its texture's
@@ -32,5 +33,13 @@ LitRoadMeasure measureLitRoad(const DecodedBatch& batch, const float (&objectToW
 
 // v4's thresholds, for an item whose state is the layer's.
 bool litRoadVerdict(const LitRoadMeasure& m);
+
+// N3's albedo stand-in (PLAN N3, "The albedo under a skipped pool"; measuring only, GT4_N3_STANDIN): the course's
+// road base, the surfaces the lit-road layer lies on. An opaque textured draw that writes Z (no alpha blending), at
+// least 0.9 of it up-facing and at least 2 m wide: road and pavement, not kerbs, markings or walls. Its texture's mean
+// colour is the albedo the relight takes under a skipped item, since the vertex colours hold GT4's light, not the
+// material.
+bool roadBaseState(const ItemSource& item);
+bool roadBaseVerdict(const LitRoadMeasure& m);
 
 }  // namespace gt4::scene

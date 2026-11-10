@@ -98,6 +98,7 @@ LitRoadMeasure measureLitRoad(const DecodedBatch& b, const float (&m)[4][4], con
         }
     }
     out.upShare = total > 0.0 ? float(upArea / total) : 0.0f;
+    out.upArea = float(upArea);
 
     // The footprint: each connected up-facing piece's 2 x area / perimeter (its edges used by one triangle, measured
     // across the ground), weighted by its area.
@@ -130,6 +131,17 @@ LitRoadMeasure measureLitRoad(const DecodedBatch& b, const float (&m)[4][4], con
 bool litRoadVerdict(const LitRoadMeasure& m) {
     return m.vertexLuminance > 16.0f && m.vertexAlpha >= 100.0f && m.centreToRim >= 0.0f && m.centreToRim < 3.0f &&
            m.upShare >= 0.9f && m.width >= 0.9f && m.texel >= 0.03f;
+}
+
+bool roadBaseState(const ItemSource& item) {
+    const gfx::Context* c = item.context;
+    if (!c || !item.batch.job) return false;
+    return ((item.prim >> 4) & 1) && !((item.prim >> 6) & 1) &&   // textured, not alpha-blended
+           c->depthTest && c->depthWrite;                          // it is the surface: it writes Z
+}
+
+bool roadBaseVerdict(const LitRoadMeasure& m) {
+    return m.upShare >= 0.9f && m.width >= 2.0f && m.upArea > 0.0f;
 }
 
 }  // namespace gt4::scene

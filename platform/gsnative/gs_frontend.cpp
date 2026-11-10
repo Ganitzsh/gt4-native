@@ -2733,6 +2733,9 @@ void GsFrontend::sceneView(std::shared_ptr<const scene::SceneView> view) {
         const bool litRoadOn = litRoad || litRoadFromEnvironment;
         const bool litRoadView = litRoadOn && view->view.role == gfx::scene::kViewMain &&
                                  (view->frameFlags & gfx::scene::kFrameLampsOn);
+        // (N3's albedo stand-in, measuring only: the road base judged beside the verdicts)
+        static const bool standIn = [] { const char* e = std::getenv("GT4_N3_STANDIN"); return e && *e == '1'; }();
+        if (litRoadView && standIn) sceneCache_->setRoadBase(true);
         if (litRoadView && !frame.spareSkips.empty()) {
             v.skip = std::move(frame.spareSkips.back());
             frame.spareSkips.pop_back();
@@ -2795,6 +2798,11 @@ void GsFrontend::sceneView(std::shared_ptr<const scene::SceneView> view) {
             if (litRoadMisaligned || v.skip.size() != v.materials.size()) {
                 ++sceneCacheCounters.n3Misaligned;
                 v.skip.clear();
+            }
+            float rgb[3];
+            if (standIn && !v.skip.empty() && sceneCache_->roadBaseAlbedo(rgb)) {
+                std::copy(rgb, rgb + 3, v.standIn);
+                v.standIn[3] = 1.0f;
             }
         }
         stats.sceneCacheMicroseconds += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - started).count();

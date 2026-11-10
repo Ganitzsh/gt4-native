@@ -233,6 +233,7 @@ struct GsnScene::Impl {
     };
     std::vector<SkipSpan> skipSpans;
     std::vector<uint32_t> skipAt;
+    float skipStandIn[4] = {};   // the skipping main view's ViewOnList::standIn (lane F's albedo stand-in), w = 0 none
     // ... and where they would have drawn: an R8 image at the scene's render size (gsn_mask.frag), drawn at a Light's
     // relight, read by gsn_light at binding 10
     vk::Pipeline maskPass;
@@ -315,16 +316,18 @@ struct GsnScene::Impl {
         float focal[2] = {1.0f, 1.0f}, centre[2] = {0.0f, 0.0f};
         float distanceA = 0.0f, distanceB = 0.0f, maxDistance = 0.0f, pad1 = 0.0f;
         float inset[4] = {1.0f, 1.0f, 0.0f, 0.0f};   // x1 < x0: no mirror
+        float standIn[4] = {};   // N3: the albedo under the skip mask, linear; w = 0 none (lane F's stand-in)
     };
-    static_assert(sizeof(NightPush) == 56);
+    static_assert(sizeof(NightPush) == 72);
     // gsn_light.comp's push constants, whole.
     struct LightPush {
         float size[2], occlusion, zScale, grade, contrast, vibrance, warmth;
         uint32_t view, aoStep;
         NightPush night;
     };
-    static_assert(sizeof(LightPush) == 96 && offsetof(LightPush, night) == 40 && offsetof(LightPush, night.focal) == 48 &&
-                  offsetof(LightPush, night.inset) == 80);
+    static_assert(sizeof(LightPush) == 112 && offsetof(LightPush, night) == 40 &&
+                  offsetof(LightPush, night.focal) == 48 && offsetof(LightPush, night.inset) == 80 &&
+                  offsetof(LightPush, night.standIn) == 96);
     struct NightBuffers {
         vk::Buffer* header = nullptr;
         vk::Buffer* lights = nullptr;
@@ -1555,6 +1558,7 @@ bool GsnScene::Impl::drawSkipMask(const gsn::FrameList::Lighting& l, size_t ligh
 void GsnScene::Impl::planSkips() {
     skipSpans.clear();
     skipAt.assign(frame.draws.size() + 1, 0);
+    std::fill(std::begin(skipStandIn), std::end(skipStandIn), 0.0f);
     if (!(night > 0.0f) || !frame.scene || !(frame.scene->flags & gfx::scene::kFrameLampsOn) || frame.views.empty()) return;
     static const int test = [] {
         const char* e = std::getenv("GT4_N3_SKIP_TEST");
@@ -1571,6 +1575,8 @@ void GsnScene::Impl::planSkips() {
             ++n3Misaligned;
             continue;
         }
+        if (view.standIn[3] > 0.0f)
+            std::copy(std::begin(view.standIn), std::end(view.standIn), std::begin(skipStandIn));
         for (const scene::InstanceIds& ids : view.ids) {
             if (!ids.mesh) continue;
             for (uint32_t j = 0; j < ids.materialCount; ++j) {
@@ -2044,6 +2050,7 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
             NightBuffers nightBuffers;
             const bool lamps = night > 0.0f && nightPrepare(l, si, colour.view, depthOnly, nightPush, nightBuffers);
             nightPush.skipMasked = masked ? 1.0f : 0.0f;
+            if (masked) std::copy(std::begin(skipStandIn), std::end(skipStandIn), std::begin(nightPush.standIn));
             vk::bind(command, lightPass);
             vk::Descriptors()
                 .sampled(0, colour.view, samplers[0])
@@ -4246,7 +4253,7 @@ void GsnScene::prepare(const SceneFormats& formats) {
                                          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
-                                        96, "gsn light");
+                                        sizeof(Impl::LightPush), "gsn light");
     // lighting.night (PLAN.md F2): the local luminance pass, the cluster build and its buffers. The light pass reads
     // these bindings whether or not the night is on (the shader skips them), so they always exist.
     if (!s.nightLumPass.valid()) {

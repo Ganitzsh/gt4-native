@@ -137,6 +137,22 @@ int main() {
     item.prim = 1u << 4;
     expect(!gt4::scene::litRoadState(item), "without alpha blending: not the layer");
 
+    // N3's albedo stand-in: the road base, opaque, textured, writing Z; up-facing and at least 2 m wide.
+    expect(!gt4::scene::roadBaseState(item), "without z write: not the road base");
+    context.depthWrite = 1;
+    expect(gt4::scene::roadBaseState(item), "opaque, textured, writing Z: the road base's state");
+    item.prim = (1u << 4) | (1u << 6);
+    expect(!gt4::scene::roadBaseState(item), "alpha-blended: not the road base");
+    item.prim = 0;
+    expect(!gt4::scene::roadBaseState(item), "untextured: not the road base");
+    const auto road = measureLitRoad(rectangle(8, 20, 0x80404040u), kIdentity, &soft);
+    expect(std::fabs(road.upArea - 160.0f) < 1e-3f && gt4::scene::roadBaseVerdict(road),
+           "an 8 m road is the road base");
+    expect(std::fabs(pool.upArea - 40.0f) < 1e-3f, "the pool's up-facing area");
+    expect(!gt4::scene::roadBaseVerdict(measureLitRoad(rectangle(1, 20, 0x80404040u), kIdentity, &soft)),
+           "a 1 m kerb top is not the road base");
+    expect(!gt4::scene::roadBaseVerdict(wall), "a wall is not the road base");
+
     if (failures) return 1;
     std::printf("lit_road: all checks passed\n");
     return 0;

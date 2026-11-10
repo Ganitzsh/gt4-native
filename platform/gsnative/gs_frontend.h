@@ -265,6 +265,10 @@ struct FrameList {
         // frame with lighting.night = enhanced. Empty: no verdicts, nothing skipped. Filled only while the verdicts are
         // on (GsFrontend::setLitRoad).
         std::vector<uint8_t> skip;
+        // N3's albedo stand-in (measuring only: GT4_N3_STANDIN=1 with the verdicts on): the course's road base albedo,
+        // linear RGB, w = 1 when known (SceneCache::roadBaseAlbedo); gsn_light.comp takes it under the skip mask in
+        // place of its estimate. w = 0: none, the estimate everywhere.
+        float standIn[4] = {};
     };
     // (B6: the views' ids and materials vectors, emptied by clear() with their capacity, for the next views on this list)
     std::vector<std::vector<scene::InstanceIds>> spareIds;
