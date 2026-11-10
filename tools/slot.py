@@ -17,6 +17,12 @@ Waits for its turn, until N GB are available (default 8) and every slot asked fo
 partial hold is given back, never kept while waiting), runs each command in turn (stops at the first failure), and
 removes the slots on exit.
 
+WSL's memory (Windows): WSL's VM keeps Linux's freed memory and page cache from Windows. After a job that ran in WSL
+(wsl.exe, or tools/build_linux.sh), and when a waiter's turn has come but the memory is under its floor while the VM
+holds over WSL_DROP_ABOVE_GB, Linux's caches are dropped and its memory compacted (as root; nothing is killed), at most
+every WSL_DROP_EVERY_S for a waiter, logged with what the VM held before and after. A VM not running is left alone.
+The waiting line says the memory available and what the VM holds.
+
 Turns: a waiter puts a ticket in GT4_LOCKS/queue (named by its arrival time; its lines the people's line, the holder
 line, and the slots it waits for) and takes nothing while an older live ticket waits for one of the same slots. So
 waiters are served in the order they came, the memory included: the oldest waits for the floor, and a job started
@@ -220,6 +226,84 @@ def available_gb():
     return 0.0
 
 
+# ---- WSL's memory (the coordinator, 2026-11-10): WSL's VM (vmmemWSL) keeps what Linux freed and its page cache on the
+# Windows side, and gives none of it back by itself (no autoMemoryReclaim in the owner's .wslconfig): at 03:40 it held
+# 19.3 GB with about 1 GB used inside, the desktop had 0.2 GB free, and jobs stopped. Dropping Linux's caches and
+# compacting its memory (as root, killing nothing) let it fall to 8.8 GB. slot.py does that after a job that ran in WSL
+# (the Linux and arm64 host builds), and before taking slots when the memory is under the floor and WSL holds much.
+
+WSL_DROP = "sync; echo 3 > /proc/sys/vm/drop_caches; echo 1 > /proc/sys/vm/compact_memory"
+WSL_DROP_ABOVE_GB = 4.0     # a waiter under its floor drops WSL's caches only when vmmemWSL holds more than this
+WSL_DROP_EVERY_S = 300      # ... and at most this often
+_wsl_looked_at = [0.0]
+
+
+def is_wsl_command(cmd):
+    """Whether a command runs in WSL: wsl(.exe) itself, or tools/build_linux.sh (the Linux and arm64 host builds)."""
+    return bool(cmd) and (os.path.basename(cmd[0]).lower() in ("wsl", "wsl.exe") or
+                          any(a.replace("\\", "/").endswith("build_linux.sh") for a in cmd))
+
+
+def parse_tasklist_kb(text):
+    """WSL's VM's memory in GB from `tasklist /FO CSV /NH` output ("name","pid","session","n","1,518,992 K"): the
+    vmmemWSL line, else a plain vmmem only when it is the one VM process (older WSL names it so; beside vmmemWSL a
+    vmmem is another Hyper-V VM's, Docker's or WSA's); None when there is none."""
+    found = {}
+    for line in text.splitlines():
+        fields = [f.strip('"') for f in line.strip().split('","')]
+        name = fields[0].strip('"').lower() if fields else ""
+        digits = "".join(ch for ch in fields[4] if ch.isdigit()) if len(fields) >= 5 else ""
+        if name in ("vmmemwsl", "vmmem") and digits:
+            found.setdefault(name, []).append(int(digits) / 2**20)
+    if found.get("vmmemwsl"):
+        return found["vmmemwsl"][0]
+    return found["vmmem"][0] if len(found.get("vmmem", [])) == 1 else None
+
+
+def wsl_gb():
+    """vmmemWSL's working set in GB (Windows; None when WSL's VM isn't running or tasklist won't say)."""
+    if not WINDOWS:
+        return None
+    try:
+        out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq vmmem*", "/FO", "CSV", "/NH"], capture_output=True,
+                             text=True, timeout=15, creationflags=subprocess.CREATE_NO_WINDOW).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return parse_tasklist_kb(out)
+
+
+def wsl_running():
+    """Whether a WSL distribution runs now (`wsl --list --running`, which starts nothing): a plain vmmem can be
+    another Hyper-V VM's, and wsl.exe -e would start WSL."""
+    try:
+        r = subprocess.run(["wsl.exe", "--list", "--running", "--quiet"], capture_output=True, timeout=30,
+                           creationflags=subprocess.CREATE_NO_WINDOW)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    # (exit 0 too: a build that says 'no running distributions' instead of printing nothing exits non-zero)
+    return r.returncode == 0 and bool(r.stdout.decode("utf-16-le", errors="ignore").replace("\x00", "").strip())
+
+
+def wsl_drop(reason):
+    """Drop WSL's page cache and compact its memory, if its VM runs (never starts it), and log what it gave back."""
+    if not WINDOWS:
+        return
+    before = wsl_gb()
+    if before is None or not wsl_running():
+        return   # (WSL's VM isn't running: nothing to give back, and wsl.exe would start it)
+    try:
+        subprocess.run(["wsl.exe", "-u", "root", "-e", "sh", "-c", WSL_DROP], capture_output=True, timeout=120,
+                       creationflags=subprocess.CREATE_NO_WINDOW)
+    except (OSError, subprocess.SubprocessError) as e:
+        log_line(f"WSL's caches not dropped ({reason}): {e}")
+        return
+    _wsl_looked_at[0] = time.time()
+    time.sleep(5)   # (the VM hands the freed pages back over a few seconds)
+    after = wsl_gb()
+    log_line(f"WSL's caches dropped ({reason}): vmmemWSL {before:.1f} -> "
+             f"{after if after is not None else 0:.1f} GB, {available_gb():.1f} GB available")
+
+
 def try_take(kinds, what):
     """One choice per kind (heavy: heavy-1 or heavy-2), all or nothing: the paths held, or None."""
     held = []
@@ -355,18 +439,28 @@ def take(kinds, what, min_gb=8.0, poll=5.0):
         log_line(f"memory floor {floor:g} GB for {'+'.join(kinds)}, not {min_gb:g} (LOW_MEMORY)")
         min_gb = floor
     ticket = enqueue(kinds, what)
-    said = None
+    said, said_at = None, 0.0
     try:
         while True:
             first = ahead_of(ticket)
-            if first is None and available_gb() >= min_gb:
+            avail = available_gb()
+            if first is None and avail < min_gb and time.time() - _wsl_looked_at[0] >= WSL_DROP_EVERY_S:
+                wsl = wsl_gb()   # (this waiter's turn, short of memory: WSL's VM may hold what Linux no longer uses)
+                if wsl is not None and wsl > WSL_DROP_ABOVE_GB:
+                    wsl_drop(f"{avail:.1f} GB available, under {min_gb:g}")
+                    avail = available_gb()
+                else:
+                    _wsl_looked_at[0] = time.time()   # (looked: not worth it now; look again in a while)
+            if first is None and avail >= min_gb:
                 held = try_take(kinds, what)
                 if held:
                     return held
             news = f"waiting behind: {first}" if first else f"waiting for the slots and {min_gb:g} GB available"
-            if news != said:
-                log_line(news)
-                said = news
+            if news != said or time.time() - said_at >= WSL_DROP_EVERY_S:   # (a change, or every few minutes)
+                wsl = None if first else wsl_gb()
+                log_line(news + ("" if first else f" ({avail:.1f} GB now"
+                                 + (f"; WSL's VM holds {wsl:.1f} GB" if wsl is not None else "") + ")"))
+                said, said_at = news, time.time()
             time.sleep(poll)
     finally:
         with contextlib.suppress(OSError):
@@ -457,6 +551,8 @@ def run(args):
                 log.flush()
                 if rc:
                     break
+        if any(is_wsl_command(c) for c in commands):
+            wsl_drop(f"after {args.what}")   # (inside the slots: the next job starts with the memory back)
     print(f"{args.what}: exit {rc}, slot {names} released")
     return rc
 
@@ -545,6 +641,24 @@ def self_test():
 
         # low memory: the floors capped per kind, one heavy job at a time and never beside a game build
         expect(floor_for(["heavy"], 7) == 7 and floor_for(["game"], 7) == 7, "without LOW_MEMORY the floors stand")
+        # WSL's memory: which jobs are WSL's, and vmmemWSL's size read from tasklist's CSV
+        expect(is_wsl_command(["wsl.exe", "-e", "bash", "-c", "make"]) and is_wsl_command(["C:\\x\\WSL.EXE"]) and
+               is_wsl_command(["bash", "tools/build_linux.sh", "aarch64"]) and
+               is_wsl_command(["wsl", "-e", "bash", "tools\\build_linux.sh"]) and
+               not is_wsl_command(["cmd", "/c", "tools\\build_windows.cmd", "Release"]) and not is_wsl_command([]),
+               "WSL jobs: wsl(.exe), or tools/build_linux.sh; not the Windows build")
+        sizes = (parse_tasklist_kb('"vmmemWSL","13496","Services","0","1,518,992 K"\n'),
+                 parse_tasklist_kb('"vmmemWSL","13496","Services","0","19.315.472 K"'),
+                 parse_tasklist_kb("INFO: No tasks are running which match the specified criteria.\n"),
+                 parse_tasklist_kb('"vmmem","4410","Services","0","2,097,152 K"'),
+                 parse_tasklist_kb('"vmmem","4410","Services","0","9,437,184 K"\n'
+                                   '"vmmemWSL","13496","Services","0","2,097,152 K"'),
+                 parse_tasklist_kb('"vmmem","4410","Services","0","1,048,576 K"\n'
+                                   '"vmmem","4411","Services","0","2,097,152 K"'))
+        expect(abs(sizes[0] - 1518992 / 2**20) < 1e-9 and abs(sizes[1] - 19315472 / 2**20) < 1e-9 and sizes[2] is None
+               and sizes[3] == 2.0 and sizes[4] == 2.0 and sizes[5] is None,
+               "the VM's size from tasklist (either digit grouping; a lone vmmem; vmmemWSL beside another VM's vmmem; "
+               "None when absent or when two vmmem can't be told apart)")
         LOW_MEMORY = True
         expect(floor_for(["game"], 7) == 5.5 and floor_for(["live-game"], 7) == 5.5 and floor_for(["heavy"], 7) == 4.5
                and floor_for(["heavy", "live-game"], 7) == 4.5 and floor_for(["heavy-both"], 7) == 7,

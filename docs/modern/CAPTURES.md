@@ -41,6 +41,13 @@ build and one. On 2026-11-09 at 22:47 a game build, a host build and a live game
 floor free before the others had grown, and the machine ran out of memory. The floor is looked at once, when a job
 starts. Each command's exit line now gives the job's peak memory so far (`peak N GB`), so the next floors can come
 from measured peaks.
+WSL's VM (`vmmemWSL`) keeps Linux's freed memory and page cache from Windows: on 2026-11-10 at 03:40 it held 19.3 GB
+with about 1 GB used inside, and the desktop had 0.2 GB free. `tools/slot.py` drops Linux's caches and compacts its
+memory (as root; nothing is killed) after any job run through `wsl.exe` or `tools/build_linux.sh`, and when the oldest
+waiter is under its floor while the VM holds over 4 GB (at most every 5 minutes), logging what the VM held before and
+after. The drop is the whole VM's: other WSL work at that moment (a push, a CI watch) finds a cold cache, nothing
+worse. The waiting line shows the memory available and the VM's size. The owner's `.wslconfig` could reclaim it by
+itself (`autoMemoryReclaim`), which needs a WSL restart: the owner's call.
 Two waits that are meant, not bugs. While a `heavy-both` waiter waits for the second heavy slot, the free one stays
 idle: the younger `heavy` waiters behind it don't take it, so the two-slot job is never starved. And the oldest
 waiter, held at its memory floor, holds back the younger ones for the same slots, even those with lower floors.
