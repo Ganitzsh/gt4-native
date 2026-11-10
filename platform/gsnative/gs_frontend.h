@@ -371,6 +371,7 @@ public:
     enum MaterializeCause : uint32_t { kForTexture, kForDraw, kForWrite, kForRead, kForOther };
     struct Stats {
         uint64_t primitives = 0, draws = 0, uploads = 0, copies = 0, decoded = 0, replaced = 0, targetReads = 0, reinterpreted = 0;
+        uint64_t spriteRuns = 0, spritesInRuns = 0;   // runs of sprites continuing one image (SpriteRun), their sprites
         uint64_t named = 0, found = 0;   // textures looked up in the texture pack, and those it has
         uint64_t reused = 0;             // textures whose content was decoded before (GsFrontend::decoded)
         uint64_t streamed = 0;           // new contents of a stream decoded into its texture (textureFor)
@@ -622,6 +623,21 @@ private:
     // targets once while it stays.
     uint64_t stateSerial = 0;
     uint32_t invertRun = 0;   // the Z buffer the primitives just before inverted (one inversion per run of them)
+    // A run of sprites drawing one image in pieces (GT4's light image stretched over the road as 32-px slices): each
+    // continues the one before it in the same draw, its screen rectangle abutting that one's and its UV rectangle
+    // starting where that one's ends, the other axis's ranges the same. Their texture bounds (the clamp above 1:1,
+    // gsn.frag's insideSprite) become the run's union, so the filter crosses the seams as the GS's does, while the run
+    // as a whole still can't bleed into a neighbour in the texture. Reset with each list (kick's sprite case).
+    struct SpriteRun {
+        bool valid = false;
+        uint32_t draw = 0;                        // the draw holding it
+        size_t first = 0, end = 0;                // its vertices
+        uint32_t count = 0;                       // its sprites
+        float ax = 0, bx = 0, ay = 0, by = 0;     // the last sprite's corners (first and second vertex)
+        float au = 0, bu = 0, av = 0, bv = 0;     // and its texture coordinates at them (texels, or S/Q and T/Q)
+        float minU = 0, maxU = 0, minV = 0, maxV = 0;   // the run's union
+    } spriteRun;
+    void noteSprite(size_t before, float ax, float bx, float ay, float by, float au, float bu, float av, float bv, bool fst);
     float invertFirst[6] = {};   // the run's first primitive (x, y of its vertices): drawn again, a second pass
     uint32_t invertFirstCount = 0;
     struct EmitCache {

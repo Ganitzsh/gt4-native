@@ -566,6 +566,7 @@ void GsFrontend::cut(FrameList& out, bool async) {
     frame.displayed = false;
     std::swap(out, frame);
     frame.clear();
+    spriteRun.valid = false;   // (its vertices went with the list)
 }
 
 void GsFrontend::readTransfer(void* out, uint32_t qwc) {
@@ -676,13 +677,60 @@ void GsFrontend::kick(bool draw) {
                 k.minV = std::min(av, bv);
                 k.maxV = std::max(av, bv);
             }
+            const size_t before = frame.vertices.size();
             emit(c, 3, Topology::Triangles);
             emit(c + 3, 3, Topology::Triangles);
+            noteSprite(before, a.x, b.x, a.y, b.y, au, bu, av, bv, fst);
         }
         queued = 0;
         break;
     }
     default: queued = 0; break;
+    }
+}
+
+// A sprite just emitted (its six vertices from `before`, if it was drawn): it joins the sprite run before it when it
+// continues that one's image (SpriteRun), and the run's sprites then share its union as their bounds. A sprite with
+// no area, one not drawn or one in another draw ends the run.
+void GsFrontend::noteSprite(size_t before, float ax, float bx, float ay, float by, float au, float bu, float av, float bv,
+                            bool fst) {
+    SpriteRun& r = spriteRun;
+    const bool drawn = frame.vertices.size() == before + 6 && !frame.commands.empty() &&
+                       frame.commands.back().kind == FrameList::Command::Kind::Draw;
+    if (!drawn || ax == bx || ay == by) {
+        r.valid = false;
+        return;
+    }
+    const uint32_t draw = frame.commands.back().index;
+    // equal within float noise: screen coordinates in pixels, texture coordinates in texels (FST) or normalised (STQ)
+    auto same = [](float p, float q, float tolerance) { return std::fabs(p - q) <= tolerance * std::max(1.0f, std::fabs(q)); };
+    const float px = 1e-3f, tex = fst ? 1e-3f : 1e-5f;
+    bool joins = r.valid && r.draw == draw && r.end == before;
+    if (joins) {
+        const bool across = same(ax, r.bx, px) && same(au, r.bu, tex) && same(ay, r.ay, px) && same(by, r.by, px) &&
+                            same(av, r.av, tex) && same(bv, r.bv, tex);   // the next slice to the right (or left)
+        const bool down = same(ay, r.by, px) && same(av, r.bv, tex) && same(ax, r.ax, px) && same(bx, r.bx, px) &&
+                          same(au, r.au, tex) && same(bu, r.bu, tex);   // the next slice below (or above)
+        joins = across || down;
+    }
+    const float minU = std::min(au, bu), maxU = std::max(au, bu), minV = std::min(av, bv), maxV = std::max(av, bv);
+    if (!joins) {
+        r = {true, draw, before, before + 6, 1, ax, bx, ay, by, au, bu, av, bv, minU, maxU, minV, maxV};
+        return;
+    }
+    r.end = before + 6;
+    r.ax = ax, r.bx = bx, r.ay = ay, r.by = by, r.au = au, r.bu = bu, r.av = av, r.bv = bv;
+    r.minU = std::min(r.minU, minU), r.maxU = std::max(r.maxU, maxU);
+    r.minV = std::min(r.minV, minV), r.maxV = std::max(r.maxV, maxV);
+    for (size_t i = r.first; i < r.end; ++i) {
+        Vertex& v = frame.vertices[i];
+        v.minU = r.minU, v.maxU = r.maxU, v.minV = r.minV, v.maxV = r.maxV;
+    }
+    if (++r.count == 2) {
+        ++stats.spriteRuns;
+        stats.spritesInRuns += 2;
+    } else {
+        ++stats.spritesInRuns;
     }
 }
 
@@ -3112,6 +3160,7 @@ void GsFrontend::vsync(uint64_t vblank, FrameList& out) {
     sceneViewsFrom = 0;
     std::swap(out, frame);
     frame.clear();
+    spriteRun.valid = false;   // (its vertices went with the list)
 }
 
 }  // namespace gt4::gsn

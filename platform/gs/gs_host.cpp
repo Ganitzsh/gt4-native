@@ -1340,6 +1340,10 @@ std::string GsHost::summary() const {
             << s.clutLoads / f << " CLUT loads; " << s.depthTextures << " Z buffers read as Z textures (GPU), " << s.readFallbacks
             << " reads of a target from memory (fallbacks)";
     }
+    if (h.target && h.target->frontend().stats.spriteRuns) {   // (the sprite runs: one image's pieces filtered as one)
+        const auto& s = h.target->frontend().stats;
+        out << "; sprite runs: " << s.spriteRuns << " (" << s.spritesInRuns << " sprites) clamped as one image";
+    }
     if (h.target && (h.target->gpuReads || h.target->staleReads))
         out << "; " << h.target->gpuReads << " reads of drawn pixels from the GPU, " << h.target->staleReads << " from GS memory";
     if (h.target && h.target->frontend().stats.readMismatchKindsSeen) {   // reads of drawn pages the GPU can't answer
