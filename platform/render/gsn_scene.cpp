@@ -239,7 +239,8 @@ struct GsnScene::Impl {
     vk::Image skipMask;
     VkExtent2D skipMaskExtent{};
     bool drawSkipMask(const gsn::FrameList::Lighting& l, size_t lightAt, vk::Image& colour, vk::Image& depth, uint32_t sx, uint32_t sy);
-    uint64_t n3MaskDraws = 0;
+    uint64_t n3MaskDraws = 0;   // the skip mask's span draws
+    uint64_t n3Masks = 0;       // Lights given a skip mask
     uint64_t n3ItemsSkipped = 0, n3Frames = 0, n3OverParity = 0;   // n3OverParity: B7 spans a skip left undrawn
     uint64_t n3ItemsSeen = 0;   // items of main views on frames that pass the gate (the verdicts' denominator)
     uint64_t n3Misaligned = 0;  // views whose skip list isn't one per material (ignored: it's read by index)
@@ -638,6 +639,9 @@ struct GsnScene::Impl {
                         static_cast<unsigned long long>(n3Frames), static_cast<unsigned long long>(n3ItemsSeen),
                         static_cast<unsigned long long>(n3ItemsSkipped), static_cast<unsigned long long>(n3OverParity),
                         std::getenv("GT4_N3_SKIP_TEST") ? " (GT4_N3_SKIP_TEST)" : "");
+        if (n3Masks)
+            std::printf("N3: skip masks for %llu Lights, %llu span draws\n", static_cast<unsigned long long>(n3Masks),
+                        static_cast<unsigned long long>(n3MaskDraws));
         if (n3Misaligned)
             std::printf("N3: %llu views ignored, their skip list not one per material\n",
                         static_cast<unsigned long long>(n3Misaligned));
@@ -1539,6 +1543,7 @@ bool GsnScene::Impl::drawSkipMask(const gsn::FrameList::Lighting& l, size_t ligh
     vk::toSampled(b, skipMask, vk::kCompute);
     vk::toSampled(b, depth, vk::kCompute);
     b.flush(command);
+    ++n3Masks;
     return true;
 }
 
