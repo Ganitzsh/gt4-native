@@ -582,7 +582,13 @@ std::string GsDumpEncoder::summary() const {
     if (counts.depthUnwritten)
         out += "; " + std::to_string(counts.depthUnwritten) + " draws testing a Z buffer not drawn since the start (not exact)";
     if (counts.memoryReplaced) out += "; GS memory replaced under it " + std::to_string(counts.memoryReplaced) + " times (not exact)";
-    if (!counts.depthUnwritten && !counts.memoryReplaced) out += "; exact as far as the dump knows";
+    // (exact only with nothing missing either: the GPU's 3D, bytes, and the colour grade, which the PS2 drew as GS draws
+    // the runtime replaces with its effect record)
+    if (!counts.depthUnwritten && !counts.memoryReplaced && !counts.models && !counts.effects && !counts.uploadsWithoutBytes &&
+        !counts.setsWithoutBytes)
+        out += "; exact as far as the dump knows";
+    else if (!counts.depthUnwritten && !counts.memoryReplaced)
+        out += "; not complete (what it lacks is listed above)";
     return out;
 }
 
