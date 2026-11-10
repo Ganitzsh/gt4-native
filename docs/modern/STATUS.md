@@ -26,8 +26,13 @@ own gate.
    nowhere darker than one in a city). So no shortcut over GT4's baked lamp light: the stills of 2026-11-10
    (`lap_ssr5f_boot`, three ways) show `enhanced` only adding to it, and N3's skip alone leaving the road dark
    wherever none of our lamps reaches (frame 9,725, the pools under the overpass). In scope, in order:
-   - N3 whole: the coverage gate (a baked pool goes only where one of our lamps replaces it), the albedo under a
-     skipped pool, the never-dark runs, the hunts on the night courses left;
+   - first, B10's channels from step 4 (the surface's own colour, normal and material, written by hybrid's side
+     passes): the night relight then lights the real surface colour with real normals, in place of today's
+     estimate from the picture, which is circular once the baked light is skipped. This replaces lane F's
+     stand-in (one mean road colour for the whole course, measuring only: `parked/f-n3-standin`), as PLAN's N3
+     foresaw ("if not, N3's skip waits for B10's material colour"). So the night lighting runs on hybrid;
+   - N3 whole: the coverage gate (a baked pool goes only where one of our lamps replaces it), the never-dark
+     runs, the hunts on the night courses left;
    - F7 (light profiles): the street lamps' spread, which the coverage gate's disc needs, and the headlights' beam;
    - the player's and the other cars' headlights lighting the road (F6's gather switch), then F9 (lamp lenses,
      brake and tail lights);

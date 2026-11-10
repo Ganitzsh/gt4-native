@@ -1752,9 +1752,10 @@ draw numbers are those of replay 2514, and the draws are found by what they are,
   remembered per (mesh, item) with its `objectToWorld`, and at the same place under a new texture it gets its keep
   without a measure (`n3Judged` and `GT4_N3_LOG` count measured verdicts). After: 2,217 judged, the same 50 identities
   and 267,433 items skipped, B6 261 us on against 228 off; `CTEST`, `ORIG` and `NATIVE` (byte-identical to main's host
-  with the verdicts off, `race7` and `lap_ssr5f_boot`) pass. The stand-in albedo under lane B's mask is still
-  `wip/f-n3-standin` (29f25bb, on the old key, off by default, built, not yet reviewed or gated): rebased onto main
-  next.
+  with the verdicts off, `race7` and `lap_ssr5f_boot`) pass. The stand-in albedo under lane B's mask is parked as
+  `parked/f-n3-standin` (29f25bb, on the old `MaterialId` key, measuring only, never reviewed or gated): one mean
+  road colour for a whole course is not what ships, so the albedo under a skipped pool comes from B10's colour
+  channel (the paragraph on the albedo below, its last sentence), built first (STATUS's finish line, 2026-11-10).
 - **The coverage gate** (the architect, 2026-11-09, from lane F's never-dark phases; lane B's review): a skip also
   needs a lamp that replaces the light it removes, so the road is never darker than GT4's where nothing of ours lights
   it (a tunnel's lights are not lamp billboards). It decides at execute time in `GsnScene`, with the frame's own
