@@ -659,6 +659,12 @@ for the selected row only, wrapped over at most three lines at the page's width;
 that. Depends: M9. Acceptance: on every tab at the device preset's smallest canvas (the Odin's 1280 x 800) and at 1600
 px, no help text cut that fits in three lines (a golden draw list per tab, M2); the prompts unmoved; a help text over
 three lines listed, so it gets shortened at the source rather than cut.
+Unfinished, on origin (lane M, 2026-11-10, at the wind-down): `wip/m13-help-band` (d7969bf): the help in its own
+three-line band above the prompts, the list at 9 rows, the panel no longer repeating the help, a `ui_help_lines` test
+with the real fonts, goldens rewritten; built in lane M's clone, ctest 75/75. Before main: a release game build
+(`platform/ui` is in the game), the clean-host gates, review (lane C, the architect), and four lines over 118
+characters in `tests/ui_help_lines.cpp`. The help texts over three lines are listed in
+`tests/ui/help_over_three_lines.txt` on the branch, for lanes B and D to shorten.
 
 **Q1-Q8: QoL options, after M1-M9** (the coordinator's choice for the owner, 2026-11-08). Each its own ticket with
 a spike for its hook, a setting off in `original`, and a session test: Q1 HUD element toggles and Q2 the gauge
