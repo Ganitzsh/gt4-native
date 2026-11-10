@@ -301,7 +301,7 @@ struct GsnScene::Impl {
         uint16_t view = 0;
         std::vector<gfx::scene::Light> records;
     };
-    std::vector<ViewLamps> viewLamps;
+    std::deque<ViewLamps> viewLamps;   // (a deque: a reference lampsOf gave stays valid while others are added)
     size_t viewLampsUsed = 0;   // (the entries in use this list; the vectors kept for their capacity)
     const std::vector<gfx::scene::Light>& lampsOf(const scene::SceneFrame& sf, uint16_t view);
     struct LampTotals {
@@ -3609,7 +3609,7 @@ void GsnScene::Impl::executeLightPart(VkCommandBuffer command, size_t at, int st
 
 // The frame's Light records with view `view`'s lamps promoted. F2b: the view's street lamps, A7 step 1b's billboard
 // candidates whose instance's material has the glow class, become kSrcCourseGlow (the list's scene cache, shared with
-// the front end, holds the classes). Once per view per list; the reference lasts until the next call.
+// the front end, holds the classes). Once per view per list; the reference lasts the list.
 const std::vector<gfx::scene::Light>& GsnScene::Impl::lampsOf(const scene::SceneFrame& sf, uint16_t view) {
     for (size_t i = 0; i < viewLampsUsed; ++i)
         if (viewLamps[i].view == view) return viewLamps[i].records;
