@@ -1736,7 +1736,12 @@ draw numbers are those of replay 2514, and the draws are found by what they are,
   `kFrameLampsOn` frame with `lighting.night = enhanced` only; `original` never builds the map (it runs only with the
   scene split on). Counters per frame: `n3Judged`, `n3Skipped` (items and draws), `n3SkipGatedOff`, `n3LaterFail` (a
   later batch or instance of a cached item that would fail), `n3Misaligned` (a view given no flags because they
-  wouldn't line up with its materials); the judging's cost in B6's front-end CPU line.
+  wouldn't line up with its materials); the judging's cost in B6's front-end CPU line. Where it is (lane F,
+  2026-11-10, at the wind-down): the verdict map on origin as `wip/f-n3s1-verdict-map` (eadea5b, reviewed by lanes A
+  and B; its predecessor 29d4680 passed every gate, and eadea5b changes only the key and the retention, so it lands
+  after a rebase and a rerun of its gates, with the judged count and B6's cost against 222 us); the stand-in albedo
+  under lane B's mask as `wip/f-n3-standin` (29f25bb, off by default, built, not yet reviewed or gated, to be rebased
+  onto the map first).
 - **The coverage gate** (the architect, 2026-11-09, from lane F's never-dark phases; lane B's review): a skip also
   needs a lamp that replaces the light it removes, so the road is never darker than GT4's where nothing of ours lights
   it (a tunnel's lights are not lamp billboards). It decides at execute time in `GsnScene`, with the frame's own
