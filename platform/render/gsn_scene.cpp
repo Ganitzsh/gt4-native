@@ -238,6 +238,18 @@ struct GsnScene::Impl {
     vk::Pipeline maskPass;
     vk::Image skipMask;
     VkExtent2D skipMaskExtent{};
+    // N3, the baked light kept where no lamp of ours replaces it (PLAN N3, "The coverage gate", per pixel): the skipped
+    // items (GT4's lit-road layer) are left out of the list's commands as before, then drawn last, just before the
+    // scene's Light, by a second run of the commands that draws only them (replaySkips), after the scene's colour
+    // without them is copied into preLayer. So the Light has the road with GT4's baked light (the target) and
+    // without it (preLayer), and gsn_light.comp gives each pixel our lamps' light where they reach and GT4's where
+    // they don't. GT4_N3_DEFER=1 until it is tuned (rule 10); off, the items stay skipped as before.
+    vk::Image preLayer;
+    VkExtent2D preLayerExtent{};
+    bool replaySkips = false;        // executeRange's second run: only the skipped spans of draws into replayTarget
+    uint32_t replayTarget = 0;
+    size_t preLayerLight = ~size_t(0);   // the Light (its command) preLayer holds the scene for, this list
+    uint64_t n3Replays = 0, n3ReplayDraws = 0;
     bool drawSkipMask(const gsn::FrameList::Lighting& l, size_t lightAt, vk::Image& colour, vk::Image& depth, uint32_t sx, uint32_t sy);
     uint64_t n3MaskDraws = 0;   // the skip mask's span draws
     uint64_t n3Masks = 0;       // Lights given a skip mask
@@ -312,7 +324,9 @@ struct GsnScene::Impl {
     uint64_t nightSideLights = 0;     // Lights relit from the side channels (GT4_NIGHT_SIDE=1, hybrid)
     // gsn_light.comp's push constants from `night` on (offset 40): mirrored field for field.
     struct NightPush {
-        float night = 0.0f, skipMasked = 0.0f;   // skipMasked: 1 when binding 9 holds the Light's skip mask (N3)
+        // skipMasked: 1 when binding 9 holds the Light's skip mask (N3); 2 when it holds the scene without GT4's lit-road
+        // layer, which the target then has (preLayer)
+        float night = 0.0f, skipMasked = 0.0f;
         float focal[2] = {1.0f, 1.0f}, centre[2] = {0.0f, 0.0f};
         float distanceA = 0.0f, distanceB = 0.0f, maxDistance = 0.0f;
         float side = 0.0f;   // 1 when bindings 10 and 11 hold the Light's side channels (hybrid: B8 step 2, B10)
@@ -715,6 +729,10 @@ struct GsnScene::Impl {
         vk::destroy(device, velocityPass);
         vk::destroy(device, maskPass);
         vk::destroy(device, skipMask);
+        vk::destroy(device, preLayer);
+        if (n3Replays)
+            std::printf("N3 baked light kept per pixel: %llu Lights with the layer drawn last (%llu span draws)\n",
+                        static_cast<unsigned long long>(n3Replays), static_cast<unsigned long long>(n3ReplayDraws));
         vk::destroy(device, taaPass);
         for (vk::Pipeline* p : {&ssrPass, &ssrComposite, &fogPass, &blurPass, &dofPass, &gradePass}) vk::destroy(device, *p);
         vk::destroy(device, ssrImage);
@@ -1561,6 +1579,7 @@ bool GsnScene::Impl::drawSkipMask(const gsn::FrameList::Lighting& l, size_t ligh
 // its job's vertices in its draw (ViewOnList::items, as B7's spans), so a draw merging several items keeps the others.
 void GsnScene::Impl::planSkips() {
     skipSpans.clear();
+    preLayerLight = ~size_t(0);
     skipAt.assign(frame.draws.size() + 1, 0);
     if (!(night > 0.0f) || !frame.scene || !(frame.scene->flags & gfx::scene::kFrameLampsOn) || frame.views.empty()) return;
     static const int test = [] {
@@ -2043,7 +2062,10 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
             vk::Image& lit = *w.lit;
             // N3: where the skipped items would have drawn (before the light pass, which reads it); the Z buffer back in
             // its sampled layout after
-            const bool masked = night > 0.0f && !skipSpans.empty() && drawSkipMask(l, ex.lightAt, colour, *si.depth, si.sx, si.sy);
+            // (with the layer drawn last, GT4_N3_DEFER: no mask; binding 9 is the scene without the layer)
+            const bool layered = night > 0.0f && preLayerLight == ex.lightAt && preLayer.valid() &&
+                                 preLayer.extent.width >= e.width && preLayer.extent.height >= e.height;
+            const bool masked = !layered && night > 0.0f && !skipSpans.empty() && drawSkipMask(l, ex.lightAt, colour, *si.depth, si.sx, si.sy);
             if (own) {
                 vk::toSampled(b, ao, vk::kCompute);
                 vk::toStorage(b, lit, true);
@@ -2054,7 +2076,7 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
             NightPush nightPush;
             NightBuffers nightBuffers;
             const bool lamps = night > 0.0f && nightPrepare(l, si, colour.view, depthOnly, nightPush, nightBuffers);
-            nightPush.skipMasked = masked ? 1.0f : 0.0f;
+            nightPush.skipMasked = layered ? 2.0f : masked ? 1.0f : 0.0f;
             // The relight from the surface's own colour and normal (B10's channels, in hybrid), where this Light's
             // target has them from this list's side passes. GT4_NIGHT_SIDE=1 until its lamps are tuned to it (rule 10).
             static const bool nightSide = [] { const char* v = std::getenv("GT4_NIGHT_SIDE"); return v && *v == '1'; }();
@@ -2085,7 +2107,7 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
                 .storageBuffer(7, nightIndices.buffer, 0,
                                sizeof(uint32_t) * render::kClusterCount * render::kMaxLightsPerCluster)
                 .sampled(8, lamps ? nightLocal.view : ao.view, samplers[0])
-                .sampled(9, masked ? skipMask.view : ao.view, samplers[0])
+                .sampled(9, layered ? preLayer.view : masked ? skipMask.view : ao.view, samplers[0])
                 .sampled(10, side ? side->normal.view : ao.view, samplers[0])
                 .sampled(11, side ? side->lit.view : ao.view, samplers[0])
                 .push(command, lightPass);
@@ -2648,10 +2670,17 @@ void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t
         return;
     }
     for (size_t at = from; at < to; ++at) {
-        if (seamOn && seamPlan.found() && !seamDone && at == seamPlan.at + 1) runSeam(command);   // (B16c: right after the anchor)
+        if (replaySkips) {   // (N3: only the draws into the Light's target that hold skipped spans; nothing else of the list)
+            const auto& again = frame.commands[at];
+            if (again.kind != gsn::FrameList::Command::Kind::Draw || again.index >= frame.draws.size() ||
+                again.index + 1 >= skipAt.size() || skipAt[again.index] == skipAt[again.index + 1] ||
+                frame.draws[again.index].target != replayTarget || !frame.draws[again.index].modeled)
+                continue;
+        }
+        if (seamOn && seamPlan.found() && !seamDone && at == seamPlan.at + 1 && !replaySkips) runSeam(command);   // (B16c: right after the anchor)
         const auto& cmd = frame.commands[at];
         // B8 step 2: a side-channel pass before a substituted view's Z clear or Light (planSides)
-        while (sideNext < sideBounds.size() && sideBounds[sideNext].command <= at) runSide(sideBounds[sideNext++]);
+        while (!replaySkips && sideNext < sideBounds.size() && sideBounds[sideNext].command <= at) runSide(sideBounds[sideNext++]);
         if (cmd.kind == gsn::FrameList::Command::Kind::Light) {
             executeLight(command, slot, at);
             continue;
@@ -2664,7 +2693,7 @@ void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t
             continue;
         }
         if (cmd.kind != gsn::FrameList::Command::Kind::Draw) continue;
-        if (limit >= 0 && executed++ >= limit) {
+        if (!replaySkips && limit >= 0 && executed++ >= limit) {
             ex.limited = true;   // (no later command of the list: its ranges and Lights after this one too)
             break;
         }
@@ -3051,7 +3080,7 @@ void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t
                 uint32_t cursor = d.first;
                 const uint32_t end = d.first + d.count;
                 auto gsRange = [&](uint32_t from, uint32_t to) {
-                    if (from >= to) return;
+                    if (from >= to || replaySkips) return;   // (the second run draws the skipped spans alone, below)
                     if (boundPipeline != p.pipeline) {   // (back from a parity draw: the GS draw's bindings again)
                         vk::bind(command, p);
                         const VkDeviceSize zero = 0;
@@ -3074,6 +3103,15 @@ void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t
                         cursor = s.first + s.count;
                     }
                 };
+                if (replaySkips) {   // N3: this draw's skipped spans, through the GS path, with the draw's own state
+                    for (uint32_t i = skipNext; i < skipEnd; ++i) {
+                        const SkipSpan& s = skipSpans[i];
+                        if (s.first < d.first || s.first + s.count > end) continue;
+                        vkCmdDraw(command, s.count, 1, modelBase + s.first, 0);
+                        if (pass == 0) ++n3ReplayDraws;
+                    }
+                    continue;
+                }
                 const uint32_t parityFrom = cmd.index + 1 < parityAt.size() ? parityAt[cmd.index] : 0;
                 const uint32_t parityTo = cmd.index + 1 < parityAt.size() ? parityAt[cmd.index + 1] : 0;
                 for (uint32_t i = parityFrom; i < parityTo; ++i) {
@@ -3130,8 +3168,45 @@ void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t
     // render pass stays open across a graph pass's boundary (lane A, B4 step 2b: barriers between passes must not land
     // inside one). execute() calls the pieces in segments()'s order too.
     // (B8 step 2: the pass before a Light that follows this range, as the Light is its own segment)
+    if (replaySkips) {   // (the second run: its render pass ended, nothing else)
+        end();
+        return;
+    }
     while (sideNext < sideBounds.size() && sideBounds[sideNext].command <= to) runSide(sideBounds[sideNext++]);
     end();
+    // N3: before a Light whose target holds skipped items, the scene without them kept (preLayer), then the items drawn
+    static const bool n3Defer = [] { const char* v = std::getenv("GT4_N3_DEFER"); return v && *v == '1'; }();
+    if (n3Defer && !ex.limited && !skipSpans.empty() && to < frame.commands.size() &&
+        frame.commands[to].kind == gsn::FrameList::Command::Kind::Light && frame.commands[to].index < frame.lights.size()) {
+        const gsn::FrameList::Lighting& l = frame.lights[frame.commands[to].index];
+        bool any = false;
+        for (size_t at = 0; at < to && !any; ++at) {
+            const auto& c = frame.commands[at];
+            if (c.kind != gsn::FrameList::Command::Kind::Draw || c.index >= frame.draws.size() || c.index + 1 >= skipAt.size()) continue;
+            any = frame.draws[c.index].target == l.target && frame.draws[c.index].modeled && skipAt[c.index] != skipAt[c.index + 1];
+        }
+        auto target = targets.find(l.target);
+        if (any && target != targets.end() && target->second.image.valid()) {
+            vk::Image& colour = target->second.image;
+            ensureWork(preLayer, preLayerExtent, colour.extent, kColour, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                       "gsn pre-layer");
+            b.image(colour, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_READ_BIT);
+            b.image(preLayer, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, vk::kTransfer, VK_ACCESS_2_TRANSFER_WRITE_BIT, true);
+            b.flush(command);
+            VkImageCopy copy{};
+            copy.srcSubresource = copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            copy.extent = {colour.extent.width, colour.extent.height, 1};
+            vkCmdCopyImage(command, colour.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, preLayer.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+            vk::toSampled(b, preLayer, vk::kCompute);
+            b.flush(command);
+            replaySkips = true;
+            replayTarget = l.target;
+            executeRange(command, slot, 0, to);
+            replaySkips = false;
+            preLayerLight = to;
+            ++n3Replays;
+        }
+    }
     if (seamOn && seamPlan.found() && !seamDone && seamPlan.at + 1 == to && !ex.limited) runSeam(command);   // (B16c: ... the anchor last)
 }
 

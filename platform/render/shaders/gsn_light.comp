@@ -42,7 +42,8 @@ layout(push_constant) uniform Light {
     uint view;          // debugging (GT4_LIGHT_VIEW): 1 the occlusion, 2 the view distance in 10 m bands
     uint aoStep;        // the occlusion's texels per pixel (gsn_ao.comp's step)
     float night;        // 0: no night relight; else its strength
-    float skipMasked;   // 1: skipMask holds this Light's skip mask; 0: nothing of it skipped (the mask reads 0)
+    float skipMasked;   // 1: skipMask holds this Light's skip mask; 0: nothing of it skipped (the mask reads 0);
+                        // 2: skipMask holds the scene without GT4's lit-road layer (colour / 255), which `scene` has
     vec2 focal;         // render pixels: x = focal * v / d + centre (v view-space x or y, d the view distance)
     vec2 centre;
     float distanceA;    // view distance = distanceA / (Z + distanceB)
@@ -174,7 +175,21 @@ void main() {
         linear *= mix(1.0, sum / weights, p.aoStrength);
     }
     // The lamps: after the occlusion (their light is not ambient), before the grades.
-    if (p.night > 0.0) linear += nightLight(q, last, unoccluded, c.rgb) * p.night;
+    if (p.night > 0.0 && p.skipMasked == 2.0) {
+        // N3, per pixel: the scene with GT4's baked lamp light on the road (c) and without it (binding 9). Their
+        // difference is what GT4 baked here; our lamps light the surface without it. The pixel gets ours where ours
+        // reaches GT4's level, GT4's where ours is under half of it, and a blend between: never darker than about
+        // 0.84 of GT4's (the blend's lowest, at ours = 0.75 of it), and never both.
+        const vec3 gsBase = texelFetch(skipMask, q, 0).rgb;
+        const vec3 base = pow(max(gsBase, vec3(0.0)), vec3(2.2));
+        const vec3 baked = max(unoccluded - base, vec3(0.0));
+        const vec3 ours = nightLight(q, last, base, gsBase) * p.night;
+        const float lb = dot(baked, kLuma), lo = dot(ours, kLuma);
+        const vec3 light = lb > 1e-5 ? mix(baked, ours, smoothstep(0.5 * lb, lb, lo)) : ours;
+        linear = max(linear + light - baked, vec3(0.0));
+    } else if (p.night > 0.0) {
+        linear += nightLight(q, last, unoccluded, c.rgb) * p.night;
+    }
     if (p.grade > 0.0) {
         vec3 x = linear;
         // Vibrance: muted colours gain the most saturation.
