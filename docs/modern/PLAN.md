@@ -1088,23 +1088,26 @@ didn't resend the bytes, and the start memory has every set page materialized (t
 memory only where something reads them). Two record kinds don't become GIF in the 2D step and are counted as not
 dumped: the 3D batches (the later step) and the native effect passes (`EffectRecord` `kGrade`, the race's colour
 grade, which the host draws as its own pass; a race dump isn't exact there unless the runtime also sends the GS's way,
-`GT4_EFFECTS_BOTH`). 2D first (enough for B24's sprites and the HUD), its start memory the colour targets read back
-under a real-time replay (B25, parked, showed the depth buffers can't be carried that way, B26): the log counts the
-draws that depth-test against a Z buffer not drawn since FROM, and a dump with any is not exact for them. A dump from
-VBlank 0 of a from-boot capture needs no read-back at all and is the encoder's exact first check;
-`tools/pcsx2_gsdump.py` playing it in PCSX2's player at 1x with a side-by-side compare; 3D through the read-back last.
-A dump holds game content (GS memory, textures), so it stays on the owner's machines like a capture, never committed
-or served. The `.gs` format is the version PCSX2's player reads (lane C has read state version 9). Depends: nothing
-for the 2D step (B25 parked; the depth limit counted instead). Acceptance: `CTEST` round trip on a synthetic frame
-(written, read back through `GsFrontend::gif`, which needs no GPU, and the FrameLists compared: every register and
-vertex equal); a HUD frame and, after the 3D step, a race frame rendered by PCSX2's software GS from our dump, against
-our renderer at `original` 1x, with the differences listed by draw; B24's exact mode then judged on it. Progress (lane
-C, 2026-11-10): steps 1 and 2 on main (659c3e1c): `platform/gs/gsdump_writer` writes and reads PCSX2's .gs format
-(state version 9, its 425-byte register part, 4 MiB of GS memory, the privileged registers and the packets), checked
-against two of PCSX2's own GT4 dumps, which decode and re-encode byte for byte (they settled one point lane C's first
-reading of the source got wrong: the vertex block is 32 bytes); the `gsdump` CTEST's round trip through `GsFrontend`
-gives every draw, vertex, texture, target and the GS memory equal. No dump of ours has been played by PCSX2 yet; that
-is the player run's job. Next: lane B's front-end dump (`GT4_GSDUMP`), then the PCSX2 player run.
+`GT4_EFFECTS_BOTH`). The tee in `gs_host.cpp`'s native target reads `GT4_GSDUMP` once and costs a null test per record
+when unset, so `ORIG` is unchanged with it off; it takes the records in the front end's order before any front-end
+work; and its summary line counts what was dumped and what wasn't (lane A, 2026-11-10). 2D first (enough for B24's
+sprites and the HUD), its start memory the colour targets read back under a real-time replay (B25, parked, showed the
+depth buffers can't be carried that way, B26): the log counts the draws that depth-test against a Z buffer not drawn
+since FROM, and a dump with any is not exact for them. A dump from VBlank 0 of a from-boot capture needs no read-back
+at all and is the encoder's exact first check; `tools/pcsx2_gsdump.py` playing it in PCSX2's player at 1x with a
+side-by-side compare; 3D through the read-back last. A dump holds game content (GS memory, textures), so it stays on
+the owner's machines like a capture, never committed or served. The `.gs` format is the version PCSX2's player reads
+(lane C has read state version 9). Depends: nothing for the 2D step (B25 parked; the depth limit counted instead).
+Acceptance: `CTEST` round trip on a synthetic frame (written, read back through `GsFrontend::gif`, which needs no GPU,
+and the FrameLists compared: every register and vertex equal); a HUD frame and, after the 3D step, a race frame
+rendered by PCSX2's software GS from our dump, against our renderer at `original` 1x, with the differences listed by
+draw; B24's exact mode then judged on it. Progress (lane C, 2026-11-10): steps 1 and 2 on main (659c3e1c):
+`platform/gs/gsdump_writer` writes and reads PCSX2's .gs format (state version 9, its 425-byte register part, 4 MiB of
+GS memory, the privileged registers and the packets), checked against two of PCSX2's own GT4 dumps, which decode and
+re-encode byte for byte (they settled one point lane C's first reading of the source got wrong: the vertex block is 32
+bytes); the `gsdump` CTEST's round trip through `GsFrontend` gives every draw, vertex, texture, target and the GS
+memory equal. No dump of ours has been played by PCSX2 yet; that is the player run's job. Next: lane B's front-end
+dump (`GT4_GSDUMP`), then the PCSX2 player run.
 
 ### Lane D: systems
 
