@@ -1151,6 +1151,10 @@ between events (a block crossing, an envelope step, the voice going off; a susta
 being one), bit-identical to `mix()`'s per-sample path by `CTEST` (`spu2_advance`, every sample) and the live check
 (`GT4_SPU_ADVANCE_CHECK`: 7200 frames, 0 differences). A race's voice advance went from about 215 to about 70 us a
 frame on the desktop.
+Unfinished, on origin (lane D, 2026-11-10, at the wind-down): the game's hash memo, profile saving (1), as
+`wip/d5-hash-memo` (458d949, OK'd by lane C and the architect; REL and hook_lint passed). Before main: DIFFTEST, the
+host build, `GT4_HASH_MEMO_CHECK=1` over a race, the garage and Photo Travel with 0 mismatches, and the memo's off/on
+A/B.
 
 **D6: Vehicle state discovery (L).** RISKS R14, then the fields of `scene::Vehicle`. Depends: R14. Acceptance: per
 wheel load and slip plotted over a lap, consistent with the car's motion; documented addresses.
