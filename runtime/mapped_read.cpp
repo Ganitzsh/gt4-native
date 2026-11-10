@@ -14,13 +14,19 @@
 namespace gt4::rt {
 
 namespace {
-std::atomic<uint64_t> g_stack{0}, g_asked{0};
+std::atomic<uint64_t> g_stack{0}, g_scratchpad{0}, g_past_top{0}, g_elsewhere{0};
 }  // namespace
 
 void read_mapped_into(uint8_t *out, const uint8_t *src, size_t bytes) {
     const uintptr_t a = reinterpret_cast<uintptr_t>(src);
     if (!bytes) return;
     if (in_guest_ram(a, bytes)) {
+        std::memcpy(out, src, bytes);
+        return;
+    }
+    // The scratchpad: committed and readable at its fixed address for the process's life (guest.cpp's alloc_fixed)
+    if (a >= kScratchpad && a <= kScratchpad + kScratchpadSize && bytes <= kScratchpad + kScratchpadSize - a) {
+        g_scratchpad.fetch_add(1, std::memory_order_relaxed);
         std::memcpy(out, src, bytes);
         return;
     }
@@ -35,7 +41,7 @@ void read_mapped_into(uint8_t *out, const uint8_t *src, size_t bytes) {
         std::memcpy(out, src, bytes);
         return;
     }
-    g_asked.fetch_add(1, std::memory_order_relaxed);
+    (a >= low && a < top ? g_past_top : g_elsewhere).fetch_add(1, std::memory_order_relaxed);
     size_t done = 0;
     while (done < bytes) {
         MEMORY_BASIC_INFORMATION mbi;
@@ -49,6 +55,8 @@ void read_mapped_into(uint8_t *out, const uint8_t *src, size_t bytes) {
     }
 }
 
-MappedReadCounts mapped_read_counts() { return {g_stack.load(), g_asked.load()}; }
+MappedReadCounts mapped_read_counts() {
+    return {g_stack.load(), g_scratchpad.load(), g_past_top.load(), g_elsewhere.load()};
+}
 
 }  // namespace gt4::rt

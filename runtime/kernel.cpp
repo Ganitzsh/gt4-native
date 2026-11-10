@@ -605,12 +605,14 @@ namespace {
 // GT4_WATCH=seconds: logs every guest thread's state and where the running one is (sampled).
 DWORD WINAPI watchdog_thread(void *p) {
     const DWORD period = static_cast<DWORD>(reinterpret_cast<uintptr_t>(p)) * 1000;
+    bool alarmsMiscountSaid = false;
     for (;;) {
         Sleep(period);
         char line[1024];
         int n = snprintf(line, sizeof line, "watch: frame %u, threads:", g_frames.load());
         uint32_t pc = 0;
         int running = 0;
+        int alarmsMiscounted = 0;   // (g_alarms_set against the alarms set, when they differ)
         char chain[600] = "";
         int chain_len = 0;
         // a kernel lock held for 2 s is a deadlock: name its owner and where it is (stderr only,
@@ -673,13 +675,22 @@ DWORD WINAPI watchdog_thread(void *p) {
             // thread's flip cycle and "wait one VBlank" switch (D_006186E4, D_006186DC: docs/IOP_SERVICES.md 4)
             int alarms = 0;
             for (const Alarm &a : g_alarms) alarms += a.used ? 1 : 0;
-            n += snprintf(line + n, sizeof line - n, "; alarms %d, self-wakeups %u, flip %d/%d", alarms,
-                          g_self_wakeups.load(), guest_ref<int32_t>(0x006186E4), guest_ref<int32_t>(0x006186DC));
+            // (the count g_alarms_due trusts, under g_lock as every writer: a difference is a writer that misses it)
+            const int counted = g_alarms_set.load();
+            if (counted != alarms) alarmsMiscounted = counted - alarms;
+            n += snprintf(line + n, sizeof line - n, "; alarms %d (counted %d), self-wakeups %u, flip %d/%d", alarms,
+                          counted, g_self_wakeups.load(), guest_ref<int32_t>(0x006186E4),
+                          guest_ref<int32_t>(0x006186DC));
             // reads of game data outside the guest's RAM (mapped_read.h): from the calling thread's stack at once,
             // or asking the system
             const MappedReadCounts reads = mapped_read_counts();
-            n += snprintf(line + n, sizeof line - n, "; reads off guest RAM %llu from the stack, %llu asked",
-                          static_cast<unsigned long long>(reads.stack), static_cast<unsigned long long>(reads.asked));
+            n += snprintf(line + n, sizeof line - n,
+                          "; reads off guest RAM %llu from the stack, %llu from the scratchpad, asked %llu past the "
+                          "stack's top and %llu elsewhere",
+                          static_cast<unsigned long long>(reads.stack),
+                          static_cast<unsigned long long>(reads.scratchpad),
+                          static_cast<unsigned long long>(reads.askedPastTop),
+                          static_cast<unsigned long long>(reads.askedElsewhere));
             if (Thread *r = g_running) {
                 running = r->id;
                 if (!r->host_frozen && SuspendThread(r->host) != static_cast<DWORD>(-1)) {
@@ -709,6 +720,11 @@ DWORD WINAPI watchdog_thread(void *p) {
         uint32_t guest = 0;
         const char *name = native_name_for(pc, &guest);
         log_info("%s; running %d at %08x (%s, PS2 %08x); callers%s", line, running, pc, *name ? name : "?", guest, chain);
+        if (alarmsMiscounted && !alarmsMiscountSaid) {   // (said once: a code change to look for, not a state)
+            alarmsMiscountSaid = true;
+            log_warn("watch: g_alarms_set is %+d off the alarms set: a writer of an alarm's used misses the count, so "
+                     "g_alarms_due may skip a due alarm", alarmsMiscounted);
+        }
         // where each waiting thread is: the game functions on its stack (newest first)
         for (int i = 1; i < kMaxThreads; ++i) {
             Thread &t = g_threads[i];
