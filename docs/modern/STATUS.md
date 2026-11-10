@@ -52,11 +52,14 @@ own gate.
      and `lighting.night = enhanced`; `original` keeps the PS2's picture and `low`, the handheld's, keeps the GS
      path until the Odin's cost is measured (desktop, 1080p high, a night lap: GPU 2.3 to 3.0 ms, render thread
      1.1 to 1.9 ms, front end 1.5 to 1.8 ms a frame). Older settings files under those presets move once.
-4. **Day lighting, and hybrid in presets with it:** B10 (per-pixel lighting and material classes), B11 (the
-   course's shadows on cars), B12 (GTAO). Hybrid alone draws the PS2 path's picture at a higher CPU cost, so it
-   enters presets low-ultra only with B10 (B8 step 5, as PLAN has it): the quiet-window `PERF`, the front end's
-   +31 % and the render thread's +0.35 ms cut or justified, R9's two every-frame readers checked, and the owner's
-   review against PCSX2 stills.
+4. **Day lighting: cut from this finish line** (2026-11-10; B10's step 2, B11 and B12 stay in PLAN for after it).
+   Why: by day GT4's cars are already lit per object from the place they are in, and per-pixel lighting of the same
+   model differs from GT4's by under 4 levels on 92-93 % of samples (B10's own measure), so the largest ticket left
+   would change little a player sees; B11's shadow maps would need casters GT4 doesn't send (it submits what the
+   camera sees; to be checked before B11 starts), and the horizon AO already runs. What was done instead: hybrid,
+   in medium to ultra for the night, now draws no side channels by day (d459c3c's parent): on a day race at high its
+   GPU time is the GS path's (1.04 against 1.05 ms) and its main thread 0.68 against 0.60 ms a frame (was 0.79).
+   The owner can put day lighting back: say so and it is the next step.
 5. **FSR 3.1 on game frames:** A3b step 1 (the camera-cut hook) is done: `kViewCut` is set and TAA's history
    resets on it. Left: B16c part 4, with the night level's and the display state's resets.
 6. **PS2 mechanisms out:** P1 is done (53b7455: the dead GIF and VIF records; this list had it as open). P4 (the

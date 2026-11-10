@@ -1793,10 +1793,13 @@ draw numbers are those of replay 2514, and the draws are found by what they are,
   (`GT4_LAMP_PROFILE=40,0.9,60,72`), hybrid, `GT4_NIGHT_SIDE=1`, 30 frames of `lap_ssr5f_boot`: ours over GT4's under
   the layer per frame 0.97 to 2.47, median 1.18; of 3,734 32-pixel blocks none under half of GT4's (41 % with the
   skip alone), 5 % under 0.95, 11 % over twice GT4's (lamps brighter than GT4 baked there: the strength's and the
-  owner's look to settle). Owed before the switches go: the other night laps and Hong Kong measured the same way;
+  owner's look to settle). Since then (2026-11-10): `lap_ssr5r_boot` and `lap_csr5r_boot` measured the same way (no
+  block under half of GT4's); `lap_csr5.cap` can't be (recorded before the records the path needs: no frame has a
+  masked area), its course being `lap_csr5r_boot`'s; `lightProfile` and `lightDiffuse` are in the GPU-against-C++
+  test (`tests/light_list.cpp`, 1,024 cases). Still owed: Hong Kong at dusk, which waits for a driven lap;
   the layer's place in the order (it is drawn after the blended draws GT4 drew over it, and after a grade between it
   and the Light); a Light with no range before it (no replay: the skip and its mask as before, uncounted);
-  `lightProfile` in the GPU-against-C++ test; CONTRACTS c.1's profile bits and `Light::reserved`'s host use written
+  CONTRACTS c.1's profile bits and `Light::reserved`'s host use written
   down. **Since the same day the switches are the settings' own behaviour**: `lighting.night = enhanced` with
   `render.scene = hybrid` (`nightModernWanted`) runs the verdicts, the side-channel relight, the profile and the
   per-pixel blend; the switches remain as overrides (`GT4_NIGHT_SIDE=0`, `GT4_N3_DEFER=0`, `GT4_N3_VERDICTS=0|1`,
