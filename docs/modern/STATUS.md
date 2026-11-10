@@ -57,7 +57,8 @@ own gate.
    enters presets low-ultra only with B10 (B8 step 5, as PLAN has it): the quiet-window `PERF`, the front end's
    +31 % and the render thread's +0.35 ms cut or justified, R9's two every-frame readers checked, and the owner's
    review against PCSX2 stills.
-5. **FSR 3.1 on game frames:** A3b step 1 (the camera-cut hook), B16c part 4.
+5. **FSR 3.1 on game frames:** A3b step 1 (the camera-cut hook) is done: `kViewCut` is set and TAA's history
+   resets on it. Left: B16c part 4, with the night level's and the display state's resets.
 6. **PS2 mechanisms out:** P1 is done (53b7455: the dead GIF and VIF records; this list had it as open). P4 (the
    preemptive delivery fallback): its diagnostic is in, 0 late deliveries in the garage, Photo Travel and a race;
    the freeze goes once a replay and a licence test show 0 too. P5 is answered (R17: the race fills the PS2's heap

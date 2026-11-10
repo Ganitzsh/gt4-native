@@ -209,6 +209,13 @@ copies, so it follows A12). Acceptance: `REL`; `DIFFTEST`; `ORIG` and `STREAM` u
 sessions every visible cut flagged, and no flag on continuous frames at speed over a lap (target 0: a false flag costs
 one frame of history, a missed cut a ghost), and none on resuming from a pause whose camera didn't change; no TAA
 ghost on the first frame after a view change, on a capture with one. Ahead of B16c's part 4, which needs it.
+Step 1 is done (2026-11-10): the hook in both copies, the net, `kViewCut`, the counts (logged every 3,600 views;
+`GT4_CUT_LOG=1` logs each cut) and `GsnScene`'s TAA reset. Three things differ from the text above, from the review:
+from a camera at rest the residual's bound is 3 m (a resume at 300 km/h is 1.4 m away on its first VBlank); the turn's
+bound is 90 degrees over one VBlank and 135 over more; the field of view's 3 % is per VBlank. A live race (PE race 2,
+its start sequence and the driving after it): 7 flags, 5 with the game's signal, 2 first sights, none from the net
+alone. Owed: the night level's and B16c's resets (with B16c part 4), a replay's and a pause at speed's
+live runs, and the TAA capture across a view change.
 
 **A4: Object identity from 00455708 (S-M).** `game_src/func_00455708.cpp` (draft) sets a runtime-global model
 context (set, model index, level) that A2 reads (`kInstObjectKnown`). Depends: A2, RISKS R2 verdict on 00455708.
