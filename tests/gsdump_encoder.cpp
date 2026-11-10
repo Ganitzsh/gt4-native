@@ -299,7 +299,7 @@ int main() {
         if (p.id == 0) b.gif(p.path, p.data.data(), p.data.size());
         if (p.id == 1) b.vsync(2, listB);
     }
-    expect(listA.draws.size() >= 5, "the frame has its draws");
+    expect(listA.draws.size() >= 4, "the frame has its draws (the front end merges same-state ones)");
     expect(sameDraws(listA, listB), "every draw's state, range, target and texture equal");
     expect(sameVertices(listA, listB), "every vertex equal");
     expect(sameTextures(listA, listB), "every texture decoded equal");

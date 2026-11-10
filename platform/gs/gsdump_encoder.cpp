@@ -95,6 +95,8 @@ uint32_t floatBits(float f) { return std::bit_cast<uint32_t>(f); }
 
 bool GsDumpEncoder::parse(const char* value, Options& out) {
     if (!value || !*value) return false;
+    out.from = 0;
+    out.count = 1;
     std::string s(value);
     const size_t a = s.find(',');
     out.path = s.substr(0, a);
