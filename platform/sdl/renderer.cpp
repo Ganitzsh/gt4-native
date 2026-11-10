@@ -28,6 +28,7 @@ using gt4::vk::check;
 namespace {
 
 constexpr uint32_t kFramesInFlight = 2;
+std::string g_pipelineCacheFile;   // Renderer::setPipelineCacheFile
 
 std::string lower(std::string text) {
     for (char& c : text) if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
@@ -266,6 +267,8 @@ struct Renderer::Impl {
         }
         if (timestamps) vkDestroyQueryPool(device.device, timestamps, nullptr);
         if (pool) vkDestroyCommandPool(device.device, pool, nullptr);
+        gt4::vk::savePipelineCache(device, g_pipelineCacheFile);
+        gt4::vk::closePipelineCache(device);
         vkDestroyDevice(device.device, nullptr);
         if (surface) SDL_Vulkan_DestroySurface(instance, surface, nullptr);
     }
@@ -334,6 +337,7 @@ struct Renderer::Impl {
         create.ppEnabledExtensionNames = extensions.data();
         check(vkCreateDevice(device.physical, &create, nullptr, &device.device), "vkCreateDevice");
         volkLoadDevice(device.device);
+        gt4::vk::openPipelineCache(device, g_pipelineCacheFile);
         vkGetDeviceQueue(device.device, device.family, 0, &device.queue);
         VkCommandPoolCreateInfo poolInfo{};
         poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -973,6 +977,7 @@ Renderer::Renderer(VkInstance instance, VkExtent2D size, const std::string& gpuR
 }
 
 Renderer::~Renderer() = default;
+void Renderer::setPipelineCacheFile(const std::string& path) { g_pipelineCacheFile = path; }
 void Renderer::resize() { impl->resized = true; }
 void Renderer::displayChanged() { if (!impl->headless) impl->displayMoved = true; }
 bool Renderer::headless() const { return impl->headless; }

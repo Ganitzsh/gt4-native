@@ -498,6 +498,15 @@ int run(const Options& options) {
         for (const auto& warning : gt4::loadSettings(settings, settingsPath)) std::fprintf(stderr, "Settings: %s\n", warning.c_str());
         std::printf("Settings: %s\n", settingsPath.c_str());
     }
+    // The pipelines compiled in earlier runs (vk::openPipelineCache): pipeline_cache.bin beside the settings;
+    // GT4_PIPELINE_CACHE=FILE another file, =0 none.
+    {
+        const char* e = std::getenv("GT4_PIPELINE_CACHE");
+        std::string cache;
+        if (e && *e) cache = std::strcmp(e, "0") ? e : "";
+        else if (!settingsPath.empty()) cache = (std::filesystem::path(settingsPath).parent_path() / "pipeline_cache.bin").string();
+        Renderer::setPipelineCacheFile(cache);
+    }
     // The PS2 frame fills a 4:3 TV picture (640 x 448 with non-square pixels); --set aspect.ratio overrides.
     const bool gsMode = !options.game.empty() || !options.replay.empty();
     if (gsMode && settings.aspect == gt4::AspectRatio::Window) gt4::setOption(settings, "aspect.ratio", "4:3");

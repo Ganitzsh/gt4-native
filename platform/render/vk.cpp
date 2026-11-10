@@ -26,6 +26,60 @@ uint32_t Device::maxSamples(uint32_t requested) const {
     return samples;
 }
 
+void openPipelineCache(Device& device, const std::string& path) {
+    std::vector<char> data;
+    if (!path.empty()) {
+        if (std::FILE* f = std::fopen(path.c_str(), "rb")) {
+            char chunk[65536];
+            for (size_t n; (n = std::fread(chunk, 1, sizeof chunk, f)) > 0;) data.insert(data.end(), chunk, chunk + n);
+            std::fclose(f);
+        }
+        // Vulkan's header: length, version, vendor, device, the cache UUID (another GPU's or driver's: not used)
+        uint32_t words[4] = {};
+        const bool ours = data.size() >= 16 + VK_UUID_SIZE && (std::memcpy(words, data.data(), 16), true) &&
+                          words[1] == VK_PIPELINE_CACHE_HEADER_VERSION_ONE && words[2] == device.properties.vendorID &&
+                          words[3] == device.properties.deviceID &&
+                          !std::memcmp(data.data() + 16, device.properties.pipelineCacheUUID, VK_UUID_SIZE);
+        if (!data.empty() && !ours) {
+            std::printf("Pipeline cache %s: from another GPU or driver, not used\n", path.c_str());
+            data.clear();
+        }
+    }
+    VkPipelineCacheCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+    info.initialDataSize = data.size();
+    info.pInitialData = data.empty() ? nullptr : data.data();
+    if (vkCreatePipelineCache(device.device, &info, nullptr, &device.pipelineCache) != VK_SUCCESS && !data.empty()) {
+        info.initialDataSize = 0;   // (data the driver refuses: an empty cache)
+        info.pInitialData = nullptr;
+        if (vkCreatePipelineCache(device.device, &info, nullptr, &device.pipelineCache) != VK_SUCCESS) device.pipelineCache = VK_NULL_HANDLE;
+    }
+    if (!data.empty() && device.pipelineCache) std::printf("Pipeline cache: %s (%zu KB)\n", path.c_str(), data.size() / 1024);
+}
+
+void savePipelineCache(const Device& device, const std::string& path) {
+    if (path.empty() || !device.pipelineCache) return;
+    size_t size = 0;
+    if (vkGetPipelineCacheData(device.device, device.pipelineCache, &size, nullptr) != VK_SUCCESS || !size) return;
+    std::vector<char> data(size);
+    if (vkGetPipelineCacheData(device.device, device.pipelineCache, &size, data.data()) != VK_SUCCESS) return;
+    const std::string temporary = path + ".new";
+    std::FILE* f = std::fopen(temporary.c_str(), "wb");
+    if (!f) return;
+    const bool written = std::fwrite(data.data(), 1, size, f) == size;
+    if (std::fclose(f) != 0 || !written) {
+        std::remove(temporary.c_str());
+        return;
+    }
+    std::remove(path.c_str());   // (rename does not replace a file on Windows)
+    std::rename(temporary.c_str(), path.c_str());
+}
+
+void closePipelineCache(Device& device) {
+    if (device.pipelineCache) vkDestroyPipelineCache(device.device, device.pipelineCache, nullptr);
+    device.pipelineCache = VK_NULL_HANDLE;
+}
+
 bool hasStencil(VkFormat format) {
     return format == VK_FORMAT_D24_UNORM_S8_UINT || format == VK_FORMAT_D32_SFLOAT_S8_UINT ||
            format == VK_FORMAT_D16_UNORM_S8_UINT;
@@ -373,7 +427,7 @@ Pipeline createCompute(const Device& device, ShaderCode code, std::initializer_l
     info.stage.module = shader;
     info.stage.pName = "main";
     info.layout = pipeline.layout;
-    const VkResult result = vkCreateComputePipelines(device.device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline.pipeline);
+    const VkResult result = vkCreateComputePipelines(device.device, device.pipelineCache, 1, &info, nullptr, &pipeline.pipeline);
     vkDestroyShaderModule(device.device, shader, nullptr);
     check(result, name);
     label(device, VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(pipeline.pipeline), name);
@@ -490,7 +544,7 @@ Pipeline createGraphics(const Device& device, const GraphicsDesc& desc) {
     info.pColorBlendState = &blend;
     info.pDynamicState = &dynamic;
     info.layout = pipeline.layout;
-    const VkResult result = vkCreateGraphicsPipelines(device.device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline.pipeline);
+    const VkResult result = vkCreateGraphicsPipelines(device.device, device.pipelineCache, 1, &info, nullptr, &pipeline.pipeline);
     vkDestroyShaderModule(device.device, vertex, nullptr);
     if (fragment) vkDestroyShaderModule(device.device, fragment, nullptr);
     check(result, desc.name);
