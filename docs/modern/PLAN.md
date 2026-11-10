@@ -2264,6 +2264,13 @@ it. Depends: none. Acceptance:
 - The commit names each thread and loop found (PC, function).
 - A diagnostic stays instead of the freeze: a delivery waiting more than 50 ms logs the running thread's PC once, so
   a missed loop shows instead of stalling silently.
+- **Where it is** (2026-11-10): the diagnostic is on main beside the freeze. A late delivery records the game
+  function the frozen thread was in; the interrupt thread logs each function once as a warning ("frame callbacks
+  waited over 50 ms for a safe point: the running thread was in ...") and the counts in the 3,600-frame line. With
+  it, the garage, Photo Travel's shot and PE race 2 with the drive (the boot movie and the loads on the way; about
+  12,300 deliveries): 0 by freezing, where 2026-11-08's session to a race had 17 of 8,911. Not run: a replay, a
+  licence test, GT mode's other screens. The freeze stays until those show 0 too (the owner's play logs count: any
+  late delivery names its function in `host.log`); then the freeze, `GT4_FRAME_DELIVERY` and `GT4_WATCH`'s guard go.
 
 **P5: Spike R17, guest memory beyond 32 MB (S, lane A).** RISKS.md R17: a debug runtime build, nothing to main.
 Acceptance: the answer and its measurements in R17. If it finds a use, a ticket follows.

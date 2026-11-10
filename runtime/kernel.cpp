@@ -281,6 +281,73 @@ uint64_t g_due_since = 0;   // when something to deliver came due (0: nothing wa
 bool g_guard_frozen = false;
 std::atomic<uint32_t> g_frozen_in_runtime{0}, g_frozen_in_runtime_at{0};
 uint64_t g_delivered_cooperatively = 0, g_delivered_preemptively = 0;
+// P4 (docs/modern/PLAN.md): where a delivery that waited past kCooperativeLimit found the running thread: the game
+// function it was in (the innermost return address in the image with a name), so each loop that makes no syscall
+// for 50 ms is known by name before the freeze goes, and shows afterwards instead of stalling silently. Filled while
+// the thread is frozen (no allocation, no logging), logged by the interrupt thread once per function and with the
+// counts in the 3,600-frame line.
+struct LateDelivery {
+    std::atomic<uint32_t> function{0}, at{0}, count{0};   // the function's guest address, a host pc inside it
+};
+LateDelivery g_late[16];
+std::atomic<uint32_t> g_late_elsewhere{0};   // (no name found, or the table full)
+std::atomic<uint32_t> g_late_logged{0};      // how many of g_late's entries the interrupt thread has logged
+
+// The innermost code address of a frozen thread that lies in the image and has a name: its pc, else a return address
+// on its stack. 0: none found.
+uint32_t frozen_code_address(const CONTEXT &ctx) {
+    auto code = [](uint32_t a) {
+        MEMORY_BASIC_INFORMATION m;
+        return a >= 0x02000000 && a < 0x04000000 && VirtualQuery(reinterpret_cast<void *>(uintptr_t(a)), &m, sizeof m) &&
+               m.State == MEM_COMMIT &&
+               (m.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY));
+    };
+    if (code(ctx.Eip) && *native_name_for(ctx.Eip, nullptr)) return ctx.Eip;
+    const auto *sp = reinterpret_cast<const uint32_t *>(ctx.Esp);
+    MEMORY_BASIC_INFORMATION mi;
+    for (int k = 0; k < 1024; ++k) {
+        if ((k == 0 || (reinterpret_cast<uintptr_t>(sp + k) & 0xFFF) == 0) &&
+            (!VirtualQuery(sp + k, &mi, sizeof mi) || mi.State != MEM_COMMIT || (mi.Protect & (PAGE_GUARD | PAGE_NOACCESS))))
+            break;
+        if (code(sp[k]) && *native_name_for(sp[k], nullptr)) return sp[k];
+    }
+    return 0;
+}
+
+void note_late_delivery(const CONTEXT &ctx) {
+    const uint32_t at = frozen_code_address(ctx);
+    uint32_t function = 0;
+    if (!at || !*native_name_for(at, &function)) {
+        ++g_late_elsewhere;
+        return;
+    }
+    if (!function) function = at;   // (runtime code: no guest address; by its own)
+    for (LateDelivery &l : g_late) {
+        uint32_t held = l.function.load();
+        if (!held) {   // (only the interrupt thread writes: no race for the slot)
+            l.at = at;
+            l.function = function;
+            held = function;
+        }
+        if (held == function) {
+            ++l.count;
+            return;
+        }
+    }
+    ++g_late_elsewhere;
+}
+
+// From the interrupt thread, nothing frozen: each function a late delivery found, once, as it first appears.
+void log_late_deliveries() {
+    for (uint32_t k = g_late_logged.load(); k < 16 && g_late[k].function.load(); ++k) {
+        uint32_t guest = 0;
+        const char *name = native_name_for(g_late[k].at.load(), &guest);
+        log_warn("kernel: frame callbacks waited over 50 ms for a safe point: the running thread was in %s (%08x, host pc "
+                 "%08x); delivered by freezing it (P4: this loop needs a safe point)",
+                 name, guest, g_late[k].at.load());
+        g_late_logged = k + 1;
+    }
+}
 std::atomic<uint32_t> g_self_wakeups{0};   // wakeups a handler gave the thread it ran on (GT4_WATCH)
 
 // From the interrupt thread: freeze the running guest thread, run handlers, resume or preempt. False when it left
@@ -298,6 +365,7 @@ bool interrupt_now() {
         CONTEXT ctx;
         ctx.ContextFlags = CONTEXT_CONTROL;
         GetThreadContext(r->host, &ctx);  // makes the suspension take effect
+        if (cooperative_delivery()) note_late_delivery(ctx);   // (P4: past the limit; in preemptive mode every one is)
         if (g_guard_frozen) {
             // the innermost return address in the image: runtime code (not a game function) means frozen inside it.
             // Code only: a pointer to the runtime's data on the stack named "runtime" too (g_lock + 0x10, the critical
@@ -433,12 +501,21 @@ DWORD WINAPI interrupt_thread(void *) {
         }
         // (left for a safe point: look again shortly, for the limit)
         if (g_alarms_due() && !interrupt_now()) WaitForSingleObject(g_irq_wake, 1);
+        if (g_late_logged.load() < 16 && g_late[g_late_logged.load()].function.load()) log_late_deliveries();
         if (g_frames % 3600 == 0 && now >= next_frame - frame_cycles && g_frames) {
             static uint32_t logged = 0;
             if (logged != g_frames) {
                 logged = g_frames;
                 log_info("kernel: frame callbacks delivered at safe points %llu, by interrupting %llu",
                          static_cast<unsigned long long>(g_delivered_cooperatively), static_cast<unsigned long long>(g_delivered_preemptively));
+                for (const LateDelivery &l : g_late) {   // (P4: which functions the interrupted threads were in)
+                    if (!l.function.load()) break;
+                    uint32_t guest = 0;
+                    const char *name = native_name_for(l.at.load(), &guest);
+                    log_info("kernel:   %u of them in %s (%08x)", l.count.load(), name, guest);
+                }
+                if (const uint32_t elsewhere = g_late_elsewhere.load())
+                    log_info("kernel:   %u of them where no function is named", elsewhere);
             }
         }
     }
