@@ -684,7 +684,10 @@ blended and equal-Z items are lit (B22).
   albedo as the pixel over the channel and the normal from the normal channel, where an item's surface is the pixel's,
   nothing veils it, the vertex colour is at least 8 of 255 and the pixel is under the target's ceiling; elsewhere its
   estimates. Off, frames are identical to before (hybrid, hybrid with the night, the night on the GS path) and
-  `ORIG` holds. Owed before the switch goes and the night enters a preset (the review, a fresh agent): the cases
+  `ORIG` holds. Blended layers that write no Z (markings, decals) give the channel their own colour in a pass after
+  the surfaces' (only layers that blend their own colour in; not shadows, glows, or N3's skipped items), run only
+while the night reads the channel; a layer's texture alpha isn't read yet. Owed before the switch goes and the night
+  enters a preset (the review, a fresh agent): the cases
   above that the reader doesn't keep or count yet (fog, undone or skipped; tagged blended layers folded into the
   pixel, the lit-road layer where N3 doesn't skip it; TFX other than modulate and untextured items; untagged equal-Z
   draws over items); channels left stale where a boundary had no reset (B8's limit, now feeding a divide); the
@@ -2014,7 +2017,12 @@ lamps, no acne or detached shadows; temporal stability as above, as lights enter
 `GT4_LAMP_PROFILE=RANGE,SCALE,INNER,OUTER` (2026-11-10): an analytic profile in the light list's flags (bits 8-15),
 `kProfileStreetLamp`, a road luminaire's batwing (1 / cos^3 of the angle from the axis, held at 16), so a lamp
 pointing down lights the road evenly inside its cone; the course lamps become spots along the world's down axis. The
-cookie textures below remain for the headlights' beams. Headlight beams and street lamps get shapes. A profile is
+cookie textures below remain for an asymmetric cut-off line. Since then (the same day) the profile lights the road
+the same from any mounting height, and **the headlights are lit** on the night's modern path (F6's gather switch):
+A7 step 2's spots get a beam in `GsnScene::lampsOf` (tipped down 4 degrees, full to 14 and ending at 30, 50 m) and
+`kProfileLowBeam`: the inverse square cancelled out to the range, and a wrapped diffuse term for the road's answer at
+grazing incidence (`lightProfile`, `lightDiffuse`). They pass through what stands in the beam until F6's shadows.
+Headlight beams and street lamps get shapes. A profile is
 an angular intensity table (IES-style: intensity against vertical and horizontal angle) baked into a small 2D
 cookie (a slice of a texture array, indexed by `GpuLight`'s profile index): the low beam with its hot spot,
 asymmetric cut-off line and spread; the high beam (used where the game's car light state says so, else low only);
