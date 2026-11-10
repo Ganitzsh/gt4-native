@@ -569,17 +569,21 @@ std::string GsDumpEncoder::summary() const {
     std::snprintf(line, sizeof line,
                   "GS dump %s%s: VBlanks %llu-%llu, GS memory from %s, %llu VSyncs, %llu transfers (%llu bytes), %llu draws "
                   "(%llu vertices); not dumped: %llu GPU 3D batches, %llu colour-grade passes, %llu uploads without bytes, "
-                  "%llu texture sets without bytes; %llu draws testing a Z buffer not drawn since the start (not exact); "
-                  "GS memory replaced under it %llu times (not exact)",
+                  "%llu texture sets without bytes",
                   options.path.c_str(), failed ? " (failed)" : closed ? "" : " (open)", static_cast<unsigned long long>(options.from),
                   static_cast<unsigned long long>(options.from + options.count - 1), memorySource.c_str(),
                   static_cast<unsigned long long>(vsyncs), static_cast<unsigned long long>(counts.transfers),
                   static_cast<unsigned long long>(counts.bytes), static_cast<unsigned long long>(counts.draws),
                   static_cast<unsigned long long>(counts.vertices), static_cast<unsigned long long>(counts.models),
                   static_cast<unsigned long long>(counts.effects), static_cast<unsigned long long>(counts.uploadsWithoutBytes),
-                  static_cast<unsigned long long>(counts.setsWithoutBytes), static_cast<unsigned long long>(counts.depthUnwritten),
-                  static_cast<unsigned long long>(counts.memoryReplaced));
-    return line;
+                  static_cast<unsigned long long>(counts.setsWithoutBytes));
+    std::string out = line;
+    // what makes it not exact, only when there is some (an exact dump reads as exact: lane A)
+    if (counts.depthUnwritten)
+        out += "; " + std::to_string(counts.depthUnwritten) + " draws testing a Z buffer not drawn since the start (not exact)";
+    if (counts.memoryReplaced) out += "; GS memory replaced under it " + std::to_string(counts.memoryReplaced) + " times (not exact)";
+    if (!counts.depthUnwritten && !counts.memoryReplaced) out += "; exact as far as the dump knows";
+    return out;
 }
 
 }  // namespace gt4::gs
