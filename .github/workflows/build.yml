@@ -121,7 +121,8 @@ jobs:
         arch: [x86_64, aarch64]
     env:
       GT4_LINUX_TOOLS: ${{ github.workspace }}/.linux-tools
-      GT4_JOBS: 4
+      # x86_64 also builds the tests; with 4 jobs the runner ran out of memory on about half the pushes.
+      GT4_JOBS: ${{ matrix.arch == 'x86_64' && 2 || 4 }}
     steps:
       - uses: actions/checkout@v4
       - name: Build tools; lavapipe and numpy for the tests (x86_64 runs ctest)

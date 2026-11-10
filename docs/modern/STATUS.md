@@ -3,6 +3,57 @@
 Status as of 2026-11-10. All eight agent lanes stopped and retired, their clones and worktrees removed. Main is the
 source of truth: PLAN.md and MENU_DESIGN.md in this folder hold each ticket's full text. This file is the short view.
 
+## Finish line (the owner, 2026-11-10)
+
+The owner's direction: finish with a working build that has most of the modernisation in, and don't overdo it. One
+session now runs the work in the order below; the lanes' queues further down are history. PLAN's "Next" list was
+about three times this, so it is cut to what a player sees and what removes PS2 mechanisms. Everything cut stays in
+PLAN as written, for after the release.
+
+**Where we stand.** The foundations are done and on main, but the presets don't show them yet: `render.scene =
+hybrid` draws the same picture as the PS2 path and is in no preset, `lighting.night = enhanced` is in no preset,
+and the day lighting (B10 onwards) isn't started. So the remaining work is mostly making finished machinery
+visible, plus one large new piece (B10).
+
+**In scope, in this order.** Each step lands on main behind its setting (rule 10) and enters the presets at its
+own gate.
+
+1. **Main green.** The Linux x86_64 CI job runs out of memory on about half the pushes: two build jobs there.
+2. **Land what is finished.** `wip/d5-hash-memo` (checks to run), `wip/f-n3s1-verdict-map` (gates to rerun),
+   `wip/m13-help-band`.
+3. **Hybrid in presets low-ultra** (B8 step 5): the quiet-window `PERF`, the front end's +31 % and the render
+   thread's +0.35 ms cut or justified, R9's two every-frame readers checked.
+4. **Night lighting in presets:** N3's stand-in and never-dark run, then its release; `lighting.night = enhanced`
+   in presets; F9 (lamp lenses, brake and tail lights); the player's headlights lighting the road, without
+   shadows (F6's gather switch alone).
+5. **Day lighting:** B10 (per-pixel lighting and material classes), B11 (the course's shadows on cars), B12
+   (GTAO). Into presets after the owner's review against PCSX2 stills.
+6. **FSR 3.1 on game frames:** A3b step 1 (the camera-cut hook), B16c part 4.
+7. **PS2 mechanisms out:** P1 (the dead GIF and VIF records), P4 (the preemptive delivery fallback), P5 (the
+   32 MB spike, and the lift if something uses it), P3a (block links as offsets). Then P2b (native palettes) and
+   P3b (draw state in renderer terms), last because they are large and change no picture.
+8. **Driving feel:** what is left of D8 (physics force feedback, behind a switch today), D12 (steering and pedal
+   response) and D14 (gamepad haptics from the physics), checked against main first, since parts are in; D13 from
+   `archive/d-laneD-review` if its gates pass.
+9. **Release 0.1.1** from main, after an Odin pass (C6b).
+
+**Cut until after the release.** B9 (showroom and photo views stay on the PS2 path), B13 (SSR, probes), B14 (sky,
+froxel fog), B15 and F4 (modern mode, tone map, HDR, modern bloom and flares), B18-B23, F3, F5, F6's shadows, F7,
+F8, N4, E4, E6-E9, E10, M10-M12 and Q1-Q8, D15, D16, B24's later steps, B26 (unless its picture bug is seen),
+C12 step 4, split-screen relight and TAA, C7.
+
+**What "no PS2 patterns" means here.** PS2_REMOVAL.md has the full table. After step 7, what is left is the game's
+own logic and data, which a recompiled game can't shed: its 32-bit address space, the 60 Hz frame, the kernel and
+SDK calls it makes, PS2 float rounding, and the PS2 renderer path that `original` keeps and that still draws what
+hybrid doesn't replace (sky, GT4's post effects, HUD, menus).
+
+**Physics.** No ticket changes GT4's simulation, and none is added: it is the game's own code at 60 Hz in PS2
+arithmetic, and replays, ghosts, licence times and imported saves depend on it bit for bit. What modernises around
+it is step 8: force feedback, haptics and steering response computed from the physics state.
+
+**Review with one session** (rule 3 needs someone other than the author): each code step is read by a fresh agent
+that gets the diff and the ticket's acceptance, not the author's conclusion, before it is pushed.
+
 ## Latest Odin build
 
 - Last device build: main-874f32e, main's head at the wind-down (night bands fix, magenta fix, native menu by default,
@@ -59,8 +110,7 @@ source of truth: PLAN.md and MENU_DESIGN.md in this folder hold each ticket's fu
 - **In progress:** A3b (camera cuts); A4, A6, A8, A11b (to confirm with lane A); B16c (part 4 waits for A3b);
   B17 FSR 3.1 (game frames wait on B16c); B24 (step 1 behind a switch); C6/C6b (Odin runs); C12 (steps 1-2 in,
   3 in review, 4 the PCSX2 player run); D8; runtime CPU cuts (hash memo next); M13; N3 step 1; NATIVE baselines.
-- **Next:** B26 step 0; N3's never-dark measurement, then the batwing with its I0 and N3's release; F6, F7, F9;
-  B9-B15 and F3-F5 (phase 3); D12-D16; E4-E9; P1, P3a, P3b, P4, P5; M10-M12; split-screen relight and TAA.
+- **Next:** the Finish line section above, in its order.
 - **Parked:** B25 (fix moved to B26), E10 (clean field mode), N2, F2b's view-level albedo and albedo floor.
 
 ## Where the work lives
@@ -73,6 +123,7 @@ source of truth: PLAN.md and MENU_DESIGN.md in this folder hold each ticket's fu
 
 ## Where each lane stopped (queues in order)
 
+History from the wind-down: the Finish line section decides what is picked up from these queues.
 Nothing is left only on disk: unfinished work is on origin under wip/, parked/ or debug/ (rule 10).
 
 - **Architect:** nothing open of its own; writes N3's rule, NATIVE's tool names, A3b's last sessions, C12's
