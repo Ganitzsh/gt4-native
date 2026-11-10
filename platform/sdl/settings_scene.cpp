@@ -44,4 +44,10 @@ bool sceneSplitWanted(const Settings& settings) {
     return sceneRecordsWanted(settings) && (modern || settings.night == LightingMode::Enhanced);
 }
 
+// The night's modern path (PLAN.md N3, F7, B10's channels): lighting.night = enhanced on the hybrid renderer, whose
+// side channels it lights with. The front end then judges GT4's lit-road layer (N3's verdicts).
+bool nightModernWanted(const Settings& settings) {
+    return settings.night == LightingMode::Enhanced && settings.scene == SceneRenderer::Hybrid;
+}
+
 }  // namespace gt4

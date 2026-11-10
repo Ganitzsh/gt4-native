@@ -216,6 +216,9 @@ bool sceneRecordsWanted(const Settings& settings);
 // (lighting.night = enhanced, PLAN.md F2b). The pixels are the same either way. GT4_GSN_SCENE_SPLIT=1 turns it on too
 // (gs_host.cpp).
 bool sceneSplitWanted(const Settings& settings);
+// lighting.night = enhanced on render.scene = hybrid: the lamps light the surface's own colour, and GT4's baked lamp
+// light stays only where none of ours replaces it (settings_scene.cpp).
+bool nightModernWanted(const Settings& settings);
 
 // Content aspect ratio (width / height), or 0 for "match the window".
 float aspectValue(AspectRatio ratio);

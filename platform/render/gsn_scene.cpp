@@ -243,7 +243,7 @@ struct GsnScene::Impl {
     // scene's Light, by a second run of the commands that draws only them (replaySkips), after the scene's colour
     // without them is copied into preLayer. So the Light has the road with GT4's baked light (the target) and
     // without it (preLayer), and gsn_light.comp gives each pixel our lamps' light where they reach and GT4's where
-    // they don't. GT4_N3_DEFER=1 until it is tuned (rule 10); off, the items stay skipped as before.
+    // they don't. In hybrid (the night's modern path); GT4_N3_DEFER=0: the items stay skipped, as without hybrid.
     vk::Image preLayer;
     VkExtent2D preLayerExtent{};
     bool replaySkips = false;        // executeRange's second run: only the skipped spans of draws into replayTarget
@@ -2079,8 +2079,8 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
             const bool lamps = night > 0.0f && nightPrepare(l, si, layered ? preLayer.view : colour.view, depthOnly, nightPush, nightBuffers);
             nightPush.skipMasked = layered ? 2.0f : masked ? 1.0f : 0.0f;
             // The relight from the surface's own colour and normal (B10's channels, in hybrid), where this Light's
-            // target has them from this list's side passes. GT4_NIGHT_SIDE=1 until its lamps are tuned to it (rule 10).
-            static const bool nightSide = [] { const char* v = std::getenv("GT4_NIGHT_SIDE"); return v && *v == '1'; }();
+            // target has them from this list's side passes. GT4_NIGHT_SIDE=0: the estimates, as without hybrid.
+            static const bool nightSide = [] { const char* v = std::getenv("GT4_NIGHT_SIDE"); return !(v && *v == '0'); }();
             SideImages* side = nullptr;
             if (lamps && nightSide && hybrid && sideClearedThisList.count(l.target)) {
                 auto it = sideTargets.find(l.target);
@@ -3179,7 +3179,8 @@ void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t
     while (sideNext < sideBounds.size() && sideBounds[sideNext].command <= to) runSide(sideBounds[sideNext++]);
     end();
     // N3: before a Light whose target holds skipped items, the scene without them kept (preLayer), then the items drawn
-    static const bool n3Defer = [] { const char* v = std::getenv("GT4_N3_DEFER"); return v && *v == '1'; }();
+    static const bool n3DeferOff = [] { const char* v = std::getenv("GT4_N3_DEFER"); return v && *v == '0'; }();
+    const bool n3Defer = hybrid && !n3DeferOff;
     if (n3Defer && !ex.limited && !skipSpans.empty() && to < frame.commands.size() &&
         frame.commands[to].kind == gsn::FrameList::Command::Kind::Light && frame.commands[to].index < frame.lights.size()) {
         const gsn::FrameList::Lighting& l = frame.lights[frame.commands[to].index];
@@ -3755,25 +3756,31 @@ const std::vector<gfx::scene::Light>& GsnScene::Impl::lampsOf(const scene::Scene
     }
     // F7's street-lamp profile (PLAN.md F7, N3's coverage gate): each of the view's course lamps, a point light at its
     // glow until here, becomes a spot pointing down the world's up axis as the view sees it, with the street lamp's
-    // profile, so the road under it is lit evenly out to its cone. GT4_LAMP_PROFILE=RANGE,SCALE,INNER,OUTER (metres;
-    // the intensity's factor; the cone's half angles in degrees) while it is tuned against N3's never-dark measure
-    // (rule 10); unset: the point lights as before.
+    // profile, so the road under it is lit evenly out to its cone. In hybrid (the night's modern path, whose albedo is
+    // the surface's own: the point lamps' strength was set against the estimate's, about 0.7-0.8 everywhere): a range
+    // of 40 m, 0.9 of F2b's intensity, the cone full to 60 degrees and ending at 72, set against N3's never-dark
+    // measure on the three Route 5 laps recorded from boot (PLAN N3). GT4_LAMP_PROFILE=RANGE,SCALE,INNER,OUTER
+    // (metres; the intensity's factor; degrees) gives other values, with or without hybrid; GT4_LAMP_PROFILE=off: the
+    // point lights.
     static const struct LampProfile {
-        bool on = false;
-        float range = 0.0f, scale = 1.0f, cosInner = 0.0f, cosOuter = 0.0f;
+        bool fromEnvironment = false, off = false;
+        float range = 40.0f, scale = 0.9f, cosInner = 0.5f, cosOuter = 0.309017f;   // (cos 60, cos 72 degrees)
         LampProfile() {
             const char* e = std::getenv("GT4_LAMP_PROFILE");
+            if (!e) return;
             float r = 0.0f, s = 0.0f, a = 0.0f, b = 0.0f;
-            if (e && std::sscanf(e, "%f,%f,%f,%f", &r, &s, &a, &b) == 4 && r > 0.0f && s > 0.0f && a > 0.0f && b > a && b < 90.0f) {
-                on = true;
+            if (std::sscanf(e, "%f,%f,%f,%f", &r, &s, &a, &b) == 4 && r > 0.0f && s > 0.0f && a > 0.0f && b > a && b < 90.0f) {
+                fromEnvironment = true;
                 range = r;
                 scale = s;
                 cosInner = std::cos(a * 3.14159265f / 180.0f);
                 cosOuter = std::cos(b * 3.14159265f / 180.0f);
+            } else {
+                off = true;   // ('off', or anything that isn't four valid numbers)
             }
         }
     } lampProfile;
-    if (lampProfile.on) {
+    if (!lampProfile.off && (hybrid || lampProfile.fromEnvironment)) {
         const scene::ViewData* vd = nullptr;
         for (const scene::ViewData& candidate : sf.views)
             if (candidate.id == view) vd = &candidate;

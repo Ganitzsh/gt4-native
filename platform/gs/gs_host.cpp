@@ -91,6 +91,7 @@ public:
     std::string dumpSummary() const { return gsDump ? gsDump->summary() : std::string(); }
     const render::GlowClassifier& glowClassifier() const { return *glow; }
     std::atomic<bool> splitWanted{false};   // GsHost::setSceneSplit (any thread); applied at the next vsync
+    std::atomic<bool> litRoadWanted{false}; // GsHost::setLitRoad, the same way
     void setEventSink(gsn::GsFrontend::EventSink sink) { native->setEventSink(std::move(sink)); }
     // A live game's asynchronous reads (gfx::kReadAsync): the list cut at the read goes to the render thread with the
     // rectangle to copy when it draws it (`later`, not waited for), and GsHost::answerReads sends the pixels; pixels no
@@ -256,6 +257,7 @@ public:
                 }
             native->vsync(count, list);
             native->setSceneSplit(splitFromEnv || splitWanted.load(std::memory_order_relaxed));   // (between frames)
+            native->setLitRoad(litRoadWanted.load(std::memory_order_relaxed));
             // the dump key's request: this frame's draw list and GS memory (one string test a frame until then)
             std::string dir;
             {
@@ -1287,6 +1289,10 @@ void GsHost::setGameOption(uint32_t id, uint32_t value) {
 
 void GsHost::setSceneSplit(bool on) {
     if (impl->target) impl->target->splitWanted.store(on, std::memory_order_relaxed);
+}
+
+void GsHost::setLitRoad(bool on) {
+    if (impl->target) impl->target->litRoadWanted.store(on, std::memory_order_relaxed);
 }
 
 bool GsHost::requestDump(const std::string& dir) {

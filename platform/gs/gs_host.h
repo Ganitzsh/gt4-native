@@ -88,6 +88,9 @@ public:
     // The front end's scene split (A10; sceneSplitWanted in the settings, or GT4_GSN_SCENE_SPLIT=1): from the next VSync.
     // Live and in replays alike.
     void setSceneSplit(bool on);
+    // N3's lit-road verdicts in the front end (GsFrontend::setLitRoad; nightModernWanted in the settings): from the next
+    // VSync, live and in replays alike. GT4_N3_VERDICTS=1 or 0 overrides it (comparisons).
+    void setLitRoad(bool on);
     // The dump key (main.cpp; PLAN.md C6b, the night bands): the next frame's draw list (draws.txt) and the front
     // end's GS memory (gs_memory.bin) written into `dir` at that frame's VBlank. False without the native path.
     bool requestDump(const std::string& dir);

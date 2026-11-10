@@ -454,7 +454,7 @@ public:
         if (sceneCache_) sceneCache_->setClassifier(sceneClassifier);
     }
     // N3: the lit-road verdicts on the views' lists (ViewOnList::skip) while the scene split is on; off by default
-    // (GT4_N3_VERDICTS=1 turns it on for testing until its setting lands); on the front-end thread, between frames.
+    // (GT4_N3_VERDICTS=1 or 0 overrides it, for comparisons); on the front-end thread, between frames.
     void setLitRoad(bool on) { litRoad = on; }
     // F2b: a decoded texture's summary (computed once from level 0 at decode: scene/texture_summary.h) by its identity;
     // false when it has none (not decoded, retired, or a texture pack's image, whose game texture is not decoded).
@@ -734,7 +734,7 @@ private:
     void clearSceneJobs();
     std::shared_ptr<scene::SceneCache> sceneCache_;   // (shared with the lists that carry it: FrameList::sceneCache)
     std::function<uint32_t(const scene::ItemSource&)> sceneClassifier;   // setSceneClassifier
-    bool litRoad = false;   // setLitRoad (or GT4_N3_VERDICTS=1, read in sceneView)
+    bool litRoad = false;   // setLitRoad (GT4_N3_VERDICTS overrides it, read in sceneView)
     // F2b: each decoded texture's summary by its identity (textureIdentity), retired with it (textureSummary)
     std::unordered_map<uint64_t, scene::TextureSummary> textureSummaries;
     void summarize(uint64_t identity, const TextureImage& image);

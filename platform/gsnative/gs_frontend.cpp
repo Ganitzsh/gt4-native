@@ -2777,8 +2777,12 @@ void GsFrontend::sceneView(std::shared_ptr<const scene::SceneView> view) {
             frame.spareItems.pop_back();
         }
         // N3: the lit-road verdicts, for the main view of a frame GT4 lights its lamps in (the back end skips by them).
-        static const bool litRoadFromEnvironment = [] { const char* e = std::getenv("GT4_N3_VERDICTS"); return e && *e == '1'; }();
-        const bool litRoadOn = litRoad || litRoadFromEnvironment;
+        // (GT4_N3_VERDICTS=1 or 0: on or off whatever the settings say, for comparisons)
+        static const int litRoadFromEnvironment = [] {
+            const char* e = std::getenv("GT4_N3_VERDICTS");
+            return !e ? -1 : *e == '1' ? 1 : *e == '0' ? 0 : -1;
+        }();
+        const bool litRoadOn = litRoadFromEnvironment < 0 ? litRoad : litRoadFromEnvironment == 1;
         const bool litRoadView = litRoadOn && view->view.role == gfx::scene::kViewMain &&
                                  (view->frameFlags & gfx::scene::kFrameLampsOn);
         if (litRoadView && !frame.spareSkips.empty()) {

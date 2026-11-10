@@ -1539,6 +1539,7 @@ int run(const Options& options) {
             sendReadAnswers();
             gs->setHdTextures(settings.hdTextures);
             gs->setSceneSplit(gt4::sceneSplitWanted(settings));   // (B6's ids for F2b's lamps, B7/B8's views; live and replays)
+            gs->setLitRoad(gt4::nightModernWanted(settings));     // (N3's verdicts, for the night's modern path)
             gs->sendRequests();
             // the host's SPU2 mixer (audio.mixer = host; D5, D9): live and in replays of a capture that carries it
             gs->setAudioInterpolation(static_cast<uint32_t>(settings.audioInterpolation));
