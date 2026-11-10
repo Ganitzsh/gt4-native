@@ -322,6 +322,7 @@ struct GsnScene::Impl {
     } lampTotals;
     uint64_t nightSplitSkipped = 0;   // Lights not relit: their target holds more than one main view (split screen)
     uint64_t nightSideLights = 0;     // Lights relit from the side channels (GT4_NIGHT_SIDE=1, hybrid)
+    uint64_t sidePlansSkipped = 0;    // lists that planned no side passes: nothing would read the channels
     // gsn_light.comp's push constants from `night` on (offset 40): mirrored field for field.
     struct NightPush {
         // skipMasked: 1 when binding 9 holds the Light's skip mask (N3); 2 when it holds the scene without GT4's lit-road
@@ -764,6 +765,9 @@ struct GsnScene::Impl {
                         static_cast<unsigned long long>(sidePasses), static_cast<unsigned long long>(sideResets),
                         static_cast<unsigned long long>(sideItemsDrawn), static_cast<unsigned long long>(sideVeils),
                         static_cast<unsigned long long>(sideLayersDrawn), static_cast<unsigned long long>(sideLayersLeft));
+        if (hybrid && sidePlansSkipped)
+            std::printf("Hybrid side channels: %llu lists planned none (nothing reads them: the lamps off, or the night's "
+                        "lighting original)\n", static_cast<unsigned long long>(sidePlansSkipped));
         if (parity) {   // B7's fallbacks by reason (PLAN B7's acceptance lists them)
             const render::ParityStats& s = parityView.stats();
             std::printf("Parity path: %llu of %llu items drawn from the mesh cache; on the GS path: mesh 0 %llu, mesh evicted %llu, "
@@ -1666,7 +1670,13 @@ void GsnScene::Impl::planParity() {
     }
     for (const render::ParitySpan& s : paritySpans) ++parityAt[s.draw + 1];
     for (size_t d = 1; d < parityAt.size(); ++d) parityAt[d] += parityAt[d - 1];
-    if (hybrid) planSides();
+    // The side channels are drawn only for a reader: the night relight (lighting.night, on a frame GT4 lights its lamps
+    // in) or a GT4_SIDE_VIEW. A list whose frame says the lamps are off plans none (no bounds, no SideItems, no passes:
+    // hybrid by day costs the parity draws only); a list without its frame's record (cut before FrameEnd) keeps them.
+    static const bool sideViewed = std::getenv("GT4_SIDE_VIEW") != nullptr;
+    const bool sideRead = sideViewed || (night > 0.0f && (!frame.scene || (frame.scene->flags & gfx::scene::kFrameLampsOn)));
+    if (hybrid && sideRead) planSides();
+    else if (hybrid) sideBounds.clear(), sideNext = 0, sideClearedThisList.clear(), ++sidePlansSkipped;
 }
 
 // B8 step 2: where this list's side-channel passes run (before each Z clear of a substituted view's Z buffer, and at its
