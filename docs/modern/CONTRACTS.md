@@ -190,7 +190,9 @@ enum ViewRole : uint8_t {
     kViewOther = 15,
 };
 enum ViewFlags : uint8_t {
-    kViewCut = 1,          // camera moved discontinuously: temporal history resets
+    kViewCut = 1,          // camera moved discontinuously: temporal history resets. Set by the runtime's ViewBegin
+                           // (A3b: the game's camera signals, and a net on the camera's own motion), on main, split,
+                           // mirror and photo views, once on the new camera's first frame
     kViewInset = 2,        // drawn inside another view's target (the race mirror)
     kViewCameraKnown = 4,  // worldToView is the camera the view loaded; else identity and the host estimates
     kViewSplit = 8,        // a half of a split screen (2 Player Battle, A12): two kViewMain views a frame, drawing

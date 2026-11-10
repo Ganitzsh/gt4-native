@@ -393,6 +393,7 @@ struct SceneFrameState {
     uint32_t flushSerial = 0;   // the serial of the current flush's first billboard Instance (0: none yet)
     uint16_t billboardCount = 0;   // the flush's billboards kept (g_billboards)
     uint16_t openView = 0, viewInstances = 0;
+    uint32_t vblank = 0;     // the opening FrameBegin's (A3b: the frame's time, for its views' cameras)
     uint16_t mainView = 0;   // the frame's last kViewMain view (A7: the glow pass's lights name it)
     float mainWorldToView[16] = {};   // that view's worldToView, as its ViewBegin sent it (A7 step 2's car lamps)
     bool haveMainWorldToView = false;
@@ -419,7 +420,12 @@ uint32_t g_billboards_dropped = 0;   // billboards past the 512 a flush keeps, t
 // kCutAbsent VBlanks. After a flag the track starts again from that sample, so the next frame isn't tested (one
 // sample) and the consumers' rebuilt history isn't thrown away again. The margins are step 0's: on continuous frames
 // the residual is at most 0.72 m and the field of view 1.7 %; cuts are 3 to 240 m, 4 to 180 degrees or 10 to 850 %.
-constexpr float kCutMetres = 1.0f, kCutFocal = 0.03f;
+// From a camera that stood still (the game's own pause, a fixed trackside camera) there is no velocity to predict
+// with: the first frame of a resume at speed is its speed away (1.4 m a VBlank at 300 km/h), so the bound there is
+// the smallest cut measured, kCutMetresFromRest. The turn and the field of view are per VBlank too: over a frame of
+// several VBlanks a crash's swing (46.7 degrees a VBlank) or a zoom adds up, so the turn's bound is 90 degrees for
+// one VBlank and 135 beyond, and the field of view's kCutFieldOfView a VBlank.
+constexpr float kCutMetres = 1.0f, kCutMetresFromRest = 3.0f, kCutFieldOfView = 0.03f;
 constexpr uint32_t kCutAbsent = 30;
 enum CutCause { kCutSignal, kCutResidual, kCutTurn, kCutFocalChange, kCutAbsentView, kCutCauses };
 struct CameraTrack {
@@ -429,11 +435,12 @@ struct CameraTrack {
     float position[2][3] = {};  // the camera in the world, the last two (0 the older)
     uint32_t vblank[2] = {};
     float forward[3] = {};      // the last view direction in the world
-    float focal = 0.0f;         // the last projection's [1][1]
+    float fieldOfView = 0.0f;   // the last vertical field of view, radians (from the projection's [1][1])
 };
 CameraTrack g_tracks[16];
 uint32_t g_cuts[kCutCauses] = {};
 uint32_t g_cut_signal = 0;      // (a)'s pending cut for the next view the game opens as kViewMain: bits, below
+uint64_t g_cut_views = 0;       // the views the net looked at (the counts' line)
 struct CameraSignals {
     bool have = false;
     uint32_t cam = 0;
@@ -442,8 +449,10 @@ struct CameraSignals {
 CameraSignals g_camera_signals[3];   // by split half + 1 (0: no split)
 
 // The net's verdict for a view's camera this frame, and its track brought up to date. `m`: worldToView (row vectors:
-// view = world x m), `focal`: the projection's [1][1].
+// view = world x m), `focal`: the projection's [1][1] (the cotangent of half the vertical field of view), `vblank`:
+// the frame's own (its FrameBegin's: the clock may tick between two views of one frame).
 bool cameraCut(uint32_t key, const float (&m)[4][4], float focal, uint32_t vblank, CutCause &cause) {
+    const float fieldOfView = focal != 0.0f && std::isfinite(focal) ? 2.0f * std::atan(1.0f / std::fabs(focal)) : 0.0f;
     // the camera in the world: c x R + t = 0, R orthonormal up to GT4's scale: c = -t x R^-1; the view looks down -z
     float position[3], forward[3];
     float scale2 = m[0][0] * m[0][0] + m[1][0] * m[1][0] + m[2][0] * m[2][0];
@@ -470,24 +479,28 @@ bool cameraCut(uint32_t key, const float (&m)[4][4], float focal, uint32_t vblan
         cut = true;
         cause = kCutAbsentView;
     } else if (vblank == t->vblank[1]) {
-        return false;   // (the same VBlank again, a second list of one frame: the first one's verdict stands)
-    } else if (t->samples >= 1) {
+        return false;   // (a second view with this key in one frame: the first one's verdict stands, the track is its)
+    } else if (t->samples >= 2) {
+        // (with one sample, the frame after a flag or a first sight, nothing is tested: the consumers' history was
+        // just rebuilt, and a cut on that very frame is the game's signals')
         const float steps = float(vblank - t->vblank[1]);
-        float predicted[3];
+        float predicted[3], speed2 = 0.0f;
         for (int i = 0; i < 3; ++i) {
-            const float velocity = t->samples >= 2 && t->vblank[1] > t->vblank[0]
+            const float velocity = t->vblank[1] > t->vblank[0]
                                        ? (t->position[1][i] - t->position[0][i]) / float(t->vblank[1] - t->vblank[0]) : 0.0f;
             predicted[i] = t->position[1][i] + velocity * steps;
+            speed2 += velocity * velocity;
         }
         const float dx = position[0] - predicted[0], dy = position[1] - predicted[1], dz = position[2] - predicted[2];
         const float residual = std::sqrt(dx * dx + dy * dy + dz * dz) / steps;
-        const float turn = forward[0] * t->forward[0] + forward[1] * t->forward[1] + forward[2] * t->forward[2];
-        const float focalChange = t->focal != 0.0f ? std::fabs(focal / t->focal - 1.0f) : 0.0f;
-        // (with one sample there is no velocity yet: the frame after a flag or a first sight isn't tested for the
-        // residual, only for the turn and the field of view, which need no history of two)
-        if (t->samples >= 2 && residual > kCutMetres) cut = true, cause = kCutResidual;
-        else if (t->samples >= 2 && turn < 0.0f) cut = true, cause = kCutTurn;
-        else if (t->samples >= 2 && focalChange > kCutFocal) cut = true, cause = kCutFocalChange;
+        const float lengths = std::sqrt((forward[0] * forward[0] + forward[1] * forward[1] + forward[2] * forward[2]) *
+                                        (t->forward[0] * t->forward[0] + t->forward[1] * t->forward[1] + t->forward[2] * t->forward[2]));
+        const float turn = lengths > 0.0f ? (forward[0] * t->forward[0] + forward[1] * t->forward[1] + forward[2] * t->forward[2]) / lengths
+                                          : 1.0f;   // the cosine of the angle turned
+        const float zoom = t->fieldOfView > 0.0f && fieldOfView > 0.0f ? std::fabs(fieldOfView / t->fieldOfView - 1.0f) : 0.0f;
+        if (residual > (speed2 < 1e-8f ? kCutMetresFromRest : kCutMetres)) cut = true, cause = kCutResidual;
+        else if (turn < (steps <= 1.0f ? 0.0f : -0.7071f)) cut = true, cause = kCutTurn;
+        else if (zoom > kCutFieldOfView * steps) cut = true, cause = kCutFocalChange;
     }
     if (cut) t->samples = 0;   // (the track starts again from this sample)
     if (t->samples >= 1) {
@@ -497,7 +510,7 @@ bool cameraCut(uint32_t key, const float (&m)[4][4], float focal, uint32_t vblan
     std::memcpy(t->position[1], position, sizeof position);
     t->vblank[1] = vblank;
     std::memcpy(t->forward, forward, sizeof forward);
-    t->focal = focal;
+    t->fieldOfView = fieldOfView;
     t->samples = std::min(t->samples + 1, 2);
     return cut;
 }
@@ -577,6 +590,7 @@ void sceneFrameBegin(uint32_t context, const gfx::scene::FrameBegin &record, con
     gfx::scene::FrameBegin begin = record;
     begin.frame = ++g_sceneFrames;
     begin.vblank = kernel_frame_count();
+    g_scene.vblank = begin.vblank;
     append(context, gfx::kScene, &begin, sizeof begin, extra, extraBytes);
 }
 }  // namespace
@@ -656,20 +670,27 @@ uint32_t gt4_scene_view_begin(uint32_t context, int role, int flags, uint32_t pa
     if ((r.flags & scene::kViewCameraKnown) &&
         (r.role == scene::kViewMain || r.role == scene::kViewMirror || r.role == scene::kViewPhoto)) {
         CutCause cause = kCutSignal;
-        const bool net = cameraCut(uint32_t(r.role) | r.pass << 8, r.worldToView, set1[5], kernel_frame_count(), cause);
+        const bool net = cameraCut(uint32_t(r.role) | r.pass << 8, r.worldToView, set1[5], g_scene.vblank, cause);
+        ++g_cut_views;
         const bool signal = requestedMain && g_cut_signal != 0;
         if (signal || net) {
             r.flags |= scene::kViewCut;
             ++g_cuts[signal ? kCutSignal : cause];   // (both on one frame: one flag, counted as the game's)
             static const bool log = [] { const char *e = getenv("GT4_CUT_LOG"); return e && *e == '1'; }();
             if (log)
-                log_info("pgl: camera cut at VBlank %u, role %u pass %u: %s%s (signals %x)", kernel_frame_count(), r.role, r.pass,
+                log_info("pgl: camera cut at VBlank %u, role %u pass %u: %s%s (signals %x)", g_scene.vblank, r.role, r.pass,
                          signal ? "the game's signal" : cause == kCutResidual ? "the camera jumped" : cause == kCutTurn
                              ? "the view turned over 90 degrees" : cause == kCutFocalChange ? "the field of view changed"
                              : "a view not seen before or lately",
                          signal && net ? ", and the net" : "", g_cut_signal);
         }
         if (requestedMain) g_cut_signal = 0;
+        // (the counts, every 3,600 views looked at: A3b's counter per cause)
+        if (g_cut_views % 3600 == 0)
+            log_info("pgl: camera cuts (A3b): %u from the game's signals, the net alone: %u jumps, %u turns, %u field-of-view "
+                     "changes, %u views not seen before or lately; %llu views looked at",
+                     g_cuts[kCutSignal], g_cuts[kCutResidual], g_cuts[kCutTurn], g_cuts[kCutFocalChange], g_cuts[kCutAbsentView],
+                     static_cast<unsigned long long>(g_cut_views));
     }
     sceneAppend(context, &r, sizeof r);
     g_scene.openView = view;
