@@ -1088,6 +1088,13 @@ Acceptance: `CTEST` round trip on a synthetic frame (written, read back through 
 and the FrameLists compared: every register and vertex equal); a HUD frame and, after the 3D step, a race frame
 rendered by PCSX2's software GS from our dump, against our renderer at `original` 1x, with the differences listed by
 draw; B24's exact mode then judged on it.
+Progress (lane C, 2026-11-10): steps 1 and 2 on main (659c3e1c): `platform/gs/gsdump_writer` writes and reads PCSX2's
+.gs format (state version 9, its 425-byte register part, 4 MiB of GS memory, the privileged registers and the
+packets), checked against two of PCSX2's own GT4 dumps, which decode and re-encode byte for byte (they settled one
+point lane C's first reading of the source got wrong: the vertex block is 32 bytes); the `gsdump` CTEST's round trip
+through `GsFrontend` gives every draw, vertex, texture, target and the GS memory equal. No dump of ours has been
+played by PCSX2 yet; that is the player run's job. Next: lane B's front-end dump (`GT4_GSDUMP`), then the PCSX2 player
+run.
 
 ### Lane D: systems
 
