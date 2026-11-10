@@ -2271,6 +2271,13 @@ it. Depends: none. Acceptance:
   12,300 deliveries): 0 by freezing, where 2026-11-08's session to a race had 17 of 8,911. Not run: a replay, a
   licence test, GT mode's other screens. The freeze stays until those show 0 too (the owner's play logs count: any
   late delivery names its function in `host.log`); then the freeze, `GT4_FRAME_DELIVERY` and `GT4_WATCH`'s guard go.
+  **Its first find** (the same day, the Arcade route to a night time trial: 4 late deliveries on the car screens):
+  not a loop missing a safe point but a bug of the port. `MCarGarage::getColors` (0013C500) destroys its 64 colours
+  from the array's end, which the matched source writes as the address of the next local; this build's frame puts
+  that local elsewhere, so the loop stepped through the address space for a few hundred milliseconds, and the car
+  screen stalled as long. `game_src/func_0013C500.cpp` writes the end as `arr + 64`: 0 late deliveries on that route
+  after (14,400 deliveries), `DIFFTEST` and `hook_lint` pass. Other matched sources may write an array's end the
+  same way: the diagnostic names them when play meets them.
 
 **P5: Spike R17, guest memory beyond 32 MB (S, lane A).** RISKS.md R17: a debug runtime build, nothing to main.
 Acceptance: the answer and its measurements in R17. If it finds a use, a ticket follows.

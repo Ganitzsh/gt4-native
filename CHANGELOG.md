@@ -10,6 +10,8 @@ Versions follow [semantic versioning](https://semver.org). Each release is tagge
   `host.log`. The `original` preset keeps GT4's own screens and pause; Escape there now opens the pages too.
 - Fixed: vertical bands across the road under headlights and street lamps at night (at every render scale except
   1:1; most visible on handhelds).
+- Fixed: a stall of a few hundred milliseconds on the car screens (Arcade's car selection, wherever a car's
+  colours are listed).
 - Night lighting (the `medium`, `high` and `ultra` presets, and the default): the course's street lamps light the
   road, the walls and the cars near them, evenly under each lamp and the same from any lamp height; the cars'
   headlights light the road ahead, and their tail and brake lamps what is behind them. The game's own baked lamp
