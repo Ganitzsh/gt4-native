@@ -446,6 +446,15 @@ cut sounds in a race.
 
 ## R17: Guest memory beyond 32 MB (PLAN P5)
 
+**Status: the heap half answered, nothing would use it; the mirrors' audit not run** (2026-11-10, `GT4_HEAP_LOG=20`
+on a release game, PE race 2 with the drive and the garage). The game's one heap (the pool 008744D0, 008A215C to
+01FF8000: 23.9 MB) holds 12.4 MB in GT mode's menus and 21.5 MB in the race, in 867 blocks, with 2.4 MB free in one
+piece. The race's two largest blocks are 12.1 MB and 3.6 MB (the course's data and its buffers); nothing fails to
+allocate and nothing is sized from `GetMemorySize` at run time that the log shows growing. So the game fills the
+PS2's memory by design, and more memory would be used only by game logic that asks for more (more cars, longer
+replays): none exists, and writing it is outside the port. No lift. The uncached mirrors (0x20000000, 0x30000000)
+were not audited: they cost address space only, and removing them gains nothing while the heap stays where it is.
+
 **What is known.** The runtime gives the game the PS2's 32 MB: `kRamSize`, `GetMemorySize` returns 32 MB and
 `EndOfHeap` 0x01E00000 (`runtime/kernel.cpp:1179-1189`). Uncached mirrors of the RAM sit at 0x20000000 and 0x30000000
 (`guest.cpp:99`), and the scratchpad at 0x70000000.

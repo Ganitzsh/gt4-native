@@ -2274,6 +2274,8 @@ it. Depends: none. Acceptance:
 
 **P5: Spike R17, guest memory beyond 32 MB (S, lane A).** RISKS.md R17: a debug runtime build, nothing to main.
 Acceptance: the answer and its measurements in R17. If it finds a use, a ticket follows.
+Answered for the heap (2026-11-10, R17): the race fills 21.5 of the heap's 23.9 MB by design and nothing asks for
+more; no lift, no ticket. The mirrors' audit wasn't run (nothing to gain while the heap stays).
 
 **P6: Spike R18, the sound driver without the SPU2 register image (M, lane D).** RISKS.md R18. Depends: D5.
 Done (2026-11-09, `spikes/R18-sound-driver-without-image.md`): no, the register image stays; no ticket follows.
