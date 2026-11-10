@@ -1749,6 +1749,13 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
     ex.modelBase = static_cast<uint32_t>(frame.vertices.size());   // where the GPU's vertices start
     const uint32_t modelBase = ex.modelBase;
     std::memcpy(vertices.mapped, frame.vertices.data(), frame.vertices.size() * sizeof(gsn::Vertex));
+    // DEBUG (the night strips, lane A's reading): GT4_GSN_SPRITE_CLAMP=0 leaves every sprite unbounded in the GPU's copy
+    // (minU > maxU), so gsn.frag's insideSprite never clamps a coordinate to its sprite's own UV rectangle.
+    static const bool noSpriteClamp = [] { const char* e = std::getenv("GT4_GSN_SPRITE_CLAMP"); return e && e[0] == '0'; }();
+    if (noSpriteClamp) {
+        gsn::Vertex* gpu = static_cast<gsn::Vertex*>(vertices.mapped);
+        for (size_t k = 0; k < frame.vertices.size(); ++k) gpu[k].minU = 1, gpu[k].maxU = 0;
+    }
     if (gsExact()) {   // B24: the sprites' (x0, y0, ds, dt) in their own S, T, Q and U, the GPU's copy only
         gsn::Vertex* gpu = static_cast<gsn::Vertex*>(vertices.mapped);
         for (const ExactSprite& e : exactSprites)
