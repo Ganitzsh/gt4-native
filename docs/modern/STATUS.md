@@ -18,38 +18,40 @@ visible, plus one large new piece (B10).
 **In scope, in this order.** Each step lands on main behind its setting (rule 10) and enters the presets at its
 own gate.
 
-1. **Main green.** The Linux x86_64 CI job runs out of memory on about half the pushes: two build jobs there.
-2. **Land what is finished.** `wip/d5-hash-memo` (checks to run), `wip/f-n3s1-verdict-map` (gates to rerun),
-   `wip/m13-help-band`.
-3. **Hybrid in presets low-ultra** (B8 step 5): the quiet-window `PERF`, the front end's +31 % and the render
-   thread's +0.35 ms cut or justified, R9's two every-frame readers checked.
-4. **Night lighting in presets:** N3's stand-in and never-dark run, then its release; `lighting.night = enhanced`
+1. **Main green.** Done (e61ce10): the Linux x86_64 CI job ran out of memory on about half the pushes, so it
+   builds with two jobs.
+2. **Land what is finished.** Done: the hash memo (664f506; the game's CPU 1.69 to 1.63 ms a frame over a race
+   session) and N3 step 1's verdict map, with a fix its gates asked for (PLAN N3). Left: `wip/m13-help-band`.
+3. **Night lighting in presets:** N3's stand-in and never-dark run, then its release; `lighting.night = enhanced`
    in presets; F9 (lamp lenses, brake and tail lights); the player's headlights lighting the road, without
    shadows (F6's gather switch alone).
-5. **Day lighting:** B10 (per-pixel lighting and material classes), B11 (the course's shadows on cars), B12
-   (GTAO). Into presets after the owner's review against PCSX2 stills.
-6. **FSR 3.1 on game frames:** A3b step 1 (the camera-cut hook), B16c part 4.
-7. **PS2 mechanisms out:** P1 (the dead GIF and VIF records), P4 (the preemptive delivery fallback), P5 (the
+4. **Day lighting, and hybrid in presets with it:** B10 (per-pixel lighting and material classes), B11 (the
+   course's shadows on cars), B12 (GTAO). Hybrid alone draws the PS2 path's picture at a higher CPU cost, so it
+   enters presets low-ultra only with B10 (B8 step 5, as PLAN has it): the quiet-window `PERF`, the front end's
+   +31 % and the render thread's +0.35 ms cut or justified, R9's two every-frame readers checked, and the owner's
+   review against PCSX2 stills.
+5. **FSR 3.1 on game frames:** A3b step 1 (the camera-cut hook), B16c part 4.
+6. **PS2 mechanisms out:** P1 (the dead GIF and VIF records), P4 (the preemptive delivery fallback), P5 (the
    32 MB spike, and the lift if something uses it), P3a (block links as offsets). Then P2b (native palettes) and
    P3b (draw state in renderer terms), last because they are large and change no picture.
-8. **Driving feel:** what is left of D8 (physics force feedback, behind a switch today), D12 (steering and pedal
+7. **Driving feel:** what is left of D8 (physics force feedback, behind a switch today), D12 (steering and pedal
    response) and D14 (gamepad haptics from the physics), checked against main first, since parts are in; D13 from
    `archive/d-laneD-review` if its gates pass.
-9. **Release 0.1.1** from main, after an Odin pass (C6b).
+8. **Release 0.1.1** from main, after an Odin pass (C6b).
 
 **Cut until after the release.** B9 (showroom and photo views stay on the PS2 path), B13 (SSR, probes), B14 (sky,
 froxel fog), B15 and F4 (modern mode, tone map, HDR, modern bloom and flares), B18-B23, F3, F5, F6's shadows, F7,
 F8, N4, E4, E6-E9, E10, M10-M12 and Q1-Q8, D15, D16, B24's later steps, B26 (unless its picture bug is seen),
 C12 step 4, split-screen relight and TAA, C7.
 
-**What "no PS2 patterns" means here.** PS2_REMOVAL.md has the full table. After step 7, what is left is the game's
+**What "no PS2 patterns" means here.** PS2_REMOVAL.md has the full table. After step 6, what is left is the game's
 own logic and data, which a recompiled game can't shed: its 32-bit address space, the 60 Hz frame, the kernel and
 SDK calls it makes, PS2 float rounding, and the PS2 renderer path that `original` keeps and that still draws what
 hybrid doesn't replace (sky, GT4's post effects, HUD, menus).
 
 **Physics.** No ticket changes GT4's simulation, and none is added: it is the game's own code at 60 Hz in PS2
 arithmetic, and replays, ghosts, licence times and imported saves depend on it bit for bit. What modernises around
-it is step 8: force feedback, haptics and steering response computed from the physics state.
+it is step 7: force feedback, haptics and steering response computed from the physics state.
 
 **Review with one session** (rule 3 needs someone other than the author): each code step is read by a fresh agent
 that gets the diff and the ticket's acceptance, not the author's conclusion, before it is pushed.

@@ -1743,12 +1743,18 @@ draw numbers are those of replay 2514, and the draws are found by what they are,
   `kFrameLampsOn` frame with `lighting.night = enhanced` only; `original` never builds the map (it runs only with the
   scene split on). Counters per frame: `n3Judged`, `n3Skipped` (items and draws), `n3SkipGatedOff`, `n3LaterFail` (a
   later batch or instance of a cached item that would fail), `n3Misaligned` (a view given no flags because they
-  wouldn't line up with its materials); the judging's cost in B6's front-end CPU line. Where it is (lane F,
-  2026-11-10, at the wind-down): the verdict map on origin as `wip/f-n3s1-verdict-map` (eadea5b, reviewed by lanes A
-  and B; its predecessor 29d4680 passed every gate, and eadea5b changes only the key and the retention, so it lands
-  after a rebase and a rerun of its gates, with the judged count and B6's cost against 222 us); the stand-in albedo
-  under lane B's mask as `wip/f-n3-standin` (29f25bb, off by default, built, not yet reviewed or gated, to be rebased
-  onto the map first).
+  wouldn't line up with its materials); the judging's cost in B6's front-end CPU line. Where it is (2026-11-10):
+  the verdict map is on main (lane F's eadea5b, reviewed by lanes A and B, rebased unchanged), off by default, with
+  one change its gates asked for. On `lap_ssr5f_boot` to 20,200 the map as it was judged 216,469 items for 437
+  distinct measures, about 16 a frame for the whole race, and B6 cost 514 us a scene frame against 217 off: road
+  markings whose textures change identity as the race goes (6,673 identities over 189 meshes), each new identity a new
+  key. An item whose geometry alone fails the rule (the vertex colour, the up-facing share, the width) is now
+  remembered per (mesh, item) with its `objectToWorld`, and at the same place under a new texture it gets its keep
+  without a measure (`n3Judged` and `GT4_N3_LOG` count measured verdicts). After: 2,217 judged, the same 50 identities
+  and 267,433 items skipped, B6 261 us on against 228 off; `CTEST`, `ORIG` and `NATIVE` (byte-identical to main's host
+  with the verdicts off, `race7` and `lap_ssr5f_boot`) pass. The stand-in albedo under lane B's mask is still
+  `wip/f-n3-standin` (29f25bb, on the old key, off by default, built, not yet reviewed or gated): rebased onto main
+  next.
 - **The coverage gate** (the architect, 2026-11-09, from lane F's never-dark phases; lane B's review): a skip also
   needs a lamp that replaces the light it removes, so the road is never darker than GT4's where nothing of ours lights
   it (a tunnel's lights are not lamp billboards). It decides at execute time in `GsnScene`, with the frame's own
