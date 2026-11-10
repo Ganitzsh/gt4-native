@@ -19,8 +19,10 @@ SourceDefaults sourceDefaults(uint8_t source) {
     // night's modern path, GsnScene::lampsOf: a wide spot backwards); without one the gather counts them under
     // notLights. Short ranges and low strengths: a tail lamp tints what is right behind the car, a brake lamp reaches
     // the car following.
-    case kSrcTailLight: return {4.0f, 0.6f, 0.05f, true, true};
-    case kSrcBrakeLight: return {8.0f, 2.0f, 0.05f, true, true};
+    // (a source radius of 0.3 m: the lamps sit in the bodywork, and with a point's inverse square a bumper lip 0.1 m
+    // from one would get tens of times the road's red)
+    case kSrcTailLight: return {4.0f, 0.6f, 0.3f, true, true};
+    case kSrcBrakeLight: return {8.0f, 2.0f, 0.3f, true, true};
     case kSrcCarLightReflection: return {0.0f, 0.0f, 0.0f, false, true};   // GT4's picture of a light, not a light
     case kSrcSun: return {0.0f, 1.0f, 0.0f, true, true};
     case kSrcWarning: return {6.0f, 2.0f, 0.1f, true, true};

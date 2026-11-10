@@ -3918,7 +3918,9 @@ const std::vector<gfx::scene::Light>& GsnScene::Impl::lampsOf(const scene::Scene
                 // F9, its lights (PLAN.md): each car's tail and brake lamps (A7 step 2's spots pointing backwards, sent
                 // without a cone) as wide spots: full to 50 degrees, ending at 85. On a frame GT4 lights its lamps in
                 // only, for now: by day a brake lamp's light is a few levels on a sunlit road, and the relight's other
-                // parts (the layers' colours) run on night frames. GT4_REAR_LAMPS=off: not lit; a number: the factor.
+                // parts (the layers' colours) run on night frames. Off with the street lamps' profile too
+                // (GT4_LAMP_PROFILE=off: the comparison with the point lamps is without any car lamp).
+                // GT4_REAR_LAMPS=off: not lit; a number: the factor.
                 static const float rearLamps = [] {
                     const char* e = std::getenv("GT4_REAR_LAMPS");
                     if (!e) return 1.0f;

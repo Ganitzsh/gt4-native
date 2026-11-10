@@ -107,8 +107,11 @@ bool sideSurface(ivec2 q, vec3 gs, out vec3 albedo, out vec3 n) {
     return true;
 }
 // `linear`: the pixel's colour before the occlusion (the albedo's; lamp light is not dimmed by ambient occlusion);
-// `gs`: the same as the target holds it.
-vec3 nightLight(ivec2 q, ivec2 last, vec3 linear, vec3 gs) {
+// `gs`: the same as the target holds it. Returns the street lamps' light (the lights with the street-lamp profile:
+// what GT4's baked lamp light stands for, so what may replace it, N3) and gives the other lights' in `others` (the
+// cars' lamps, the game's own lights: added whatever GT4 baked).
+vec3 nightLight(ivec2 q, ivec2 last, vec3 linear, vec3 gs, out vec3 others) {
+    others = vec3(0.0);
     if (p.inset.z >= p.inset.x && all(greaterThanEqual(vec2(q), p.inset.xy)) && all(lessThanEqual(vec2(q), p.inset.zw)))
         return vec3(0.0);   // the rear-view mirror: another view (step 2: unlit)
     const float d = nightDistance(q);
@@ -130,11 +133,11 @@ vec3 nightLight(ivec2 q, ivec2 last, vec3 linear, vec3 gs) {
         if (dot(n, P) > 0.0) n = -n;
     }
     // The lights: the directional ones, then the pixel's cluster.
-    vec3 sum = vec3(0.0);
+    vec3 sum = vec3(0.0), rest = vec3(0.0);
     for (uint i = 0u; i < header.directionalCount; ++i) {
         vec3 L;
         const float a = lightAttenuation(lights[i], P, L);
-        sum += lights[i].colour * a * lightDiffuse(lightProfileOf(lights[i]), dot(n, L));
+        rest += lights[i].colour * a * lightDiffuse(lightProfileOf(lights[i]), dot(n, L));   // (directional: no street lamp)
     }
     const uvec2 tile = uvec2(clamp(vec2(q) / p.size * vec2(header.clustersX, header.clustersY), vec2(0.0),
                                    vec2(header.clustersX, header.clustersY) - 1.0));
@@ -144,8 +147,11 @@ vec3 nightLight(ivec2 q, ivec2 last, vec3 linear, vec3 gs) {
         const GpuLight light = lights[indices[cell.offset + k]];
         vec3 L;
         const float a = lightAttenuation(light, P, L);
-        sum += light.colour * a * lightDiffuse(lightProfileOf(light), dot(n, L));
+        const vec3 lit = light.colour * a * lightDiffuse(lightProfileOf(light), dot(n, L));
+        if (lightProfileOf(light) == kProfileStreetLamp) sum += lit;
+        else rest += lit;
     }
+    others = albedo * rest;
     return albedo * sum;
 }
 
@@ -186,13 +192,18 @@ void main() {
         const vec3 gsBase = texelFetch(skipMask, q, 0).rgb;
         const vec3 base = pow(max(gsBase, vec3(0.0)), vec3(2.2));
         const vec3 baked = max(unoccluded - base, vec3(0.0));
-        const vec3 ours = nightLight(q, last, base, gsBase) * p.night;
+        vec3 others;
+        const vec3 ours = nightLight(q, last, base, gsBase, others) * p.night;   // (the street lamps': what replaces)
         const float lb = dot(baked, kLuma), lo = dot(ours, kLuma);
         const vec3 dimmed = baked * aoFactor;
         const vec3 light = lb > 1e-5 ? mix(dimmed, ours, smoothstep(0.5 * lb, lb, lo)) : ours;
-        linear = max(linear - dimmed + light, vec3(0.0));
+        // (the cars' lamps and the game's other lights on top: a braking car over an amber pool adds its red, it
+        // doesn't take the pool's light away)
+        linear = max(linear - dimmed + light + others * p.night, vec3(0.0));
     } else if (p.night > 0.0) {
-        linear += nightLight(q, last, unoccluded, c.rgb) * p.night;
+        vec3 others;
+        const vec3 street = nightLight(q, last, unoccluded, c.rgb, others);
+        linear += (street + others) * p.night;
     }
     if (p.grade > 0.0) {
         vec3 x = linear;

@@ -107,8 +107,8 @@ void filtering() {
                    other.range == 10.0f,
                "an unknown-group car lamp keeps a tail lamp's reach for F9, unlit; 'other' its general reach");
     }
-    {   // A7's car lamps (step 2's three and step 1a's kSrcCarLamp) arrive but don't light: the tail and brake lamps and
-        // kSrcCarLamp until F9 tunes them, a headlight until the host gives it its beam (F7)
+    {   // A7's car lamps (step 2's three and step 1a's kSrcCarLamp) arrive but don't light as the game sends them:
+        // kSrcCarLamp never, a headlight, a tail or a brake lamp until the host gives it its beam (F7, F9)
         std::vector<Light> lamps;
         for (uint8_t source : {gfx::scene::kSrcHeadlight, gfx::scene::kSrcTailLight, gfx::scene::kSrcBrakeLight})
             lamps.push_back(record(1, source, 0, 0, -5));
@@ -154,7 +154,7 @@ void filtering() {
 
 void spotsAndDirectional() {
     std::vector<Light> r;
-    // (a lit source: the tail and brake lamps' spots don't light yet, and a headlight only with its beam)
+    // (a lit source: a car's lamps light only with the beam the host gives them)
     Light spotUnknown = record(1, gfx::scene::kSrcOther, 0, 0, -2);
     spotUnknown.kind = gfx::scene::kLightSpot;
     spotUnknown.direction[2] = -2.0f;   // not unit
@@ -201,7 +201,7 @@ void overLimit() {
     expect(s.droppedAround == 0, "none of the dropped spheres holds the camera");
 
     // Ranked by the sphere, not the centre: a head lamp 30 m away with a 40 m range is kept before tail lamps 5 m away
-    // with a 4 m range (lit sources with those ranges in the record: kSrcTailLight doesn't light yet, kSrcHeadlight only with its beam).
+    // with a 4 m range (lit sources with those ranges in the record: a car's own lamps light only with the beam the host gives them).
     r.clear();
     for (uint32_t i = 0; i < kMaxLights; ++i) {
         Light t = record(1, gfx::scene::kSrcOther, 0, 0, -5.0f);
