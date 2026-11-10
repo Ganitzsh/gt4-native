@@ -240,7 +240,8 @@ _wsl_looked_at = [0.0]
 
 def is_wsl_command(cmd):
     """Whether a command runs in WSL: wsl(.exe) itself, or tools/build_linux.sh (the Linux and arm64 host builds)."""
-    return bool(cmd) and (os.path.basename(cmd[0]).lower() in ("wsl", "wsl.exe") or
+    # (backslashes made slashes first: on Linux os.path.basename splits on '/' only, and the self-test runs there too)
+    return bool(cmd) and (os.path.basename(cmd[0].replace("\\", "/")).lower() in ("wsl", "wsl.exe") or
                           any(a.replace("\\", "/").endswith("build_linux.sh") for a in cmd))
 
 
