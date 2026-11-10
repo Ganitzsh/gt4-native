@@ -14,6 +14,9 @@ layout(std430, set = 0, binding = 0) buffer Layout {
 struct Case { vec4 falloff; vec4 cone; };   // (d, range, sourceRadius, z), (cosAngle, scale, offset, -)
 layout(std430, set = 0, binding = 1) readonly buffer Cases { Case cases[]; };
 layout(std430, set = 0, binding = 2) writeonly buffer Results { vec4 results[]; };   // falloff, cone, slice, index
+// F7's profiles on the same cases (the cosine and the distance): the street lamp's and the low beam's factors, Lambert's
+// and the low beam's diffuse terms
+layout(std430, set = 0, binding = 3) writeonly buffer Profiles { vec4 profiles[]; };
 layout(push_constant) uniform Push { float sliceScale, sliceBias; uint count; } p;
 
 void main() {
@@ -51,5 +54,7 @@ void main() {
                           float(slice),
                           float(clusterIndex(uvec3(i % kClusterX, (i / kClusterX) % kClusterY, slice),
                                              kClusterX, kClusterY)));
+        profiles[i] = vec4(lightProfile(kProfileStreetLamp, c.cone.x, c.falloff.x), lightProfile(kProfileLowBeam, c.cone.x, c.falloff.x),
+                           lightDiffuse(kProfileNone, c.cone.x), lightDiffuse(kProfileLowBeam, c.cone.x));
     }
 }

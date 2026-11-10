@@ -1,7 +1,8 @@
 // The light list contract (docs/modern/CONTRACTS.md (c), ticket F0): include/gt4/render/light_list.h and
 // platform/render/shaders/light_list.glsl agree. A compute shader (tests/shaders/light_list_test.comp) writes a
 // sentinel into every field of the GLSL structs in a std430 buffer; each must land at the C++ offsetof. The same
-// shader evaluates the GLSL falloff, cone, slice and cell index on random cases, compared with the C++ ones.
+// shader evaluates the GLSL falloff, cone, slice, cell index and F7's profiles on random cases, compared with the
+// C++ ones.
 // Needs a Vulkan device with a compute queue; exits 77 (skipped) without one.
 #include <volk.h>
 
@@ -137,7 +138,8 @@ bool makeBuffer(VkPhysicalDevice physical, VkDevice device, VkDeviceSize size, H
 }
 
 // Runs the shader; false (skip) when there is no usable device.
-bool runGpu(const std::vector<Case>& cases, const Push& push, std::vector<uint8_t>& layout, std::vector<float>& results) {
+bool runGpu(const std::vector<Case>& cases, const Push& push, std::vector<uint8_t>& layout, std::vector<float>& results,
+            std::vector<float>& profiles) {
     if (volkInitialize() != VK_SUCCESS) { std::printf("light_list: no Vulkan loader\n"); return false; }
     Gpu gpu;
     VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
@@ -189,25 +191,25 @@ bool runGpu(const std::vector<Case>& cases, const Push& push, std::vector<uint8_
     VkQueue queue;
     vkGetDeviceQueue(device, family, 0, &queue);
 
-    HostBuffer layoutBuffer, caseBuffer, resultBuffer;
+    HostBuffer layoutBuffer, caseBuffer, resultBuffer, profileBuffer;
     const VkDeviceSize caseBytes = sizeof(Case) * cases.size(), resultBytes = 16 * cases.size();
     if (!makeBuffer(physical, device, sizeof(LayoutBlock), layoutBuffer) || !makeBuffer(physical, device, caseBytes, caseBuffer) ||
-        !makeBuffer(physical, device, resultBytes, resultBuffer)) {
+        !makeBuffer(physical, device, resultBytes, resultBuffer) || !makeBuffer(physical, device, resultBytes, profileBuffer)) {
         std::printf("FAILED: host-visible buffers\n");
         ++failures;
         return true;
     }
     std::memcpy(caseBuffer.data, cases.data(), size_t(caseBytes));
 
-    VkDescriptorSetLayoutBinding bindings[3]{};
-    for (uint32_t b = 0; b < 3; ++b) {
+    VkDescriptorSetLayoutBinding bindings[4]{};
+    for (uint32_t b = 0; b < 4; ++b) {
         bindings[b].binding = b;
         bindings[b].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[b].descriptorCount = 1;
         bindings[b].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     }
     VkDescriptorSetLayoutCreateInfo dslci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    dslci.bindingCount = 3;
+    dslci.bindingCount = 4;
     dslci.pBindings = bindings;
     VkDescriptorSetLayout setLayout;
     vkCreateDescriptorSetLayout(device, &dslci, nullptr, &setLayout);
@@ -234,7 +236,7 @@ bool runGpu(const std::vector<Case>& cases, const Push& push, std::vector<uint8_
     const bool built = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &cpci, nullptr, &pipeline) == VK_SUCCESS;
     expect(built, "compute pipeline");
 
-    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3};
+    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4};
     VkDescriptorPoolCreateInfo dpci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     dpci.maxSets = 1;
     dpci.poolSizeCount = 1;
@@ -247,10 +249,10 @@ bool runGpu(const std::vector<Case>& cases, const Push& push, std::vector<uint8_
     dsai.pSetLayouts = &setLayout;
     VkDescriptorSet set;
     vkAllocateDescriptorSets(device, &dsai, &set);
-    VkDescriptorBufferInfo infos[3] = {{layoutBuffer.buffer, 0, VK_WHOLE_SIZE}, {caseBuffer.buffer, 0, VK_WHOLE_SIZE},
-                                       {resultBuffer.buffer, 0, VK_WHOLE_SIZE}};
-    VkWriteDescriptorSet writes[3]{};
-    for (uint32_t b = 0; b < 3; ++b) {
+    VkDescriptorBufferInfo infos[4] = {{layoutBuffer.buffer, 0, VK_WHOLE_SIZE}, {caseBuffer.buffer, 0, VK_WHOLE_SIZE},
+                                       {resultBuffer.buffer, 0, VK_WHOLE_SIZE}, {profileBuffer.buffer, 0, VK_WHOLE_SIZE}};
+    VkWriteDescriptorSet writes[4]{};
+    for (uint32_t b = 0; b < 4; ++b) {
         writes[b] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         writes[b].dstSet = set;
         writes[b].dstBinding = b;
@@ -258,7 +260,7 @@ bool runGpu(const std::vector<Case>& cases, const Push& push, std::vector<uint8_
         writes[b].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[b].pBufferInfo = &infos[b];
     }
-    vkUpdateDescriptorSets(device, 3, writes, 0, nullptr);
+    vkUpdateDescriptorSets(device, 4, writes, 0, nullptr);
 
     VkCommandPoolCreateInfo cpi{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     cpi.queueFamilyIndex = family;
@@ -294,6 +296,8 @@ bool runGpu(const std::vector<Case>& cases, const Push& push, std::vector<uint8_
     layout.assign(static_cast<uint8_t*>(layoutBuffer.data), static_cast<uint8_t*>(layoutBuffer.data) + sizeof(LayoutBlock));
     results.resize(cases.size() * 4);
     std::memcpy(results.data(), resultBuffer.data, size_t(resultBytes));
+    profiles.resize(cases.size() * 4);
+    std::memcpy(profiles.data(), profileBuffer.data, size_t(resultBytes));
 
     vkDestroyCommandPool(device, commandPool, nullptr);
     vkDestroyDescriptorPool(device, pool, nullptr);
@@ -379,14 +383,14 @@ int main() {
     }
     const Push push{header.sliceScale, header.sliceBias, uint32_t(cases.size())};
     std::vector<uint8_t> layout;
-    std::vector<float> results;
-    if (!runGpu(cases, push, layout, results)) {
+    std::vector<float> results, profiles;
+    if (!runGpu(cases, push, layout, results, profiles)) {
         std::printf("light_list: skipped (no GPU); CPU checks %s\n", failures ? "failed" : "passed");
         return failures ? 1 : kSkip;
     }
     checkLayout(layout);
 
-    int falloffBad = 0, coneBad = 0, sliceBad = 0, indexBad = 0;
+    int falloffBad = 0, coneBad = 0, sliceBad = 0, indexBad = 0, profileBad = 0;
     for (size_t i = 0; i < cases.size(); ++i) {
         const Case& c = cases[i];
         const float* r = &results[4 * i];
@@ -401,6 +405,11 @@ int main() {
         if (uint32_t(r[2]) != s && !atBoundary) ++sliceBad;
         const uint32_t idx = clusterIndex(uint32_t(i) % kClusterX, (uint32_t(i) / kClusterX) % kClusterY, uint32_t(r[2]));
         if (uint32_t(r[3]) != idx) ++indexBad;
+        // F7's profiles and diffuse terms, at the case's cosine (-1..1) and distance
+        const float want[4] = {lightProfile(kProfileStreetLamp, c.cone[0], c.falloff[0]), lightProfile(kProfileLowBeam, c.cone[0], c.falloff[0]),
+                               lightDiffuse(kProfileNone, c.cone[0]), lightDiffuse(kProfileLowBeam, c.cone[0])};
+        for (int k2 = 0; k2 < 4; ++k2)
+            if (std::fabs(profiles[4 * i + k2] - want[k2]) > 1e-5f * std::max(1.0f, std::fabs(want[k2]))) ++profileBad;
     }
     char what[96];
     std::snprintf(what, sizeof what, "GLSL falloff equals C++ (%d of %zu differ)", falloffBad, cases.size());
@@ -411,6 +420,8 @@ int main() {
     expect(sliceBad == 0, what);
     std::snprintf(what, sizeof what, "GLSL cell index equals C++ (%d differ)", indexBad);
     expect(indexBad == 0, what);
+    std::snprintf(what, sizeof what, "GLSL profiles and diffuse terms equal C++ (%d differ)", profileBad);
+    expect(profileBad == 0, what);
 
     if (failures) {
         std::printf("light_list: %d check(s) failed\n", failures);
