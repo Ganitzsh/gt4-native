@@ -1293,6 +1293,7 @@ struct GsnScene::Impl {
     struct ExactSprite {
         uint32_t first;   // its six vertices
         float x0, y0, ds, dt;
+        float minU, minV, maxU, maxV;   // its own texture rectangle (the front end's bounds may be a sprite run's)
     };
     std::vector<ExactSprite> exactSprites;
     uint64_t listSerial = 0;                   // lists made current so far (pendingTargets): a list executed again keeps it
@@ -1379,7 +1380,8 @@ void GsnScene::Impl::makeExactSprites() {
             const float u0 = (ax ? ua : ub) * scaleU, u1 = (ax ? ub : ua) * scaleU;
             const float v0 = (ay ? va : vb) * scaleV, v1 = (ay ? vb : va) * scaleV;
             const float ds = x1 != x0 ? (u1 - u0) / (x1 - x0) : 0.0f, dt = y1 != y0 ? (v1 - v0) / (y1 - y0) : 0.0f;
-            exactSprites.push_back({first, x0, y0, ds / 65536.0f, dt / 65536.0f});   // (texels per pixel)
+            exactSprites.push_back({first, x0, y0, ds / 65536.0f, dt / 65536.0f,   // (texels per pixel)
+                                    std::min(ua, ub), std::min(va, vb), std::max(ua, ub), std::max(va, vb)});
         }
     }
 }
@@ -1770,6 +1772,9 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
             for (uint32_t k = 0; k < 6; ++k) {
                 gsn::Vertex& v = gpu[e.first + k];
                 v.s = e.x0, v.t = e.y0, v.q = e.ds, v.u = e.dt;
+                // exactCoordinate starts from the bounds' min corner: the sprite's own, not a sprite run's union (so
+                // exact mode clamps each slice as before runs existed; whether it should clamp at all is B24's question)
+                v.minU = e.minU, v.minV = e.minV, v.maxU = e.maxU, v.maxV = e.maxV;
             }
     }
     // GT4's 3D batches (docs/NATIVE_V2.md, step 2): gsn_models.comp writes their triangles into the ranges their
