@@ -1787,7 +1787,13 @@ draw numbers are those of replay 2514, and the draws are found by what they are,
   the layer's place in the order (it is drawn after the blended draws GT4 drew over it, and after a grade between it
   and the Light); a Light with no range before it (no replay: the skip and its mask as before, uncounted);
   `lightProfile` in the GPU-against-C++ test; CONTRACTS c.1's profile bits and `Light::reserved`'s host use written
-  down; then the switches become `lighting.night = enhanced`'s behaviour in hybrid.
+  down. **Since the same day the switches are the settings' own behaviour**: `lighting.night = enhanced` with
+  `render.scene = hybrid` (`nightModernWanted`) runs the verdicts, the side-channel relight, the profile and the
+  per-pixel blend; the switches remain as overrides (`GT4_NIGHT_SIDE=0`, `GT4_N3_DEFER=0`, `GT4_N3_VERDICTS=0|1`,
+  `GT4_LAMP_PROFILE=off` or four values). The profile's second form lights the road the same from any mounting
+  height (Clubman reverse's tunnel was at 3 times GT4's with the batwing alone; 1.69 after), default strength 0.8.
+  At the defaults, per 32-pixel block: S.S. Route 5 forward median 1.11, Clubman reverse 1.00, none under half of
+  GT4's on either, 10-11 % over twice; S.S. Route 5 reverse at the first form's 0.9: median 1.00, none under half.
 - **The coverage gate, per item** (the architect, 2026-11-09, from lane F's never-dark phases; lane B's review; not
   built, superseded by the per-pixel form above, kept for its reasoning): a skip also
   needs a lamp that replaces the light it removes, so the road is never darker than GT4's where nothing of ours lights
