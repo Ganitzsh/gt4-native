@@ -225,6 +225,8 @@ void GsDumpEncoder::image(const uint8_t* data, size_t bytes) {
 
 void GsDumpEncoder::transfer(uint32_t dbp, uint32_t dbw, uint32_t dpsm, uint32_t x, uint32_t y, uint32_t w, uint32_t h,
                              const uint8_t* data, size_t bytes) {
+    // (never TRXDIR without its IMAGE: the GS would take the packets after it as pixels; the callers count a missing one)
+    if (!data || !bytes) return;
     addRegisters({{BITBLTBUF, uint64_t(dbp & 0x3FFF) << 32 | uint64_t(dbw & 0x3F) << 48 | uint64_t(dpsm & 0x3F) << 56},
                   {TRXPOS, uint64_t(x & 0x7FF) << 32 | uint64_t(y & 0x7FF) << 48},
                   {TRXREG, uint64_t(w & 0xFFF) | uint64_t(h & 0xFFF) << 32},
@@ -262,7 +264,7 @@ void GsDumpEncoder::parseGif(uint32_t path, const uint8_t* data, size_t bytes) {
             if (!p.nreg) p.nreg = 16;
             p.regs = hi;
             p.reg = 0;
-            if ((lo >> 46) & 1) apply(PRIM, (lo >> 47) & 0x7FF);
+            if (p.flg == 0 && ((lo >> 46) & 1)) apply(PRIM, (lo >> 47) & 0x7FF);   // (PRE counts in PACKED only)
             if (!p.nloop) continue;
             if (p.flg >= 2) {
                 p.imageLeft = p.nloop;
@@ -338,7 +340,10 @@ void GsDumpEncoder::upload(const gfx::UploadRecord& u, const uint8_t* data, size
         setUploads.erase(it);
         return;
     }
-    if (!bytes && u.qwords && writer.isOpen()) ++counts.uploadsWithoutBytes;
+    if (!data || !bytes) {   // (not dumped: GS memory there stays as the dump's start held it)
+        if (u.qwords && writer.isOpen()) ++counts.uploadsWithoutBytes;
+        return;
+    }
     transfer(u.base, u.width, u.format, u.x, u.y, u.w, u.h, data, bytes);
 }
 
@@ -370,11 +375,19 @@ void GsDumpEncoder::texSet(const uint8_t* payload, size_t bytes,
         }
     }
     size_t offset = 0;
+    std::vector<uint8_t> padded;
     for (const gfx::TexSetUpload& u : uploads) {
         const size_t n = size_t(u.qwords) * 16;
         const size_t have = data && offset < available ? std::min(n, available - offset) : 0;
-        transfer(u.destination & 0x3FFF, (u.destination >> 16) & 0x3F, (u.destination >> 24) & 0x3F, 0, 0, u.w, u.h,
-                 have ? data + offset : nullptr, have ? n : 0);
+        const uint8_t* bytesOf = have ? data + offset : nullptr;
+        if (have && have < n) {   // (the content ran short: its bytes, then zeros, so the IMAGE is the size TRXREG says)
+            padded.assign(n, 0);
+            std::memcpy(padded.data(), data + offset, have);
+            bytesOf = padded.data();
+            if (writer.isOpen()) ++counts.setUploadsShort;
+        }
+        if (bytesOf) transfer(u.destination & 0x3FFF, (u.destination >> 16) & 0x3F, (u.destination >> 24) & 0x3F, 0, 0, u.w, u.h,
+                              bytesOf, n);
         offset += n;
     }
 }
@@ -530,7 +543,7 @@ void GsDumpEncoder::open(const uint8_t* memory, const char* source) {
     if (memory) start.memory.assign(memory, memory + GsDumpState::kMemoryBytes);
     memorySource = source ? source : "";
     std::vector<uint8_t> privileged(GsDumpState::kPrivilegedBytes);
-    privilegedBlock(shown, 0, privileged.data());
+    privilegedBlock(shown, 0, privileged.data());   // (field 0 until the first VSync)
     std::string error;
     if (!writer.open(options.path, start, privileged.data(), error)) {
         failed = true;
@@ -545,7 +558,7 @@ void GsDumpEncoder::open(const uint8_t* memory, const char* source) {
 void GsDumpEncoder::vsync(uint32_t field) {
     if (!writer.isOpen()) return;
     std::vector<uint8_t> privileged(GsDumpState::kPrivilegedBytes);
-    privilegedBlock(shown, uint64_t(field & 1) << 13, privileged.data());
+    privilegedBlock(shown, field, privileged.data());
     writer.vsync(field & 1, privileged.data());
     if (++vsyncs < options.count) return;
     std::string error;
@@ -569,14 +582,14 @@ std::string GsDumpEncoder::summary() const {
     std::snprintf(line, sizeof line,
                   "GS dump %s%s: VBlanks %llu-%llu, GS memory from %s, %llu VSyncs, %llu transfers (%llu bytes), %llu draws "
                   "(%llu vertices); not dumped: %llu GPU 3D batches, %llu colour-grade passes, %llu uploads without bytes, "
-                  "%llu texture sets without bytes",
+                  "%llu texture sets without bytes, %llu set uploads short (padded)",
                   options.path.c_str(), failed ? " (failed)" : closed ? "" : " (open)", static_cast<unsigned long long>(options.from),
                   static_cast<unsigned long long>(options.from + options.count - 1), memorySource.c_str(),
                   static_cast<unsigned long long>(vsyncs), static_cast<unsigned long long>(counts.transfers),
                   static_cast<unsigned long long>(counts.bytes), static_cast<unsigned long long>(counts.draws),
                   static_cast<unsigned long long>(counts.vertices), static_cast<unsigned long long>(counts.models),
                   static_cast<unsigned long long>(counts.effects), static_cast<unsigned long long>(counts.uploadsWithoutBytes),
-                  static_cast<unsigned long long>(counts.setsWithoutBytes));
+                  static_cast<unsigned long long>(counts.setsWithoutBytes), static_cast<unsigned long long>(counts.setUploadsShort));
     std::string out = line;
     // what makes it not exact, only when there is some (an exact dump reads as exact: lane A)
     if (counts.depthUnwritten)
@@ -585,7 +598,7 @@ std::string GsDumpEncoder::summary() const {
     // (exact only with nothing missing either: the GPU's 3D, bytes, and the colour grade, which the PS2 drew as GS draws
     // the runtime replaces with its effect record)
     if (!counts.depthUnwritten && !counts.memoryReplaced && !counts.models && !counts.effects && !counts.uploadsWithoutBytes &&
-        !counts.setsWithoutBytes)
+        !counts.setsWithoutBytes && !counts.setUploadsShort)
         out += "; exact as far as the dump knows";
     else if (!counts.depthUnwritten && !counts.memoryReplaced)
         out += "; not complete (what it lacks is listed above)";

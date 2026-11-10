@@ -111,6 +111,7 @@ private:
     struct Counts {
         uint64_t records = 0, transfers = 0, bytes = 0, draws = 0, vertices = 0;
         uint64_t models = 0, effects = 0, uploadsWithoutBytes = 0, setsWithoutBytes = 0, depthUnwritten = 0;
+        uint64_t setUploadsShort = 0;   // texture-set uploads whose kept content was shorter (padded with zeros)
         uint64_t memoryReplaced = 0;   // GS memory replaced under an open dump that had written packets
     } counts;
 };

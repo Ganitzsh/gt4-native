@@ -316,6 +316,55 @@ int main() {
     }
     expect(!sameDraws(listA, listC), "without the starting registers the draws differ (the comparison can fail)");
 
+    // Lane C's two cases, a dump from VBlank 0 (FROM 0): an upload record with no bytes, and a texture set whose kept
+    // content is shorter than its upload, then a sprite. Neither may leave the GS waiting for pixels (a transfer started
+    // without its IMAGE, or an IMAGE of the wrong size, would take the sprite's packets as pixels): the sprite arrives
+    // whole, as a front end fed the same records directly draws it.
+    {
+        const auto path2 = gt4::test::uniqueTempPath("gt4_gsdump_encoder2", ".gs");
+        GsDumpEncoder::Options o2;
+        o2.path = path2.string();
+        GsDumpEncoder e2(o2);
+        expect(e2.opensAtStart(), "FROM 0 opens at the start");
+        e2.open(nullptr, "zero");
+        GsFrontend a2;
+        a2.restoreMemory(memory->data());
+        e2.memoryReplaced(memory->data());   // (the snapshot before anything was written: the dump opens again on it)
+        Both both2{a2, e2};
+        both2.state(startState());
+        both2.upload({0x2800, 1, gfx::C32, 0, 0, 16, 16, 0x300000, 64}, {});   // no bytes
+        gfx::TexSetRecord set{1, 0x1234, 0, 1, 64, 0};   // sent 0: the host's kept content, 100 bytes of its 1,024
+        const gfx::TexSetUpload up{0x2000u | (1u << 16) | (uint32_t(gfx::C32) << 24), 16, 16, 0x200000, 64};
+        std::vector<uint8_t> payload(sizeof set + sizeof up);
+        std::memcpy(payload.data(), &set, sizeof set);
+        std::memcpy(payload.data() + sizeof set, &up, sizeof up);
+        const std::vector<uint8_t> shortContent(100, 0x5A);
+        e2.texSet(payload.data(), payload.size(), [&](uint64_t) { return &shortContent; });
+        both2.draw(6, gfx::kDrawPrim | gfx::kDrawColor, {vertex(10, 20, 0, 0x800000FF), vertex(200, 120, 0, 0x800000FF)});
+        FrameList a2List;
+        e2.vsync(0);
+        a2.vsync(1, a2List);
+        const std::string summary2 = e2.summary();
+        expect(summary2.find("1 uploads without bytes") != std::string::npos, "the upload without bytes is counted");
+        expect(summary2.find("1 set uploads short") != std::string::npos, "the short set upload is counted");
+        expect(summary2.find("exact as far") == std::string::npos, "a dump missing bytes isn't called exact");
+        GsDump d2;
+        expect(d2.read(path2.string(), error), "the second dump reads back");
+        std::filesystem::remove(path2);
+        expect(!std::memcmp(d2.state.memory.data(), memory->data(), GsMemory::kBytes), "the snapshot's memory is the start");
+        GsFrontend b2;
+        b2.restoreMemory(d2.state.memory.data());
+        const std::vector<uint64_t> start2 = d2.state.registersAsGif();
+        b2.gif(3, reinterpret_cast<const uint8_t*>(start2.data()), start2.size() * 8);
+        FrameList b2List;
+        for (const GsDump::Packet& p : d2.packets) {
+            if (p.id == 0) b2.gif(p.path, p.data.data(), p.data.size());
+            if (p.id == 1) b2.vsync(1, b2List);
+        }
+        expect(a2List.draws.size() == 1 && sameDraws(a2List, b2List) && sameVertices(a2List, b2List),
+               "the sprite after them arrives whole (the dump stays in step)");
+    }
+
     std::printf("gsdump_encoder: %zu draws, %zu vertices, %zu textures, %zu targets; %s\n", listA.draws.size(),
                 listA.vertices.size(), listA.textures.size(), listA.targets.size(), failures ? "FAILED" : "ok");
     return failures ? 1 : 0;

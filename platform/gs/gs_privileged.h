@@ -30,12 +30,21 @@ inline std::vector<std::pair<uint32_t, uint64_t>> displayRegisters(const gfx::Di
     return out;
 }
 
-// The 8 KiB privileged block (kPrivilegedBytes) for a display record: its registers at their offsets, CSR as the game
-// leaves it (`csr`, 0x1000; FIELD, bit 13, is the field the VSync ends), the rest 0.
-inline void privilegedBlock(const gfx::DisplayRecord& d, uint64_t csr, uint8_t* block8k) {
+// The 8 KiB privileged block (kPrivilegedBytes) for a display record and the field a VSync ends: the record's registers
+// at their offsets, and the ones the display record doesn't carry at GT4's NTSC values as PCSX2's own dumps of GT4 hold
+// them (lane C: k001 and t50 alike), since PCSX2's CRTC takes the video mode and its timings from SMODE1 and the sync
+// registers: SMODE1, SRFSH, SYNCH1, SYNCH2, SYNCV, IMR, and CSR (ID 0x55, REV 0x1B, the FIFO empty, FIELD bit 13).
+inline void privilegedBlock(const gfx::DisplayRecord& d, uint32_t field, uint8_t* block8k) {
     std::memset(block8k, 0, 8192);
     for (const auto& [offset, value] : displayRegisters(d)) std::memcpy(block8k + offset, &value, 8);
-    std::memcpy(block8k + 0x1000, &csr, 8);
+    const std::pair<uint32_t, uint64_t> gt4Ntsc[] = {{0x0010, 0x0000000740814504ull},   // SMODE1
+                                                      {0x0030, 0x8ull},                   // SRFSH
+                                                      {0x0040, 0x0007F5B61F06F040ull},    // SYNCH1
+                                                      {0x0050, 0x33A4D8ull},              // SYNCH2
+                                                      {0x0060, 0x00C7800601A01801ull},    // SYNCV
+                                                      {0x1010, 0x7D00ull},                // IMR
+                                                      {0x1000, 0x551B4000ull | uint64_t(field & 1) << 13}};   // CSR
+    for (const auto& [offset, value] : gt4Ntsc) std::memcpy(block8k + offset, &value, 8);
 }
 
 }  // namespace gt4::gs
