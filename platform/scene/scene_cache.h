@@ -122,12 +122,13 @@ private:
     };
     // Items whose geometry alone fails the verdict (litRoadGeometryFails), by (mesh, item), with the objectToWorld they
     // were measured through: the same item at the same place fails with any texture, so its keep is entered in
-    // litRoadVerdicts under the new texture without a measure. Some of the layer's textures change identity as the race goes (lap_ssr5f_boot: road markings
-    // 0.19 m wide, 189 meshes of 95 course objects under 6,673 texture identities: 216,469 judgements for 437
-    // distinct measures, about 16 a frame for the whole race), and each new identity is a new key in litRoadVerdicts.
-    // 'The same place' is within kLitRoadSameLinear on the matrix's 3 x 3 (the verdicts' own rotation bound) and
-    // kLitRoadSameMetres on its translation: objectToWorld comes through the camera's inverse, so a still object's
-    // differs in its last bits from frame to frame (a 0 as -0). Dropped as the verdicts are.
+    // litRoadVerdicts under the new texture without a measure. Some of the layer's textures change identity as the
+    // race goes (lap_ssr5f_boot: road markings 0.19 m wide, 189 meshes of 95 course objects under 6,673 texture
+    // identities: 216,469 judgements for 437 distinct measures, about 16 a frame for the whole race), and each new
+    // identity is a new key in litRoadVerdicts. 'The same place' is within kLitRoadSameLinear on the matrix's 3 x 3
+    // (the verdicts' own rotation bound) and kLitRoadSameMetres on its translation: objectToWorld comes through the
+    // camera's inverse, so a still object's differs in its last bits from frame to frame (a 0 as -0). Dropped as the
+    // verdicts are.
     struct LitRoadGeometryKey {
         MeshKey mesh{};
         uint32_t item = 0;
