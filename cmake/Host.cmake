@@ -620,6 +620,21 @@ if(BUILD_TESTING)
   endif()
   add_test(NAME ui_sdf_font COMMAND gt4_ui_sdf_font_test)
 
+  # The selected row's help in its band (MENU_DESIGN M13): with the real fonts and the host's schema, the band holds
+  # three body lines, and the help texts over three are listed against tests/ui/help_over_three_lines.txt.
+  add_executable(gt4_ui_help_lines_test tests/ui_help_lines.cpp platform/ui/host/ui_renderer.cpp
+                 platform/ui/host/settings_schema.cpp platform/ui/ui_records.cpp platform/ui/draw_list.cpp
+                 platform/ui/menu_model.cpp platform/ui/menu_layout.cpp ${GT4_SETTINGS_SOURCES})
+  target_link_libraries(gt4_ui_help_lines_test PRIVATE gt4_ui_text)
+  target_include_directories(gt4_ui_help_lines_test PRIVATE platform/ui platform/ui/host platform/sdl platform/render
+                             platform/gs include tests)
+  if(MSVC)
+    target_compile_options(gt4_ui_help_lines_test PRIVATE /W4)
+  else()
+    target_compile_options(gt4_ui_help_lines_test PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+  add_test(NAME ui_help_lines COMMAND gt4_ui_help_lines_test ${CMAKE_CURRENT_SOURCE_DIR}/tests/ui)
+
   # The settings pages' link records (include/gt4/ui.h, platform/ui/ui_records, MENU_DESIGN.md M1).
   add_executable(gt4_ui_records_test tests/ui_records.cpp platform/ui/ui_records.cpp platform/ui/draw_list.cpp)
   target_include_directories(gt4_ui_records_test PRIVATE platform/ui include)

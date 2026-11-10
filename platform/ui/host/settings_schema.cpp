@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <string>
+#include <string_view>
 
 namespace gt4::ui {
 
@@ -216,6 +218,57 @@ std::vector<uint8_t> payload(uint32_t kind, uint32_t request, bool ok, const std
     return encodeSettings(kind, request, ok, body);
 }
 
+// The band under the list holds three lines of help (MENU_DESIGN M13). An option's own help (the settings table's,
+// which `gt4_host --list-options` and the settings file print whole) may be a paragraph: these rows get a shorter
+// text for the menu, saying what the choice is and what each value does, without the reasons and the references.
+// tests/ui_help_lines.cpp lists any row whose help still needs more than three lines.
+const char *menuHelp(const char *key, const std::string &whole) {
+    static const struct { const char *key, *help; } kShort[] = {
+        {"render.scene",
+         "What draws the 3D scenes. original: the PS2's picture. hybrid: the same picture through the modern renderer, "
+         "which the night lighting lights with. parity: a check for developers, never saved."},
+        {"render.aa",
+         "Anti-aliasing after the frame is drawn: fxaa, smaa, smaa_t2x (SMAA over two frames) or taa (temporal; it also "
+         "upsamples). Not used when the upscaler is fsr2 or fsr3."},
+        {"render.upscaler",
+         "How the picture is scaled to the screen: bilinear, bicubic, lanczos, fsr1 (AMD FSR 1), or fsr2 and fsr3 "
+         "(temporal: they also do the anti-aliasing)."},
+        {"display.field_mode",
+         "Interlaced screens (the menus). blend: both fields half and half, steady, with a doubled copy of what moves. "
+         "clean: only the newer field where something moved; sharper, but moving content can bob by a line."},
+        {"input.response",
+         "How the sticks and pedals respond. original: as on the PS2, the sticks cut at 8 % and jump from there. modern: "
+         "the dead zones, curve and filters below, and GT4's own centre band compensated in races."},
+        {"input.trigger_travel",
+         "The analogue triggers as L2 and R2 (set Gas = R2, Brake = L2 in GT4's Options). game: as on the PS2, full "
+         "throttle from 18 % of the travel and full brake from 33 %. full: full only at the end of the travel."},
+        {"input.steer.game_band",
+         "GT4 keeps the steering at 0 for the first 29 % of the stick. In modern, in a race, the steering starts at that "
+         "band's edge instead, so the stick's first steps turn the wheels. 0: not compensated."},
+        {"input.haptics",
+         "The gamepad's rumble. original: GT4's own (crashes and such). physics: that, plus what the car does: "
+         "understeer, lock-up and wheelspin on the heavy motor, kerbs and rough ground on the light one."},
+        {"input.trigger_effects",
+         "With physics rumble: an Xbox pad's impulse triggers and a DualSense's adaptive triggers (the brake stiffens "
+         "near lock-up, the throttle pulses on wheelspin). Steam Input or DS4Windows can swallow them."},
+        {"input.wheel.mode",
+         "A steering wheel. pad: it works as a DualShock 2, through its bindings. dfp: GT4 sees a Logitech Driving "
+         "Force Pro, as on the PS2, and drives its force feedback. Only with a wheel connected."},
+        {"audio.mixer",
+         "Where GT4's sound effects and voices are mixed. game: in the game, as always. host: the host mixes the same "
+         "voices, which the interpolation and spatial audio below need. Music and movie sound stay in the game."},
+        {"audio.interpolation",
+         "How the host's mixer reads between a voice's samples. original: straight lines, dull highs and some grit. "
+         "cubic: a smooth curve. sinc: the closest to the recorded sound. The same sounds play either way."},
+        {"audio.spatial",
+         "Where the cars' sounds come from. original: as GT4 pans them. stereo: each car panned from its direction. "
+         "hrtf: for headphones, cars behind and beside you sound there. Music and menus are unchanged."},
+    };
+    for (const auto &s : kShort)
+        if (std::string_view(s.key) == key) return s.help;
+    return whole.c_str();
+}
+
 }  // namespace
 
 const std::vector<HiddenOption> &hiddenOptions() {
@@ -264,7 +317,7 @@ Schema buildSchema(const Settings &settings) {
             const OptionInfo &o = found->second;
             row.key = r.key;
             row.label = r.label;
-            row.help = o.help;
+            row.help = menuHelp(r.key, o.help);
             row.apply = r.apply;
             row.previewFirst = r.previewFirst;
             row.value = o.value;

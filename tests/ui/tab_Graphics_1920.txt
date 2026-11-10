@@ -1,0 +1,48 @@
+canvas 1920.0 flags 1 items 47
+quad 0.0 0.0 1920.0 1080.0 asset 00000000 color 000000ff op 154/256
+quad 0.0 0.0 1920.0 112.0 asset 00000000 color 000000e0 op 256/256
+text 80.0 22.0 0.0 80.0 asset 00000000 color f4f4f2ff op 256/256 title 64 italic w800 left "Settings"
+quad 80.0 150.0 103.0 56.0 asset 00000000 color 2a2c30eb op 256/256
+text 80.0 163.0 103.0 30.0 asset 00000000 color b9bcc2ff op 256/256 title 24 w700 center "Game"
+quad 195.0 150.0 170.5 56.0 asset 00000000 color f29a1fff op 256/256
+text 195.0 163.0 170.5 30.0 asset 00000000 color 0b0b0cff op 256/256 title 24 w700 center "Graphics"
+quad 377.5 150.0 153.5 56.0 asset 00000000 color 2a2c30eb op 256/256
+text 377.5 163.0 153.5 30.0 asset 00000000 color b9bcc2ff op 256/256 title 24 w700 center "Display"
+quad 543.0 150.0 120.0 56.0 asset 00000000 color 2a2c30eb op 256/256
+text 543.0 163.0 120.0 30.0 asset 00000000 color b9bcc2ff op 256/256 title 24 w700 center "Image"
+quad 675.0 150.0 170.5 56.0 asset 00000000 color 2a2c30eb op 256/256
+text 675.0 163.0 170.5 30.0 asset 00000000 color b9bcc2ff op 256/256 title 24 w700 center "Controls"
+quad 857.5 150.0 120.0 56.0 asset 00000000 color 2a2c30eb op 256/256
+text 857.5 163.0 120.0 30.0 asset 00000000 color b9bcc2ff op 256/256 title 24 w700 center "Audio"
+quad 989.5 150.0 254.5 56.0 asset 00000000 color 2a2c30eb op 256/256
+text 989.5 163.0 254.5 30.0 asset 00000000 color b9bcc2ff op 256/256 title 24 w700 center "Accessibility"
+quad 1256.0 150.0 137.0 56.0 asset 00000000 color 2a2c30eb op 256/256
+text 1256.0 163.0 137.0 30.0 asset 00000000 color b9bcc2ff op 256/256 title 24 w700 center "System"
+quad 19.0 160.0 45.0 36.0 asset 00000000 color 55585dff op 256/256
+text 19.0 166.0 45.0 22.5 asset 00000000 color f4f4f2ff op 256/256 title 18 w600 center "LB"
+quad 1409.0 160.0 45.0 36.0 asset 00000000 color 55585dff op 256/256
+text 1409.0 166.0 45.0 22.5 asset 00000000 color f4f4f2ff op 256/256 title 18 w600 center "RB"
+clip 80.0 280.0 1080.0 542.0 asset 00000000 color 00000000 op 256/256
+quad 80.0 300.0 1080.0 58.0 asset 00000000 color ffffffff op 46/256
+quad 88.0 318.0 16.0 22.0 asset 00000000 color f29a1fff op 256/256
+text 120.0 310.0 540.0 37.5 asset 00000000 color f29a1fff op 256/256 title 30 w500 left "A row"
+text 620.0 310.0 510.0 37.5 asset 00000000 color f29a1fff op 256/256 title 30 w500 right "‹  A  ›"
+unclip 0.0 0.0 0.0 0.0 asset 00000000 color 00000000 op 256/256
+nine 1220.0 320.0 620.0 510.0 asset 00000000 color 2a2c30eb op 256/256
+quad 1220.0 320.0 620.0 4.0 asset 00000000 color f29a1fff op 256/256
+text 1250.0 350.0 560.0 32.5 asset 00000000 color f4f4f2ff op 256/256 title 26 italic w700 left "A ROW"
+text 1250.0 410.0 560.0 30.0 asset 00000000 color b9bcc2ff op 256/256 body 24 w400 left "Applies at once."
+quad 0.0 842.0 1920.0 238.0 asset 00000000 color 000000e0 op 256/256
+text 1776.0 1014.0 64.0 25.0 asset 00000000 color f4f4f2ff op 256/256 title 20 w600 left "Tabs"
+quad 1685.0 1008.0 83.0 36.0 asset 00000000 color 55585dff op 256/256
+text 1685.0 1014.0 83.0 22.5 asset 00000000 color f4f4f2ff op 256/256 title 18 w600 center "LB RB"
+text 1567.0 1014.0 78.0 25.0 asset 00000000 color f4f4f2ff op 256/256 title 20 w600 left "Reset"
+quad 1523.0 1008.0 36.0 36.0 asset 00000000 color 55585dff op 256/256
+text 1523.0 1014.0 36.0 22.5 asset 00000000 color f4f4f2ff op 256/256 title 18 w600 center "X"
+text 1405.0 1014.0 78.0 25.0 asset 00000000 color f4f4f2ff op 256/256 title 20 w600 left "Close"
+quad 1361.0 1008.0 36.0 36.0 asset 00000000 color 55585dff op 256/256
+text 1361.0 1014.0 36.0 22.5 asset 00000000 color f4f4f2ff op 256/256 title 18 w600 center "B"
+text 1229.0 1014.0 92.0 25.0 asset 00000000 color f4f4f2ff op 256/256 title 20 w600 left "Change"
+quad 1185.0 1008.0 36.0 36.0 asset 00000000 color 55585dff op 256/256
+text 1185.0 1014.0 36.0 22.5 asset 00000000 color f4f4f2ff op 256/256 title 18 w600 center "A"
+text 80.0 850.0 1760.0 125.0 asset 00000000 color f4f4f2ff op 256/256 body 26 w400 left "A help line long enough to run into the prompts if nothing stopped it at their left edge, and then some more words."

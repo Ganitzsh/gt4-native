@@ -22,6 +22,13 @@ constexpr float kListTop = 300.0f;
 constexpr float kPanelWidth = 620.0f;
 constexpr float kPanelGap = 40.0f;
 constexpr float kListMax = 1080.0f;
+// The selected row's help (MENU_DESIGN M13): its own band above the prompts, the page's width, three lines at most,
+// the host's ellipsis only past them. The box is three of the body face's lines: Saira's line is 1.574 em (its hhea,
+// at the host's em mapping), so 3 x 1.574 x 26 = 122.8 units, and the box is 125 (a whole three, not a fourth).
+constexpr float kHelpTop = 842.0f;    // under the list (300 + 9 rows of 58 = 822) and its scroll mark (828 to 838)
+constexpr float kHelpSize = 26.0f;
+constexpr float kHelpBox = 125.0f;
+constexpr float kPanelHeight = 510.0f;   // the detail panel ends above the help band (320 + 510 = 830)
 
 struct Builder {
     DrawList list;
@@ -114,7 +121,7 @@ void keyCap(Builder& b, float x, float y, const char* name) {
     b.text(x, y + 6.0f, w, name, Font::Title, 18.0f, kText, Align::Center, false, 600);
 }
 
-// Returns the left edge of the first entry (the help line ends before it).
+// Returns the left edge of the first entry.
 float prompts(Builder& b, float canvasWidth, PromptStyle style,
               const std::vector<std::pair<const char*, std::string>>& entries) {
     // Right-aligned in the help bar: glyph (36 x 36, or a key cap) then its label, 40 units between entries.
@@ -303,20 +310,19 @@ DrawList layout(const Menu& menu, const LayoutOptions& options) {
                    1.0f, "scroll.down");
     }
 
-    // The detail panel: the selected row's name, help, why it is unused, and when it applies.
+    // The detail panel: the selected row's name, why it is unused, and when it applies (its help is in the band
+    // above the prompts, M13). The unused line wraps over three of the body face's lines at 24 (3 x 1.574 x 24).
     if (panel && selectedRow) {
         const float px = W - kMargin - kPanelWidth + b.dx;
-        Item& frame = b.add(ItemKind::NineSlice, px, 320.0f, kPanelWidth, 620.0f, kPanel);
+        Item& frame = b.add(ItemKind::NineSlice, px, 320.0f, kPanelWidth, kPanelHeight, kPanel);
         frame.asset = Builder::art("panel.detail");
         b.quad(px, 320.0f, kPanelWidth, 4.0f, kAccent);
         b.text(px + 30.0f, 350.0f, kPanelWidth - 60.0f, upper(selectedRow->label), Font::Title, 26.0f, kText,
                Align::Left, true, 700);
-        // The help wraps in the panel down to the unused line's place (the host wraps: draw_list.h).
-        b.text(px + 30.0f, 400.0f, kPanelWidth - 60.0f, selectedRow->help, Font::Body, 24.0f, kSecondary).h = 340.0f;
-        float y = 760.0f;
+        float y = 410.0f;
         if (!selectedRow->unused.empty()) {
-            b.text(px + 30.0f, y, kPanelWidth - 60.0f, selectedRow->unused, Font::Body, 24.0f, kWarning);
-            y += 70.0f;
+            b.text(px + 30.0f, y, kPanelWidth - 60.0f, selectedRow->unused, Font::Body, 24.0f, kWarning).h = 115.0f;
+            y += 130.0f;
         }
         if (selectedRow->kind == RowKind::Choice || selectedRow->kind == RowKind::Step)
             b.text(px + 30.0f, y, kPanelWidth - 60.0f,
@@ -324,10 +330,10 @@ DrawList layout(const Menu& menu, const LayoutOptions& options) {
                    Font::Body, 24.0f, kSecondary);
     }
 
-    // Help bar: the selected row's help (or why it is unused) and the controller's prompts.
+    // The bottom bar: the selected row's help (or, with no panel, why it is unused) over the controller's prompts.
     b.opacity = content;
     b.dx = 0.0f;
-    b.quad(0.0f, kCanvasHeight - kBottomBar, W, kBottomBar, kBar);
+    b.quad(0.0f, kHelpTop, W, kCanvasHeight - kHelpTop, kBar);
     std::vector<std::pair<const char*, std::string>> entries;
     if (selectedRow && selectedRow->kind == RowKind::Link) entries.push_back({"confirm", "Open"});
     else if (selectedRow && selectedRow->kind == RowKind::Action) entries.push_back({"confirm", "Select"});
@@ -335,12 +341,11 @@ DrawList layout(const Menu& menu, const LayoutOptions& options) {
     entries.push_back({"back", menu.inSubPage() ? "Back" : "Close"});
     if (selectedRow && !selectedRow->presetValue.empty()) entries.push_back({"reset", "Reset"});
     if (menu.schema().tabs.size() > 1) entries.push_back({"tabs", "Tabs"});
-    const float promptsLeft = prompts(b, W, options.prompts, entries);
+    prompts(b, W, options.prompts, entries);
     if (selectedRow) {
-        // The help line up to the prompts (40 units short of them), cut by the host when longer.
+        // The help in its band, the page's width, wrapped by the host over three lines at most (M13).
         const std::string& help = !selectedRow->unused.empty() && !panel ? selectedRow->unused : selectedRow->help;
-        b.text(kMargin, kCanvasHeight - kBottomBar + 34.0f, std::max(0.0f, promptsLeft - 40.0f - kMargin), help,
-               Font::Body, 28.0f, kText);
+        b.text(kMargin, kHelpTop + 8.0f, W - 2.0f * kMargin, help, Font::Body, kHelpSize, kText).h = kHelpBox;
     }
 
     // The keep-or-revert dialog over everything.

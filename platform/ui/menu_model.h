@@ -81,7 +81,7 @@ struct MenuTiming {
 class Menu {
 public:
     using Timing = MenuTiming;
-    static constexpr int kVisibleRows = 11;   // rows of the list on screen (menu_layout.cpp)
+    static constexpr int kVisibleRows = 9;   // rows of the list on screen (menu_layout.cpp; 11 before M13's help)
 
     explicit Menu(Timing timing = Timing());
 

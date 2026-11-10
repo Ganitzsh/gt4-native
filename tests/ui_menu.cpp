@@ -410,7 +410,8 @@ int main(int argc, char** argv) {
     }
 
     // The hub's eight tabs (M4's titles) at 16:9, 21:9 and 4:3: every item inside the canvas (the chips shrink to
-    // fit), and the help line ends before the prompts in every prompt style.
+    // fit); the help in its band above the prompts, the page's width and three lines high (M13), the prompts where
+    // they were (their row at 1008), in every prompt style; a golden draw list per tab at 4:3 and 16:9.
     {
         Schema s;
         for (const char* title : {"Game", "Graphics", "Display", "Image", "Controls", "Audio", "Accessibility",
@@ -441,17 +442,40 @@ int main(int argc, char** argv) {
                 options.canvasWidth = width;
                 options.prompts = style;
                 const DrawList list = layout(menu, options);
-                bool inside = true;
-                float helpRight = 0.0f, promptsLeft = width;
+                bool inside = true, help = false, promptsRow = false;
                 for (const auto& item : list.items) {
                     if (item.kind == ItemKind::ClipPush || item.kind == ItemKind::ClipPop) continue;
                     inside = inside && item.x >= 0.0f && item.x + item.w <= width + 0.01f;
-                    if (item.kind == ItemKind::Text && item.y == 1006.0f) helpRight = item.x + item.w;
-                    else if (item.y >= 1008.0f) promptsLeft = std::min(promptsLeft, item.x);
+                    if (item.kind == ItemKind::Text && item.text == menu.page()->rows[0].help)
+                        help = item.y == 850.0f && item.x == 80.0f && item.w == width - 160.0f &&
+                               item.h == 125.0f && item.size == 26.0f && item.y + item.h <= 1008.0f;
+                    promptsRow = promptsRow || (item.kind == ItemKind::Text && item.y == 1014.0f);
                 }
                 check(inside, "the eight tabs and the caps inside the canvas");
-                check(helpRight > 0.0f && helpRight + 40.0f <= promptsLeft + 0.01f,
-                      "the help line ends 40 units before the prompts");
+                check(help, "the help in its band: the page's width, a three-line box, above the prompts");
+                check(promptsRow, "the prompts' labels where they were (1014)");
+            }
+        for (const float width : {1440.0f, 1920.0f})
+            for (int tab = 0; tab < static_cast<int>(s.tabs.size()); ++tab) {
+                Menu m;
+                m.setSchema(s);
+                m.open();
+                for (int i = 0; i < tab; ++i) m.press(Input::TabRight);
+                m.tick(5.0f);
+                LayoutOptions options;
+                options.canvasWidth = width;
+                const std::string text = describe(layout(m, options));
+                char name[96];
+                std::snprintf(name, sizeof name, "/tab_%s_%d.txt", s.tabs[static_cast<size_t>(tab)].c_str(),
+                              static_cast<int>(width));
+                const std::string path = goldens + name;
+                if (update) {
+                    std::ofstream(path, std::ios::binary) << text;
+                } else if (read(path) != text) {
+                    std::fprintf(stderr, "layout differs from %s (--update rewrites it):\n%s\n", path.c_str(),
+                                 text.c_str());
+                    ++failures;
+                }
             }
     }
 
