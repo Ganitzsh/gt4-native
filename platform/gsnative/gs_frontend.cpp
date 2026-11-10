@@ -2116,6 +2116,21 @@ void GsFrontend::model(const gfx::ModelJob& in, const uint32_t* words) {
         std::find(r10SkipTex.begin(), r10SkipTex.end(), long(texture.id)) != r10SkipTex.end()) return;
     if (!n3SkipIdentities.empty() && texture.kind == TextureSource::Kind::Memory &&
         n3SkipIdentities.count(textureIdentity(texture.id))) return;   // LOCAL N3 DEBUG: v4's textures (GT4_N3_V4SKIP)
+    {   // LOCAL N3 DEBUG: GT4_N3_SKIPIDS=hex,hex,... skips the draws of exactly those texture identities (a bisection)
+        static const std::unordered_set<uint64_t> skipIds = [] {
+            std::unordered_set<uint64_t> s;
+            if (const char* e = std::getenv("GT4_N3_SKIPIDS"))
+                for (const char* p = e; *p;) {
+                    char* end = nullptr;
+                    const unsigned long long v = std::strtoull(p, &end, 16);
+                    if (end == p) break;
+                    s.insert(v);
+                    p = *end == ',' ? end + 1 : end;
+                }
+            return s;
+        }();
+        if (!skipIds.empty() && texture.kind == TextureSource::Kind::Memory && skipIds.count(textureIdentity(texture.id))) return;
+    }
     if (texture.kind == TextureSource::Kind::Target && texture.id != colour) sceneRead(texture.id);
     noteDraw(colour, depth, texture);
     const bool moving = (in.flags & 4) != 0;

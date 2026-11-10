@@ -3236,6 +3236,32 @@ bool GsnScene::Impl::nightPrepare(const gsn::FrameList::Lighting& l, const Scene
             }
             std::printf("F2b lamps: vblank %u view %u n %u near20 %u behind %u front30 %u nearest %.1f\n",
                         unsigned(frame.vblank), unsigned(view->id), n, near20, behind, front30, n ? nearest : -1.0f);
+            // GT4_N3_LAMPLIST=FROM-TO: every course lamp and billboard candidate of the view in those VBlanks, one line
+            // each: g = the game's own record (entries2[]), p = a promoted billboard, b = a candidate left as one;
+            // id = the game's light object or the billboard's instance serial; view space; on screen when z < 0
+            static const std::pair<long, long> listRange = [] {
+                const char* e = std::getenv("GT4_N3_LAMPLIST");
+                long a = -1, b = -1;
+                if (e) std::sscanf(e, "%ld-%ld", &a, &b);
+                return std::make_pair(a, b);
+            }();
+            const long vb = long(frame.vblank);
+            if (vb >= listRange.first && vb <= listRange.second) {
+                for (size_t i = 0; i < nightRecords.size(); ++i) {
+                    const gfx::scene::Light& r = nightRecords[i];
+                    if (r.view != view->id) continue;
+                    const bool billboard = r.source == gfx::scene::kSrcBillboard;
+                    if (r.source != gfx::scene::kSrcCourseGlow && !billboard) continue;
+                    // (a promoted lamp keeps its candidate's id, an instance serial: 1.. per frame, far below the
+                    // game's object addresses)
+                    const char kind = billboard ? 'b' : (r.id >= 0x00100000u ? 'g' : 'p');
+                    const float x = r.position[0], y = r.position[1], z = r.position[2];
+                    std::printf("F2b lamp: vblank %ld view %u kind %c id %08x pos %.2f %.2f %.2f w %.2f sx %.1f sy %.1f\n",
+                                vb, unsigned(view->id), kind, unsigned(r.id), x, y, z, r.width,
+                                z < -0.1f ? k.centre[0] + k.focal[0] * x / -z : -1.0f,
+                                z < -0.1f ? k.centre[1] + k.focal[1] * y / -z : -1.0f);
+                }
+            }
         }
     }
     if (const uint32_t n = render::testLightCount()) {
