@@ -160,9 +160,12 @@ void SceneCache::endFrame() {
     meshCache.endFrame();
     materialTable.endFrame();
     ++frames;
-    if (frames % kLitRoadPruneFrames == 0)   // (pruned every 600 frames of the verdicts unseen for kLitRoadFrames)
+    if (frames % kLitRoadPruneFrames == 0) {   // (pruned every 600 frames of the verdicts unseen for kLitRoadFrames)
         for (auto it = litRoadVerdicts.begin(); it != litRoadVerdicts.end();)
             it = frames - it->second.lastFrame >= kLitRoadFrames ? litRoadVerdicts.erase(it) : std::next(it);
+        for (auto it = litRoadFailedGeometry.begin(); it != litRoadFailedGeometry.end();)
+            it = frames - it->second.lastFrame >= kLitRoadFrames ? litRoadFailedGeometry.erase(it) : std::next(it);
+    }
 }
 
 namespace {
@@ -173,6 +176,14 @@ void rotationOf(const float (&m)[4][4], float (&r)[3][3]) {
         const float s = std::sqrt(m[i][0] * m[i][0] + m[i][1] * m[i][1] + m[i][2] * m[i][2]);
         for (int q = 0; q < 3; ++q) r[i][q] = s > 0.0f ? m[i][q] / s : 0.0f;
     }
+}
+
+// Whether two objectToWorld matrices place an item the same: `linear` on the 3 x 3, `metres` on the translation.
+bool sameMatrix(const float (&a)[4][4], const float (&b)[4][4], float linear, float metres) {
+    for (int r = 0; r < 4; ++r)
+        for (int q = 0; q < 3; ++q)
+            if (!(std::fabs(a[r][q] - b[r][q]) <= (r < 3 ? linear : metres))) return false;
+    return true;
 }
 
 }  // namespace
@@ -208,21 +219,35 @@ void SceneCache::litRoad(const InstanceData& instance, const ItemSource* items, 
         auto it = litRoadVerdicts.find(key);
         if (it == litRoadVerdicts.end()) {
             LitRoadEntry e;
-            TextureSummary ts;
-            const bool known = summaries && summaries(items[i].texture, ts);
-            const DecodedBatch batch = decodeBatch(*items[i].batch.job, items[i].batch.words);
-            const LitRoadMeasure measure = measureLitRoad(batch, instance.objectToWorld.m, known ? &ts : nullptr);
-            e.skip = litRoadVerdict(measure) ? 1 : 0;
-            // GT4_N3_LOG=1 (N3's acceptance): each new verdict with its measures, once per key
-            static const bool log = [] { const char* v = std::getenv("GT4_N3_LOG"); return v && *v == '1'; }();
-            if (log)
-                std::printf("n3 verdict: texture %016llx material %u item %u vc %.1f a %.1f c/r %.2f share %.3f width %.3f "
-                            "texel %.4f -> %s\n", static_cast<unsigned long long>(items[i].texture), materials[i], unsigned(i),
-                            measure.vertexLuminance, measure.vertexAlpha, measure.centreToRim, measure.upShare, measure.width,
-                            measure.texel, e.skip ? "skip" : "keep");
+            // Its geometry already failed at this place, under another texture: the verdict a measure would give (keep),
+            // entered under this key as a measure's would be, without the measure. Not counted in n3Judged or logged.
+            const LitRoadGeometryKey geometryKey{mesh, uint32_t(i)};
+            auto failed = litRoadFailedGeometry.find(geometryKey);
+            if (failed != litRoadFailedGeometry.end() &&
+                sameMatrix(failed->second.objectToWorld, instance.objectToWorld.m, kLitRoadSameLinear, kLitRoadSameMetres)) {
+                failed->second.lastFrame = frames;
+            } else {
+                TextureSummary ts;
+                const bool known = summaries && summaries(items[i].texture, ts);
+                const DecodedBatch batch = decodeBatch(*items[i].batch.job, items[i].batch.words);
+                const LitRoadMeasure measure = measureLitRoad(batch, instance.objectToWorld.m, known ? &ts : nullptr);
+                e.skip = litRoadVerdict(measure) ? 1 : 0;
+                if (litRoadGeometryFails(measure)) {
+                    LitRoadGeometryEntry& g = litRoadFailedGeometry[geometryKey];
+                    std::memcpy(g.objectToWorld, instance.objectToWorld.m, sizeof g.objectToWorld);
+                    g.lastFrame = frames;
+                }
+                // GT4_N3_LOG=1 (N3's acceptance): each measured verdict with its measures
+                static const bool log = [] { const char* v = std::getenv("GT4_N3_LOG"); return v && *v == '1'; }();
+                if (log)
+                    std::printf("n3 verdict: texture %016llx material %u item %u vc %.1f a %.1f c/r %.2f share %.3f width %.3f "
+                                "texel %.4f -> %s\n", static_cast<unsigned long long>(items[i].texture), materials[i], unsigned(i),
+                                measure.vertexLuminance, measure.vertexAlpha, measure.centreToRim, measure.upShare, measure.width,
+                                measure.texel, e.skip ? "skip" : "keep");
+                ++counters.n3Judged;
+            }
             std::memcpy(e.rotation, rotation, sizeof rotation);
             it = litRoadVerdicts.emplace(key, e).first;
-            ++counters.n3Judged;
         }
         LitRoadEntry& e = it->second;
         e.lastFrame = frames;

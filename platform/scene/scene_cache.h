@@ -120,12 +120,34 @@ private:
         float rotation[3][3] = {};
         uint64_t lastFrame = 0;
     };
+    // Items whose geometry alone fails the verdict (litRoadGeometryFails), by (mesh, item), with the objectToWorld they
+    // were measured through: the same item at the same place fails with any texture, so its keep is entered in
+    // litRoadVerdicts under the new texture without a measure. Some of the layer's textures change identity as the race goes (lap_ssr5f_boot: road markings
+    // 0.19 m wide, 189 meshes of 95 course objects under 6,673 texture identities: 216,469 judgements for 437
+    // distinct measures, about 16 a frame for the whole race), and each new identity is a new key in litRoadVerdicts.
+    // 'The same place' is within kLitRoadSameLinear on the matrix's 3 x 3 (the verdicts' own rotation bound) and
+    // kLitRoadSameMetres on its translation: objectToWorld comes through the camera's inverse, so a still object's
+    // differs in its last bits from frame to frame (a 0 as -0). Dropped as the verdicts are.
+    struct LitRoadGeometryKey {
+        MeshKey mesh{};
+        uint32_t item = 0;
+        bool operator==(const LitRoadGeometryKey& o) const { return mesh == o.mesh && item == o.item; }
+    };
+    struct LitRoadGeometryKeyHash {
+        size_t operator()(const LitRoadGeometryKey& k) const { return MeshKeyHash{}(k.mesh) ^ (size_t(k.item) << 1); }
+    };
+    static constexpr float kLitRoadSameLinear = 1e-3f, kLitRoadSameMetres = 0.01f;
+    struct LitRoadGeometryEntry {
+        float objectToWorld[4][4] = {};
+        uint64_t lastFrame = 0;
+    };
     static constexpr uint64_t kLitRoadFrames = 36000;      // (10 minutes of scene frames)
     static constexpr uint64_t kLitRoadPruneFrames = 600;   // how often endFrame looks for verdicts unseen that long
     // (MaterialIds are never reused: emptied past kLitRoadMaterialsMax, as F2b's classesById, and refilled cheaply)
     static constexpr size_t kLitRoadMaterialsMax = 100000;
     std::unordered_map<MaterialId, uint8_t> litRoadMaterials;
     std::unordered_map<LitRoadKey, LitRoadEntry, LitRoadKeyHash> litRoadVerdicts;
+    std::unordered_map<LitRoadGeometryKey, LitRoadGeometryEntry, LitRoadGeometryKeyHash> litRoadFailedGeometry;
     std::vector<uint8_t> litRoadCandidate;   // (litRoad's, kept)
     uint64_t frames = 0;                     // endFrame's count
 };

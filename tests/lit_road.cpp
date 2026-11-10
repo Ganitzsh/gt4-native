@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <initializer_list>
 
 namespace {
 
@@ -111,6 +112,22 @@ int main() {
     expect(!litRoadVerdict(measureLitRoad(rectangle(4, 10, kPoolColour), kIdentity, &glow)), "a glow is not lamp light");
     const auto unknown = measureLitRoad(rectangle(4, 10, kPoolColour), kIdentity, nullptr);
     expect(unknown.centreToRim < 0.0f && unknown.texel == 0.0f && !litRoadVerdict(unknown), "no summary, no verdict");
+
+    // The geometry alone (litRoadGeometryFails, what SceneCache remembers per mesh item whatever the texture): a
+    // marking, a wall and a dim item fail on it; what fails only through its texture doesn't (the checkers, a glow,
+    // no summary), and neither does the pool. Whatever fails on it fails the verdict under every texture here.
+    using gt4::scene::litRoadGeometryFails;
+    expect(litRoadGeometryFails(marking) && litRoadGeometryFails(wall), "a marking's and a wall's geometry fail alone");
+    expect(litRoadGeometryFails(measureLitRoad(rectangle(4, 10, 0x800A0A0Au), kIdentity, &soft)), "a dim item fails alone");
+    expect(litRoadGeometryFails(measureLitRoad(rectangle(4, 10, 0x407C7C7Cu), kIdentity, &soft)), "a faint item fails alone");
+    expect(!litRoadGeometryFails(pool) && !litRoadGeometryFails(checkers) && !litRoadGeometryFails(unknown) &&
+           !litRoadGeometryFails(measureLitRoad(rectangle(4, 10, kPoolColour), kIdentity, &glow)),
+           "the pool, and what fails only through its texture, don't fail on geometry");
+    for (const gt4::scene::TextureSummary* texture : {&soft, &fine, &glow, static_cast<const gt4::scene::TextureSummary*>(nullptr)}) {
+        const auto m = measureLitRoad(rectangle(0.15f, 10, kPoolColour), kIdentity, texture);
+        expect(litRoadGeometryFails(m) && !litRoadVerdict(m) && m.width == marking.width && m.upShare == marking.upShare &&
+               m.vertexLuminance == marking.vertexLuminance, "a marking fails the same under every texture");
+    }
 
     // The layer's draw state, and three near misses.
     gt4::gfx::ModelJob job{};

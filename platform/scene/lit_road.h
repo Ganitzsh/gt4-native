@@ -32,5 +32,8 @@ LitRoadMeasure measureLitRoad(const DecodedBatch& batch, const float (&objectToW
 
 // v4's thresholds, for an item whose state is the layer's.
 bool litRoadVerdict(const LitRoadMeasure& m);
+// Whether the verdict fails on the measures that don't read the texture (the vertex colour, the up-facing share, the
+// width): then it fails with any texture, for the same batch through the same objectToWorld.
+bool litRoadGeometryFails(const LitRoadMeasure& m);
 
 }  // namespace gt4::scene

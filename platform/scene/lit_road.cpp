@@ -132,4 +132,8 @@ bool litRoadVerdict(const LitRoadMeasure& m) {
            m.upShare >= 0.9f && m.width >= 0.9f && m.texel >= 0.03f;
 }
 
+bool litRoadGeometryFails(const LitRoadMeasure& m) {
+    return !(m.vertexLuminance > 16.0f && m.vertexAlpha >= 100.0f && m.upShare >= 0.9f && m.width >= 0.9f);
+}
+
 }  // namespace gt4::scene
