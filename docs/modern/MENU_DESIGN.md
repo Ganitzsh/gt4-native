@@ -648,6 +648,14 @@ pad alone, a profile set in the menu matches the file, keyboard only works; E9's
 **M12: Pointer input and accessibility options (S-M).** `UiPointer` record, `ui.scale`, `ui.high_contrast`,
 `ui.reduce_motion`. Depends: M9. Acceptance: `CTEST` hit testing; the hub usable with the mouse alone.
 
+**M13: The selected row's help, wrapped (S).** The pages cut each row's help with an ellipsis on nearly every row:
+`menu_layout` (M3) ends the help line before the button prompts, and most help texts run longer than that room, even
+at 1600 px (lane M, 2026-11-10; the README's screenshot shows it). The help moves to its own area above the prompts,
+for the selected row only, wrapped over at most three lines at the page's width; the ellipsis stays only for text past
+that. Depends: M9. Acceptance: on every tab at the device preset's smallest canvas (the Odin's 1280 x 800) and at 1600
+px, no help text cut that fits in three lines (a golden draw list per tab, M2); the prompts unmoved; a help text over
+three lines listed, so it gets shortened at the source rather than cut.
+
 **Q1-Q8: QoL options, after M1-M9** (the coordinator's choice for the owner, 2026-11-08). Each its own ticket with
 a spike for its hook, a setting off in `original`, and a session test: Q1 HUD element toggles and Q2 the gauge
 choice (`hud.*`), Q3 chase camera options and Q4 cameras in the view cycle (`camera.*`), Q5 the hidden options
