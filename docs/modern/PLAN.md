@@ -1770,7 +1770,26 @@ draw numbers are those of replay 2514, and the draws are found by what they are,
   `parked/f-n3-standin` (29f25bb, on the old `MaterialId` key, measuring only, never reviewed or gated): one mean
   road colour for a whole course is not what ships, so the albedo under a skipped pool comes from B10's colour
   channel (the paragraph on the albedo below, its last sentence), built first (STATUS's finish line, 2026-11-10).
-- **The coverage gate** (the architect, 2026-11-09, from lane F's never-dark phases; lane B's review): a skip also
+- **The coverage gate, per pixel** (2026-11-10; on main behind `GT4_N3_DEFER=1`, replacing the per-item disc test
+  below, which was never built): the stills and the never-dark measure showed the skip leaving the road dark wherever
+  no lamp glow stands (`lap_ssr5f_boot` 12,000: 0.26 of GT4's light whatever the lamps' strength), and an item is lit
+  or bare as a whole. Instead the skipped items are drawn last: before the scene's Light the scene's colour is copied
+  (`preLayer`), then the list's commands since the target's previous Light run again drawing only the skipped spans,
+  each with its own draw's state. The light pass has the road with GT4's baked light and without it; their
+  difference is the baked light at the pixel; our lamps light the surface without it (the albedo from the scene
+  without the layer); and the pixel gets ours where ours reaches GT4's level, GT4's where ours is under half of it, a
+  blend between: never under about 0.87 of GT4's, never both, no item popping. A wrong verdict now costs little:
+  the item's contribution is treated as light and blended, not removed. Measured with F7's street-lamp profile
+  (`GT4_LAMP_PROFILE=40,0.9,60,72`), hybrid, `GT4_NIGHT_SIDE=1`, 30 frames of `lap_ssr5f_boot`: ours over GT4's under
+  the layer per frame 0.97 to 2.47, median 1.18; of 3,734 32-pixel blocks none under half of GT4's (41 % with the
+  skip alone), 5 % under 0.95, 11 % over twice GT4's (lamps brighter than GT4 baked there: the strength's and the
+  owner's look to settle). Owed before the switches go: the other night laps and Hong Kong measured the same way;
+  the layer's place in the order (it is drawn after the blended draws GT4 drew over it, and after a grade between it
+  and the Light); a Light with no range before it (no replay: the skip and its mask as before, uncounted);
+  `lightProfile` in the GPU-against-C++ test; CONTRACTS c.1's profile bits and `Light::reserved`'s host use written
+  down; then the switches become `lighting.night = enhanced`'s behaviour in hybrid.
+- **The coverage gate, per item** (the architect, 2026-11-09, from lane F's never-dark phases; lane B's review; not
+  built, superseded by the per-pixel form above, kept for its reasoning): a skip also
   needs a lamp that replaces the light it removes, so the road is never darker than GT4's where nothing of ours lights
   it (a tunnel's lights are not lamp billboards). It decides at execute time in `GsnScene`, with the frame's own
   lamps: (a) a skip is a vertex span per item, and `planSkips` finds each item's instance through `ViewOnList::ids`
@@ -1985,7 +2004,11 @@ on both night courses: the player's headlights on the road (F6 turns `kSrcHeadli
 left off; moved from A7 step 2), the car ahead's shadow in the player's headlights, cars' shadows under the street
 lamps, no acne or detached shadows; temporal stability as above, as lights enter and leave the budget.
 
-**F7: Light profiles (S-M, lane F; lane B reviews).** Headlight beams and street lamps get shapes. A profile is
+**F7: Light profiles (S-M, lane F; lane B reviews).** Its street-lamp part is on main behind
+`GT4_LAMP_PROFILE=RANGE,SCALE,INNER,OUTER` (2026-11-10): an analytic profile in the light list's flags (bits 8-15),
+`kProfileStreetLamp`, a road luminaire's batwing (1 / cos^3 of the angle from the axis, held at 16), so a lamp
+pointing down lights the road evenly inside its cone; the course lamps become spots along the world's down axis. The
+cookie textures below remain for the headlights' beams. Headlight beams and street lamps get shapes. A profile is
 an angular intensity table (IES-style: intensity against vertical and horizontal angle) baked into a small 2D
 cookie (a slice of a texture array, indexed by `GpuLight`'s profile index): the low beam with its hot spot,
 asymmetric cut-off line and spread; the high beam (used where the game's car light state says so, else low only);

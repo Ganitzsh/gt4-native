@@ -26,6 +26,10 @@ own gate.
    nowhere darker than one in a city). So no shortcut over GT4's baked lamp light: the stills of 2026-11-10
    (`lap_ssr5f_boot`, three ways) show `enhanced` only adding to it, and N3's skip alone leaving the road dark
    wherever none of our lamps reaches (frame 9,725, the pools under the overpass). In scope, in order:
+   - done so far (2026-11-10, on main behind switches until tuned): B10's lit-colour channel and the relight from
+     the surface's own colour and normal (`GT4_NIGHT_SIDE`), the street lamps' profile (`GT4_LAMP_PROFILE`), and
+     GT4's baked light kept per pixel where no lamp of ours replaces it (`GT4_N3_DEFER`): on S.S. Route 5 forward
+     no part of the road is darker than GT4's any more, and lamps light it smoothly where they stand (PLAN N3);
    - first, B10's channels from step 4 (the surface's own colour, normal and material, written by hybrid's side
      passes): the night relight then lights the real surface colour with real normals, in place of today's
      estimate from the picture, which is circular once the baked light is skipped. This replaces lane F's
