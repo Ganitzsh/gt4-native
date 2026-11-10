@@ -70,10 +70,11 @@ def main():
     print(f"{name}: exit {r.returncode}, {len(got)} frames in {d}", flush=True)
     for line in (r.stdout + r.stderr).splitlines():
         low = line.lower()
-        if any(k in low for k in ("hybrid", "validation", "error", "n3 items", "f2b glow x", "vuid", "night side", "n3 defer", "n3 baked")):
+        if any(k in low for k in ("hybrid", "validation", "error", "n3 items", "f2b glow x", "vuid", "night side", "n3 defer", "n3 baked", "headlight dbg")):
             print("   " + line[:400], flush=True)
 
 
 if __name__ == "__main__":
     main()
+
 

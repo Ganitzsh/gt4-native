@@ -60,9 +60,10 @@ def run(a, spec, index):
                GT4_ISO=os.path.join(ORIG, "Gran Turismo 4 (USA) (v1.01).iso"), **extra)
     log = open(os.path.join(work, "host.log"), "wb")
     start = time.time()
-    proc = subprocess.Popen([a.host, "--headless", "--no-audio", "--size", "640x448", "--session-dir", session,
-                             "--game", a.game, "--saves", saves, "--preset", "original",
-                             "--set", "display.frame_interpolation=off", "--set", "texture.hd_pack=off"],
+    proc = subprocess.Popen([a.host, "--headless", "--no-audio", "--size", os.environ.get("MEMO_SIZE", "640x448"), "--session-dir", session,
+                             "--game", a.game, "--saves", saves, "--preset", os.environ.get("MEMO_PRESET", "original"),
+                             "--set", "display.frame_interpolation=off", "--set", "texture.hd_pack=off",
+                             *[x for kv in os.environ.get("MEMO_SETS", "").split(",") if kv for x in ("--set", kv)]],
                             cwd=a.wt, env=env, stdout=log, stderr=subprocess.STDOUT,
                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     try:
@@ -89,8 +90,8 @@ def run(a, spec, index):
     print(f"== {tag}: exit {code}, {time.time() - start:.0f} s, game logs {logs}", flush=True)
     for path in logs + [os.path.join(work, "host.log")]:
         for line in open(path, errors="replace"):
-            if re.search(r"hash memo|GS: |identity|VBlanks? |walks ", line) and len(line) < 2500:
-                print(f"   {os.path.basename(path)}: {line.rstrip()[:1800]}", flush=True)
+            if re.search(r"hash memo|GS: |Parity path|Night side|N3 baked|Hybrid side|Vulkan (error|warning)|[Ee]rror|assert|crash|exception", line) and len(line) < 4000:
+                print(f"   {os.path.basename(path)}: {line.rstrip()[:420]}", flush=True)
     return code
 
 

@@ -24,7 +24,7 @@ def run(exe, tag, cap, frames, shots, sets, envs):
     shutil.rmtree(d, ignore_errors=True)
     d.mkdir(parents=True)
     args = [str(exe), "--headless", "--replay", str(CAPS / cap), "--frames", frames, "--fixed-step", "--size", "1280x720",
-            "--preset", "original", "--set", "display.frame_interpolation=off", "--set", "texture.hd_pack=off",
+            "--preset", os.environ.get("SAME_PRESET", "original"), "--set", "display.frame_interpolation=off", "--set", "texture.hd_pack=off",
             "--set", "debug.overlay=off"]
     for s in sets:
         args += ["--set", s]
@@ -32,8 +32,29 @@ def run(exe, tag, cap, frames, shots, sets, envs):
     r = subprocess.run(args, capture_output=True, text=True, errors="replace", creationflags=subprocess.CREATE_NO_WINDOW,
                        env=dict(os.environ, **envs))
     hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in d.glob("*.ppm")}
+    if os.environ.get("SAME_STATS") == "1":
+        KEPT[tag] = {p.name: p.read_bytes() for p in d.glob("*.ppm")}
     shutil.rmtree(d, ignore_errors=True)
     return hashes, r.stdout + r.stderr, r.returncode
+
+
+KEPT = {}
+
+
+def stats(a, b):
+    """PARITY's measure between two sets of PPMs: the share of identical pixels, of pixels within 4 a channel, the largest."""
+    import numpy as np
+    same = within = total = 0
+    worst = 0
+    for n in a:
+        if n not in b or len(a[n]) != len(b[n]):
+            continue
+        x = np.frombuffer(a[n][-(len(a[n]) // 3 * 3):], dtype=np.uint8).astype(np.int16)
+        y = np.frombuffer(b[n][-(len(b[n]) // 3 * 3):], dtype=np.uint8).astype(np.int16)
+        d = np.abs(x - y).reshape(-1, 3).max(axis=1)
+        same += int((d == 0).sum()); within += int((d <= 4).sum()); total += d.size
+        worst = max(worst, int(d.max()))
+    return (100.0 * same / total, 100.0 * within / total, worst) if total else (0.0, 0.0, -1)
 
 
 def main():
@@ -67,6 +88,10 @@ def main():
         ok = bool(ha) and same == len(ha) == len(hb) and ca == 0 and cb == 0
         print(f"{name}: ref {len(ha)} frames (exit {ca}), new {len(hb)} (exit {cb}); identical {same}, differ "
               f"{sum(1 for n in ha if n in hb and hb[n] != ha[n])}: {'pass' if ok else 'FAIL'}", flush=True)
+        if not ok and os.environ.get("SAME_STATS") == "1":
+            st = stats(KEPT.get(name + "_ref", {}), KEPT.get(name + "_new", {}))
+            print(f"   pixels identical {st[0]:.3f} %, within 4 a channel {st[1]:.3f} %, the largest difference {st[2]}", flush=True)
+        KEPT.clear()
         bad += not ok
     return 1 if bad else 0
 

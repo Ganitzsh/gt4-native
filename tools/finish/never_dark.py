@@ -85,10 +85,10 @@ def main():
     import slot
     slot.kill_with_me()
     out = WT / "build/never_dark" / tag
-    ours_env = dict(GT4_NIGHT_SIDE="1", GT4_N3_VERDICTS="1", **envs)
+    ours_env = dict(envs)   # (the settings' own path: hybrid with lighting.night = enhanced)
     replay(out / "gt4", cap, frames, shots, "original", {})
     replay(out / "ours", cap, frames, shots, "enhanced", ours_env)
-    mask_env = {k: v for k, v in ours_env.items() if k != "GT4_N3_DEFER"}   # (with it, binding 9 is no mask)
+    mask_env = dict(ours_env, GT4_N3_DEFER="0")   # (deferred, binding 9 is no mask: the mask from the skip itself)
     replay(out / "mask", cap, frames, shots, "enhanced", dict(mask_env, GT4_LIGHT_VIEW="4"))
     rows, blocks = [], []
     for p in sorted((out / "gt4").glob("*.ppm")):
