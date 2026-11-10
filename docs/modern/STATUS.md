@@ -47,7 +47,10 @@ own gate.
    - F10 (new, PLAN): the night's ambient from the place, measured per view from its sky and its lamps, never one
      constant; a course without lamps stays as dark as GT4 made it, lit by headlights;
    - F6's shadows from the player's headlights, after B11's shadow atlas (step 4);
-   - then `lighting.night = enhanced` in presets, after the Odin's cost (C6b) and the owner's look.
+   - **in the presets since 2026-11-10:** medium, high and ultra (and the defaults) set `render.scene = hybrid`
+     and `lighting.night = enhanced`; `original` keeps the PS2's picture and `low`, the handheld's, keeps the GS
+     path until the Odin's cost is measured (desktop, 1080p high, a night lap: GPU 2.3 to 3.0 ms, render thread
+     1.1 to 1.9 ms, front end 1.5 to 1.8 ms a frame). Older settings files under those presets move once.
 4. **Day lighting, and hybrid in presets with it:** B10 (per-pixel lighting and material classes), B11 (the
    course's shadows on cars), B12 (GTAO). Hybrid alone draws the PS2 path's picture at a higher CPU cost, so it
    enters presets low-ultra only with B10 (B8 step 5, as PLAN has it): the quiet-window `PERF`, the front end's
@@ -182,7 +185,8 @@ Nothing is left only on disk: unfinished work is on origin under wip/, parked/ o
 
 ## Waiting on the owner
 
-- Install main-874f32e on the Odin; check a night race on S.S. Route 5 for the bands.
+- Install the next build on the Odin; with the high preset (or the playtest file over low), a night race on S.S.
+  Route 5: the frame rate against low's, and the look of the lamps, the tunnels and the headlights.
 - Night lighting: answered 2026-11-10 (as modern games do it, the ambient by place: the Finish line's step 3).
 - Rumble: run the 3-pulse test in a race and say which buzz; check the GT4 Native shortcut's Steam vibration toggle.
 - Try the native Linux build (gt4-native.sh shortcut) for speed: it takes the host out of FEX.
