@@ -36,6 +36,13 @@ def route(name, wt):
              + tap("cross", 300) + tap("cross", 600) + tap("dpdown", 40) + tap("dpright", 40) * 4
              + ["capture screen"] + tap("cross", 600) + ["capture photo", "vwait 1800", "capture photo2", "quit"])
         return r, os.path.join(MAIN, "build", "r5_saves")
+    if name == "night":    # CAPTURES.md's Arcade route to a Clubman Stage Route 5 time trial at night, then a drive
+        r = (["vwait 1400"] + tap("start", 600) + tap("triangle", 1000) + tap("triangle", 500) + tap("cross", 1800)
+             + tap("start", 200) + tap("dpdown", 40) + tap("dpup", 40) + tap("cross", 150) + tap("dpright", 40) + tap("cross", 600)
+             + tap("dpdown", 40) + tap("cross", 600) + tap("dpright", 60) * 3 + tap("cross", 600) + tap("cross", 600)
+             + tap("cross", 300) * 3 + tap("cross", 600) + tap("cross", 900) + tap("cross", 900)
+             + ["capture grid", "button cross 1", "vwait 1500", "capture drive", "button cross 0", "vwait 60", "quit"])
+        return r, os.path.join(MAIN, "build", "r5_saves")
     raise SystemExit(f"unknown session {name}")
 
 
@@ -90,7 +97,7 @@ def run(a, spec, index):
     print(f"== {tag}: exit {code}, {time.time() - start:.0f} s, game logs {logs}", flush=True)
     for path in logs + [os.path.join(work, "host.log")]:
         for line in open(path, errors="replace"):
-            if re.search(r"hash memo|GS: |Parity path|Night side|N3 baked|Hybrid side|Vulkan (error|warning)|[Ee]rror|assert|crash|exception", line) and len(line) < 4000:
+            if re.search(r"hash memo|kernel: frame|kernel:   |waited over|camera cut|Camera cuts|GS: |Parity path|Night side|N3 baked|Hybrid side|Vulkan (error|warning)|[Ee]rror|assert|crash|exception", line) and len(line) < 4000:
                 print(f"   {os.path.basename(path)}: {line.rstrip()[:420]}", flush=True)
     return code
 
