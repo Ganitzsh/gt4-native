@@ -547,7 +547,12 @@ int main() {
               "render.scene = hybrid is taken (B8), and saved");
         check(setOption(r, "render.scene", "parity").empty() && r.scene == SceneRenderer::Parity, "render.scene = parity is taken (B7)");
         check(formatSettings(r).find("\nscene = original\n") != std::string::npos && formatSettings(r).find("scene = parity") == std::string::npos,
-              "parity is a session's check: never saved (written as original)");
+              "parity is a session's check: never saved (written as original without the night relight)");
+        {
+            Settings tried;   // (high: hybrid with the relight)
+            check(setOption(tried, "render.scene", "parity").empty() && formatSettings(tried).find("\nscene = hybrid\n") != std::string::npos,
+                  "parity tried under high is written as hybrid: the relight keeps its modern form at the next start");
+        }
         check(setOption(r, "render.scene", "original").empty() && r.scene == SceneRenderer::Original, "and back to original");
         check(setOption(r, "render.scene", "bogus") == "render.scene: expected original, parity or hybrid", "a bad value names the ones taken");
         check(formatSettings(r).find("[render]") < formatSettings(r).find("\nscene = original\n") &&

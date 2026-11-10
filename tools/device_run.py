@@ -675,7 +675,9 @@ class Device:
         res = {}
         for mode in ("original", "enhanced"):
             prof = os.path.join(self.report, "logs", f"night_{mode}.jsonl")
-            code, cpu = self.scene_span("lap_csr5.cap", 9000, ["--preset", "high", "--set", f"lighting.night={mode}",
+            # (render.scene pinned: high sets hybrid since 2026-11-10, and this item measures the relight's first form)
+            code, cpu = self.scene_span("lap_csr5.cap", 9000, ["--preset", "high", "--set", "render.scene=original",
+                                                               "--set", f"lighting.night={mode}",
                                                                "--profile-json", prof], f"night_{mode}",
                                         skip_lines=300)
             busy = self.stage(self.profile(prof, skip=300), "cpu_stages", "front end thread: busy", "cpu_us")
@@ -715,7 +717,9 @@ class Device:
             shutil.rmtree(d, ignore_errors=True)
             os.makedirs(d)
             prof = os.path.join(self.report, "logs", f"{tag}_{scene}.jsonl")
-            self.replay("race_grid43.cap", 700, ["--preset", preset, "--set", f"render.scene={scene}",
+            # (lighting.night pinned: medium to ultra set enhanced since 2026-11-10, and this item compares the scene alone)
+            self.replay("race_grid43.cap", 700, ["--preset", preset, "--set", "lighting.night=original",
+                                                 "--set", f"render.scene={scene}",
                                                  "--profile-json", prof], f"{tag}_{scene}", capture=("21-700/10", d))
             dirs[scene] = d
             frames = self.profile(prof, skip=20)

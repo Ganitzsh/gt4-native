@@ -293,7 +293,10 @@ std::string formatSettings(const Settings& settings) {
         out << "# " << option.allowed << "\n";
         if (const std::string unused = unusedReason(settings, key); !unused.empty()) out << "# (" << unused << ")\n";
         std::string value = option.get(settings);
-        if (key == "render.scene" && value == "parity") value = "original";   // (B7's parity is a session's check: never saved)
+        // (B7's parity is a session's check: never saved. Written as what goes with the night it is saved with: hybrid
+        // with the relight, so a player who tried parity under high doesn't come back on the GS path with the relight's
+        // first form; original without)
+        if (key == "render.scene" && value == "parity") value = settings.night == LightingMode::Enhanced ? "hybrid" : "original";
         out << key.substr(dot + 1) << " = " << value << "\n";
     }
     return out.str();

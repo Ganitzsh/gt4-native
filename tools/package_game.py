@@ -110,7 +110,7 @@ data. Full instructions, controls, settings and known issues: https://github.com
 3. Settings: Escape, or Guide or Select+Start on the pad.
 
 Handheld (Steam Deck, ARM handhelds under Proton): rename settings-handheld.ini to settings.ini first.
-To try the work that is in no preset yet: settings-playtest.ini (each line says what to look for), copied over
+To try the work the low preset doesn't have yet: settings-playtest.ini (each line says what to look for), copied over
 settings.ini after keeping a copy of yours.
 PS2 saves: gt4_host.exe --import-save "path\\to\\Mcd001.ps2" copies them into the saves folder.
 HD texture packs go in textures\\SCUS-97328.
@@ -140,7 +140,7 @@ an ARM handheld runs it through FEX. Steam with a Proton installed is all it nee
 GT4_PROTON=/path/to/a/Proton/folder ./gt4-native.sh uses that Proton (by default the newest Steam has, then
 ~/.steam/root/compatibilitytools.d and /usr/share/steam/compatibilitytools.d).
 Handheld: rename settings-handheld.ini to settings.ini first.
-To try the work that is in no preset yet: settings-playtest.ini (each line says what to look for), copied over
+To try the work the low preset doesn't have yet: settings-playtest.ini (each line says what to look for), copied over
 settings.ini after keeping a copy of yours.
 PS2 saves: ./gt4_host --import-save /path/to/Mcd001.ps2 copies them into the saves folder.
 HD texture packs go in textures/SCUS-97328.
@@ -219,7 +219,7 @@ On the first start gt4_host.exe makes CORE.GT4.elf here from it.
 # What a release archive may contain beside the programs: anything else (a disc image, an executable taken from the
 # game, a save) stops the packaging.
 RELEASE_DOCS = ("LICENSE", "THIRD_PARTY_NOTICES.md", "CREDITS.md")
-# Shipped beside settings-handheld.ini when the tree has it: the work in no preset yet, switched on to try, each line
+# Shipped beside settings-handheld.ini when the tree has it: the work the low preset doesn't have yet, switched on to try, each line
 # saying what to look for (not a preset; the owner's playtest, 2026-11-09).
 PLAYTEST = os.path.join("docs", "modern", "settings-playtest.ini")
 

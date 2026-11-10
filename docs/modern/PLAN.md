@@ -1883,7 +1883,8 @@ A5b, B4, F4 for `modern`.
 records into the light list, clusters over the scene rectangle, view-space positions and normals from GT4's Z,
 the lights added in the scene stage with the albedo estimate of CONTRACTS.md c.3. While F2 lights the road, N3
 skips the lit-road layer (draws 305-308), so the lamps' light reaches the road once. Until N3 lands,
-`lighting.night = enhanced` is set by `--set` only, in no preset, so a release never lights the road twice. Three
+`lighting.night = enhanced` was set by `--set` only, in no preset, so a release never lit the road twice (since
+2026-11-10 it is in medium, high and ultra with `render.scene = hybrid`, N3's per-pixel form: never twice). Three
 other lanes' files change, each reviewed by its lane: `gsn_light.comp` (lane B's scene-stage shader) takes the
 added light; `sceneRecordsWanted` (`settings_scene.cpp`, lane C) is also true with `lighting.night = enhanced`,
 since the game sends no lights without records; and `cmake/Host.cmake` (lane C) links the light sources and
