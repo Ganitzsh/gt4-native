@@ -841,17 +841,19 @@ cheap. For 3D triangles above 1x there is no GS sample to match (the GS only sam
 sampling deterministic across GPUs: the texel coordinate from the interpolated STQ, rounded to the GS's sub-texel
 bits, then the GS's bilinear weights, exactly GS-like at 1x only. The owner's night strips turned out not to be B24's
 (2026-11-10): they were the native renderer's own, on every GPU at every scale but 1:1, and PCSX2's software renderer
-shows none. The draw is GT4's 28-texel light image stretched over the road as 20 abutting 32-pixel sprites, each
-clamped above 1:1 to its own slice's texels (`gsn.frag`'s `insideSprite`). Fixed by 73cfad8 (lane A): abutting sprites
-of one image are a run, clamped as one image at its outer edges. Strips 0 of 9 frames on `lap_ssr5f_boot` at low and
-at 2x (from 3 and 5), closer to `original` at 1:1 on every night progressive frame measured (`lap_ssr5r_prog`, 11 of
-11), unchanged on the day one (`race_pe2_prog`), `ORIG` unchanged; NATIVE (section 2) now guards it, and its check on
-the Odin (no band in the night replay, the structure test) is 73cfad8's, in the next build, no longer B24's. B24 keeps
-its own purpose, sampling deterministic across GPUs, its exact mode keeping each slice's own clamp (9f57886). Depends:
-B4. Acceptance: the desktop's frames bit-identical (else a re-baseline under section 2's rule, with PCSX2 on a night
-frame and a HUD frame); on the Odin `ORIG` within 2 levels on every pixel at `original` on the REF captures (above 1x:
-deterministic across devices within 2 levels, not GS-exact), after which section 2's strict rule replaces the interim
-one; `PERF` desktop and Odin (C6b); `VAL`.
+shows none. The draw is GT4's 32 x 32 light image (about 28 texels of it) stretched over the road as 20 abutting
+32-pixel sprites, each clamped above 1:1 to its own slice's texels (`gsn.frag`'s `insideSprite`). Fixed by 73cfad8
+(lane A): abutting sprites of one image are a run, clamped as one image at its outer edges. Strips 0 of 9 frames on
+`lap_ssr5f_boot` at low and at 2x (from 3 and 5), closer to `original` at 1:1 on every night progressive frame
+measured (`lap_ssr5r_prog`, 11 of 11), unchanged on the day one (`race_pe2_prog`), `ORIG` unchanged; the same fix
+removed a fainter seam every 32 GS pixels in a full-screen pass GT4 draws in columns (race7, mostly 1-3 levels: the
+post copies' case); NATIVE (section 2) now guards it, and its check on the Odin (no band in the night replay, the
+structure test) is 73cfad8's, in the next build, no longer B24's. B24 keeps its own purpose, sampling deterministic
+across GPUs, its exact mode keeping each slice's own clamp (9f57886). Depends: B4. Acceptance: the desktop's frames
+bit-identical (else a re-baseline under section 2's rule, with PCSX2 on a night frame and a HUD frame); on the Odin
+`ORIG` within 2 levels on every pixel at `original` on the REF captures (above 1x: deterministic across devices within
+2 levels, not GS-exact), after which section 2's strict rule replaces the interim one; `PERF` desktop and Odin (C6b);
+`VAL`.
 
 **B25: Depth buffers in the mid-run snapshot (M; lane B; lane A reviews the front end). Parked** (lane B, 2026-11-09:
 `parked/b25-depth-start`, the Z start and the read-back; every gate passes but the acceptance, the sub-capture pair
