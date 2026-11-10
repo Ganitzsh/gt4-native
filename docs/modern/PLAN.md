@@ -833,19 +833,25 @@ clustered lights. Depends: B7 (its first form), F1. Acceptance: `PARITY` kept; `
 
 **B24: GS-exact texel sampling (M; lane B; lane A reviews the front end).** The GS path leaves a sprite's or
 triangle's texture coordinates and its bilinear filter to each GPU's interpolator and sampler, and GPUs differ there:
-on the Odin (Adreno under Turnip) the owner's night bands (the suspected draw #197, until the Odin's night-replay
-bisection names it: the light image stretched over the road in 32-pixel strips, one strip's coordinates restarting at
-its own vertices), the HUD's glyph edges moving by a texel (a texel boundary hit exactly), and texture sampling over
-the 3D scene (section 2's per-device-class `ORIG`; the coordinator, 2026-11-09). Scoped by primitive: for sprites (2D:
-the light image, the HUD, the post copies) B24 computes each pixel's texel coordinate as the GS does (its fixed-point
-UV step and 4 sub-texel bits from the pixel position) and filters with the GS's bilinear weights in the shader, exact
-and cheap. For 3D triangles above 1x there is no GS sample to match (the GS only sampled at 1x), so B24 makes their
+the HUD's glyph edges moving by a texel (a texel boundary hit exactly), and texture sampling over the 3D scene
+(section 2's per-device-class `ORIG`; the coordinator, 2026-11-09). Scoped by primitive: for sprites (2D: the light
+image, the HUD, the post copies) B24 computes each pixel's texel coordinate as the GS does (its fixed-point UV step
+and 4 sub-texel bits from the pixel position) and filters with the GS's bilinear weights in the shader, exact and
+cheap. For 3D triangles above 1x there is no GS sample to match (the GS only sampled at 1x), so B24 makes their
 sampling deterministic across GPUs: the texel coordinate from the interpolated STQ, rounded to the GS's sub-texel
-bits, then the GS's bilinear weights, exactly GS-like at 1x only. Lane B takes it after the bisection names the draw.
-Depends: B4. Acceptance: the desktop's frames bit-identical (else a re-baseline under section 2's rule, with PCSX2 on
-a night frame and a HUD frame); on the Odin, the night replay with no band (the structure test) and `ORIG` within 2
-levels on every pixel at `original` on the REF captures (above 1x: deterministic across devices within 2 levels, not
-GS-exact), after which section 2's strict rule replaces the interim one; `PERF` desktop and Odin (C6b); `VAL`.
+bits, then the GS's bilinear weights, exactly GS-like at 1x only. The owner's night strips turned out not to be B24's
+(2026-11-10): they were the native renderer's own, on every GPU at every scale but 1:1, and PCSX2's software renderer
+shows none. The draw is GT4's 28-texel light image stretched over the road as 20 abutting 32-pixel sprites, each
+clamped above 1:1 to its own slice's texels (`gsn.frag`'s `insideSprite`). Fixed by 73cfad8 (lane A): abutting sprites
+of one image are a run, clamped as one image at its outer edges. Strips 0 of 9 frames on `lap_ssr5f_boot` at low and
+at 2x (from 3 and 5), closer to `original` at 1:1 on every night progressive frame measured (`lap_ssr5r_prog`, 11 of
+11), unchanged on the day one (`race_pe2_prog`), `ORIG` unchanged; NATIVE (section 2) now guards it, and its check on
+the Odin (no band in the night replay, the structure test) is 73cfad8's, in the next build, no longer B24's. B24 keeps
+its own purpose, sampling deterministic across GPUs, its exact mode keeping each slice's own clamp (9f57886). Depends:
+B4. Acceptance: the desktop's frames bit-identical (else a re-baseline under section 2's rule, with PCSX2 on a night
+frame and a HUD frame); on the Odin `ORIG` within 2 levels on every pixel at `original` on the REF captures (above 1x:
+deterministic across devices within 2 levels, not GS-exact), after which section 2's strict rule replaces the interim
+one; `PERF` desktop and Odin (C6b); `VAL`.
 
 **B25: Depth buffers in the mid-run snapshot (M; lane B; lane A reviews the front end). Parked** (lane B, 2026-11-09:
 `parked/b25-depth-start`, the Z start and the read-back; every gate passes but the acceptance, the sub-capture pair
