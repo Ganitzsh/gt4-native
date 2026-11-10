@@ -21,7 +21,8 @@ own gate.
 1. **Main green.** Done (e61ce10): the Linux x86_64 CI job ran out of memory on about half the pushes, so it
    builds with two jobs.
 2. **Land what is finished.** Done: the hash memo (664f506; the game's CPU 1.69 to 1.63 ms a frame over a race
-   session) and N3 step 1's verdict map, with a fix its gates asked for (PLAN N3). Left: `wip/m13-help-band`.
+   session), N3 step 1's verdict map, with a fix its gates asked for (PLAN N3), and M13 (the menu's help in its
+   own three-line band; no row's help overflows it).
 3. **Night lighting, as modern games do it** (the owner, 2026-11-10: real lights, and a place in the middle of
    nowhere darker than one in a city). So no shortcut over GT4's baked lamp light: the stills of 2026-11-10
    (`lap_ssr5f_boot`, three ways) show `enhanced` only adding to it, and N3's skip alone leaving the road dark
