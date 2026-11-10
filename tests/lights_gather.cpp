@@ -117,6 +117,20 @@ void filtering() {
         gatherLights(lamps.data(), lamps.size(), 1, 0.5f, 500.0f, 1.0f, lit, ls);
         expect(ls.notLights == 4 && ls.kept == 0,
                "headlights, tail and brake lamps and kSrcCarLamp counted as not lights");
+        // F7's low beam: a headlight lights once the host gives it its beam (a spot with its cone, the profile in the
+        // record's reserved word), and carries the profile in its flags; the same record without the cone still doesn't
+        Light beam = record(1, gfx::scene::kSrcHeadlight, 0, 0, -5);
+        beam.kind = gfx::scene::kLightSpot;
+        beam.direction[2] = -1.0f;
+        beam.cosInner = 0.97f;
+        beam.cosOuter = 0.87f;
+        beam.range = 50.0f;
+        beam.reserved = kProfileLowBeam;
+        std::vector<Light> withBeam{lamps[0], beam};
+        gatherLights(withBeam.data(), withBeam.size(), 1, 0.5f, 500.0f, 1.0f, lit, ls);
+        expect(ls.notLights == 1 && ls.kept == 1 && lit.size() == 1 && lit[0].type == kSpot &&
+                   ((lit[0].flags >> kProfileShift) & kProfileMask) == kProfileLowBeam,
+               "a headlight with its beam lights, as a spot with the low-beam profile; one without doesn't");
     }
     expect(s.invalid == 1, "a NaN position is invalid");
     expect(s.dark == 2, "black and intensity 0 are dark lamps, counted apart");

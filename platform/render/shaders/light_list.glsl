@@ -14,7 +14,7 @@ const uint kClusterCount = kClusterX * kClusterY * kClusterZ;
 const uint kPoint = 0u, kSpot = 1u, kDirectional = 2u;                          // LightType
 const uint kCastsShadow = 1u, kVolumetric = 2u, kNoSpecular = 4u, kGameGlow = 8u, kFromGame = 16u;   // LightFlags
 const uint kProfileShift = 8u, kProfileMask = 0xFFu;                            // the flags' profile (F7), 0 none
-const uint kProfileNone = 0u, kProfileStreetLamp = 1u;                          // LightProfile
+const uint kProfileNone = 0u, kProfileStreetLamp = 1u, kProfileLowBeam = 2u;    // LightProfile
 
 struct GpuLight {          // 64 bytes
     vec3 position; float range;        // view space, metres
@@ -45,10 +45,21 @@ float lightCone(float cosAngle, float scale, float offset) {
 // d^2 / (kStreetLampHeight^2 x cos), the cosine held at kStreetLampMinCos; 1 for none.
 const float kStreetLampHeight = 8.0;
 const float kStreetLampMinCos = 0.25;
+const float kLowBeamReference = 10.0;
 float lightProfile(uint profile, float cosAngle, float d) {
-    if (profile != kProfileStreetLamp) return 1.0;
-    return d * d / (kStreetLampHeight * kStreetLampHeight * max(cosAngle, kStreetLampMinCos));
+    if (profile == kProfileStreetLamp)
+        return d * d / (kStreetLampHeight * kStreetLampHeight * max(cosAngle, kStreetLampMinCos));
+    if (profile == kProfileLowBeam) return d * d / (kLowBeamReference * kLowBeamReference);
+    return 1.0;
 }
+
+// The diffuse term for ndl = dot(n, L) (light_list.h): Lambert's, wrapped under the low beam.
+const float kLowBeamWrap = 0.3;
+float lightDiffuse(uint profile, float ndl) {
+    if (profile == kProfileLowBeam) return clamp((ndl + kLowBeamWrap) / (1.0 + kLowBeamWrap), 0.0, 1.0);
+    return max(ndl, 0.0);
+}
+uint lightProfileOf(GpuLight light) { return (light.flags >> kProfileShift) & kProfileMask; }
 
 // saturate(1 - (d / range)^4)^2 / (d^2 + sourceRadius^2); 0 for a range that is not positive, the
 // denominator at least kMinFalloffDenominator (light_list.h)
@@ -86,7 +97,7 @@ float lightAttenuation(GpuLight light, vec3 p, out vec3 L) {
     if (light.type == kSpot) {
         const float cosAngle = dot(-L, light.direction);
         a *= lightCone(cosAngle, light.spotScale, light.spotOffset) *
-             lightProfile((light.flags >> kProfileShift) & kProfileMask, cosAngle, d);
+             lightProfile(lightProfileOf(light), cosAngle, d);
     }
     return a;
 }

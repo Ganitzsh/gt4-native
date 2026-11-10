@@ -134,7 +134,7 @@ vec3 nightLight(ivec2 q, ivec2 last, vec3 linear, vec3 gs) {
     for (uint i = 0u; i < header.directionalCount; ++i) {
         vec3 L;
         const float a = lightAttenuation(lights[i], P, L);
-        sum += lights[i].colour * a * max(dot(n, L), 0.0);
+        sum += lights[i].colour * a * lightDiffuse(lightProfileOf(lights[i]), dot(n, L));
     }
     const uvec2 tile = uvec2(clamp(vec2(q) / p.size * vec2(header.clustersX, header.clustersY), vec2(0.0),
                                    vec2(header.clustersX, header.clustersY) - 1.0));
@@ -144,7 +144,7 @@ vec3 nightLight(ivec2 q, ivec2 last, vec3 linear, vec3 gs) {
         const GpuLight light = lights[indices[cell.offset + k]];
         vec3 L;
         const float a = lightAttenuation(light, P, L);
-        sum += light.colour * a * max(dot(n, L), 0.0);
+        sum += light.colour * a * lightDiffuse(lightProfileOf(light), dot(n, L));
     }
     return albedo * sum;
 }

@@ -73,6 +73,14 @@ void checkCpuFunctions() {
     expect(lightProfile(kProfileStreetLamp, 0.1f, 8.0f) == lightProfile(kProfileStreetLamp, kStreetLampMinCos, 8.0f) &&
            lightProfile(kProfileStreetLamp, -1.0f, 8.0f) == lightProfile(kProfileStreetLamp, kStreetLampMinCos, 8.0f),
            "street lamp: the cosine held towards the horizon");
+    // the low beam: the inverse square cancelled (the factor x 1 / d^2 the same at 5 m and 40 m), and a wrapped
+    // diffuse term: Lambert's for every other profile, about a quarter at grazing incidence under the low beam
+    expect(std::fabs(lightProfile(kProfileLowBeam, 1.0f, 5.0f) / 25.0f - lightProfile(kProfileLowBeam, 0.8f, 40.0f) / 1600.0f) < 1e-7f &&
+           lightProfile(kProfileLowBeam, 1.0f, kLowBeamReference) == 1.0f, "low beam: the same light at every distance");
+    expect(lightDiffuse(kProfileNone, 0.5f) == 0.5f && lightDiffuse(kProfileStreetLamp, -0.2f) == 0.0f, "diffuse: Lambert's");
+    expect(lightDiffuse(kProfileLowBeam, 1.0f) == 1.0f && std::fabs(lightDiffuse(kProfileLowBeam, 0.05f) - 0.35f / 1.3f) < 1e-6f &&
+           lightDiffuse(kProfileLowBeam, -0.3f) == 0.0f && lightDiffuse(kProfileLowBeam, -1.0f) == 0.0f,
+           "diffuse under the low beam: wrapped, 0 from kLowBeamWrap behind the surface on");
     const LightListHeader h = makeHeader(0, 0, 0.1f, 1000.0f);
     expect(clusterSlice(0.1f * 1.0001f, h.sliceScale, h.sliceBias) == 0, "slice 0 at zNear");
     expect(clusterSlice(999.0f, h.sliceScale, h.sliceBias) == kClusterZ - 1, "last slice at zFar");

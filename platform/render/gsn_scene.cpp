@@ -3876,6 +3876,33 @@ const std::vector<gfx::scene::Light>& GsnScene::Impl::lampsOf(const scene::Scene
             const float len = std::sqrt(down[0] * down[0] + down[1] * down[1] + down[2] * down[2]);
             if (len > 1e-6f) {
                 for (float& c : down) c /= len;
+                // F7's low beam, F6's gather switch (PLAN.md): each car's headlights (A7 step 2's spots along their
+                // beam, sent without a cone) get their beam: tipped down kHeadlightDip from the game's direction (the
+                // dipped beam's cut-off: little light above the lamps' height), a cone full to 14 degrees and ending at
+                // 30, a range of 50 m, the low-beam profile. In hybrid only, as the street lamps' profile.
+                // GT4_HEADLIGHTS=off: not lit; a number: the intensity's factor (default 1).
+                static const float headlights = [] {
+                    const char* e = std::getenv("GT4_HEADLIGHTS");
+                    if (!e) return 1.0f;
+                    char* end = nullptr;
+                    const float value = std::strtof(e, &end);
+                    return end != e && value > 0.0f ? value : 0.0f;   // ('off', or anything that isn't a positive number)
+                }();
+                constexpr float kHeadlightDip = 0.07f;   // (the tangent of about 4 degrees)
+                for (gfx::scene::Light& lamp : v.records) {
+                    if (lamp.source != gfx::scene::kSrcHeadlight || lamp.view != view || !hybrid || !(headlights > 0.0f)) continue;
+                    float beam[3] = {lamp.direction[0] + kHeadlightDip * down[0], lamp.direction[1] + kHeadlightDip * down[1],
+                                     lamp.direction[2] + kHeadlightDip * down[2]};
+                    const float beamLength = std::sqrt(beam[0] * beam[0] + beam[1] * beam[1] + beam[2] * beam[2]);
+                    if (!(beamLength > 1e-6f) || !std::isfinite(beamLength)) continue;   // (no direction: left without a beam)
+                    for (int k = 0; k < 3; ++k) lamp.direction[k] = beam[k] / beamLength;
+                    lamp.kind = gfx::scene::kLightSpot;
+                    lamp.cosInner = 0.970296f;   // (cos 14 degrees)
+                    lamp.cosOuter = 0.866025f;   // (cos 30 degrees)
+                    lamp.range = 50.0f;
+                    lamp.intensity *= headlights;
+                    lamp.reserved = render::kProfileLowBeam;
+                }
                 for (gfx::scene::Light& lamp : v.records) {
                     if (lamp.source != gfx::scene::kSrcCourseGlow || lamp.view != view) continue;
                     lamp.kind = gfx::scene::kLightSpot;

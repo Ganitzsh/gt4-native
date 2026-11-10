@@ -11,9 +11,12 @@ SourceDefaults sourceDefaults(uint8_t source) {
     using namespace gfx::scene;
     switch (source) {
     case kSrcCourseGlow: return {18.0f, 6.0f, 0.3f, true, true};
-    // Sent by A7 step 2, not lit until F6 (headlights) / F9 (brake, tail) tune them, like step 1a's kSrcCarLamp at the
-    // same lamps (below). The gather counts them under notLights; the values are F6's / F9's starting points.
-    case kSrcHeadlight: return {40.0f, 20.0f, 0.1f, false, true};
+    // A headlight (A7 step 2) lights once it has its beam (F7's low beam: the host gives the record its cone and
+    // profile on the night's modern path, GsnScene::lampsOf); as the game sends it, without a cone, the gather counts
+    // it under notLights: a point light at the lamp would light all round the car.
+    case kSrcHeadlight: return {50.0f, 20.0f, 0.1f, true, true};
+    // Sent by A7 step 2, not lit until F9 (brake, tail) tunes them, like step 1a's kSrcCarLamp at the same lamps
+    // (below). The gather counts them under notLights; the values are F9's starting points.
     case kSrcTailLight: return {4.0f, 1.0f, 0.05f, false, true};
     case kSrcBrakeLight: return {5.0f, 2.0f, 0.05f, false, true};
     case kSrcCarLightReflection: return {0.0f, 0.0f, 0.0f, false, true};   // GT4's picture of a light, not a light

@@ -33,6 +33,8 @@ enum LightProfile : uint32_t {
     kProfileNone = 0,
     kProfileStreetLamp = 1,   // a road luminaire: the ground under a lamp pointing down lit evenly out to its cone,
                               // and the same from any mounting height (lightProfile)
+    kProfileLowBeam = 2,      // a headlight's dipped beam: the same light at every distance out to its range
+                              // (lightProfile), on a road that answers light at a grazing angle (lightDiffuse)
 };
 
 struct GpuLight {                       // 64 bytes
@@ -86,9 +88,26 @@ inline float lightCone(float cosAngle, float scale, float offset) {
 // kStreetLampMinCos (about 75 degrees: past where such optics cut off, and the factor stays finite at the horizon).
 inline constexpr float kStreetLampHeight = 8.0f;     // metres: the height at which the factor on the axis is 1
 inline constexpr float kStreetLampMinCos = 0.25f;
+// kProfileLowBeam, a headlight's dipped beam: its optics put the most intensity just under the cut-off, where the
+// road is farthest, so what it lights is about as bright far as near; the inverse square is cancelled out to the
+// light's range (its window still ends it): (d / kLowBeamReference)^2. Without it a wall 10 m ahead is lit a hundred
+// times more than the road 30 m ahead, and with no tone map between the two one of them is black or the other white.
+inline constexpr float kLowBeamReference = 10.0f;   // metres: the distance at which the factor is 1
 inline float lightProfile(uint32_t profile, float cosAngle, float d) {
-    if (profile != kProfileStreetLamp) return 1.0f;
-    return d * d / (kStreetLampHeight * kStreetLampHeight * std::max(cosAngle, kStreetLampMinCos));
+    if (profile == kProfileStreetLamp)
+        return d * d / (kStreetLampHeight * kStreetLampHeight * std::max(cosAngle, kStreetLampMinCos));
+    if (profile == kProfileLowBeam) return d * d / (kLowBeamReference * kLowBeamReference);
+    return 1.0f;
+}
+
+// The diffuse term for ndl = dot(n, L): Lambert's max(ndl, 0), except under the low beam, whose light reaches the road
+// at a few degrees: a road isn't Lambertian there (its luminance coefficient rises towards grazing incidence, which
+// road-lighting practice tabulates), so the term is wrapped, (ndl + kLowBeamWrap) / (1 + kLowBeamWrap): the road ahead
+// gets about a quarter of what a surface facing the lamp gets, not a twentieth.
+inline constexpr float kLowBeamWrap = 0.3f;
+inline float lightDiffuse(uint32_t profile, float ndl) {
+    if (profile == kProfileLowBeam) return std::clamp((ndl + kLowBeamWrap) / (1.0f + kLowBeamWrap), 0.0f, 1.0f);
+    return std::max(ndl, 0.0f);
 }
 
 // --- Distance attenuation --------------------------------------------------------------------------------
