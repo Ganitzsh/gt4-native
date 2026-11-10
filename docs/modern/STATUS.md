@@ -63,10 +63,11 @@ own gate.
 5. **FSR 3.1 on game frames:** A3b step 1 (the camera-cut hook) is done: `kViewCut` is set and TAA's history
    resets on it. Left: B16c part 4, with the night level's and the display state's resets.
 6. **PS2 mechanisms out:** P1 is done (53b7455: the dead GIF and VIF records; this list had it as open). P4 (the
-   preemptive delivery fallback): its diagnostic is in, 0 late deliveries in the garage, Photo Travel and a race;
-   the freeze goes once a replay and a licence test show 0 too. P5 is answered (R17: the race fills the PS2's heap
-   by design, nothing would use more: no lift). Left of this step: P3a (block links as offsets). Then P2b (native
-   palettes) and P3b (draw state in renderer terms), last because they are large and change no picture.
+   preemptive delivery fallback): its diagnostic is in, 0 late deliveries in the garage, Photo Travel and a race; a
+   replay and a licence test since (0 in both); the freeze goes once a play session's log from the Odin has none. P5
+   is answered (R17: the race fills the PS2's heap by design, nothing would use more: no lift). Left of this step:
+   P3a (block links as offsets). Then P2b (native palettes) and P3b (draw state in renderer terms), last because
+   they are large and change no picture.
 7. **Driving feel:** what is left of D8 (physics force feedback, behind a switch today), D12 (steering and pedal
    response) and D14 (gamepad haptics from the physics), checked against main first, since parts are in; D13 from
    `archive/d-laneD-review` if its gates pass.

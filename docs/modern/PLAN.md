@@ -214,8 +214,10 @@ Step 1 is done (2026-11-10): the hook in both copies, the net, `kViewCut`, the c
 from a camera at rest the residual's bound is 3 m (a resume at 300 km/h is 1.4 m away on its first VBlank); the turn's
 bound is 90 degrees over one VBlank and 135 over more; the field of view's 3 % is per VBlank. A live race (PE race 2,
 its start sequence and the driving after it): 7 flags, 5 with the game's signal, 2 first sights, none from the net
-alone. Owed: the night level's and B16c's resets (with B16c part 4), a replay's and a pause at speed's
-live runs, and the TAA capture across a view change.
+alone. A live B-spec night race and its replay at `high` (Sunday Cup race 4, Clubman Stage Route 5 Reverse; 14,400
+views): 55 flags, 54 with the game's signal (53 of them the net's too), 1 first sight, none from the net alone, the
+history reset 51 times. Owed: the night level's and B16c's resets (with B16c part 4), a pause at speed's live run,
+and the TAA capture across a view change.
 
 **A4: Object identity from 00455708 (S-M).** `game_src/func_00455708.cpp` (draft) sets a runtime-global model
 context (set, model index, level) that A2 reads (`kInstObjectKnown`). Depends: A2, RISKS R2 verdict on 00455708.
@@ -2290,6 +2292,11 @@ it. Depends: none. Acceptance:
   loop and has the same fix (`game_src/func_0013C690.cpp`; no route of mine reaches it). A scan of the decomp's
   sources for reverse-destruction loops starting at another local's address found these two and no other; loops
   written another way aren't covered, and the diagnostic names any that play meets.
+  **The two runs left** (the same day, at `high`, the desktop): a B-spec night race to its end, its Result screens
+  and 3,600 VBlanks of its replay (22,219 deliveries), and License B-1 driven, failed and retried from the License
+  Center (7,804): 0 by freezing in both. The freeze stays for one more thing, the Odin: under FEX a loop takes
+  longer, so a wait that is under 50 ms here may be over it there. When a play session's `host.log` from the Odin
+  has no "waited over 50 ms" line, the freeze, `GT4_FRAME_DELIVERY` and `GT4_WATCH`'s guard go.
 
 **P5: Spike R17, guest memory beyond 32 MB (S, lane A).** RISKS.md R17: a debug runtime build, nothing to main.
 Acceptance: the answer and its measurements in R17. If it finds a use, a ticket follows.
