@@ -1673,6 +1673,8 @@ void GsnScene::Impl::planParity() {
     // The side channels are drawn only for a reader: the night relight (lighting.night, on a frame GT4 lights its lamps
     // in) or a GT4_SIDE_VIEW. A list whose frame says the lamps are off plans none (no bounds, no SideItems, no passes:
     // hybrid by day costs the parity draws only); a list without its frame's record (cut before FrameEnd) keeps them.
+    // A lamp promoted on a lamps-off frame (a warning lamp or a glow billboard by day: the car lamps gather none there)
+    // is then relit from the relight's estimates, as on the GS path, not from the channels.
     static const bool sideViewed = std::getenv("GT4_SIDE_VIEW") != nullptr;
     const bool sideRead = sideViewed || (night > 0.0f && (!frame.scene || (frame.scene->flags & gfx::scene::kFrameLampsOn)));
     if (hybrid && sideRead) planSides();
