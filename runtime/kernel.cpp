@@ -288,6 +288,9 @@ uint64_t g_delivered_cooperatively = 0, g_delivered_preemptively = 0;
 // counts in the 3,600-frame line.
 struct LateDelivery {
     std::atomic<uint32_t> function{0}, at{0}, count{0};   // the function's guest address, a host pc inside it
+    std::atomic<uint32_t> callers[5]{};                   // the next named code addresses up its stack, the first time
+    std::atomic<uint32_t> pc{0};                          // the frozen thread's own pc, the first time (outside the image:
+                                                          // it was in a host call, and `at` is the last game code above it)
 };
 LateDelivery g_late[16];
 std::atomic<uint32_t> g_late_elsewhere{0};   // (no name found, or the table full)
@@ -295,27 +298,42 @@ std::atomic<uint32_t> g_late_logged{0};      // how many of g_late's entries the
 
 // The innermost code address of a frozen thread that lies in the image and has a name: its pc, else a return address
 // on its stack. 0: none found.
-uint32_t frozen_code_address(const CONTEXT &ctx) {
+uint32_t frozen_code_address(const CONTEXT &ctx, uint32_t *callers = nullptr, int room = 0) {
     auto code = [](uint32_t a) {
         MEMORY_BASIC_INFORMATION m;
         return a >= 0x02000000 && a < 0x04000000 && VirtualQuery(reinterpret_cast<void *>(uintptr_t(a)), &m, sizeof m) &&
                m.State == MEM_COMMIT &&
                (m.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY));
     };
-    if (code(ctx.Eip) && *native_name_for(ctx.Eip, nullptr)) return ctx.Eip;
+    // (the first is the answer; `callers` takes the named ones that follow it up the stack, of other functions: a
+    // trivial leaf, or a stale slot, says little without them)
+    uint32_t first = code(ctx.Eip) && *native_name_for(ctx.Eip, nullptr) ? ctx.Eip : 0;
+    uint32_t last_function = 0;
+    if (first) native_name_for(first, &last_function);
+    int taken = 0;
     const auto *sp = reinterpret_cast<const uint32_t *>(ctx.Esp);
     MEMORY_BASIC_INFORMATION mi;
-    for (int k = 0; k < 1024; ++k) {
+    for (int k = 0; k < 1024 && (!first || taken < room); ++k) {
         if ((k == 0 || (reinterpret_cast<uintptr_t>(sp + k) & 0xFFF) == 0) &&
             (!VirtualQuery(sp + k, &mi, sizeof mi) || mi.State != MEM_COMMIT || (mi.Protect & (PAGE_GUARD | PAGE_NOACCESS))))
             break;
-        if (code(sp[k]) && *native_name_for(sp[k], nullptr)) return sp[k];
+        if (!code(sp[k])) continue;
+        uint32_t function = 0;
+        if (!*native_name_for(sp[k], &function)) continue;
+        if (!first) {
+            first = sp[k];
+            last_function = function;
+        } else if (callers && function != last_function) {
+            callers[taken++] = sp[k];
+            last_function = function;
+        }
     }
-    return 0;
+    return first;
 }
 
 void note_late_delivery(const CONTEXT &ctx) {
-    const uint32_t at = frozen_code_address(ctx);
+    uint32_t callers[5] = {};
+    const uint32_t at = frozen_code_address(ctx, callers, 5);
     uint32_t function = 0;
     if (!at || !*native_name_for(at, &function)) {
         ++g_late_elsewhere;
@@ -325,6 +343,8 @@ void note_late_delivery(const CONTEXT &ctx) {
     for (LateDelivery &l : g_late) {
         uint32_t held = l.function.load();
         if (!held) {   // (only the interrupt thread writes: no race for the slot)
+            for (int k = 0; k < 5; ++k) l.callers[k] = callers[k];
+            l.pc = ctx.Eip;
             l.at = at;
             l.function = function;
             held = function;
@@ -360,6 +380,15 @@ bool log_late_deliveries() {
             log_warn("kernel: frame callbacks waited over 50 ms for a safe point: the running thread was in %s (%08x, host "
                      "pc %08x); delivered by freezing it (P4: a loop without a safe point, unless the thread had just been "
                      "resumed)", name, guest, g_late[k].at.load());
+        if (g_late[k].pc.load() != g_late[k].at.load())
+            log_warn("kernel:   its own pc was %08x, outside the game's code: in a host call, the address above being the "
+                     "nearest named code on its stack (which may be a stale slot)", g_late[k].pc.load());
+        for (const std::atomic<uint32_t> &caller : g_late[k].callers) {   // (what stood above it on its stack)
+            if (!caller.load()) break;
+            uint32_t from = 0;
+            const char *above = native_name_for(caller.load(), &from);
+            log_warn("kernel:   above it on the stack: %s (%08x, host pc %08x)", above, from, caller.load());
+        }
         g_late_logged = k + 1;
     }
     return true;
