@@ -9,6 +9,7 @@
 #include "pad_steer.h"
 #include "vehicle.h"
 #include "guest.h"
+#include "guest_writes.h"
 #include "image.h"
 #include "kernel.h"
 #include "link.h"
@@ -143,6 +144,7 @@ DWORD WINAPI clock_pusher(void *) {
             // seconds since 2000-01-01 00:00 UTC (what the IOP derives from the RTC)
             const uint32_t secs = static_cast<uint32_t>(time(nullptr) - 946684800);
             uint8_t *p = gp(g_clock_addr);
+            guest_written();   // (a host thread writing guest RAM: guest_writes.h)
             wr32(p, secs);
             wr32(p + 4, 0);
             wr32(p + 8, 0);   // drive state OK

@@ -1,6 +1,7 @@
 #include "kernel.h"
 
 #include "guest.h"
+#include "guest_writes.h"
 #include "image.h"
 #include "link.h"
 #include "gt4/link/protocol.h"
@@ -187,6 +188,7 @@ void make_ready(Thread *t, bool front = false) {
 }
 
 void dispatch(Thread *t) {
+    guest_written();   // (guest code about to run: guest_writes.h)
     remove_ready(t);
     t->status = THS_RUN;
     g_running = t;
@@ -237,6 +239,7 @@ using AlarmFn = void (*)(int id, uint16_t ticks, uint32_t arg);
 // the runtime's completions, the alarms. Nothing here may allocate or free memory: the guest thread was frozen
 // wherever it was, possibly inside the C runtime's heap holding its lock.
 void deliver_pending() {
+    guest_written();   // (handlers about to run: guest_writes.h)
     g_in_interrupt = true;
     if (g_tick_pending) {
         g_tick_pending = false;

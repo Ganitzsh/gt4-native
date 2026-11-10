@@ -15,6 +15,7 @@
 // performs itself), and the return address swapped for runtime/record_stub.s. Interrupts are held from
 // entry to return (KernelScope), so their handlers write nothing in between.
 #include "guest.h"
+#include "guest_writes.h"
 #include "image.h"
 #include "kernel.h"
 #include "log.h"
@@ -317,7 +318,10 @@ DWORD WINAPI poke_thread(void *) {
             const uint32_t addr = poke_address(p, &end);
             if (*end != '=') return 0;
             const uint32_t word = static_cast<uint32_t>(strtoul(end + 1, &end, 16));
-            if (addr) *static_cast<volatile uint32_t *>(guest_ptr(addr)) = word;
+            if (addr) {
+                guest_written();   // (guest_writes.h)
+                *static_cast<volatile uint32_t *>(guest_ptr(addr)) = word;
+            }
             log_info("record: VBlank %u: [%08X] = %08X", kernel_frame_count(), addr, word);
             p = *end == ',' ? end + 1 : end;
         }

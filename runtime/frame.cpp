@@ -10,6 +10,7 @@
 // and each read served as soon as its block is sent. Nothing of the PS2's DMA channels, their registers or
 // their interrupts is left.
 #include "guest.h"
+#include "guest_writes.h"
 #include "kernel.h"
 #include "link.h"
 #include "load_stats.h"
@@ -27,6 +28,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <map>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -102,6 +105,94 @@ uint64_t identity_hash(const uint8_t *p, size_t n, uint64_t seed) {
     return (uint64_t(hi) << 32) | lo;
 }
 
+// The walk's hash memo (PLAN.md D5's profile, (1)): in a race the walk hashed about 4 MB a frame, the same texture
+// sets and model packets about 12 times each (their distinct contents total about 347 KB), about 620 us a frame on
+// the desktop. identity_hash(bytes, n, seed) is kept for the rest of the walk, keyed by the content's address, size
+// and seed (the seed carries a tex set's chained hash, so every value the host gets is the same as before), for
+// contents read in place from guest RAM only (a stack's or a frame buffer's bytes are hashed every time). It is
+// emptied whenever g_guest_writes moves (guest_writes.h lists every writer), and a value hashed while a write began
+// is not kept. The walk's own writes into guest RAM (the hash and sent fields it stores into records) are kept as
+// merged ranges, and a content overlapping one is hashed again. GT4_HASH_MEMO=0: off. GT4_HASH_MEMO_CHECK=1 (the
+// proof): every hit is hashed too and compared, the first differences logged; the totals in the 3,600-VBlank line.
+const bool g_memo_on = [] {
+    const char *e = getenv("GT4_HASH_MEMO");
+    return !(e && *e == '0');
+}();
+const bool g_memo_check = [] {
+    const char *e = getenv("GT4_HASH_MEMO_CHECK");
+    return e && *e && *e != '0';
+}();
+std::atomic<uint64_t> g_memo_hits{0}, g_memo_misses{0}, g_memo_checked{0}, g_memo_mismatches{0};
+
+struct HashMemo {
+    struct Key {
+        uintptr_t at;
+        uint32_t n;
+        uint64_t seed;
+        bool operator==(const Key &o) const { return at == o.at && n == o.n && seed == o.seed; }
+    };
+    struct KeyHash {
+        size_t operator()(const Key &k) const {
+            uint64_t h = k.seed ^ (uint64_t(k.at) << 32 | k.n);
+            h ^= h >> 31;
+            h *= 0xBF58476D1CE4E5B9ull;
+            h ^= h >> 29;
+            return static_cast<size_t>(h);
+        }
+    };
+    std::unordered_map<Key, uint64_t, KeyHash> map;
+    uint32_t generation = 0;
+    std::map<uintptr_t, uintptr_t> written;   // the walk's own writes into guest RAM, merged: start -> end
+    uint64_t hits = 0, misses = 0;
+
+    // Before the walk writes `n` bytes at `a` (a record's fields)
+    void wrote(uintptr_t a, size_t n) {
+        if (!n || !in_guest_ram(a, n)) return;
+        uintptr_t start = a, end = a + n;
+        auto it = written.upper_bound(start);
+        if (it != written.begin() && std::prev(it)->second >= start) --it;
+        while (it != written.end() && it->first <= end) {
+            start = std::min(start, it->first);
+            end = std::max(end, it->second);
+            it = written.erase(it);
+        }
+        written.emplace(start, end);
+    }
+    bool overlapsWrite(uintptr_t a, size_t n) const {
+        auto it = written.upper_bound(a);
+        if (it != written.begin() && std::prev(it)->second > a) return true;
+        return it != written.end() && it->first < a + n;
+    }
+
+    // identity_hash(bytes, n, seed), from the memo where it can be (inGuest: the bytes are read in place in guest RAM)
+    uint64_t hash(const uint8_t *bytes, uint32_t n, uint64_t seed, bool inGuest) {
+        if (!g_memo_on || !inGuest) return identity_hash(bytes, n, seed);
+        const uint32_t generation_now = g_guest_writes.load();
+        if (generation_now != generation) {
+            map.clear();
+            generation = generation_now;
+        }
+        const uintptr_t at = reinterpret_cast<uintptr_t>(bytes);
+        const Key key{at, n, seed};
+        if (auto it = map.find(key); it != map.end() && !overlapsWrite(at, n)) {
+            ++hits;
+            if (g_memo_check) {
+                const uint64_t fresh = identity_hash(bytes, n, seed);
+                g_memo_checked.fetch_add(1);
+                if (fresh != it->second && g_memo_mismatches.fetch_add(1) < 10)
+                    log_warn("frame: the hash memo's value for %08x + %u (seed %016llx) is %016llx, the bytes' %016llx",
+                             static_cast<unsigned>(at), n, static_cast<unsigned long long>(seed),
+                             static_cast<unsigned long long>(it->second), static_cast<unsigned long long>(fresh));
+            }
+            return it->second;
+        }
+        ++misses;
+        const uint64_t value = identity_hash(bytes, n, seed);
+        if (g_guest_writes.load() == generation_now) map[key] = value;   // (a write began meanwhile: not kept)
+        return value;
+    }
+};
+
 // Where a walk's time goes (logged with the tick counts): inside link_send (copying, and waiting for room when the host
 // is behind: it sleeps 1 ms at a time) and in synchronous reads (waiting for the host's pixels). One per kick, passed
 // down the walk (kicks on two threads, or a nested one, each keep their own).
@@ -110,6 +201,7 @@ struct WalkTimes {
     // its longest synchronous read: how long, into which guest address, how many qwords (for the session's longest)
     int64_t longestRead = 0;
     uint32_t readDestination = 0, readQwords = 0;
+    HashMemo memo;   // (this walk's)
 };
 int64_t qpc_now() {
     LARGE_INTEGER t;
@@ -164,13 +256,14 @@ void send_tex_set(WalkTimes &times, uint8_t *payload, uint32_t bytes) {
                                         (uint64_t(uploads[k].w) << 32 | uint64_t(uploads[k].h) << 48),
                                     uploads[k].qwords};
         for (const uint64_t v : layout) hash = (hash ^ v) * 0x100000001B3ull;
-        hash = (hash ^ identity_hash(bytes, n, hash)) * 0x9E3779B97F4A7C15ull;
+        hash = (hash ^ times.memo.hash(bytes, n, hash, data[k].empty())) * 0x9E3779B97F4A7C15ull;
         hash ^= hash >> 31;
     }
     r.hashLow = static_cast<uint32_t>(hash);
     r.hashHigh = static_cast<uint32_t>(hash >> 32);
     g_set_slots.add(gfx::SetSlots::of(r, uploads), [](uint64_t gone) { g_sent_sets.erase(gone); });
     r.sent = g_sent_sets.insert(hash).second ? 1u : 0u;
+    times.memo.wrote(reinterpret_cast<uintptr_t>(payload), sizeof r);
     std::memcpy(payload, &r, sizeof r);
     if (!r.sent) return;
     // each upload's bytes, or a reference to a content the host keeps (gfx::kDataReference)
@@ -227,10 +320,11 @@ void send_block(WalkTimes &times, uint8_t *block, uint32_t bytes) {
                 copy = read_mapped(ptr(m.source), n);
                 bytes = copy.data();
             }
-            const uint64_t hash = identity_hash(bytes, n, 0xCBF29CE484222325ull ^ n);
+            const uint64_t hash = times.memo.hash(bytes, n, 0xCBF29CE484222325ull ^ n, copy.empty());
             m.hashLow = static_cast<uint32_t>(hash);
             m.hashHigh = static_cast<uint32_t>(hash >> 32);
             m.sent = g_sent_models.add(hash, [](uint64_t) {}) ? 1u : 0u;
+            times.memo.wrote(reinterpret_cast<uintptr_t>(block + at + sizeof h), sizeof m);
             std::memcpy(block + at + sizeof h, &m, sizeof m);
             if (m.sent) {
                 const uint32_t head[2] = {m.source, n};
@@ -266,6 +360,7 @@ void send_block(WalkTimes &times, uint8_t *block, uint32_t bytes) {
             times.readDestination = r.destination;
             times.readQwords = r.qwords;
         }
+        guest_written();   // (the read's pixels into guest memory: guest_writes.h)
         for (uint32_t q = 0; q < r.qwords; ++q) std::memcpy(ptr(r.destination + q * 16), &pixels[q * 16], 16);
     }
 }
@@ -413,11 +508,16 @@ void log_tick_counts() {
     log_info("frame: ticks during a walk %u (deferred %u, the longest by %.3f ms; past the ring %u, merged %u); "
              "walks %u, over 16 ms %u, over 50 ms %u, the longest %.3f ms at VBlank %u (%.3f waiting for ring room, "
              "%.3f in reads); the longest synchronous read %.3f ms at VBlank %u (%u qwords into %08x); nested kicks "
-             "%u; link records %llu in %llu publishes",
+             "%u; link records %llu in %llu publishes; hash memo %.1f hits and %.1f misses a walk (%llu checked, "
+             "%llu differ)",
              g_ticks_mid_walk.load(), g_ticks_deferred.load(), g_longest_deferral.load() * ms, g_ticks_overflowed.load(),
              g_ticks_merged.load(), g_walks.load(), g_walks_over16.load(), g_walks_over50.load(), longest * ms, longestAt,
              longestSend * ms, longestRead * ms, read * ms, readAt, readQwords, readDestination, g_kicks_nested.load(),
-             static_cast<unsigned long long>(sent.records), static_cast<unsigned long long>(sent.publishes));
+             static_cast<unsigned long long>(sent.records), static_cast<unsigned long long>(sent.publishes),
+             g_walks.load() ? static_cast<double>(g_memo_hits.load()) / g_walks.load() : 0.0,
+             g_walks.load() ? static_cast<double>(g_memo_misses.load()) / g_walks.load() : 0.0,
+             static_cast<unsigned long long>(g_memo_checked.load()),
+             static_cast<unsigned long long>(g_memo_mismatches.load()));
     if (const uint32_t calls = g_vehicle_calls.load())
         log_info("frame: vehicles only (kOptionSceneRecords 2): %u kicks, %u blocks sent; %.1f us a kick on average, the "
                  "longest %.1f us", calls, g_vehicle_blocks.load(), g_vehicle_ticks.load() * ms * 1000.0 / calls,
@@ -606,6 +706,8 @@ extern "C" void gt4_replace_func_004A11F8(uint32_t pair) {
         walk(times, list);
     }
     times.send = link_send_wait_ticks() - waited;
+    g_memo_hits.fetch_add(times.memo.hits);
+    g_memo_misses.fetch_add(times.memo.misses);
     --g_in_walk;
     const int64_t took = qpc_now() - start;
     {

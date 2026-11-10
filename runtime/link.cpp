@@ -2,6 +2,7 @@
 
 #include "gt4/link/protocol.h"
 #include "guest.h"
+#include "guest_writes.h"
 #include "kernel.h"
 #include "log.h"
 #include "runtime.h"
@@ -450,6 +451,8 @@ void link_poll() {
                 const uint32_t have = (n - 8) / 16;
                 const uint32_t copy = (qwc < g_image_qwc ? qwc : g_image_qwc);
                 const uint32_t got = copy < have ? copy : have;
+                if (in_guest_ram(reinterpret_cast<uintptr_t>(g_image_dst), got * 16u))
+                    guest_written();   // (a read into guest memory: guest_writes.h)
                 std::memcpy(g_image_dst, payload + 8, got * 16);
                 g_image_done = true;
             } else {
@@ -636,6 +639,7 @@ void link_async_deliver(void *dst) {
     for (Landed &l : g_landed) {
         if (!l.fresh || l.dst != dst) continue;
         if (g_hdr->frame - l.frame <= kLandedFrames) {
+            guest_written();   // (pixels landing in guest memory: guest_writes.h)
             std::memcpy(dst, l.bytes, l.size);
             ++g_async_delivered;
         } else {
