@@ -1714,24 +1714,29 @@ draw numbers are those of replay 2514, and the draws are found by what they are,
   exists. The debug host and tools of the hunts and the never-dark sweep are on origin as `debug/f-n3-debug` (README
   in `tools/lanef/`), deleted when N3 closes.
 - **Step 1, the mechanism** (lanes F and B write it together, lane B the back end's skip; lane A the flag): the
-  verdict per (material, mesh item) in `SceneCache` (`platform/scene/scene_cache.h`), beside the `MaterialTable`: a
-  map keyed by (`MaterialId`, the mesh's `MeshKey`, item index), filled in `SceneCache::assign` at each view's
-  `ViewEnd` on the front end's thread, and delivered per item on `FrameList::ViewOnList` as a flag parallel to
-  `materials`, which the GS back end reads when it executes the view's modeled draws (lane B). A new key is judged
-  there synchronously, not on the mesh worker: the cheap material tests first (layer state, vertex colour,
-  centre/rim), then only the items passing them get `decodeBatch()` from the batch where it lies (`ItemSource::batch`)
-  for the up-facing share, footprint width and texel size; memoised, so each key is judged once. A view's `ViewEnd`
-  comes before its list is cut, so the verdict is there when the draws execute: 0 frames late. Waiting for the mesh
-  worker would be late by the decode, several frames at a course's first frames, the pop N3 must not have. The one
-  exception is a list cut inside a view (a read in the middle of the main view; none expected at night): items drawn
-  before their verdict keep GT4's look and are counted in `n3Pending`. The up-facing share comes through the
-  instance's `objectToWorld` at the item's first sight, since a mesh is shared between instances and only the share
-  depends on the rotation (every lit-road item has an identity rotation today); an instance of a judged item whose
-  rotation differs counts in `n3LaterFail`, so a tilted copy can't inherit a flat verdict. The GS path skips the
-  item's draws in a `kViewMain` view on a `kFrameLampsOn` frame with `lighting.night = enhanced` only; `original`
-  never builds the map (assign runs only with the scene split on). Counters per frame: `n3Judged`, `n3Skipped` (items
-  and draws), `n3SkipGatedOff`, `n3LaterFail` (a later batch or instance of a cached item that would fail),
-  `n3Pending`; the judging's cost in B6's front-end CPU line.
+  verdict per (texture, mesh item) in `SceneCache` (`platform/scene/scene_cache.h`), beside the `MaterialTable`: a map
+  keyed by (the texture's identity, its content's: `GsFrontend::textureIdentity` mixes the GS layout fields with the
+  hash of the texels, so other content at the same place is a new key; the mesh's `MeshKey`; item index), what the
+  verdict reads, the layer state still tested per material first (lane F, 2026-11-10: a `MaterialId` key was renewed
+  for a material unseen 300 frames, so the course was judged again as the car came back to it, B6's front end at 620
+  against 222 us a scene frame; verdicts are kept 36,000 frames unseen), filled in `SceneCache::litRoad`, called from
+  `GsFrontend::sceneView` at each view's `ViewEnd` on the front end's thread, and delivered per item on
+  `FrameList::ViewOnList` as a flag parallel to `materials`, which the GS back end reads when it executes the view's
+  modeled draws (lane B). A new key is judged there synchronously, not on the mesh worker: the cheap material tests
+  first (the layer state, a known texture summary and its centre/rim under 3), then only the items passing them get
+  `decodeBatch()` from the batch where it lies (`ItemSource::batch`) for the vertex colour, the up-facing share,
+  footprint width and texel size; memoised, so each key is judged once. A view's `ViewEnd` comes before its list is
+  cut, so the verdict is there when the draws execute: 0 frames late. Waiting for the mesh worker would be late by the
+  decode, several frames at a course's first frames, the pop N3 must not have. The one exception is a list cut inside
+  a view (a read in the middle of the main view; none expected at night): items drawn before their verdict keep GT4's
+  look (not counted apart today). The up-facing share comes through the instance's `objectToWorld` at the item's first
+  sight, since a mesh is shared between instances and only the share depends on the rotation (every lit-road item has
+  an identity rotation today); an instance of a judged item whose rotation differs counts in `n3LaterFail`, so a
+  tilted copy can't inherit a flat verdict. The GS path skips the item's draws in a `kViewMain` view on a
+  `kFrameLampsOn` frame with `lighting.night = enhanced` only; `original` never builds the map (it runs only with the
+  scene split on). Counters per frame: `n3Judged`, `n3Skipped` (items and draws), `n3SkipGatedOff`, `n3LaterFail` (a
+  later batch or instance of a cached item that would fail), `n3Misaligned` (a view given no flags because they
+  wouldn't line up with its materials); the judging's cost in B6's front-end CPU line.
 - **The coverage gate** (the architect, 2026-11-09, from lane F's never-dark phases; lane B's review): a skip also
   needs a lamp that replaces the light it removes, so the road is never darker than GT4's where nothing of ours lights
   it (a tunnel's lights are not lamp billboards). It decides at execute time in `GsnScene`, with the frame's own
@@ -1740,8 +1745,8 @@ draw numbers are those of replay 2514, and the draws are found by what they are,
   lamps at `executeBegin`, per main view keyed by view id, and `nightPrepare` reuses that result, so lamps are not
   promoted twice and `LampTotals` don't double (a Light whose target no view binds gets no lamps, as today); (c) each
   candidate's footprint, the centre and radius of all of its item's decoded vertices in object space (the skip removes
-  the whole item), is kept in lane F's verdict entry, whose key (`MaterialId`, `MeshKey`, item) fixes the geometry,
-  and delivered as `ViewOnList::skipFootprint`, one float4 per material parallel to `skip` and written at
+  the whole item), is kept in lane F's verdict entry, whose key (texture identity, `MeshKey`, item) fixes the
+  geometry, and delivered as `ViewOnList::skipFootprint`, one float4 per material parallel to `skip` and written at
   `firstMaterial` like it (0 where `skip` is 0); the back end takes the centre through the instance's `objectToView`
   each frame and the radius times the instance's largest axis scale. The disc test runs in view space, where the
   Lights already are (`gfx::scene::Light`, kept so by `promote()`): no inverse is needed. A candidate's draws are
