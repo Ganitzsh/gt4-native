@@ -381,9 +381,10 @@ bool log_late_deliveries() {
                      "pc %08x); delivered by freezing it (P4: a loop without a safe point, unless the thread had just been "
                      "resumed)", name, guest, g_late[k].at.load());
         if (g_late[k].pc.load() != g_late[k].at.load())
-            log_warn("kernel:   its own pc was %08x, outside the game's code: in a host call, the address above being the "
-                     "nearest named code on its stack (which may be a stale slot)", g_late[k].pc.load());
-        for (const std::atomic<uint32_t> &caller : g_late[k].callers) {   // (what stood above it on its stack)
+            log_warn("kernel:   its own pc was %08x, not in named code (a host call, most likely): the function above is "
+                     "the nearest named code on its stack", g_late[k].pc.load());
+        // (what stood above it: named code addresses found on its stack, not an unwind: a stale slot can be among them)
+        for (const std::atomic<uint32_t> &caller : g_late[k].callers) {
             if (!caller.load()) break;
             uint32_t from = 0;
             const char *above = native_name_for(caller.load(), &from);

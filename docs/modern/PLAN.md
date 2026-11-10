@@ -2276,8 +2276,10 @@ it. Depends: none. Acceptance:
   from the array's end, which the matched source writes as the address of the next local; this build's frame puts
   that local elsewhere, so the loop stepped through the address space for a few hundred milliseconds, and the car
   screen stalled as long. `game_src/func_0013C500.cpp` writes the end as `arr + 64`: 0 late deliveries on that route
-  after (14,400 deliveries), `DIFFTEST` and `hook_lint` pass. Other matched sources may write an array's end the
-  same way: the diagnostic names them when play meets them.
+  after (14,400 deliveries), `DIFFTEST` and `hook_lint` pass. Its sibling `getAllColors` (0013C690) had the same
+  loop and has the same fix (`game_src/func_0013C690.cpp`; no route of mine reaches it). A scan of the decomp's
+  sources for reverse-destruction loops starting at another local's address found these two and no other; loops
+  written another way aren't covered, and the diagnostic names any that play meets.
 
 **P5: Spike R17, guest memory beyond 32 MB (S, lane A).** RISKS.md R17: a debug runtime build, nothing to main.
 Acceptance: the answer and its measurements in R17. If it finds a use, a ticket follows.
