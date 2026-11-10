@@ -22,16 +22,19 @@ own gate.
    builds with two jobs.
 2. **Land what is finished.** Done: the hash memo (664f506; the game's CPU 1.69 to 1.63 ms a frame over a race
    session) and N3 step 1's verdict map, with a fix its gates asked for (PLAN N3). Left: `wip/m13-help-band`.
-3. **Night lighting in presets.** A look at six frames of `lap_ssr5f_boot` three ways (2026-11-10; local stills,
-   `build/night_look` of the session's worktree): `enhanced` over GT4's baked lamp light adds our lamps' light to
-   the road, walls and pillars near them and leaves the rest as it is; with N3's skip on and nothing else, the
-   baked pools go and the road is dark wherever none of our lamps reaches (frame 9,725, the orange pools under
-   the overpass). So the skip can't ship before its coverage gate, the albedo under a skipped pool and the lamp
-   profile, which is most of N3 and not started on the back end. Proposed, for the owner to accept or refuse:
-   `lighting.night = enhanced` enters presets as it is, GT4's baked light kept (the road near a lamp is lit by
-   both), and N3's skip moves after the release. Either way, next here: the Odin's cost of `enhanced` (C6b), F9
-   (lamp lenses, brake and tail lights), and the player's headlights lighting the road, without shadows (F6's
-   gather switch alone).
+3. **Night lighting, as modern games do it** (the owner, 2026-11-10: real lights, and a place in the middle of
+   nowhere darker than one in a city). So no shortcut over GT4's baked lamp light: the stills of 2026-11-10
+   (`lap_ssr5f_boot`, three ways) show `enhanced` only adding to it, and N3's skip alone leaving the road dark
+   wherever none of our lamps reaches (frame 9,725, the pools under the overpass). In scope, in order:
+   - N3 whole: the coverage gate (a baked pool goes only where one of our lamps replaces it), the albedo under a
+     skipped pool, the never-dark runs, the hunts on the night courses left;
+   - F7 (light profiles): the street lamps' spread, which the coverage gate's disc needs, and the headlights' beam;
+   - the player's and the other cars' headlights lighting the road (F6's gather switch), then F9 (lamp lenses,
+     brake and tail lights);
+   - F10 (new, PLAN): the night's ambient from the place, measured per view from its sky and its lamps, never one
+     constant; a course without lamps stays as dark as GT4 made it, lit by headlights;
+   - F6's shadows from the player's headlights, after B11's shadow atlas (step 4);
+   - then `lighting.night = enhanced` in presets, after the Odin's cost (C6b) and the owner's look.
 4. **Day lighting, and hybrid in presets with it:** B10 (per-pixel lighting and material classes), B11 (the
    course's shadows on cars), B12 (GTAO). Hybrid alone draws the PS2 path's picture at a higher CPU cost, so it
    enters presets low-ultra only with B10 (B8 step 5, as PLAN has it): the quiet-window `PERF`, the front end's
@@ -47,9 +50,9 @@ own gate.
 8. **Release 0.1.1** from main, after an Odin pass (C6b).
 
 **Cut until after the release.** B9 (showroom and photo views stay on the PS2 path), B13 (SSR, probes), B14 (sky,
-froxel fog), B15 and F4 (modern mode, tone map, HDR, modern bloom and flares), B18-B23, F3, F5, F6's shadows, F7,
-F8, N4, E4, E6-E9, E10, M10-M12 and Q1-Q8, D15, D16, B24's later steps, B26 (unless its picture bug is seen),
-C12 step 4, split-screen relight and TAA, C7.
+froxel fog), B15 and F4 (modern mode, tone map, HDR, modern bloom and flares), B18-B23, F3, F5, F6's shadows
+beyond the player's headlights, F8 (volumetric light), N4, E4, E6-E9, E10, M10-M12 and Q1-Q8, D15, D16, B24's
+later steps, B26 (unless its picture bug is seen), C12 step 4, split-screen relight and TAA, C7.
 
 **What "no PS2 patterns" means here.** PS2_REMOVAL.md has the full table. After step 6, what is left is the game's
 own logic and data, which a recompiled game can't shed: its 32-bit address space, the 60 Hz frame, the kernel and
@@ -167,8 +170,7 @@ Nothing is left only on disk: unfinished work is on origin under wip/, parked/ o
 ## Waiting on the owner
 
 - Install main-874f32e on the Odin; check a night race on S.S. Route 5 for the bands.
-- Night lighting: accept or refuse `lighting.night = enhanced` in presets with GT4's baked lamp light kept (the
-  Finish line's step 3), from a night race with the playtest settings file.
+- Night lighting: answered 2026-11-10 (as modern games do it, the ambient by place: the Finish line's step 3).
 - Rumble: run the 3-pulse test in a race and say which buzz; check the GT4 Native shortcut's Steam vibration toggle.
 - Try the native Linux build (gt4-native.sh shortcut) for speed: it takes the host out of FEX.
 - Optional: a recorded creep under the S.S. Route 5 overpass (the popping light); a Hong Kong dusk lap.
