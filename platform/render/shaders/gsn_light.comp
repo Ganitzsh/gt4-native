@@ -27,6 +27,12 @@ layout(set = 0, binding = 8) uniform sampler2D localLuminance;   // gsn_night_lu
 // p.skipMasked is 1 (else a stand-in: nothing skipped). For the albedo's stand-in under skipped items (lane F);
 // GT4_LIGHT_VIEW=4 shows it.
 layout(set = 0, binding = 9) uniform sampler2D skipMask;
+// The scene target's side channels (render.scene = hybrid: B8 step 2, B10's lit channel), read only when p.side is 1
+// (else stand-ins): the item's view-space normal facing the eye (w: 1 where a blended draw veils the surface) and
+// GT4's lit vertex colour (1.0 = 0xFF; the GS modulates the texture by it, 0x80 being 1). Both 0 where no item's
+// surface is the pixel's (the sky, untagged draws, a partition's reset).
+layout(set = 0, binding = 10) uniform sampler2D sideNormal;
+layout(set = 0, binding = 11) uniform sampler2D sideLit;
 layout(push_constant) uniform Light {
     vec2 size;
     float aoStrength;   // 0: no occlusion
@@ -42,7 +48,7 @@ layout(push_constant) uniform Light {
     float distanceA;    // view distance = distanceA / (Z + distanceB)
     float distanceB;
     float maxDistance;  // metres: farther is not geometry
-    float pad1;
+    float side;         // 1: sideNormal and sideLit hold this Light's side channels; 0: stand-ins, not read
     vec4 inset;         // the mirror, render pixels (x0, y0, x1, y1, inclusive); x1 < x0: none
 } p;
 
@@ -82,24 +88,46 @@ float nightLocal(ivec2 q) {
         }
     return s.y > 1e-3 ? exp(s.x / s.y) : 0.0;
 }
-// `linear`: the pixel's colour before the occlusion (the albedo's; lamp light is not dimmed by ambient occlusion).
-vec3 nightLight(ivec2 q, ivec2 last, vec3 linear) {
+// The surface's own colour and normal from the side channels (B10): the pixel over GT4's lit vertex colour is the
+// texture, to rounding, since the GS modulates per pixel (texel x colour / 0x80). False where they can't be had: no
+// item's surface here, a blended draw veiling it, a vertex colour under the floor (the quotient's noise: 8 of 255 is
+// a factor of 1 / 16), or a pixel that reached the target's ceiling (the product was clamped, the quotient is low).
+// `gs`: the pixel as the target holds it (colour / 255).
+const float kLitFloor = 8.0 / 255.0;
+bool sideSurface(ivec2 q, vec3 gs, out vec3 albedo, out vec3 n) {
+    if (p.side == 0.0) return false;
+    const vec4 normal = texelFetch(sideNormal, q, 0);
+    if (normal.w > 0.0 || !(dot(normal.xyz, normal.xyz) >= 0.25)) return false;   // (a NaN normal fails too)
+    const vec3 lit = texelFetch(sideLit, q, 0).rgb;
+    if (min(lit.r, min(lit.g, lit.b)) < kLitFloor || max(gs.r, max(gs.g, gs.b)) >= 254.5 / 255.0) return false;
+    const vec3 texel = clamp(gs / (lit * (255.0 / 128.0)), vec3(0.0), vec3(1.0));
+    albedo = min(pow(texel, vec3(2.2)), vec3(0.9));
+    n = normalize(normal.xyz);
+    return true;
+}
+// `linear`: the pixel's colour before the occlusion (the albedo's; lamp light is not dimmed by ambient occlusion);
+// `gs`: the same as the target holds it.
+vec3 nightLight(ivec2 q, ivec2 last, vec3 linear, vec3 gs) {
     if (p.inset.z >= p.inset.x && all(greaterThanEqual(vec2(q), p.inset.xy)) && all(lessThanEqual(vec2(q), p.inset.zw)))
         return vec3(0.0);   // the rear-view mirror: another view (step 2: unlit)
     const float d = nightDistance(q);
     if (!(d > 0.0 && d < p.maxDistance)) return vec3(0.0);
-    const float local = nightLocal(q);
-    if (!(local > 0.0)) return vec3(0.0);
-    const vec3 albedo = clamp(linear / max(local, 1e-3) * 0.18, vec3(0.0), vec3(0.9));
-    // The normal: from the nearer neighbour on each axis, towards the camera.
     const vec3 P = nightPosition(q, d);
-    const ivec2 l = max(q - ivec2(1, 0), ivec2(0)), r = min(q + ivec2(1, 0), last);
-    const ivec2 u = max(q - ivec2(0, 1), ivec2(0)), b = min(q + ivec2(0, 1), last);
-    const float dl = nightDistance(l), dr = nightDistance(r), du = nightDistance(u), db = nightDistance(b);
-    const vec3 ex = abs(dr - d) < abs(dl - d) ? nightPosition(r, dr) - P : P - nightPosition(l, dl);
-    const vec3 ey = abs(db - d) < abs(du - d) ? nightPosition(b, db) - P : P - nightPosition(u, du);
-    vec3 n = normalize(cross(ex, ey));
-    if (dot(n, P) > 0.0) n = -n;
+    vec3 albedo, n;
+    if (!sideSurface(q, gs, albedo, n)) {
+        // Without the side channels: the albedo estimated from the picture, the normal from the Z buffer.
+        const float local = nightLocal(q);
+        if (!(local > 0.0)) return vec3(0.0);
+        albedo = clamp(linear / max(local, 1e-3) * 0.18, vec3(0.0), vec3(0.9));
+        // The normal: from the nearer neighbour on each axis, towards the camera.
+        const ivec2 l = max(q - ivec2(1, 0), ivec2(0)), r = min(q + ivec2(1, 0), last);
+        const ivec2 u = max(q - ivec2(0, 1), ivec2(0)), b = min(q + ivec2(0, 1), last);
+        const float dl = nightDistance(l), dr = nightDistance(r), du = nightDistance(u), db = nightDistance(b);
+        const vec3 ex = abs(dr - d) < abs(dl - d) ? nightPosition(r, dr) - P : P - nightPosition(l, dl);
+        const vec3 ey = abs(db - d) < abs(du - d) ? nightPosition(b, db) - P : P - nightPosition(u, du);
+        n = normalize(cross(ex, ey));
+        if (dot(n, P) > 0.0) n = -n;
+    }
     // The lights: the directional ones, then the pixel's cluster.
     vec3 sum = vec3(0.0);
     for (uint i = 0u; i < header.directionalCount; ++i) {
@@ -146,7 +174,7 @@ void main() {
         linear *= mix(1.0, sum / weights, p.aoStrength);
     }
     // The lamps: after the occlusion (their light is not ambient), before the grades.
-    if (p.night > 0.0) linear += nightLight(q, last, unoccluded) * p.night;
+    if (p.night > 0.0) linear += nightLight(q, last, unoccluded, c.rgb) * p.night;
     if (p.grade > 0.0) {
         vec3 x = linear;
         // Vibrance: muted colours gain the most saturation.

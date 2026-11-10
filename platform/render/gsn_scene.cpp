@@ -255,7 +255,7 @@ struct GsnScene::Impl {
     // where the partition wrote Z (gsn_side_reset.*: material 0, GT4's colour as it is).
     bool hybrid = false;
     struct SideImages {
-        vk::Image normal, material, depth;
+        vk::Image normal, material, depth, lit;   // lit: B10's channel, GT4's lit vertex colour (modern_side.frag)
         VkExtent2D grown{};
     };
     std::unordered_map<uint32_t, SideImages> sideTargets;   // by the view's colour target
@@ -309,11 +309,13 @@ struct GsnScene::Impl {
         double microseconds = 0.0;   // the pass's time on the render thread
     } lampTotals;
     uint64_t nightSplitSkipped = 0;   // Lights not relit: their target holds more than one main view (split screen)
+    uint64_t nightSideLights = 0;     // Lights relit from the side channels (GT4_NIGHT_SIDE=1, hybrid)
     // gsn_light.comp's push constants from `night` on (offset 40): mirrored field for field.
     struct NightPush {
         float night = 0.0f, skipMasked = 0.0f;   // skipMasked: 1 when binding 9 holds the Light's skip mask (N3)
         float focal[2] = {1.0f, 1.0f}, centre[2] = {0.0f, 0.0f};
-        float distanceA = 0.0f, distanceB = 0.0f, maxDistance = 0.0f, pad1 = 0.0f;
+        float distanceA = 0.0f, distanceB = 0.0f, maxDistance = 0.0f;
+        float side = 0.0f;   // 1 when bindings 10 and 11 hold the Light's side channels (hybrid: B8 step 2, B10)
         float inset[4] = {1.0f, 1.0f, 0.0f, 0.0f};   // x1 < x0: no mirror
     };
     static_assert(sizeof(NightPush) == 56);
@@ -724,12 +726,15 @@ struct GsnScene::Impl {
         for (vk::Buffer& b : parityBlocks) vk::destroy(device, b);
         for (vk::Buffer& b : parityStagingRing) vk::destroy(device, b);
         for (auto& [id, side] : sideTargets)
-            for (vk::Image* i : {&side.normal, &side.material, &side.depth}) vk::destroy(device, *i);
+            for (vk::Image* i : {&side.normal, &side.material, &side.depth, &side.lit}) vk::destroy(device, *i);
         for (vk::Buffer& b : sideItemRing) vk::destroy(device, b);
         vk::destroy(device, sidePass);
         vk::destroy(device, sideResetPass);
         vk::destroy(device, sideViewPass);
         vk::destroy(device, sideVeilPass);
+        if (hybrid && nightSideLights)
+            std::printf("Night side channels: %llu Lights relit from the surface's own colour and normal\n",
+                        static_cast<unsigned long long>(nightSideLights));
         if (hybrid)
             std::printf("Hybrid side channels: %llu passes (%llu with a reset), %llu items drawn, %llu blended draws marking veiled\n",
                         static_cast<unsigned long long>(sidePasses), static_cast<unsigned long long>(sideResets),
@@ -1600,6 +1605,7 @@ void GsnScene::Impl::planSkips() {
 void GsnScene::Impl::planParity() {
     paritySpans.clear();
     parityAt.assign(frame.draws.size() + 1, 0);
+    sideClearedThisList.clear();   // (this list's: a list that plans no side pass must not read the last one's channels)
     if (!parity || frame.views.empty() || frame.models.empty() || !ex.jobs) return;
     parityView.setRotate(!device.provokingLast);
     // B8 step 4: GT4_SCENE_READS=modern lets the game's reads see the substituted picture (R9's per-reader checks)
@@ -2049,6 +2055,23 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
             NightBuffers nightBuffers;
             const bool lamps = night > 0.0f && nightPrepare(l, si, colour.view, depthOnly, nightPush, nightBuffers);
             nightPush.skipMasked = masked ? 1.0f : 0.0f;
+            // The relight from the surface's own colour and normal (B10's channels, in hybrid), where this Light's
+            // target has them from this list's side passes. GT4_NIGHT_SIDE=1 until its lamps are tuned to it (rule 10).
+            static const bool nightSide = [] { const char* v = std::getenv("GT4_NIGHT_SIDE"); return v && *v == '1'; }();
+            SideImages* side = nullptr;
+            if (lamps && nightSide && hybrid && sideClearedThisList.count(l.target)) {
+                auto it = sideTargets.find(l.target);
+                if (it != sideTargets.end() && it->second.normal.valid() && it->second.lit.valid() &&
+                    it->second.normal.extent.width >= e.width && it->second.normal.extent.height >= e.height)
+                    side = &it->second;
+            }
+            if (side) {
+                vk::toSampled(b, side->normal, vk::kCompute);
+                vk::toSampled(b, side->lit, vk::kCompute);
+                b.flush(command);
+                nightPush.side = 1.0f;
+                ++nightSideLights;
+            }
             vk::bind(command, lightPass);
             vk::Descriptors()
                 .sampled(0, colour.view, samplers[0])
@@ -2063,6 +2086,8 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
                                sizeof(uint32_t) * render::kClusterCount * render::kMaxLightsPerCluster)
                 .sampled(8, lamps ? nightLocal.view : ao.view, samplers[0])
                 .sampled(9, masked ? skipMask.view : ao.view, samplers[0])
+                .sampled(10, side ? side->normal.view : ao.view, samplers[0])
+                .sampled(11, side ? side->lit.view : ao.view, samplers[0])
                 .push(command, lightPass);
             const LightPush k{{float(e.width), float(e.height)}, lighting.occlusion, kZScale, lighting.grade, 1.18f, 0.3f, 1.0f,
                               lightView, kAoStep, nightPush};
@@ -3256,14 +3281,15 @@ void GsnScene::Impl::runSide(const SideBound& bound) {
     ensureWork(side.normal, side.grown, extent, VK_FORMAT_R16G16B16A16_SFLOAT, usage, "gsn side normal");
     ensureWork(side.material, side.grown, extent, VK_FORMAT_R32_UINT, usage, "gsn side material");
     ensureWork(side.depth, side.grown, extent, VK_FORMAT_R32_SFLOAT, usage, "gsn side depth");
-    for (vk::Image* i : {&side.normal, &side.material, &side.depth}) vk::toColor(b, *i, first);
+    ensureWork(side.lit, side.grown, extent, VK_FORMAT_R16G16B16A16_SFLOAT, usage, "gsn side lit");
+    for (vk::Image* i : {&side.normal, &side.material, &side.depth, &side.lit}) vk::toColor(b, *i, first);
     vk::toDepth(b, depth);
     b.flush(command);
     if (!sidePass.valid()) {
         vk::GraphicsDesc desc;
         desc.vertex = shaders::modern_side_vert();
         desc.fragment = shaders::modern_side_frag();
-        desc.colors = {VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R32_UINT, VK_FORMAT_R32_SFLOAT};
+        desc.colors = {VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R32_UINT, VK_FORMAT_R32_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT};
         desc.depth = kDepth;
         desc.stencil = kDepth;
         desc.depthTest = true;
@@ -3301,11 +3327,12 @@ void GsnScene::Impl::runSide(const SideBound& bound) {
         veil.colors = desc.colors;
         veil.depth = kDepth;
         veil.stencil = kDepth;
-        // (one blend state for all three, as independentBlend is not required: alpha only, which the material and depth
-        // channels, single-channel R32 formats, don't have, so only the normal channel's w is written)
+        // (one blend state for all four, as independentBlend is not required: alpha only, which the material and depth
+        // channels, single-channel R32 formats, don't have, so only the normal channel's w is written, and the lit
+        // channel's alpha, which nothing reads: gsn_side_veil.frag)
         VkPipelineColorBlendAttachmentState mark{};
         mark.colorWriteMask = VK_COLOR_COMPONENT_A_BIT;
-        veil.blendStates = {mark, mark, mark};
+        veil.blendStates = {mark, mark, mark, mark};
         veil.dynamics.clear();
         veil.depthTest = true;
         veil.depthWrite = false;
@@ -3315,9 +3342,9 @@ void GsnScene::Impl::runSide(const SideBound& bound) {
         sideVeilPass = vk::createGraphics(device, veil);
         ++counters.pipelines;
     }
-    VkRenderingAttachmentInfo colours[3]{};
-    vk::Image* images[3] = {&side.normal, &side.material, &side.depth};
-    for (int i = 0; i < 3; ++i) {
+    VkRenderingAttachmentInfo colours[4]{};
+    vk::Image* images[4] = {&side.normal, &side.material, &side.depth, &side.lit};
+    for (int i = 0; i < 4; ++i) {
         colours[i].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
         colours[i].imageView = images[i]->view;
         colours[i].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -3334,7 +3361,7 @@ void GsnScene::Impl::runSide(const SideBound& bound) {
     info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
     info.renderArea = {{0, 0}, {std::min(extent.width, depth.extent.width), std::min(extent.height, depth.extent.height)}};
     info.layerCount = 1;
-    info.colorAttachmentCount = 3;
+    info.colorAttachmentCount = 4;
     info.pColorAttachments = colours;
     info.pDepthAttachment = &ds;
     info.pStencilAttachment = &ds;
@@ -3444,16 +3471,16 @@ void GsnScene::Impl::runSide(const SideBound& bound) {
         ++sideVeils;
     }
     vkCmdEndRendering(command);
-    // B8 step 3 (debugging): GT4_SIDE_VIEW=normal|material|depth|veiled shows that channel in place of the scene target's colour
+    // B8 step 3 (debugging): GT4_SIDE_VIEW=normal|material|depth|veiled|lit shows that channel in place of the scene target's colour
     // at its Light (alpha kept), so the picture is what the scene stage will light with
     static const int sideView = [] {
         const char* e = std::getenv("GT4_SIDE_VIEW");
         if (!e) return -1;
         const std::string v = e;
-        return v == "normal" ? 0 : v == "material" ? 1 : v == "depth" ? 2 : v == "veiled" ? 3 : -1;
+        return v == "normal" ? 0 : v == "material" ? 1 : v == "depth" ? 2 : v == "veiled" ? 3 : v == "lit" ? 4 : -1;
     }();
     if (bound.light && sideView >= 0) {
-        for (vk::Image* i : {&side.normal, &side.material, &side.depth}) vk::toSampled(b, *i, vk::kFragment);
+        for (vk::Image* i : {&side.normal, &side.material, &side.depth, &side.lit}) vk::toSampled(b, *i, vk::kFragment);
         vk::toColor(b, colourTarget.image);
         b.flush(command);
         if (!sideViewPass.valid()) {
@@ -3465,7 +3492,7 @@ void GsnScene::Impl::runSide(const SideBound& bound) {
             write.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT;
             desc.blendStates = {write};
             desc.types = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER};
+                          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER};
             desc.pushSize = 8;
             desc.name = "gsn side view";
             sideViewPass = vk::createGraphics(device, desc);
@@ -3490,6 +3517,7 @@ void GsnScene::Impl::runSide(const SideBound& bound) {
             .sampled(0, side.normal.view, samplers[0])
             .sampled(1, side.material.view, samplers[0])
             .sampled(2, side.depth.view, samplers[0])
+            .sampled(3, side.lit.view, samplers[0])
             .push(command, sideViewPass);
         const struct { uint32_t channel; float depthRange; } constants{static_cast<uint32_t>(sideView), 300.0f};
         vk::pushConstants(command, sideViewPass, &constants, sizeof constants);
@@ -4250,8 +4278,9 @@ void GsnScene::prepare(const SceneFormats& formats) {
                                          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
                                          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                                          VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER},
-                                        96, "gsn light");
+                                        sizeof(Impl::LightPush), "gsn light");
     // lighting.night (PLAN.md F2): the local luminance pass, the cluster build and its buffers. The light pass reads
     // these bindings whether or not the night is on (the shader skips them), so they always exist.
     if (!s.nightLumPass.valid()) {

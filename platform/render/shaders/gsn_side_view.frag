@@ -1,11 +1,13 @@
 #version 460
-// B8 step 3's debug view (GT4_SIDE_VIEW=normal|material|depth|veiled): a side channel shown in place of the scene target's
+// B8 step 3's debug view (GT4_SIDE_VIEW=normal|material|depth|veiled|lit): a side channel shown in place of the scene target's
 // colour at its Light, to check what the scene stage will light with. The target holds colour / 255 (gsn.frag), so
 // 1.0 is full brightness; alpha is left as GT4 wrote it (the write mask keeps it).
 layout(set = 0, binding = 0) uniform sampler2D normalChannel;
 layout(set = 0, binding = 1) uniform usampler2D materialChannel;
 layout(set = 0, binding = 2) uniform sampler2D depthChannel;
-layout(push_constant) uniform View { uint channel; float depthRange; } view;   // channel: 0 normal, 1 material, 2 depth, 3 veiled
+layout(set = 0, binding = 3) uniform sampler2D litChannel;
+// channel: 0 normal, 1 material, 2 depth, 3 veiled, 4 lit (B10: the lit vertex colour, 0x80 shown as mid grey)
+layout(push_constant) uniform View { uint channel; float depthRange; } view;
 layout(location = 0) in vec2 inUv;
 layout(location = 0) out vec4 outColour;
 
@@ -23,6 +25,8 @@ void main() {
         c = dot(n.xyz, n.xyz) > 0.0 ? n.xyz * 0.5 + 0.5 : vec3(0.0);
     } else if (view.channel == 1u) {
         c = hue(texelFetch(materialChannel, at, 0).r);
+    } else if (view.channel == 4u) {
+        c = texelFetch(litChannel, at, 0).rgb;
     } else if (view.channel == 3u) {
         c = vec3(texelFetch(normalChannel, at, 0).w > 0.0 ? 1.0 : 0.0);
     } else {
