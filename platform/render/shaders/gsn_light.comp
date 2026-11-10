@@ -162,6 +162,7 @@ void main() {
     }
     vec3 linear = pow(max(c.rgb, vec3(0.0)), vec3(2.2));
     const vec3 unoccluded = linear;
+    float aoFactor = 1.0;
     if (p.aoStrength > 0.0) {
         const float d = distanceAt(q);
         float sum = 0.0, weights = 0.0;
@@ -172,21 +173,24 @@ void main() {
                 sum += texelFetch(occlusion, s / int(p.aoStep), 0).r * w;
                 weights += w;
             }
-        linear *= mix(1.0, sum / weights, p.aoStrength);
+        aoFactor = mix(1.0, sum / weights, p.aoStrength);
+        linear *= aoFactor;
     }
     // The lamps: after the occlusion (their light is not ambient), before the grades.
     if (p.night > 0.0 && p.skipMasked == 2.0) {
         // N3, per pixel: the scene with GT4's baked lamp light on the road (c) and without it (binding 9). Their
         // difference is what GT4 baked here; our lamps light the surface without it. The pixel gets ours where ours
         // reaches GT4's level, GT4's where ours is under half of it, and a blend between: never darker than about
-        // 0.84 of GT4's (the blend's lowest, at ours = 0.75 of it), and never both.
+        // 0.87 of GT4's (the blend's lowest, at ours about 0.79 of it), and never both. The occlusion dims GT4's
+        // baked light as it dims the rest of GT4's picture, and not ours (lamp light is not ambient).
         const vec3 gsBase = texelFetch(skipMask, q, 0).rgb;
         const vec3 base = pow(max(gsBase, vec3(0.0)), vec3(2.2));
         const vec3 baked = max(unoccluded - base, vec3(0.0));
         const vec3 ours = nightLight(q, last, base, gsBase) * p.night;
         const float lb = dot(baked, kLuma), lo = dot(ours, kLuma);
-        const vec3 light = lb > 1e-5 ? mix(baked, ours, smoothstep(0.5 * lb, lb, lo)) : ours;
-        linear = max(linear + light - baked, vec3(0.0));
+        const vec3 dimmed = baked * aoFactor;
+        const vec3 light = lb > 1e-5 ? mix(dimmed, ours, smoothstep(0.5 * lb, lb, lo)) : ours;
+        linear = max(linear - dimmed + light, vec3(0.0));
     } else if (p.night > 0.0) {
         linear += nightLight(q, last, unoccluded, c.rgb) * p.night;
     }
@@ -210,6 +214,6 @@ void main() {
     }
     if (p.view == 1u) linear = vec3(texelFetch(occlusion, q / int(p.aoStep), 0).r);
     if (p.view == 2u) { const float d = distanceAt(q); linear = vec3(d < 5.0 ? 1.0 : 0.0, d < 20.0 ? 1.0 : 0.0, d < 80.0 ? 1.0 : 0.0); }
-    if (p.view == 4u) linear = vec3(p.skipMasked > 0.0 ? texelFetch(skipMask, q, 0).r : 0.0);   // (N3: the skip mask)
+    if (p.view == 4u) linear = vec3(p.skipMasked == 1.0 ? texelFetch(skipMask, q, 0).r : 0.0);   // (N3: the skip mask)
     imageStore(result, q, vec4(pow(linear, vec3(1.0 / 2.2)), c.a));
 }

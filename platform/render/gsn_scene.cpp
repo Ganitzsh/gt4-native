@@ -2075,7 +2075,8 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
             // its night bindings get stand-ins it does not read).
             NightPush nightPush;
             NightBuffers nightBuffers;
-            const bool lamps = night > 0.0f && nightPrepare(l, si, colour.view, depthOnly, nightPush, nightBuffers);
+            // (layered: the local luminance, the estimated albedo's, from the scene without the baked light too)
+            const bool lamps = night > 0.0f && nightPrepare(l, si, layered ? preLayer.view : colour.view, depthOnly, nightPush, nightBuffers);
             nightPush.skipMasked = layered ? 2.0f : masked ? 1.0f : 0.0f;
             // The relight from the surface's own colour and normal (B10's channels, in hybrid), where this Light's
             // target has them from this list's side passes. GT4_NIGHT_SIDE=1 until its lamps are tuned to it (rule 10).
@@ -3106,8 +3107,11 @@ void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t
                 if (replaySkips) {   // N3: this draw's skipped spans, through the GS path, with the draw's own state
                     for (uint32_t i = skipNext; i < skipEnd; ++i) {
                         const SkipSpan& s = skipSpans[i];
-                        if (s.first < d.first || s.first + s.count > end) continue;
+                        // (inside the draw, and not one already drawn: the spans are sorted, and the first run's
+                        // skipUpTo leaves out a span starting before its cursor the same way)
+                        if (s.first < cursor || s.first + s.count > end) continue;
                         vkCmdDraw(command, s.count, 1, modelBase + s.first, 0);
+                        cursor = s.first + s.count;
                         if (pass == 0) ++n3ReplayDraws;
                     }
                     continue;
@@ -3179,8 +3183,18 @@ void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t
     if (n3Defer && !ex.limited && !skipSpans.empty() && to < frame.commands.size() &&
         frame.commands[to].kind == gsn::FrameList::Command::Kind::Light && frame.commands[to].index < frame.lights.size()) {
         const gsn::FrameList::Lighting& l = frame.lights[frame.commands[to].index];
+        // (from the target's previous Light on: what came before it was drawn for that Light, and is in the picture)
+        size_t first = 0;
+        for (size_t at = to; at-- > 0;) {
+            const auto& c = frame.commands[at];
+            if (c.kind == gsn::FrameList::Command::Kind::Light && c.index < frame.lights.size() &&
+                frame.lights[c.index].target == l.target) {
+                first = at + 1;
+                break;
+            }
+        }
         bool any = false;
-        for (size_t at = 0; at < to && !any; ++at) {
+        for (size_t at = first; at < to && !any; ++at) {
             const auto& c = frame.commands[at];
             if (c.kind != gsn::FrameList::Command::Kind::Draw || c.index >= frame.draws.size() || c.index + 1 >= skipAt.size()) continue;
             any = frame.draws[c.index].target == l.target && frame.draws[c.index].modeled && skipAt[c.index] != skipAt[c.index + 1];
@@ -3201,7 +3215,7 @@ void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t
             b.flush(command);
             replaySkips = true;
             replayTarget = l.target;
-            executeRange(command, slot, 0, to);
+            executeRange(command, slot, first, to);
             replaySkips = false;
             preLayerLight = to;
             ++n3Replays;
@@ -3763,7 +3777,7 @@ const std::vector<gfx::scene::Light>& GsnScene::Impl::lampsOf(const scene::Scene
         const scene::ViewData* vd = nullptr;
         for (const scene::ViewData& candidate : sf.views)
             if (candidate.id == view) vd = &candidate;
-        if (vd) {
+        if (vd && (vd->flags & gfx::scene::kViewCameraKnown)) {   // (an unknown camera is the identity: no world down)
             // world down, (0, -1, 0), in view space (row vectors: v x worldToView)
             const float (&m)[4][4] = vd->worldToView.m;
             float down[3] = {-m[1][0], -m[1][1], -m[1][2]};
