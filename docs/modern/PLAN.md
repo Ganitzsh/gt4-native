@@ -2045,7 +2045,12 @@ low | high` (froxel resolution and lights per froxel). Depends: B14, F1, F7; F6 
 `PERF(<= 1 ms)` desktop at `high`, Odin at `low` or off; review images: headlight beams and lamp cones in night haze
 and fog; no flicker (temporal stability as above).
 
-**F9: Emissive car lamps (S, lane F; lane B reviews).** Headlight, tail and brake lamp lenses glow from the light's
+**F9: Emissive car lamps (S, lane F; lane B reviews).** Its lights are on main (2026-11-10): on the night's modern
+path each car's tail and brake lamps light what is behind them (A7 step 2's spots given a wide cone in
+`GsnScene::lampsOf`; ranges of 4 m and 8 m, the brake lamps at GT4's own ramp), on frames GT4 lights its lamps in.
+N3's blend lets only the street lamps replace GT4's baked light; the cars' lamps are added on top. Still open: the
+lenses' own glow (GT4's sprites stay), the day brake glow, `kSrcCarLamp`.
+Headlight, tail and brake lamp lenses glow from the light's
 state, not from GT4's baked lens texture alone: first a probe, as R8's for bodies or F2b's texture summary, since no
 record names a lamp lens: it finds the lens materials per car, kept as a class bit with the material id (lane B's
 MaterialTable). Then the emissive comes from that class bit and A7 step 2's light state (on, brake) per instance in

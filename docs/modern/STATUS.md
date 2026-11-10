@@ -32,8 +32,8 @@ own gate.
      no part of the road is darker than GT4's any more, and lamps light it smoothly where they stand (PLAN N3).
      Since then these are what `lighting.night = enhanced` does on `render.scene = hybrid`, with no switch, and a
      lamp lights the road the same from any height (the tunnels were three times too bright). The cars' headlights
-     light the road, the car ahead and the walls (a dipped-beam profile; no shadows yet), and painted lines keep
-     their own colour under the lamps;
+     light the road, the car ahead and the walls (a dipped-beam profile; no shadows yet), tail and brake lamps
+     light what is behind a car, and painted lines keep their own colour under the lamps;
    - first, B10's channels from step 4 (the surface's own colour, normal and material, written by hybrid's side
      passes): the night relight then lights the real surface colour with real normals, in place of today's
      estimate from the picture, which is circular once the baked light is skipped. This replaces lane F's
