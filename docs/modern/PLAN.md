@@ -679,6 +679,20 @@ blended and equal-Z items are lit (B22).
   vertex colour is its lighting (`gt4_lighting.glsl`), so GT4's pixel divided by this channel is the texture, to
   rounding. Kept as GT4's colour, each counted: saturated pixels, fog (undone first or skipped), veiled pixels and
   untagged equal-Z draws over items, colours under a floor, TFX other than modulate.
+- **Where it is** (2026-11-10): the channel is on main, written by hybrid's side passes (`GT4_SIDE_VIEW=lit` shows
+  it), and its first reader is the night relight: with `GT4_NIGHT_SIDE=1` in hybrid, `gsn_light.comp` takes the
+  albedo as the pixel over the channel and the normal from the normal channel, where an item's surface is the pixel's,
+  nothing veils it, the vertex colour is at least 8 of 255 and the pixel is under the target's ceiling; elsewhere its
+  estimates. Off, frames are identical to before (hybrid, hybrid with the night, the night on the GS path) and
+  `ORIG` holds. Owed before the switch goes and the night enters a preset (the review, a fresh agent): the cases
+  above that the reader doesn't keep or count yet (fog, undone or skipped; tagged blended layers folded into the
+  pixel, the lit-road layer where N3 doesn't skip it; TFX other than modulate and untextured items; untagged equal-Z
+  draws over items); channels left stale where a boundary had no reset (B8's limit, now feeding a divide); the
+  fourth attachment's cost in hybrid, measured, the Odin included (four colour attachments is Vulkan's guaranteed
+  minimum: a fifth channel needs another pass or a packed format). The first never-dark measure with it (N3;
+  `lap_ssr5f_boot`, 30 frames from 8,000 to 20,000, the baked light skipped): our lamps give a median 0.63 of GT4's
+  light under the skip mask per frame (0.20 to 1.22), and 41 % of the 32-pixel blocks under half of GT4's: the
+  lamps' strength and spread are next (F7's street-lamp profile, then the coverage gate).
 - **Classes** (RISKS R8): prelit (body 0, 0x0B0, 0x1508, 0x16F8) is never relit, only shadowed and occluded, so the
   course only darkens; car paint (0x10A8, 0x12C8); glossy (0xCA8, 0xEA0); diffuse N.L with roughness from the
   squarings; projected (0x1608) kept as drawn; unknown bodies keep GT4's colour.
