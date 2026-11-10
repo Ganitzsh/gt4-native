@@ -546,8 +546,14 @@ void GsDumpEncoder::vsync(uint32_t field) {
 }
 
 std::string GsDumpEncoder::summary() const {
-    if (!opened) return "";
     char line[512];
+    if (!opened) {   // (FROM never came: say which VBlanks did)
+        if (lastSeen == 0) return "";
+        std::snprintf(line, sizeof line, "GS dump %s: not written, VBlank %llu never came (the game's VBlanks %llu-%llu passed)",
+                      options.path.c_str(), static_cast<unsigned long long>(options.from), static_cast<unsigned long long>(firstSeen),
+                      static_cast<unsigned long long>(lastSeen));
+        return line;
+    }
     std::snprintf(line, sizeof line,
                   "GS dump %s%s: VBlanks %llu-%llu, GS memory from %s, %llu VSyncs, %llu transfers (%llu bytes), %llu draws "
                   "(%llu vertices); not dumped: %llu GPU 3D batches, %llu colour-grade passes, %llu uploads without bytes, "

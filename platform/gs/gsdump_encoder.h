@@ -18,6 +18,7 @@
 #include "gs_primitives.h"
 #include "gt4/gfx.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -30,7 +31,8 @@ class GsDumpEncoder {
 public:
     struct Options {
         std::string path;
-        uint64_t from = 0;    // the VBlank the dump starts at (0: before anything, GS memory as the console boots)
+        uint64_t from = 0;    // the game's VBlank count the dump starts at (the VSync records' count, as GT4_GSN_AT and
+                              // the host log's 'vblank N' have it: a mid-run capture's start high), 0: before anything
         uint64_t count = 1;   // VSyncs written
     };
     // "PATH,FROM,COUNT" (FROM and COUNT optional: 0 and 1); false for an empty or unreadable value.
@@ -54,7 +56,11 @@ public:
 
     // At a VBlank (`vblank`: the VBlank count the host passes its target): true when the dump opens here, before
     // vsync(); the caller then calls open() with GS memory as it stands.
-    bool opensAt(uint64_t vblank) const { return !opened && !failed && options.from && vblank == options.from; }
+    bool opensAt(uint64_t vblank) {
+        firstSeen = std::min(firstSeen, vblank);
+        lastSeen = std::max(lastSeen, vblank);
+        return !opened && !failed && options.from && vblank == options.from;
+    }
     // FROM 0: the dump opens before anything reaches the front end (GS memory zero, as the console boots).
     bool opensAtStart() const { return !opened && !failed && !options.from; }
     void open(const uint8_t* memory, const char* memorySource);
@@ -85,6 +91,7 @@ private:
     std::vector<uint8_t> out;   // the transfer being built
     bool opened = false, failed = false, closed = false;
     uint64_t vsyncs = 0;
+    uint64_t firstSeen = ~uint64_t(0), lastSeen = 0;   // the game's VBlank counts seen (a FROM never reached is said)
     float internalQ = 1.0f;   // the GS's Q (PACKED ST sets it; RGBAQ's Q is what reaches the vertex)
     // the raw GIF paths' parse state (a packet can span calls)
     struct Path {
