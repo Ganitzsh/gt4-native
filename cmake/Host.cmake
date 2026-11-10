@@ -66,6 +66,7 @@ gt4_shader(gsn_frag_parity_export ${S}/gsn.frag frag DEFINES GSN_PARITY=1 GSN_ST
 # B8's side channels (render.scene = hybrid): the items redrawn per depth partition, and the partition's reset.
 gt4_shader(modern_side_vert ${S}/modern_parity.vert vert DEFINES GSN_SIDE=1)
 gt4_shader(modern_side_frag ${S}/modern_side.frag frag)
+gt4_shader(modern_side_lit_frag ${S}/modern_side.frag frag DEFINES GSN_SIDE_LIT=1)
 gt4_shader(gsn_side_reset_vert ${S}/gsn_side_reset.vert vert)
 gt4_shader(gsn_side_reset_frag ${S}/gsn_side_reset.frag frag)
 gt4_shader(gsn_side_view_frag ${S}/gsn_side_view.frag frag)

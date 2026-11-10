@@ -288,8 +288,8 @@ struct GsnScene::Impl {
     std::unordered_set<uint32_t> sideClearedThisList;
     std::vector<vk::Buffer> sideItemRing;
     vk::Buffer* sideItems = nullptr;
-    vk::Pipeline sidePass, sideResetPass, sideViewPass, sideVeilPass;
-    uint64_t sidePasses = 0, sideItemsDrawn = 0, sideResets = 0, sideVeils = 0;
+    vk::Pipeline sidePass, sideResetPass, sideViewPass, sideVeilPass, sideLayerPass;
+    uint64_t sidePasses = 0, sideItemsDrawn = 0, sideResets = 0, sideVeils = 0, sideLayersDrawn = 0, sideLayersLeft = 0;
     void planSides();
     void runSide(const SideBound& bound);
     vk::Pipeline& parityPipeline(uint32_t blendKey, uint32_t mask, bool depth, bool exports);
@@ -750,13 +750,16 @@ struct GsnScene::Impl {
         vk::destroy(device, sideResetPass);
         vk::destroy(device, sideViewPass);
         vk::destroy(device, sideVeilPass);
+        vk::destroy(device, sideLayerPass);
         if (hybrid && nightSideLights)
             std::printf("Night side channels: %llu Lights relit from the surface's own colour and normal\n",
                         static_cast<unsigned long long>(nightSideLights));
         if (hybrid)
-            std::printf("Hybrid side channels: %llu passes (%llu with a reset), %llu items drawn, %llu blended draws marking veiled\n",
+            std::printf("Hybrid side channels: %llu passes (%llu with a reset), %llu items drawn, %llu blended draws marking veiled; "
+                        "%llu blended layers' lit colour drawn (%llu left: an inverted Z buffer)\n",
                         static_cast<unsigned long long>(sidePasses), static_cast<unsigned long long>(sideResets),
-                        static_cast<unsigned long long>(sideItemsDrawn), static_cast<unsigned long long>(sideVeils));
+                        static_cast<unsigned long long>(sideItemsDrawn), static_cast<unsigned long long>(sideVeils),
+                        static_cast<unsigned long long>(sideLayersDrawn), static_cast<unsigned long long>(sideLayersLeft));
         if (parity) {   // B7's fallbacks by reason (PLAN B7's acceptance lists them)
             const render::ParityStats& s = parityView.stats();
             std::printf("Parity path: %llu of %llu items drawn from the mesh cache; on the GS path: mesh 0 %llu, mesh evicted %llu, "
@@ -3430,6 +3433,14 @@ void GsnScene::Impl::runSide(const SideBound& bound) {
                                                      // tyre marks at the surface's own Z, are the surface, not a veil)
         veil.name = "gsn side veil";
         sideVeilPass = vk::createGraphics(device, veil);
+        // the view's blended layers' lit colour (modern_side.frag GSN_SIDE_LIT): the lit channel alone, the layer's own
+        // test against the surface (GEQUAL, as GT4 draws them), no Z write
+        vk::GraphicsDesc layer = desc;
+        layer.fragment = shaders::modern_side_lit_frag();
+        layer.colors = {VK_FORMAT_R16G16B16A16_SFLOAT};
+        layer.depthCompare = VK_COMPARE_OP_GREATER_OR_EQUAL;
+        layer.name = "gsn side layers";
+        sideLayerPass = vk::createGraphics(device, layer);
         ++counters.pipelines;
     }
     VkRenderingAttachmentInfo colours[4]{};
@@ -3561,6 +3572,77 @@ void GsnScene::Impl::runSide(const SideBound& bound) {
         ++sideVeils;
     }
     vkCmdEndRendering(command);
+    // B10: the lit colour of the partition's blended layers (tagged items that test Z against their base and write none:
+    // markings, decals), after the surfaces', in the list's order; not N3's skipped items (GT4's baked light is no
+    // surface colour: the relight takes it apart)
+    {
+        bool layers = false;
+        for (size_t i = 0; i < paritySpans.size(); ++i) {
+            const render::ParitySpan& sp = paritySpans[i];
+            if (!ours(i)) continue;
+            const gsn::Draw& d = frame.draws[sp.draw];
+            const gfx::Context& c = d.state.c;
+            if (d.depth != view.depth || !((d.state.prim >> 6) & 1) || !c.depthTest || c.depthFunc < 2 || c.depthWrite ||
+                c.colorKeep == 0xFFFFFFFFu)
+                continue;
+            // (a layer that blends its own colour in, (Cs - Cd) x As + Cd: one that only darkens or adds, a shadow or
+            // a glow, has no surface colour to give; modern_side.frag leaves out a near-black one too)
+            if (c.blendA != 0 || c.blendB != 1 || c.blendD != 1) continue;
+            bool skipped = false;
+            if (sp.draw + 1 < skipAt.size())
+                for (uint32_t k = skipAt[sp.draw]; k < skipAt[sp.draw + 1] && !skipped; ++k) skipped = skipSpans[k].first == sp.first;
+            if (skipped) continue;
+            if (d.depthInverted) {   // (its test is the other way round: left as the base's colour, counted)
+                ++sideLayersLeft;
+                continue;
+            }
+            const uint32_t right = std::min((uint32_t(c.scissorX1) + 1) * sx, info.renderArea.extent.width),
+                           bottom = std::min((uint32_t(c.scissorY1) + 1) * sy, info.renderArea.extent.height);
+            if (right <= c.scissorX0 * sx || bottom <= c.scissorY0 * sy) continue;
+            if (!layers) {
+                VkRenderingAttachmentInfo lit = colours[3];
+                lit.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+                VkRenderingInfo only = info;
+                only.colorAttachmentCount = 1;
+                only.pColorAttachments = &lit;
+                vkCmdBeginRendering(command, &only);
+                vkCmdSetViewport(command, 0, 1, &viewport);
+                vk::bind(command, sideLayerPass);
+                vk::Descriptors()
+                    .sampled(0, blank.view, samplers[0])
+                    .storageBuffer(1, ex.jobs->buffer, 0, frame.models.size() * sizeof(gfx::ModelJob))
+                    .storageBuffer(2, ex.words->buffer, 0, frame.modelData.size() * 4)
+                    .storageBuffer(3, sideItems->buffer, 0, paritySpans.size() * sizeof(SideItem))
+                    .push(command, sideLayerPass);
+                layers = true;
+            }
+            const VkRect2D scissor{{static_cast<int32_t>(c.scissorX0 * sx), static_cast<int32_t>(c.scissorY0 * sy)},
+                                   {right - c.scissorX0 * sx, bottom - c.scissorY0 * sy}};
+            vkCmdSetScissor(command, 0, 1, &scissor);
+            ParityConstants pc{};
+            pc.draw.targetSize[0] = static_cast<float>(extent.width);
+            pc.draw.targetSize[1] = static_cast<float>(extent.height);
+            pc.draw.scale[0] = static_cast<float>(sx);
+            pc.draw.scale[1] = static_cast<float>(sy);
+            pc.draw.sourceScale[0] = pc.draw.scale[0];
+            pc.draw.sourceScale[1] = pc.draw.scale[1];
+            if (spanCommand[i] < ex.jittered.size() && ex.jittered[spanCommand[i]]) {
+                pc.draw.jitter[0] = ex.phase[0] / float(sx);
+                pc.draw.jitter[1] = ex.phase[1] / float(sy);
+            }
+            pc.job = sp.job;
+            pc.t = modelT;
+            pc.tPrevious = modelTPrevious;
+            pc.side = static_cast<uint32_t>(i);
+            vk::pushConstants(command, sideLayerPass, pc);
+            const VkDeviceSize vertexAt = sp.vertexOffset;
+            vkCmdBindVertexBuffers(command, 0, 1, &parityBlocks[sp.block].buffer, &vertexAt);
+            vkCmdBindIndexBuffer(command, parityBlocks[sp.block].buffer, sp.indexOffset, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(command, sp.indexCount, 1, sp.firstIndex, 0, 0);
+            ++sideLayersDrawn;
+        }
+        if (layers) vkCmdEndRendering(command);
+    }
     // B8 step 3 (debugging): GT4_SIDE_VIEW=normal|material|depth|veiled|lit shows that channel in place of the scene target's colour
     // at its Light (alpha kept), so the picture is what the scene stage will light with
     static const int sideView = [] {

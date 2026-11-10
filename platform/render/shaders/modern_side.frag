@@ -14,6 +14,21 @@ layout(location = 10) flat in vec4 inFlatColour;
 layout(location = 11) in vec3 inViewPosition;
 layout(location = 12) flat in uint inMaterial;
 
+#if defined(GSN_SIDE_LIT)
+// GSN_SIDE_LIT: the view's blended layers that write no Z (road markings, decals: tagged items drawn over their base
+// with their own depth test), drawn after the partition's surfaces into the lit channel alone. The pixel GT4 shows
+// there is the layer's texture times the layer's vertex colour, not the base's, so the channel takes the layer's:
+// without it a white line over dark asphalt divides by the asphalt's colour and comes out several times too
+// reflective. (Where the layer's own alpha is partial the channel is the layer's all the same: an edge's error.)
+layout(location = 0) out vec4 outLit;
+void main() {
+    if ((inHomogeneous & 4u) != 0u) discard;
+    const vec4 lit = (inHomogeneous & 2u) != 0u ? inFlatColour : inColourW / inW;
+    // (a near-black layer darkens what is under it, a car's shadow: no surface colour, the base's stays)
+    if (max(lit.r, max(lit.g, lit.b)) < 32.0 / 255.0) discard;
+    outLit = lit;
+}
+#else
 layout(location = 0) out vec4 outNormal;     // xyz: view-space unit normal facing the eye; w: 0 (the veiled mark's)
 layout(location = 1) out uint outMaterial;
 layout(location = 2) out float outDepth;     // view-space depth (positive, away from the eye)
@@ -29,3 +44,4 @@ void main() {
     outDepth = abs(inViewPosition.z);
     outLit = (inHomogeneous & 2u) != 0u ? inFlatColour : inColourW / inW;
 }
+#endif
