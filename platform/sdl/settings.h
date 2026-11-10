@@ -65,7 +65,9 @@ enum class UiPrompts : uint8_t { Auto, Xbox, PlayStation, Keyboard };
 
 struct Settings {
     // 2 (MENU_DESIGN M9f2): a version-1 file's ui.entry = hotkey and ui.pause = gt4 count as unset (loadSettings)
-    static constexpr int kVersion = 2;
+    // 3 (the night's modern path in the presets): an older file's render.scene = original and lighting.night =
+    //   original under medium, high or ultra were those presets' values then, not choices: they follow the preset
+    static constexpr int kVersion = 3;
 
     // [display]
     WindowMode windowMode = WindowMode::Windowed;
@@ -97,8 +99,8 @@ struct Settings {
     float sharpness = 0.2f;           // RCAS strength 0..1 (0 = off)
     AntiAliasing aa = AntiAliasing::Taa;
     int msaa = 1;                     // 1, 2, 4 or 8 samples
-    SceneRenderer scene = SceneRenderer::Original;   // render.scene (settings_scene.cpp)
-    LightingMode night = LightingMode::Original;     // lighting.night (settings_lighting.cpp; PLAN.md F2)
+    SceneRenderer scene = SceneRenderer::Hybrid;     // render.scene (settings_scene.cpp): the default preset's (high)
+    LightingMode night = LightingMode::Enhanced;     // lighting.night (settings_lighting.cpp; PLAN.md F2, N3): the same
 
     // [texture]
     TextureFilter textureFilter = TextureFilter::Trilinear;

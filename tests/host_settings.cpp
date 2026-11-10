@@ -416,55 +416,102 @@ int main() {
         const auto [hw, hOlder, hAgain, hOlderAgain, hSecond, hText] =
             writeBack("version = 1\n[graphics]\npreset = high\n[ui]\nentry = hotkey\npause = gt4\n");
         check(hOlder && logged(hw, "now follow the preset (integrated, native under high)") && hAgain.empty() &&
-                  !hOlderAgain && hText.find("\nversion = 2\n") != std::string::npos,
-              "a v1 high file: logged at the first load, written back as v2, nothing logged at the next");
+                  !hOlderAgain && hText.find("\nversion = 3\n") != std::string::npos,
+              "a v1 high file: logged at the first load, written back as the current version, nothing logged at the next");
         check(hSecond.uiEntry == UiEntry::Integrated && hSecond.uiPause == UiPause::Native &&
                   hSecond.preset == Preset::High,
               "a v1 high file written back keeps integrated / native");
         const auto [ow, oOlder, oAgain, oOlderAgain, oSecond, oText] =
             writeBack("version = 1\n[graphics]\npreset = original\n[ui]\nentry = hotkey\npause = gt4\n");
         check(oOlder && ow.empty() && oAgain.empty() && !oOlderAgain &&
-                  oText.find("\nversion = 2\n") != std::string::npos,
-              "a v1 original file: no line, written back as v2");
+                  oText.find("\nversion = 3\n") != std::string::npos,
+              "a v1 original file: no line, written back as the current version");
         check(oSecond.uiEntry == UiEntry::Hotkey && oSecond.uiPause == UiPause::Gt4 &&
                   oSecond.preset == Preset::Original,
               "a v1 original file written back keeps hotkey / gt4");
         Settings saved;
         saved.uiEntry = UiEntry::Hotkey;
-        check(formatSettings(saved).rfind("version = 2\n", 0) != std::string::npos ||
-                  formatSettings(saved).find("\nversion = 2\n") != std::string::npos,
-              "files are written as version 2");
+        check(formatSettings(saved).rfind("version = 3\n", 0) != std::string::npos ||
+                  formatSettings(saved).find("\nversion = 3\n") != std::string::npos,
+              "files are written as version 3");
         const auto path = gt4::test::uniqueTempPath("gt4_ui_v2", ".ini");
         saveSettings(saved, path.string());
         Settings back;
         const auto again = loadSettings(back, path.string());
         std::filesystem::remove(path);
         check(again.empty() && back.uiEntry == UiEntry::Hotkey && back.preset == Preset::High,
-              "a saved hotkey under high stays hotkey: written as version 2, a choice");
+              "a saved hotkey under high stays hotkey: written from version 2 on, a choice");
+
+        // Version 2 -> 3 (the night's modern path in the presets): an older file's render.scene = original and
+        // lighting.night = original under medium, high or ultra were the values of the day and follow the preset,
+        // logged once; a night the player turned on is kept; original, low and custom files keep what they hold.
+        const std::string held = "[render]\nscene = original\n[lighting]\nnight = original\n";
+        const auto [m1, v2Held] = load("version = 2\n[graphics]\npreset = high\n" + held);
+        check(v2Held.scene == SceneRenderer::Hybrid && v2Held.night == LightingMode::Enhanced && v2Held.preset == Preset::High,
+              "v2 under high holding original / original: hybrid / enhanced, still high");
+        check(logged(m1, "version 2: render.scene = hybrid and lighting.night = enhanced now, as the high preset sets them"),
+              "v2 under high: the move is logged once, with what it gives");
+        const auto [m2, v2Low] = load("version = 2\n[graphics]\npreset = low\n" + held);
+        check(m2.empty() && v2Low.scene == SceneRenderer::Original && v2Low.night == LightingMode::Original &&
+                  v2Low.preset == Preset::Low,
+              "v2 under low keeps the GS path and GT4's night (the handheld's), nothing logged");
+        const auto [m3, v2Original] = load("version = 2\n[graphics]\npreset = original\n" + held);
+        check(m3.empty() && v2Original.scene == SceneRenderer::Original && v2Original.preset == Preset::Original,
+              "v2 under original keeps the PS2's picture, nothing logged");
+        const auto [m4, v2Night] = load("version = 2\n[graphics]\npreset = ultra\n[render]\nscene = original\n[lighting]\nnight = enhanced\n");
+        check(v2Night.scene == SceneRenderer::Hybrid && v2Night.night == LightingMode::Enhanced && v2Night.preset == Preset::Ultra &&
+                  logged(m4, "version 2: render.scene = hybrid now, as the ultra preset sets them"),
+              "v2 under ultra with the night already on: only the scene moves");
+        const auto [m5, v2Custom] = load("version = 2\n[graphics]\npreset = custom\n" + held + "[texture]\nanisotropy = 2\n");
+        check(v2Custom.scene == SceneRenderer::Original && v2Custom.night == LightingMode::Original &&
+                  v2Custom.preset == Preset::Custom && logged(m5, "a custom preset keeps render.scene = original"),
+              "v2 custom keeps what it holds, and says how to get the modern path");
+        const auto [m6, v3Held] = load("version = 3\n[graphics]\npreset = high\n" + held);
+        check(m6.empty() && v3Held.scene == SceneRenderer::Original && v3Held.night == LightingMode::Original &&
+                  v3Held.preset == Preset::Custom,
+              "v3 under high holding original / original: a player's choice (custom)");
+        const auto [bw, bOlder, bAgain, bOlderAgain, bSecond, bText] = writeBack("version = 2\n[graphics]\npreset = medium\n" + held);
+        check(bOlder && bw.size() == 1 && bAgain.empty() && !bOlderAgain && bSecond.scene == SceneRenderer::Hybrid &&
+                  bSecond.night == LightingMode::Enhanced && bSecond.preset == Preset::Medium &&
+                  bText.find("\nscene = hybrid\n") != std::string::npos && bText.find("\nversion = 3\n") != std::string::npos,
+              "a v2 medium file: moved and logged at the first load, written back as v3 with hybrid, nothing at the next");
     }
 
-    // lighting.night (settings_lighting.cpp, PLAN.md F2): original by default and in the original preset, which
-    // turns it back off; the quality presets leave it as the player set it (in none of them until N3).
+    // lighting.night (settings_lighting.cpp, PLAN.md F2, N3): enhanced by default (the default preset's, high) and in
+    // medium, high and ultra, with render.scene = hybrid (the night's modern path); original in the original preset
+    // and in low (the handheld's).
     {
         Settings n;
-        check(n.night == LightingMode::Original && getOption(n, "lighting.night") == "original", "lighting.night is original by default");
+        check(n.night == LightingMode::Enhanced && getOption(n, "lighting.night") == "enhanced" && detectPreset(n) == Preset::High,
+              "lighting.night is enhanced by default, as the default preset (high) sets it");
         applyPreset(n, Preset::Original);
         check(setOption(n, "lighting.night", "enhanced").empty() && n.night == LightingMode::Enhanced, "lighting.night = enhanced is taken");
         check(detectPreset(n) == Preset::Custom, "the original preset with the night relit reads as custom");
         applyPreset(n, Preset::Original);
         check(n.night == LightingMode::Original && detectPreset(n) == Preset::Original, "the original preset turns the night relight off");
-        check(setOption(n, "lighting.night", "enhanced").empty(), "enhanced again");
         applyPreset(n, Preset::High);
-        check(n.night == LightingMode::Enhanced && detectPreset(n) == Preset::High, "a quality preset leaves it as set");
-        for (Preset preset : {Preset::Low, Preset::Medium, Preset::High, Preset::Ultra}) {
+        check(n.night == LightingMode::Enhanced && n.scene == SceneRenderer::Hybrid && detectPreset(n) == Preset::High,
+              "high turns the night relight on, on the hybrid renderer");
+        check(setOption(n, "lighting.night", "original").empty() && detectPreset(n) == Preset::Custom,
+              "the night turned off under high reads as custom: it is a preset member");
+        for (Preset preset : {Preset::Medium, Preset::High, Preset::Ultra}) {
             Settings t;
+            applyPreset(t, Preset::Original);
             applyPreset(t, preset);
-            check(t.night == LightingMode::Original, "no preset turns the night relight on");
-            check(!sceneSplitWanted(t), "no preset turns the scene split on");
+            check(t.night == LightingMode::Enhanced && t.scene == SceneRenderer::Hybrid && nightModernWanted(t) && sceneSplitWanted(t),
+                  "medium, high and ultra: the night's modern path, with the records and the split it needs");
+        }
+        {
+            Settings t;
+            applyPreset(t, Preset::Low);
+            check(t.night == LightingMode::Original && t.scene == SceneRenderer::Original && !sceneSplitWanted(t) &&
+                      !nightModernWanted(t) && detectPreset(t) == Preset::Low,
+                  "low keeps the GS path and GT4's night: no records, no split");
         }
         // the scene split (sceneSplitWanted, F2b): with the night relight, beside the records it needs
         Settings split;
-        check(!sceneSplitWanted(split) && !sceneSplitWanted(original), "no scene split by default or in the original preset");
+        check(sceneSplitWanted(Settings{}) && !sceneSplitWanted(original), "the scene split by default (high), none in the original preset");
+        applyPreset(split, Preset::Original);
         split.night = LightingMode::Enhanced;
         check(sceneRecordsWanted(split) && sceneSplitWanted(split), "the night relight wants the records and the split");
         split.night = LightingMode::Original;
@@ -473,8 +520,8 @@ int main() {
         split.scene = SceneRenderer::Hybrid;
         check(sceneSplitWanted(split), "hybrid wants the split");
         // the night's modern path (nightModernWanted): the night relight on the hybrid renderer, and only that
-        check(!nightModernWanted(split) && !nightModernWanted(original) && !nightModernWanted(Settings{}),
-              "hybrid alone, the original preset and the defaults: no modern night");
+        check(!nightModernWanted(split) && !nightModernWanted(original) && nightModernWanted(Settings{}),
+              "hybrid alone and the original preset: no modern night; the defaults (high): the modern night");
         split.night = LightingMode::Enhanced;
         check(nightModernWanted(split), "hybrid with the night relight is the night's modern path");
         split.scene = SceneRenderer::Parity;
@@ -486,7 +533,8 @@ int main() {
     // render.scene (settings_scene.cpp): the GS path, or B7's parity check, until the modern renderer draws a view.
     {
         Settings r;
-        check(r.scene == SceneRenderer::Original && getOption(r, "render.scene") == "original", "render.scene is original by default");
+        check(r.scene == SceneRenderer::Hybrid && getOption(r, "render.scene") == "hybrid", "render.scene is hybrid by default (high)");
+        applyPreset(r, Preset::Original);
         check(original.scene == SceneRenderer::Original, "the original preset draws scenes on the GS path");
         check(setOption(r, "render.scene", "original").empty(), "render.scene = original is taken");
         {
@@ -495,8 +543,8 @@ int main() {
                   "modern is refused until the modern renderer lands, with the reason");
         }
         check(setOption(r, "render.scene", "hybrid").empty() && r.scene == SceneRenderer::Hybrid &&
-                  formatSettings(r).find("scene = hybrid") == std::string::npos,
-              "render.scene = hybrid is taken (B8), never saved");
+                  formatSettings(r).find("\nscene = hybrid\n") != std::string::npos,
+              "render.scene = hybrid is taken (B8), and saved");
         check(setOption(r, "render.scene", "parity").empty() && r.scene == SceneRenderer::Parity, "render.scene = parity is taken (B7)");
         check(formatSettings(r).find("\nscene = original\n") != std::string::npos && formatSettings(r).find("scene = parity") == std::string::npos,
               "parity is a session's check: never saved (written as original)");

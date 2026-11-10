@@ -4,16 +4,16 @@
 namespace gt4::settings_table {
 
 void sceneOptions(std::vector<Option>& o) {
-    // render.scene: original by default; parity (B7) is a check; hybrid (B8) draws the same picture by the modern
-    // renderer's stages and gives the lighting its side channels (lighting.night = enhanced lights with them: the
-    // night's modern path). Neither is in a preset or saved yet; modern (B15) is named and refused, so a file or --set
-    // naming it says why.
+    // render.scene: hybrid by default (the default preset's, high: in medium, high and ultra; original in the original
+    // preset and in low). Hybrid (B8) draws GT4's picture by the modern renderer's stages and gives the lighting its
+    // side channels (lighting.night = enhanced lights with them: the night's modern path). Parity (B7) is a check,
+    // never in a preset or saved; modern (B15) is named and refused, so a file or --set naming it says why.
     Option scene = enumOption("render.scene", &Settings::scene, kSceneRenderers,
         "What draws the game's 3D scenes: original = the GS path, the PS2's picture; parity = a check, not a mode: the GS "
         "path with the 3D drawn from the mesh cache with GT4's lighting and depth, which should look the same; hybrid = the "
         "same picture by the modern renderer's stages, which give the lighting each surface's own colour and normal "
         "(lighting.night = enhanced lights with them); modern = the modern renderer with its own lighting and post "
-        "effects. Parity and hybrid are not in a preset and not saved yet.");
+        "effects. Hybrid in the medium, high and ultra presets; parity is for debugging, never saved.");
     const Setter set = scene.set;
     scene.allowed = "original | parity | hybrid";
     scene.set = [set](Settings& s, std::string_view text) -> std::string {

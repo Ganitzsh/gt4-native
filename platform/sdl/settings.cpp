@@ -55,9 +55,10 @@ using PresetTable = std::vector<std::pair<const char*, const char*>>;
 const PresetTable& presetValues(Preset preset) {
     // Personal-taste effects (depth of field, motion blur, grain, vignette, aberration) belong only to the
     // PS2-faithful preset; the quality presets leave them as the player set them.
-    // render.scene: original in the original preset; low to ultra take hybrid when it lands (PLAN.md B8,
-    // ARCHITECTURE.md section 7) and leave it as it is until then. lighting.night likewise: original here, and the
-    // quality presets leave it alone until N3 lands (PLAN.md F2).
+    // render.scene and lighting.night: original in the original preset (the PS2's picture) and in low, the handheld's,
+    // until the modern path's cost is measured on the Odin (PLAN.md C6b); hybrid and enhanced in medium, high and
+    // ultra: the night's modern path (PLAN.md N3, F7; settings_scene.cpp's nightModernWanted). By day hybrid draws
+    // GT4's picture through the modern stages until B10 lights it.
     // input.response: original (the PS2's sticks, as before) in the original preset, modern in the others (PLAN.md
     // D12); its input.steer.* and input.pedal.* values are the player's, in no preset. input.haptics and
     // input.trigger_effects: original and off in the original preset (GT4's own rumble, as on the PS2), physics and on in
@@ -73,25 +74,25 @@ const PresetTable& presetValues(Preset preset) {
         {"post.exposure", "0"}, {"post.film_grain", "0"}, {"post.vignette", "0"},
         {"post.chromatic_aberration", "0"}, {"post.dither", "off"}, {"input.response", "original"}, {"input.haptics", "original"}, {"input.trigger_effects", "off"}};
     static const PresetTable low{
-        {"render.gs", "native"}, {"display.field_mode", "blend"}, {"render.quality", "performance"}, {"render.upscaler", "fsr1"}, {"render.sharpness", "0.3"},
+        {"render.scene", "original"}, {"lighting.night", "original"}, {"render.gs", "native"}, {"display.field_mode", "blend"}, {"render.quality", "performance"}, {"render.upscaler", "fsr1"}, {"render.sharpness", "0.3"},
         {"render.aa", "fxaa"}, {"render.msaa", "1"}, {"texture.filter", "trilinear"}, {"texture.anisotropy", "4"},
         {"effects.shadows", "low"}, {"effects.reflections", "low"}, {"effects.bloom", "low"},
         {"effects.heat_haze", "low"}, {"effects.particles", "low"}, {"effects.sky_fog", "low"},
         {"effects.ambient_occlusion", "off"}, {"effects.model_detail", "original"}, {"display.race_frames", "progressive"}, {"post.tonemapper", "agx_punchy"}, {"post.auto_exposure", "on"}, {"input.response", "modern"}, {"input.haptics", "physics"}, {"input.trigger_effects", "on"}};
     static const PresetTable medium{
-        {"render.gs", "native"}, {"display.field_mode", "blend"}, {"render.quality", "quality"}, {"render.upscaler", "fsr2"}, {"render.sharpness", "0.25"},
+        {"render.scene", "hybrid"}, {"lighting.night", "enhanced"}, {"render.gs", "native"}, {"display.field_mode", "blend"}, {"render.quality", "quality"}, {"render.upscaler", "fsr2"}, {"render.sharpness", "0.25"},
         {"render.aa", "taa"}, {"render.msaa", "1"}, {"texture.filter", "trilinear"}, {"texture.anisotropy", "8"},
         {"effects.shadows", "medium"}, {"effects.reflections", "medium"}, {"effects.bloom", "medium"},
         {"effects.heat_haze", "medium"}, {"effects.particles", "medium"}, {"effects.sky_fog", "medium"},
         {"effects.ambient_occlusion", "low"}, {"effects.model_detail", "high"}, {"display.race_frames", "progressive"}, {"post.tonemapper", "agx_punchy"}, {"post.auto_exposure", "on"}, {"input.response", "modern"}, {"input.haptics", "physics"}, {"input.trigger_effects", "on"}};
     static const PresetTable high{
-        {"render.gs", "native"}, {"display.field_mode", "blend"}, {"render.quality", "native"}, {"render.upscaler", "fsr1"}, {"render.sharpness", "0.2"},
+        {"render.scene", "hybrid"}, {"lighting.night", "enhanced"}, {"render.gs", "native"}, {"display.field_mode", "blend"}, {"render.quality", "native"}, {"render.upscaler", "fsr1"}, {"render.sharpness", "0.2"},
         {"render.aa", "taa"}, {"render.msaa", "1"}, {"texture.filter", "trilinear"}, {"texture.anisotropy", "16"},
         {"effects.shadows", "high"}, {"effects.reflections", "high"}, {"effects.bloom", "high"},
         {"effects.heat_haze", "high"}, {"effects.particles", "high"}, {"effects.sky_fog", "high"},
         {"effects.ambient_occlusion", "medium"}, {"effects.model_detail", "high"}, {"display.race_frames", "progressive"}, {"post.tonemapper", "agx_punchy"}, {"post.auto_exposure", "on"}, {"input.response", "modern"}, {"input.haptics", "physics"}, {"input.trigger_effects", "on"}};
     static const PresetTable ultra{
-        {"render.gs", "native"}, {"display.field_mode", "blend"}, {"render.quality", "native"}, {"render.upscaler", "fsr2"}, {"render.sharpness", "0.15"},
+        {"render.scene", "hybrid"}, {"lighting.night", "enhanced"}, {"render.gs", "native"}, {"display.field_mode", "blend"}, {"render.quality", "native"}, {"render.upscaler", "fsr2"}, {"render.sharpness", "0.15"},
         {"render.aa", "taa"}, {"render.msaa", "1"}, {"texture.filter", "trilinear"}, {"texture.anisotropy", "16"},
         {"effects.shadows", "ultra"}, {"effects.reflections", "ultra"}, {"effects.bloom", "ultra"},
         {"effects.heat_haze", "ultra"}, {"effects.particles", "ultra"}, {"effects.sky_fog", "ultra"},
@@ -292,8 +293,7 @@ std::string formatSettings(const Settings& settings) {
         out << "# " << option.allowed << "\n";
         if (const std::string unused = unusedReason(settings, key); !unused.empty()) out << "# (" << unused << ")\n";
         std::string value = option.get(settings);
-        if (key == "render.scene" && (value == "parity" || value == "hybrid")) value = "original";   // (B7's parity, B8's
-                                                                                                      // hybrid in check form: never saved)
+        if (key == "render.scene" && value == "parity") value = "original";   // (B7's parity is a session's check: never saved)
         out << key.substr(dot + 1) << " = " << value << "\n";
     }
     return out.str();
@@ -319,6 +319,7 @@ std::vector<std::string> loadSettings(Settings& settings, const std::string& pat
     if (!file) return warnings;
     std::string line, section;
     std::vector<std::string> seen;   // the options the file sets
+    std::string statedPreset;        // the file's graphics.preset, as written
     int fileVersion = 1;             // (a file without a version line is from before version 2)
     int number = 0;
     while (std::getline(file, line)) {
@@ -352,6 +353,35 @@ std::vector<std::string> loadSettings(Settings& settings, const std::string& pat
         if (!option || !option->persistent) { warnings.push_back(where + "unknown option " + qualified); continue; }
         if (auto error = setOption(settings, qualified, value); !error.empty()) warnings.push_back(where + error);
         else seen.push_back(qualified);   // (a refused value is as if the line were missing)
+        if (qualified == "graphics.preset") statedPreset = lower(value);
+    }
+    // Version 2 -> 3 (the night's modern path in the presets): until version 3 no preset set render.scene or
+    // lighting.night, and hybrid was never saved, so a file written under medium, high or ultra holds 'original' for
+    // both as the value of the day, not as a choice. Those follow the preset now (hybrid, enhanced); a value the
+    // player set (lighting.night = enhanced under any preset) is kept, and so is everything under original, low and
+    // custom (a custom file may come from the handheld's low: it says how to get the modern path instead). Logged;
+    // the host writes the file back as version 3 at once (*older), so that is once.
+    if (fileVersion < 3) {
+        Preset stated = Preset::Custom;
+        for (Preset p : {Preset::Medium, Preset::High, Preset::Ultra})
+            if (statedPreset == name(p)) stated = p;
+        std::string moved;
+        if (stated != Preset::Custom) {
+            for (const auto& [key, value] : presetValues(stated)) {
+                if (std::string_view(key) != "render.scene" && std::string_view(key) != "lighting.night") continue;
+                const bool held = std::find(seen.begin(), seen.end(), key) != seen.end();
+                if (held && find(key)->get(settings) != "original") continue;   // (a choice: kept)
+                if (find(key)->get(settings) == value) continue;                // (the preset's already: no line of its own)
+                find(key)->set(settings, value);
+                moved += (moved.empty() ? "" : " and ") + std::string(key) + " = " + value;
+            }
+            if (!moved.empty())
+                warnings.push_back(path + ": version " + std::to_string(fileVersion) + ": " + moved + " now, as the " +
+                                   name(stated) + " preset sets them (the night's lamps light the road)");
+        } else if (statedPreset == "custom" && find("render.scene")->get(settings) == "original") {
+            warnings.push_back(path + ": version " + std::to_string(fileVersion) + ": a custom preset keeps render.scene = original; "
+                               "the medium, high and ultra presets now set render.scene = hybrid and lighting.night = enhanced");
+        }
     }
     settings.preset = detectPreset(settings);
     // Version 1 -> 2 (MENU_DESIGN M9f2): every version-1 file holds ui.entry = hotkey and ui.pause = gt4, every

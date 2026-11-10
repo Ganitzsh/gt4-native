@@ -3575,9 +3575,11 @@ void GsnScene::Impl::runSide(const SideBound& bound) {
     // B10: the lit colour of the partition's blended layers (tagged items that test Z against their base and write none:
     // markings, decals), after the surfaces', in the list's order; not N3's skipped items (GT4's baked light is no
     // surface colour: the relight takes it apart). Only while something reads the channel: the night relight
-    // (lighting.night), or GT4_SIDE_VIEW=lit; hybrid alone doesn't pay for the pass.
+    // (lighting.night, on a night frame), or GT4_SIDE_VIEW=lit; hybrid alone, and hybrid by day, don't pay for the pass.
     static const bool litViewed = [] { const char* e = std::getenv("GT4_SIDE_VIEW"); return e && std::string(e) == "lit"; }();
-    if (night > 0.0f || litViewed) {
+    // (the night relight reads it only on a frame GT4 lights its lamps in: by day the setting alone costs nothing)
+    const bool nightFrame = night > 0.0f && frame.scene && (frame.scene->flags & gfx::scene::kFrameLampsOn);
+    if (nightFrame || litViewed) {
         bool layers = false;
         for (size_t i = 0; i < paritySpans.size(); ++i) {
             const render::ParitySpan& sp = paritySpans[i];
