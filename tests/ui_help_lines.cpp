@@ -79,7 +79,10 @@ int main(int argc, char **argv) {
                     // (as ui_renderer counts them)
                     const int holds = std::max(1, static_cast<int>(std::floor(item.h / line + 0.01f)));
                     threeLines += holds == 3 ? 1 : 0;
-                    const size_t needs = wrapText(sink, body, item.size, item.text, item.w, 1000).size();
+                    // (the row's help itself, in the band's box: on a canvas without the panel a row not used
+                    // with these settings shows why in the band, and its help must fit all the same once it is used)
+                    const size_t needs = std::max(wrapText(sink, body, item.size, item.text, item.w, 1000).size(),
+                                                  wrapText(sink, body, item.size, row.help, item.w, 1000).size());
                     if (needs > 3)
                         listed << static_cast<int>(width) << ' ' << schema.tabs[tab] << ' ' << row.key << ": "
                                << needs << " lines\n";

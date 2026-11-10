@@ -8,8 +8,8 @@ namespace gt4::settings_table {
 void uiOptions(std::vector<Option>& o) {
     o.push_back(enumOption("ui.entry", &Settings::uiEntry, {"hotkey", "integrated"},
         "How Settings opens. hotkey = only by Esc, Guide or Select + Start: GT4's screens as on the PS2 (the "
-        "original preset). integrated = also from GT4's Options items, whose GT4 options row still opens GT4's own "
-        "screen, and from Start on GT mode's map (low to ultra)."));
+        "original preset). integrated = also from GT4's Options items (Settings' own GT4 options row still opens "
+        "GT4's screen) and from Start on GT mode's map (low to ultra)."));
     o.push_back(enumOption("ui.pause", &Settings::uiPause, {"gt4", "native"},
         "The race pause. gt4 = GT4's own pause screen (the original preset). native = this game's pause page: "
         "Continue, Retry where allowed, Exit, Screen, Settings (low to ultra). Esc, Guide or Select + Start in a "

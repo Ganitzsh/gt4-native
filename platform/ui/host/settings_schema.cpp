@@ -235,7 +235,7 @@ const char *menuHelp(const char *key, const std::string &whole) {
          "(temporal: they also do the anti-aliasing)."},
         {"display.field_mode",
          "Interlaced screens (the menus). blend: both fields half and half, steady, with a doubled copy of what moves. "
-         "clean: only the newer field where something moved; sharper, but moving content can bob by a line."},
+         "clean: only the newer field where something moved, but moving content can bob by a line."},
         {"input.response",
          "How the sticks and pedals respond. original: as on the PS2, the sticks cut at 8 % and jump from there. modern: "
          "the dead zones, curve and filters below, and GT4's own centre band compensated in races."},
@@ -259,7 +259,7 @@ const char *menuHelp(const char *key, const std::string &whole) {
          "voices, which the interpolation and spatial audio below need. Music and movie sound stay in the game."},
         {"audio.interpolation",
          "How the host's mixer reads between a voice's samples. original: straight lines, dull highs and some grit. "
-         "cubic: a smooth curve. sinc: the closest to the recorded sound. The same sounds play either way."},
+         "cubic: a smooth curve. sinc: the closest to the recorded sound. The same sounds play whichever it is."},
         {"audio.spatial",
          "Where the cars' sounds come from. original: as GT4 pans them. stereo: each car panned from its direction. "
          "hrtf: for headphones, cars behind and beside you sound there. Music and menus are unchanged."},
