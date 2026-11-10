@@ -1151,10 +1151,13 @@ between events (a block crossing, an envelope step, the voice going off; a susta
 being one), bit-identical to `mix()`'s per-sample path by `CTEST` (`spu2_advance`, every sample) and the live check
 (`GT4_SPU_ADVANCE_CHECK`: 7200 frames, 0 differences). A race's voice advance went from about 215 to about 70 us a
 frame on the desktop.
-Unfinished, on origin (lane D, 2026-11-10, at the wind-down): the game's hash memo, profile saving (1), as
-`wip/d5-hash-memo` (458d949, OK'd by lane C and the architect; REL and hook_lint passed). Before main: DIFFTEST, the
-host build, `GT4_HASH_MEMO_CHECK=1` over a race, the garage and Photo Travel with 0 mismatches, and the memo's off/on
-A/B.
+The game's hash memo, profile saving (1) (lane D's `wip/d5-hash-memo`, OK'd by lane C and the architect; landed
+2026-11-10, rebased unchanged): `REL`, `hook_lint` and `DIFFTEST` pass; `GT4_HASH_MEMO_CHECK=1` over the garage (1.62
+million hits hashed again), Photo Travel's shot (0.67 million) and PE race 2 with the drive (1.29 million): 0 differ.
+The saving is smaller than the profile's 620 us suggested: over the whole race session (menus included, one off/on
+pair on one binary) the game's CPU went from 1.69 to 1.63 ms a frame, with about 170 hits of 720 lookups a walk, since
+a guest write between two lookups empties the memo. The uploads and origin parts sent are the same off and on. If
+more is wanted: a memo that lasts the frame and is emptied at the VBlank too.
 
 **D6: Vehicle state discovery (L).** RISKS R14, then the fields of `scene::Vehicle`. Depends: R14. Acceptance: per
 wheel load and slip plotted over a lap, consistent with the car's motion; documented addresses.
