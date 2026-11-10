@@ -445,6 +445,7 @@ struct GsnScene::Impl {
         bool valid = false;
     };
     std::unordered_map<uint32_t, History> histories;   // by scene target
+    uint64_t cutResets = 0, cutUnknown = 0;   // A3b: resolves reset by a camera cut; resolves with no scene frame to ask
     // The scene stage's other effects (GsnScene::setEffects), each a compute pass over the scene.
     SceneEffects effects;
     vk::Pipeline ssrPass, ssrComposite, fogPass, blurPass, dofPass, gradePass;
@@ -751,6 +752,9 @@ struct GsnScene::Impl {
         vk::destroy(device, sideViewPass);
         vk::destroy(device, sideVeilPass);
         vk::destroy(device, sideLayerPass);
+        if (cutResets || cutUnknown)
+            std::printf("Camera cuts: the temporal history reset %llu times by kViewCut; %llu resolves in a list without a scene frame\n",
+                        static_cast<unsigned long long>(cutResets), static_cast<unsigned long long>(cutUnknown));
         if (hybrid && nightSideLights)
             std::printf("Night side channels: %llu Lights relit from the surface's own colour and normal\n",
                         static_cast<unsigned long long>(nightSideLights));
@@ -2389,6 +2393,19 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
         const VkExtent2D e = si.area;
         History& h = histories[l.target];
         bool reset = !h.valid || displayedFrames > h.used + 1;
+        // A3b: a camera cut in a view drawn into this target (kViewCut on its ViewBegin): the history is of another
+        // camera. In split screen either half's cut resets both. A Light in a list cut before FrameEnd has no scene
+        // frame to read the flag from: counted.
+        if (frame.scene) {
+            for (const scene::ViewData& v : frame.scene->views)
+                if (v.target == l.target && (v.flags & gfx::scene::kViewCut) &&
+                    (v.role == gfx::scene::kViewMain || v.role == gfx::scene::kViewPhoto)) {
+                    if (!reset) ++cutResets;
+                    reset = true;
+                }
+        } else {
+            ++cutUnknown;
+        }
         for (vk::Image& i : h.image)
             reset = ensureImage(i, e, kColour, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                                 "gsn scene history") || reset;

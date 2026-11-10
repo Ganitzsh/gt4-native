@@ -130,6 +130,7 @@ extern "C" void RacePS2Base__render_world_split(char *arg0, char *arg1, s32 arg2
     func_004A7454();
     temp_v0_2 = M2C_FIELD(temp_s5, char **, 0) + 0x18;
     M2C_FIELD(temp_v0_2, void (**)(char *, f32), 4)(temp_s5 + M2C_FIELD(temp_v0_2, s16 *, 0), 0);
+    gt4_scene_main_camera(spr_base(), temp_s5);  /* A3b: the half's camera, for this view's kViewCut */
     gt4_scene_view_begin(spr_base(), 1, 4, 0);   /* kViewMain, kViewCameraKnown: the half's camera is set 0 now */
     func_00397CE0(temp_s3);
     func_00396B80(temp_s4, M2C_FIELD(temp_s4, s32 *, 0x54), -1, 1.0f, 1000.0f);

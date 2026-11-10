@@ -90,6 +90,7 @@ extern "C" void func_0033EAB8(char *self, void *buf, void *cur, void *aux, f32 t
     RaceEntryCar__update(0);
     func_004A7454();
     { V *e = entry(cam, 0x18); ((FnF)e->fn)(cam + e->d, t); }
+    gt4_scene_main_camera(spr_base(), cam);      /* A3b: its mode fields and cut pulses, for this view's kViewCut */
     gt4_scene_view_begin(spr_base(), 1, 4, 0);   /* kViewMain, kViewCameraKnown: the camera is set 0 now */
     func_00397CE0(scene);
     if (I(self, 0xE340)) {

@@ -85,6 +85,9 @@ unsigned int gt4_scene_on(void);
 void gt4_scene_frame_begin(void *context, unsigned int flags);
 unsigned int gt4_scene_view_begin(void *context, int role, int flags, unsigned int pass);
 void gt4_scene_view_end(void *context);
+/* A3b: the race camera (method 0xD0's object) right before the main view's gt4_scene_view_begin, so a change of its
+ * mode fields or a cut pulse sets that view's kViewCut (the camera cut the temporal history must not cross). */
+void gt4_scene_main_camera(void *context, const void *cam);
 /* R6: while `role` is not 0, a kViewMain the game opens (0033EAB8's view) opens as `role` instead; a FrameBegin clears
  * it. Photo Travel's preview (mPhotoViewFace virtual 70) draws the race's world into its own buffers: kViewPhoto. */
 void gt4_scene_main_role(void *context, int role);
