@@ -321,7 +321,7 @@ void note_late_delivery(const CONTEXT &ctx) {
         ++g_late_elsewhere;
         return;
     }
-    if (!function) function = at;   // (runtime code: no guest address; by its own)
+    if (!function) function = 1;    // (runtime code has no guest address: one entry for all of it, not one a pc)
     for (LateDelivery &l : g_late) {
         uint32_t held = l.function.load();
         if (!held) {   // (only the interrupt thread writes: no race for the slot)
@@ -337,16 +337,32 @@ void note_late_delivery(const CONTEXT &ctx) {
     ++g_late_elsewhere;
 }
 
-// From the interrupt thread, nothing frozen: each function a late delivery found, once, as it first appears.
-void log_late_deliveries() {
+// Whether a guest thread is suspended where an interrupt froze it (preempted: it stays so until it is dispatched
+// again): it may hold the log's lock or the C runtime's, so nothing is logged meanwhile.
+bool any_thread_frozen() {
+    Lock lock;
+    for (const Thread &t : g_threads)
+        if (t.used && t.host_frozen) return true;
+    return false;
+}
+
+// From the interrupt thread, with no guest thread frozen: each function a late delivery found, once, as it first
+// appears. Put off (false) while a preempted thread is still frozen; the caller tries again on its next pass.
+bool log_late_deliveries() {
+    if (any_thread_frozen()) return false;
     for (uint32_t k = g_late_logged.load(); k < 16 && g_late[k].function.load(); ++k) {
         uint32_t guest = 0;
         const char *name = native_name_for(g_late[k].at.load(), &guest);
-        log_warn("kernel: frame callbacks waited over 50 ms for a safe point: the running thread was in %s (%08x, host pc "
-                 "%08x); delivered by freezing it (P4: this loop needs a safe point)",
-                 name, guest, g_late[k].at.load());
+        if (g_late[k].function.load() == 1)
+            log_warn("kernel: frame callbacks waited over 50 ms for a safe point: the running thread was in runtime code "
+                     "(host pc %08x, the first seen); delivered by freezing it", g_late[k].at.load());
+        else
+            log_warn("kernel: frame callbacks waited over 50 ms for a safe point: the running thread was in %s (%08x, host "
+                     "pc %08x); delivered by freezing it (P4: a loop without a safe point, unless the thread had just been "
+                     "resumed)", name, guest, g_late[k].at.load());
         g_late_logged = k + 1;
     }
+    return true;
 }
 std::atomic<uint32_t> g_self_wakeups{0};   // wakeups a handler gave the thread it ran on (GT4_WATCH)
 
@@ -364,8 +380,12 @@ bool interrupt_now() {
         SuspendThread(r->host);
         CONTEXT ctx;
         ctx.ContextFlags = CONTEXT_CONTROL;
-        GetThreadContext(r->host, &ctx);  // makes the suspension take effect
-        if (cooperative_delivery()) note_late_delivery(ctx);   // (P4: past the limit; in preemptive mode every one is)
+        const bool context = GetThreadContext(r->host, &ctx) != 0;  // makes the suspension take effect
+        // (P4: past the limit; in preemptive mode every one is. Without the context there is no stack to read.)
+        if (cooperative_delivery()) {
+            if (context) note_late_delivery(ctx);
+            else ++g_late_elsewhere;
+        }
         if (g_guard_frozen) {
             // the innermost return address in the image: runtime code (not a game function) means frozen inside it.
             // Code only: a pointer to the runtime's data on the stack named "runtime" too (g_lock + 0x10, the critical
@@ -508,11 +528,12 @@ DWORD WINAPI interrupt_thread(void *) {
                 logged = g_frames;
                 log_info("kernel: frame callbacks delivered at safe points %llu, by interrupting %llu",
                          static_cast<unsigned long long>(g_delivered_cooperatively), static_cast<unsigned long long>(g_delivered_preemptively));
-                for (const LateDelivery &l : g_late) {   // (P4: which functions the interrupted threads were in)
+                // (P4: which functions the interrupted threads were in; not while a preempted thread is frozen)
+                if (!any_thread_frozen()) for (const LateDelivery &l : g_late) {
                     if (!l.function.load()) break;
                     uint32_t guest = 0;
                     const char *name = native_name_for(l.at.load(), &guest);
-                    log_info("kernel:   %u of them in %s (%08x)", l.count.load(), name, guest);
+                    log_info("kernel:   %u of them in %s (%08x)", l.count.load(), l.function.load() == 1 ? "runtime code" : name, guest);
                 }
                 if (const uint32_t elsewhere = g_late_elsewhere.load())
                     log_info("kernel:   %u of them where no function is named", elsewhere);
