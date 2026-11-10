@@ -1951,8 +1951,9 @@ the owner, 2026-11-09), while `original` keeps GT4's way (brake glow only with t
 lamp's glow lights only the lamp itself and feeds bloom; it lights the car behind only above a small level threshold.
 Review: brake lamps brighten under braking on the car ahead, by day and at night; under braking the car behind lit red
 (F9 turns `kSrcBrakeLight` and `kSrcTailLight` on in the gather, which A7 step 2 left off, and decides whether step
-1a's `kSrcCarLamp` stays; moved from A7 step 2); headlights and tail lamps glow only with the switch on; on the
-warning capture the tint stays below N4's bar.
+1a's `kSrcCarLamp` stays, off too until F9 since c92b64c: lit at an untuned strength all round each car, it painted
+the road red in the owner's Odin playtest, and magenta at the same curve on the desktop; moved from A7 step 2);
+headlights and tail lamps glow only with the switch on; on the warning capture the tint stays below N4's bar.
 
 Additions to existing tickets, with the same rules:
 - **A7 step 2** (done: lane A, fab0402, 2026-11-09): headlights, tail and brake lamps sent as lights with their state.
