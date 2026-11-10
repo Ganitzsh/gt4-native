@@ -27,7 +27,8 @@ enum LightFlags : uint32_t {
     kFromGame = 16,        // from a scene::Light record (else synthesised by the host)
 };
 // The flags' bits 8-15: the light's profile (PLAN.md F7), 0 none. A profile shapes a spot's intensity by the angle
-// from its axis, on top of its cone.
+// from its axis and the distance (lightProfile), on top of its cone, and may give its light a diffuse term of its
+// own (lightDiffuse).
 inline constexpr uint32_t kProfileShift = 8, kProfileMask = 0xFF;
 enum LightProfile : uint32_t {
     kProfileNone = 0,

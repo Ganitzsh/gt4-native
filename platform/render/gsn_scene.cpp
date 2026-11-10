@@ -3574,20 +3574,25 @@ void GsnScene::Impl::runSide(const SideBound& bound) {
     vkCmdEndRendering(command);
     // B10: the lit colour of the partition's blended layers (tagged items that test Z against their base and write none:
     // markings, decals), after the surfaces', in the list's order; not N3's skipped items (GT4's baked light is no
-    // surface colour: the relight takes it apart)
-    {
+    // surface colour: the relight takes it apart). Only while something reads the channel: the night relight
+    // (lighting.night), or GT4_SIDE_VIEW=lit; hybrid alone doesn't pay for the pass.
+    static const bool litViewed = [] { const char* e = std::getenv("GT4_SIDE_VIEW"); return e && std::string(e) == "lit"; }();
+    if (night > 0.0f || litViewed) {
         bool layers = false;
         for (size_t i = 0; i < paritySpans.size(); ++i) {
             const render::ParitySpan& sp = paritySpans[i];
             if (!ours(i)) continue;
             const gsn::Draw& d = frame.draws[sp.draw];
             const gfx::Context& c = d.state.c;
-            if (d.depth != view.depth || !((d.state.prim >> 6) & 1) || !c.depthTest || c.depthFunc < 2 || c.depthWrite ||
+            // (its test GEQUAL, the pipeline's: a GREATER layer coplanar with its base is one GT4 rejects)
+            if (d.depth != view.depth || !((d.state.prim >> 6) & 1) || !c.depthTest || c.depthFunc != 2 || c.depthWrite ||
                 c.colorKeep == 0xFFFFFFFFu)
                 continue;
-            // (a layer that blends its own colour in, (Cs - Cd) x As + Cd: one that only darkens or adds, a shadow or
-            // a glow, has no surface colour to give; modern_side.frag leaves out a near-black one too)
+            // (a layer that blends its own colour in, (Cs - Cd) x As + Cd, or x FIX at half or more: one that only
+            // darkens or adds, a shadow or a glow, or blends by the destination's alpha or faintly, has no surface
+            // colour to give; modern_side.frag leaves out a near-black or nearly transparent one too)
             if (c.blendA != 0 || c.blendB != 1 || c.blendD != 1) continue;
+            if (!(c.blendC == 0 || (c.blendC == 2 && c.blendFixed >= 0x40))) continue;
             bool skipped = false;
             if (sp.draw + 1 < skipAt.size())
                 for (uint32_t k = skipAt[sp.draw]; k < skipAt[sp.draw + 1] && !skipped; ++k) skipped = skipSpans[k].first == sp.first;
@@ -3879,8 +3884,8 @@ const std::vector<gfx::scene::Light>& GsnScene::Impl::lampsOf(const scene::Scene
                 // F7's low beam, F6's gather switch (PLAN.md): each car's headlights (A7 step 2's spots along their
                 // beam, sent without a cone) get their beam: tipped down kHeadlightDip from the game's direction (the
                 // dipped beam's cut-off: little light above the lamps' height), a cone full to 14 degrees and ending at
-                // 30, a range of 50 m, the low-beam profile. In hybrid only, as the street lamps' profile.
-                // GT4_HEADLIGHTS=off: not lit; a number: the intensity's factor (default 1).
+                // 30, a range of 50 m, the low-beam profile. In hybrid only, as the street lamps' profile, and off with
+                // it (GT4_LAMP_PROFILE=off). GT4_HEADLIGHTS=off: not lit; a number: the intensity's factor (default 1).
                 static const float headlights = [] {
                     const char* e = std::getenv("GT4_HEADLIGHTS");
                     if (!e) return 1.0f;
@@ -3891,10 +3896,14 @@ const std::vector<gfx::scene::Light>& GsnScene::Impl::lampsOf(const scene::Scene
                 constexpr float kHeadlightDip = 0.07f;   // (the tangent of about 4 degrees)
                 for (gfx::scene::Light& lamp : v.records) {
                     if (lamp.source != gfx::scene::kSrcHeadlight || lamp.view != view || !hybrid || !(headlights > 0.0f)) continue;
-                    float beam[3] = {lamp.direction[0] + kHeadlightDip * down[0], lamp.direction[1] + kHeadlightDip * down[1],
-                                     lamp.direction[2] + kHeadlightDip * down[2]};
+                    // (no direction of its own, a degenerate matrix game-side: left without a beam, not pointed down)
+                    const float own = std::sqrt(lamp.direction[0] * lamp.direction[0] + lamp.direction[1] * lamp.direction[1] +
+                                                lamp.direction[2] * lamp.direction[2]);
+                    if (!(own > 0.5f) || !std::isfinite(own)) continue;
+                    float beam[3] = {lamp.direction[0] / own + kHeadlightDip * down[0], lamp.direction[1] / own + kHeadlightDip * down[1],
+                                     lamp.direction[2] / own + kHeadlightDip * down[2]};
                     const float beamLength = std::sqrt(beam[0] * beam[0] + beam[1] * beam[1] + beam[2] * beam[2]);
-                    if (!(beamLength > 1e-6f) || !std::isfinite(beamLength)) continue;   // (no direction: left without a beam)
+                    if (!(beamLength > 1e-6f) || !std::isfinite(beamLength)) continue;
                     for (int k = 0; k < 3; ++k) lamp.direction[k] = beam[k] / beamLength;
                     lamp.kind = gfx::scene::kLightSpot;
                     lamp.cosInner = 0.970296f;   // (cos 14 degrees)

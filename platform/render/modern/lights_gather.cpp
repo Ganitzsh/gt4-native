@@ -35,9 +35,12 @@ LightListHeader gatherLights(const gfx::scene::Light* records, size_t count, uin
             ++stats.unknownSource;
             continue;
         }
-        // (a headlight lights only with its beam: a spot whose cone is known; light_sources.cpp)
-        const bool beamless = r.source == kSrcHeadlight && !(r.kind == kLightSpot && r.cosOuter > 0.0f && r.cosInner >= r.cosOuter);
-        if (!d.lights || beamless) {
+        // (a headlight lights only with its beam: a spot with a direction and a known cone, the test `cone` makes below;
+        // light_sources.cpp)
+        const bool beam = r.kind == kLightSpot && finite3(r.direction) &&
+                          r.direction[0] * r.direction[0] + r.direction[1] * r.direction[1] + r.direction[2] * r.direction[2] > 1e-12f &&
+                          r.cosOuter > 0.0f && r.cosInner >= r.cosOuter && r.cosInner <= 1.0f;
+        if (!d.lights || (r.source == kSrcHeadlight && !beam)) {
             ++stats.notLights;
             continue;
         }

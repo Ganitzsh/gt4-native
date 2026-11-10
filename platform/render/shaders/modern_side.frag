@@ -24,8 +24,11 @@ layout(location = 0) out vec4 outLit;
 void main() {
     if ((inHomogeneous & 4u) != 0u) discard;
     const vec4 lit = (inHomogeneous & 2u) != 0u ? inFlatColour : inColourW / inW;
-    // (a near-black layer darkens what is under it, a car's shadow: no surface colour, the base's stays)
-    if (max(lit.r, max(lit.g, lit.b)) < 32.0 / 255.0) discard;
+    // (a near-black layer darkens what is under it, a car's shadow: no surface colour, the base's stays; nor where the
+    // layer's own vertex alpha lets the base through, under half of 0x80: the pixel there is mostly the base's. Its
+    // texture's alpha isn't read here: a layer whose texture is clear over part of its triangles still gives that part
+    // its colour, an error the size of the two vertex colours' ratio, to be measured with GT4_SIDE_VIEW=lit)
+    if (max(lit.r, max(lit.g, lit.b)) < 32.0 / 255.0 || lit.a < 64.0 / 255.0) discard;
     outLit = lit;
 }
 #else
