@@ -271,6 +271,7 @@ public:
         uint64_t primitives = 0, draws = 0, uploads = 0, copies = 0, decoded = 0, replaced = 0, targetReads = 0, reinterpreted = 0;
         uint64_t named = 0, found = 0;   // textures looked up in the texture pack, and those it has
         uint64_t reused = 0;             // textures whose content was decoded before (GsFrontend::decoded)
+        uint64_t streamed = 0;           // new contents of a stream decoded into its texture (textureFor)
         uint64_t setTextures = 0, setMisses = 0, setDecodes = 0;   // textures named by their set; not held now; decodes
         uint64_t setPagesWritten = 0;   // pages of sets written into graphics memory (materializePage)
         uint64_t byAddress = 0;   // textures still named by graphics-memory address (lookups)
@@ -473,7 +474,8 @@ private:
         uint64_t contentKey = 0;        // ... its key in `decoded`
         uint64_t generation = 0;   // sum of the covered pages' generations when decoded
         uint64_t clutHash = 0;
-        uint64_t decodedFrame = ~0ull, lastUsed = 0;
+        uint64_t decodedFrame = ~0ull, lastUsed = 0;   // decodedFrame: the frame it was last decoded in
+        uint32_t streak = 0;   // new contents decoded on consecutive frames (a stream: textureFor)
         uint64_t texels = 0;
         bool replacementFound = false;     // the texture pack has an image for this content
         uint32_t replacedId = 0;           // ... the texture drawn for it (replacementTexture), 0: the decoded one
