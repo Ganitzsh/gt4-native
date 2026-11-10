@@ -47,7 +47,7 @@ in the data folder yet is 'missing' and doesn't fail the run. The items:
     night_bands     lap_ssr5r and lap_csr5 at the owner's settings at 1280x800, every 100th frame from 600 through
                     tools/band_measure.py (lane F's), the frames deleted: per frame a triage score, to compare with the
                     desktop's same frames (the live dump on L3 + R3 is the item's other half)
-    night_strips    lap_ssr5r_prog at the playtest dump's settings (low, scene original, progressive, 1920x1080),
+    night_strips    lap_ssr5r_prog at the playtest dump's settings (low, scene original, progressive, 16:9, 1920x1080),
                     lighting.night enhanced and original, every 100th frame from 300 to 1300: each frame's vertical
                     steps across the near road and how many sit on a 32 GS-pixel grid (GT4's light strips) or a 40 one
                     (the relight's tiles); the frames deleted; read beside the desktop's run
@@ -55,6 +55,14 @@ in the data folder yet is 'missing' and doesn't fail the run. The items:
 Items that wait for their ticket (B16c's memory and GPU cost, F6-F9's budgets, the settings pages' cost, the
 shooting screen with the held picture) are listed as pending until they are added here. The device items of C6b
 (R4's steps, latency, the mixer's underruns, the texture pack, the pads) need a person and are not run.
+
+    py tools/device_run.py --strip-steps DIR
+
+scores a folder of frames (.ppm or .png, any machine) with strip_steps, as PLAN section 2's NATIVE does: one JSON line
+per frame in frame order ({"file", "frame", "steps", "on32", "on40", "content", "strips"}; frame is the last number in
+the name), then a summary line ({"frames", "with_strips"}). A frame has strips when 6 or more steps sit on the 32
+grid and half again as many as on the 40 grid (strips_rule). PPM is 8-bit P6 only; PNG needs Pillow; it exits 1 when
+no frame was read.
 """
 import sys
 
@@ -185,6 +193,59 @@ def strip_steps(width, height, rgb, gs_width=640, rows=(0.65, 0.75), threshold=1
         if grid == 32:
             out["phase32"] = best
     return out
+
+
+def strips_rule(score):
+    """A frame has strips (night_strips, PLAN section 2's NATIVE): 6 or more steps on the 32 grid, and half again as
+    many as on the 40 grid."""
+    return score["on32"] >= 6 and score["on32"] > 1.5 * score["on40"]
+
+
+def read_frame(path):
+    """(width, height, RGB bytes) of a binary PPM (P6, 8-bit), or of a PNG through Pillow."""
+    data = open(path, "rb").read()
+    if data[:2] == b"P6":
+        tokens, at = [], 0
+        while len(tokens) < 4:
+            while data[at:at + 1].isspace() or data[at:at + 1] == b"#":
+                if data[at:at + 1] == b"#":   # (a comment runs to the end of its line)
+                    at = data.index(b"\n", at)
+                at += 1
+            end = at
+            while not data[end:end + 1].isspace():
+                end += 1
+            tokens.append(data[at:end])
+            at = end
+        w, h, maxval = int(tokens[1]), int(tokens[2]), int(tokens[3])
+        rgb = data[at + 1:at + 1 + w * h * 3]
+        if maxval != 255 or len(rgb) != w * h * 3:
+            raise ValueError(f"{path}: an 8-bit P6 PPM is needed (maxval {maxval}, {len(rgb)} of {w * h * 3} bytes)")
+        return w, h, rgb
+    from PIL import Image
+    img = Image.open(path).convert("RGB")
+    return img.width, img.height, img.tobytes()
+
+
+def score_dir(folder):
+    """--strip-steps DIR: each .ppm / .png in frame order scored by strip_steps, one JSON line each, then the summary.
+    0 when at least one frame was read."""
+    def number(n):   # (the last number in the name: frame_10 after frame_2 without zero padding)
+        found = re.findall(r"\d+", n)
+        return int(found[-1]) if found else None
+    names = sorted((n for n in os.listdir(folder) if n.lower().endswith((".ppm", ".png"))),
+                   key=lambda n: (number(n) is None, number(n) or 0, n))
+    frames = with_strips = 0
+    for n in names:
+        w, h, rgb = read_frame(os.path.join(folder, n))
+        score = strip_steps(w, h, rgb)
+        line = {"file": n, "frame": number(n), "steps": score["steps"],
+                "on32": score["on32"], "on40": score["on40"], "content": score["content"],
+                "strips": strips_rule(score)}
+        print(json.dumps(line), flush=True)
+        frames += 1
+        with_strips += line["strips"]
+    print(json.dumps({"frames": frames, "with_strips": with_strips}), flush=True)
+    return 0 if frames else 1
 
 
 # ---------------------------------------------------------------------------------------------------------- desktop
@@ -974,7 +1035,7 @@ class Device:
                 w, h, rgb = self.frames_rgb(os.path.join(d, f))
                 per.append(dict(frame=int(m.group(1)), **strip_steps(w, h, rgb)))
             shutil.rmtree(d, ignore_errors=True)   # (game frames: never kept)
-            strips = [p for p in per if p["on32"] >= 6 and p["on32"] > 1.5 * p["on40"]]
+            strips = [p for p in per if strips_rule(p)]
             res[mode] = {"exit": code, "frames": len(per), "with_32px_steps": len(strips), "per_frame": per}
         both = all(res[m]["frames"] for m in res)
         failed = [f"{m} exited {res[m]['exit']}" for m in res if res[m]["exit"]]
@@ -1176,6 +1237,8 @@ def main():
                     help="write the reference class's frames for c6_orig (x64 only): each ORIG_CAPS capture in DATA "
                          "at its step as OUT/<capture>/frame_N.png, checked against its hash list; OUT goes to the "
                          "device's DIR/ref/")
+    ap.add_argument("--strip-steps", metavar="DIR", help="score a folder of frames (.ppm / .png) with strip_steps, "
+                    "a JSON line each and a summary (PLAN section 2's NATIVE)")
     ap.add_argument("--device", action="store_true", help="the device half (run by the desktop side over ssh)")
     ap.add_argument("--data", default="~/gt4-device")
     ap.add_argument("--report", default="")
@@ -1184,6 +1247,8 @@ def main():
     unknown = [i for i in items if i not in ITEMS]
     if unknown:
         ap.error(f"unknown items {unknown}; known: {', '.join(ITEMS)}")
+    if a.strip_steps:
+        sys.exit(score_dir(a.strip_steps))
     if a.make_hashes:
         sys.exit(make_hashes(*a.make_hashes))
     if a.make_refs:
