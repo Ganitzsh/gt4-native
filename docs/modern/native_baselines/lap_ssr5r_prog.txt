@@ -1,0 +1,48 @@
+# NATIVE step 1 baseline (PLAN.md section 2; tools/native_strips.py): lap_ssr5r_prog.cap, frames 100-4200/100
+# settings: --size 1280x896 --preset original --set render.gs=native --set render.quality=native --set
+#   aspect.ratio=window --set display.frame_interpolation=off --set texture.hd_pack=off
+# host: main 659c3e1c (host built from a5bda40f, the same host sources); written 2026-11-10
+# judged: frame 2300 on32 8 on40 5, the kerb's red and white blocks (x 843-958), the road unstepped; no strips
+# frame on32 on40 strips (strips: 1 when strips_rule holds)
+100 4 5 0
+200 10 7 0
+300 3 2 0
+400 3 3 0
+500 6 4 0
+600 2 2 0
+700 3 2 0
+800 4 4 0
+900 6 7 0
+1000 10 9 0
+1100 4 5 0
+1200 4 2 0
+1300 7 5 0
+1400 6 6 0
+1500 5 3 0
+1600 6 4 0
+1700 7 6 0
+1800 9 7 0
+1900 6 5 0
+2000 5 4 0
+2100 4 3 0
+2200 3 2 0
+2300 8 5 1
+2400 6 5 0
+2500 3 2 0
+2600 4 4 0
+2700 8 6 0
+2800 5 5 0
+2900 4 4 0
+3000 3 4 0
+3100 4 3 0
+3200 6 4 0
+3300 5 4 0
+3400 4 4 0
+3500 9 9 0
+3600 6 6 0
+3700 6 7 0
+3800 7 6 0
+3900 6 5 0
+4000 6 6 0
+4100 2 2 0
+4200 5 4 0

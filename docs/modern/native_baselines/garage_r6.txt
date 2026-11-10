@@ -1,0 +1,45 @@
+# NATIVE step 1 baseline (PLAN.md section 2; tools/native_strips.py): garage_r6.cap, frames 100-3900/100
+# settings: --size 1280x896 --preset original --set render.gs=native --set render.quality=native --set
+#   aspect.ratio=window --set display.frame_interpolation=off --set texture.hd_pack=off
+# host: main 659c3e1c (host built from a5bda40f, the same host sources); written 2026-11-10
+# judged: frame 3000 on32 12 on40 7, the stats text, clipboard and keys over the car's reflection; no strips
+# frame on32 on40 strips (strips: 1 when strips_rule holds)
+100 0 0 0
+200 0 0 0
+300 0 0 0
+400 0 0 0
+500 0 0 0
+600 0 0 0
+700 0 0 0
+800 1 1 0
+900 13 11 0
+1000 14 11 0
+1100 13 9 0
+1200 9 8 0
+1300 6 5 0
+1400 12 8 0
+1500 14 11 0
+1600 14 11 0
+1700 14 11 0
+1800 14 11 0
+1900 14 11 0
+2000 14 11 0
+2100 4 5 0
+2200 4 5 0
+2300 4 5 0
+2400 4 5 0
+2500 9 9 0
+2600 8 9 0
+2700 7 6 0
+2800 7 6 0
+2900 8 8 0
+3000 12 7 1
+3100 13 9 0
+3200 8 7 0
+3300 7 5 0
+3400 6 5 0
+3500 9 7 0
+3600 9 7 0
+3700 8 7 0
+3800 9 6 0
+3900 7 5 0

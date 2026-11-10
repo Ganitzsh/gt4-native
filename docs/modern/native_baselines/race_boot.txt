@@ -1,0 +1,54 @@
+# NATIVE step 1 baseline (PLAN.md section 2; tools/native_strips.py): race_boot.cap, frames 100-4900/100
+# settings: --size 1280x896 --preset original --set render.gs=native --set render.quality=native --set
+#   aspect.ratio=window --set display.frame_interpolation=off --set texture.hd_pack=off
+# host: main 659c3e1c (host built from a5bda40f, the same host sources); written 2026-11-10
+# frame on32 on40 strips (strips: 1 when strips_rule holds)
+100 0 0 0
+200 0 0 0
+300 0 0 0
+400 0 0 0
+500 0 0 0
+600 0 0 0
+700 0 0 0
+800 1 1 0
+900 13 11 0
+1000 14 11 0
+1100 13 9 0
+1200 9 8 0
+1300 6 5 0
+1400 12 8 0
+1500 11 9 0
+1600 6 6 0
+1700 6 6 0
+1800 6 6 0
+1900 6 6 0
+2000 6 6 0
+2100 14 10 0
+2200 14 10 0
+2300 14 10 0
+2400 14 10 0
+2500 14 10 0
+2600 14 10 0
+2700 14 10 0
+2800 14 10 0
+2900 14 10 0
+3000 14 10 0
+3100 14 10 0
+3200 1 1 0
+3300 9 8 0
+3400 9 8 0
+3500 6 6 0
+3600 4 3 0
+3700 4 3 0
+3800 6 5 0
+3900 5 4 0
+4000 8 7 0
+4100 4 2 0
+4200 4 2 0
+4300 4 2 0
+4400 4 2 0
+4500 4 2 0
+4600 4 2 0
+4700 4 2 0
+4800 4 5 0
+4900 4 5 0

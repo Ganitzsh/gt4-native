@@ -1,0 +1,77 @@
+# NATIVE step 1 baseline (PLAN.md section 2; tools/native_strips.py): race_grid43.cap, frames 10-700/10
+# settings: --size 1280x896 --preset original --set render.gs=native --set render.quality=native --set
+#   aspect.ratio=window --set display.frame_interpolation=off --set texture.hd_pack=off
+# host: main 659c3e1c (host built from a5bda40f, the same host sources); written 2026-11-10
+# judged: frame 110 on32 8 on40 5, a grid box's line and the nearest car's side (x 1006-1026); no strips
+# judged: frame 330 on32 7 on40 4, the cockpit's dashboard edges; no strips
+# frame on32 on40 strips (strips: 1 when strips_rule holds)
+10 3 3 0
+20 2 2 0
+30 7 6 0
+40 5 5 0
+50 5 4 0
+60 8 7 0
+70 2 2 0
+80 2 3 0
+90 9 9 0
+100 7 6 0
+110 8 5 1
+120 6 5 0
+130 3 2 0
+140 3 3 0
+150 8 6 0
+160 6 7 0
+170 9 7 0
+180 4 4 0
+190 5 4 0
+200 6 5 0
+210 7 6 0
+220 6 6 0
+230 9 8 0
+240 5 4 0
+250 6 4 0
+260 8 7 0
+270 6 5 0
+280 5 5 0
+290 5 5 0
+300 6 4 0
+310 9 7 0
+320 6 7 0
+330 7 4 1
+340 8 6 0
+350 9 8 0
+360 7 7 0
+370 9 10 0
+380 9 6 0
+390 9 8 0
+400 10 8 0
+410 11 9 0
+420 8 7 0
+430 1 1 0
+440 1 1 0
+450 1 2 0
+460 2 2 0
+470 3 3 0
+480 5 2 0
+490 4 2 0
+500 4 2 0
+510 4 2 0
+520 4 2 0
+530 4 2 0
+540 4 2 0
+550 4 2 0
+560 4 2 0
+570 4 2 0
+580 4 2 0
+590 4 2 0
+600 4 2 0
+610 4 2 0
+620 4 2 0
+630 4 2 0
+640 4 2 0
+650 4 2 0
+660 4 2 0
+670 4 2 0
+680 4 2 0
+690 4 2 0
+700 4 2 0
