@@ -3758,13 +3758,14 @@ const std::vector<gfx::scene::Light>& GsnScene::Impl::lampsOf(const scene::Scene
     // glow until here, becomes a spot pointing down the world's up axis as the view sees it, with the street lamp's
     // profile, so the road under it is lit evenly out to its cone. In hybrid (the night's modern path, whose albedo is
     // the surface's own: the point lamps' strength was set against the estimate's, about 0.7-0.8 everywhere): a range
-    // of 40 m, 0.9 of F2b's intensity, the cone full to 60 degrees and ending at 72, set against N3's never-dark
-    // measure on the three Route 5 laps recorded from boot (PLAN N3). GT4_LAMP_PROFILE=RANGE,SCALE,INNER,OUTER
+    // of 40 m, 0.8 of F2b's intensity (on the road under a lamp, whatever its height: light_list.h's lightProfile), the
+    // cone full to 60 degrees and ending at 72, set against N3's never-dark measure on the Route 5 laps recorded from
+    // boot (PLAN N3). GT4_LAMP_PROFILE=RANGE,SCALE,INNER,OUTER
     // (metres; the intensity's factor; degrees) gives other values, with or without hybrid; GT4_LAMP_PROFILE=off: the
     // point lights.
     static const struct LampProfile {
         bool fromEnvironment = false, off = false;
-        float range = 40.0f, scale = 0.9f, cosInner = 0.5f, cosOuter = 0.309017f;   // (cos 60, cos 72 degrees)
+        float range = 40.0f, scale = 0.8f, cosInner = 0.5f, cosOuter = 0.309017f;   // (cos 60, cos 72 degrees)
         LampProfile() {
             const char* e = std::getenv("GT4_LAMP_PROFILE");
             if (!e) return;
@@ -3776,7 +3777,9 @@ const std::vector<gfx::scene::Light>& GsnScene::Impl::lampsOf(const scene::Scene
                 cosInner = std::cos(a * 3.14159265f / 180.0f);
                 cosOuter = std::cos(b * 3.14159265f / 180.0f);
             } else {
-                off = true;   // ('off', or anything that isn't four valid numbers)
+                off = true;   // ('off', or anything that isn't four valid numbers: said, so a typo doesn't read as 'off')
+                if (std::strcmp(e, "off") != 0)
+                    std::fprintf(stderr, "GT4_LAMP_PROFILE=%s is neither 'off' nor RANGE,SCALE,INNER,OUTER: the point lamps\n", e);
             }
         }
     } lampProfile;

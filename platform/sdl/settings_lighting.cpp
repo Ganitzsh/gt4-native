@@ -4,12 +4,14 @@
 namespace gt4::settings_table {
 
 void lightingOptions(std::vector<Option>& o) {
-    // lighting.night: in no preset until N3 skips GT4's lit-road layer (PLAN.md F2), so no release lights the road
-    // twice; --set or the settings file only.
+    // lighting.night: enhanced has two forms. With render.scene = hybrid (nightModernWanted: the night's modern
+    // path, PLAN.md N3, F7, B10's channels) the lamps light each surface's own colour, and GT4's baked lamp light
+    // stays only where none of ours replaces it. Without hybrid it is F2's first form, added over GT4's baked light
+    // from estimates. In no preset until hybrid is (the Odin's cost, the owner's look); --set or the settings file.
     o.push_back(enumOption("lighting.night", &Settings::night, kLighting,
-        "original: the game's own night lighting; enhanced: the course's lamps also light the road and the cars "
-        "near them (GT4's 3D scenes relit from their Z buffer with the lamps the game sends; needs its scene "
-        "records). Not in any preset yet."));
+        "original: the game's own night lighting; enhanced: the course's lamps light the road, the walls and the cars "
+        "near them. With render.scene = hybrid they light each surface's own colour, and the game's baked lamp light "
+        "stays only where no lamp replaces it; without, their light is added over the game's. Not in any preset yet."));
 }
 
 }  // namespace gt4::settings_table

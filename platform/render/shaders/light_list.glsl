@@ -41,13 +41,13 @@ float lightCone(float cosAngle, float scale, float offset) {
     return c * c;
 }
 
-// The intensity's factor at cosAngle for a profile (light_list.h): the street lamp's 1 / cos^3, held at
-// kStreetLampMaxGain; 1 for none.
-const float kStreetLampMaxGain = 16.0;
-float lightProfile(uint profile, float cosAngle) {
+// The intensity's factor for a profile at cosAngle and distance d (light_list.h): the street lamp's
+// d^2 / (kStreetLampHeight^2 x cos), the cosine held at kStreetLampMinCos; 1 for none.
+const float kStreetLampHeight = 8.0;
+const float kStreetLampMinCos = 0.25;
+float lightProfile(uint profile, float cosAngle, float d) {
     if (profile != kProfileStreetLamp) return 1.0;
-    const float c = max(cosAngle, 1e-3);
-    return min(1.0 / (c * c * c), kStreetLampMaxGain);
+    return d * d / (kStreetLampHeight * kStreetLampHeight * max(cosAngle, kStreetLampMinCos));
 }
 
 // saturate(1 - (d / range)^4)^2 / (d^2 + sourceRadius^2); 0 for a range that is not positive, the
@@ -86,7 +86,7 @@ float lightAttenuation(GpuLight light, vec3 p, out vec3 L) {
     if (light.type == kSpot) {
         const float cosAngle = dot(-L, light.direction);
         a *= lightCone(cosAngle, light.spotScale, light.spotOffset) *
-             lightProfile((light.flags >> kProfileShift) & kProfileMask, cosAngle);
+             lightProfile((light.flags >> kProfileShift) & kProfileMask, cosAngle, d);
     }
     return a;
 }

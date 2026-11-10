@@ -472,6 +472,15 @@ int main() {
         check(sceneRecordsWanted(split) && sceneSplitWanted(split), "parity wants the records and the split (B7 draws views by B6's ids)");
         split.scene = SceneRenderer::Hybrid;
         check(sceneSplitWanted(split), "hybrid wants the split");
+        // the night's modern path (nightModernWanted): the night relight on the hybrid renderer, and only that
+        check(!nightModernWanted(split) && !nightModernWanted(original) && !nightModernWanted(Settings{}),
+              "hybrid alone, the original preset and the defaults: no modern night");
+        split.night = LightingMode::Enhanced;
+        check(nightModernWanted(split), "hybrid with the night relight is the night's modern path");
+        split.scene = SceneRenderer::Parity;
+        check(!nightModernWanted(split), "parity with the night relight is not (no side channels)");
+        split.scene = SceneRenderer::Original;
+        check(!nightModernWanted(split), "the night relight on the GS path is not");
     }
 
     // render.scene (settings_scene.cpp): the GS path, or B7's parity check, until the modern renderer draws a view.

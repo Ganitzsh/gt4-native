@@ -31,8 +31,8 @@ enum LightFlags : uint32_t {
 inline constexpr uint32_t kProfileShift = 8, kProfileMask = 0xFF;
 enum LightProfile : uint32_t {
     kProfileNone = 0,
-    kProfileStreetLamp = 1,   // a road luminaire's 'batwing': more intensity off the axis, so the ground under a lamp
-                              // pointing down is lit evenly out to its cone, not in a hot spot below it
+    kProfileStreetLamp = 1,   // a road luminaire: the ground under a lamp pointing down lit evenly out to its cone,
+                              // and the same from any mounting height (lightProfile)
 };
 
 struct GpuLight {                       // 64 bytes
@@ -74,16 +74,21 @@ inline float lightCone(float cosAngle, float scale, float offset) {
 }
 
 // --- Profiles (F7) -----------------------------------------------------------------------------------------
-// The intensity's factor at cosAngle = dot(-L, direction) for a profile; 1 for none or one this build doesn't know.
-// kProfileStreetLamp: 1 / cos^3, held at kStreetLampMaxGain. A lamp at height h pointing down lights the ground at
-// horizontal distance r with intensity x cos^3 / h^2 (the inverse square and the ground's own cosine), so this factor
-// makes it intensity / h^2 everywhere inside the cone, as a road luminaire's optics do; the cone ends it. The bound
-// is the gain at about 67 degrees, where such optics cut off (glare), and keeps the factor finite at the horizon.
-inline constexpr float kStreetLampMaxGain = 16.0f;
-inline float lightProfile(uint32_t profile, float cosAngle) {
+// The intensity's factor for a profile at cosAngle = dot(-L, direction) and distance d (metres) from the light; 1 for
+// none or one this build doesn't know.
+// kProfileStreetLamp, a road luminaire as its designer sets it: the same light on the road whatever the mounting
+// height, and even out to the cone's edge. A lamp at height h pointing down lights the ground at an angle from its
+// axis with intensity x cos^3 / h^2 (the inverse square and the ground's own cosine). The 'batwing', 1 / cos^3, makes
+// that intensity / h^2 everywhere inside the cone; (h / kStreetLampHeight)^2, with h = d x cos the lamp's height
+// above the lit point, makes it intensity / kStreetLampHeight^2 for every lamp, so a tunnel's low lamps don't light
+// the road several times brighter than a street's high ones (Clubman Stage Route 5 Reverse's tunnel: 3 times GT4's
+// level with the batwing alone). Together: d^2 / (kStreetLampHeight^2 x cos), the cosine held at
+// kStreetLampMinCos (about 75 degrees: past where such optics cut off, and the factor stays finite at the horizon).
+inline constexpr float kStreetLampHeight = 8.0f;     // metres: the height at which the factor on the axis is 1
+inline constexpr float kStreetLampMinCos = 0.25f;
+inline float lightProfile(uint32_t profile, float cosAngle, float d) {
     if (profile != kProfileStreetLamp) return 1.0f;
-    const float c = std::max(cosAngle, 1e-3f);
-    return std::min(1.0f / (c * c * c), kStreetLampMaxGain);
+    return d * d / (kStreetLampHeight * kStreetLampHeight * std::max(cosAngle, kStreetLampMinCos));
 }
 
 // --- Distance attenuation --------------------------------------------------------------------------------
