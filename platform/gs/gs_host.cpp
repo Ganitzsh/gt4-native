@@ -239,7 +239,8 @@ public:
                 std::vector<uint8_t> vram(gsn::GsMemory::kBytes);
                 const size_t drawn = readVramWithTargets(vram.data());
                 const std::string source = serveRead ? "the front end's memory and " + std::to_string(drawn) +
-                                                           " drawn targets read back from the GPU (no Z)"
+                                                           " drawn targets read back from the GPU (no Z; the frame at FROM cut "
+                                                           "once for the read-back: markersNotChecked + 1)"
                                                      : std::string("the front end's memory only (no read-back here: pixels "
                                                                    "the GPU drew before are not in it)");
                 gsDump->open(vram.data(), source.c_str());
@@ -460,7 +461,10 @@ public:
         std::memcpy(out, copy.data(), gsn::GsMemory::kBytes);
         return read;
     }
-    void writeVram(const void* data) override { native->restoreMemory(data); }
+    void writeVram(const void* data) override {
+        if (gsDump) gsDump->memoryReplaced(static_cast<const uint8_t*>(data));
+        native->restoreMemory(data);
+    }
     uint64_t blankFrames = 0, gpuReads = 0, staleReads = 0, laterReads = 0;
     uint64_t memoryBefore[8] = {};   // P2's metric at the last VBlank (vsync)
 private:

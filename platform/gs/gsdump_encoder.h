@@ -53,6 +53,10 @@ public:
     void model() { if (writer.isOpen()) ++counts.models; }
     void effect(const gfx::EffectRecord& r);
     void display(const gfx::DisplayRecord& d) { shown = d; }
+    // GS memory replaced whole (the host's writeVram: a mid-run capture's snapshot). Before the dump opens, nothing to
+    // do (open() takes memory then); open with nothing written yet, it opens again on `memory`; after that, counted,
+    // and the dump isn't exact.
+    void memoryReplaced(const uint8_t* memory);
 
     // At a VBlank (`vblank`: the VBlank count the host passes its target): true when the dump opens here, before
     // vsync(); the caller then calls open() with GS memory as it stands.
@@ -107,6 +111,7 @@ private:
     struct Counts {
         uint64_t records = 0, transfers = 0, bytes = 0, draws = 0, vertices = 0;
         uint64_t models = 0, effects = 0, uploadsWithoutBytes = 0, setsWithoutBytes = 0, depthUnwritten = 0;
+        uint64_t memoryReplaced = 0;   // GS memory replaced under an open dump that had written packets
     } counts;
 };
 

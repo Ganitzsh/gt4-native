@@ -512,6 +512,18 @@ void GsDumpEncoder::effect(const gfx::EffectRecord& r) {
     if (r.kind == gfx::kGrade && writer.isOpen()) ++counts.effects;   // (a pass of the host's: not the GS's input)
 }
 
+void GsDumpEncoder::memoryReplaced(const uint8_t* memory) {
+    if (!writer.isOpen()) return;
+    if (counts.transfers == 0 && vsyncs == 0) {   // nothing written yet: the dump starts again from this memory
+        std::string error;
+        writer.close(error);
+        opened = false;
+        open(memory, (memorySource + ", then a snapshot's GS memory (writeVram) before anything was written").c_str());
+        return;
+    }
+    ++counts.memoryReplaced;
+}
+
 void GsDumpEncoder::open(const uint8_t* memory, const char* source) {
     opened = true;
     GsDumpState start = registers;
@@ -546,7 +558,7 @@ void GsDumpEncoder::vsync(uint32_t field) {
 }
 
 std::string GsDumpEncoder::summary() const {
-    char line[512];
+    char line[768];
     if (!opened) {   // (FROM never came: say which VBlanks did)
         if (lastSeen == 0) return "";
         std::snprintf(line, sizeof line, "GS dump %s: not written, VBlank %llu never came (the game's VBlanks %llu-%llu passed)",
@@ -557,14 +569,16 @@ std::string GsDumpEncoder::summary() const {
     std::snprintf(line, sizeof line,
                   "GS dump %s%s: VBlanks %llu-%llu, GS memory from %s, %llu VSyncs, %llu transfers (%llu bytes), %llu draws "
                   "(%llu vertices); not dumped: %llu GPU 3D batches, %llu colour-grade passes, %llu uploads without bytes, "
-                  "%llu texture sets without bytes; %llu draws testing a Z buffer not drawn since the start (not exact)",
+                  "%llu texture sets without bytes; %llu draws testing a Z buffer not drawn since the start (not exact); "
+                  "GS memory replaced under it %llu times (not exact)",
                   options.path.c_str(), failed ? " (failed)" : closed ? "" : " (open)", static_cast<unsigned long long>(options.from),
                   static_cast<unsigned long long>(options.from + options.count - 1), memorySource.c_str(),
                   static_cast<unsigned long long>(vsyncs), static_cast<unsigned long long>(counts.transfers),
                   static_cast<unsigned long long>(counts.bytes), static_cast<unsigned long long>(counts.draws),
                   static_cast<unsigned long long>(counts.vertices), static_cast<unsigned long long>(counts.models),
                   static_cast<unsigned long long>(counts.effects), static_cast<unsigned long long>(counts.uploadsWithoutBytes),
-                  static_cast<unsigned long long>(counts.setsWithoutBytes), static_cast<unsigned long long>(counts.depthUnwritten));
+                  static_cast<unsigned long long>(counts.setsWithoutBytes), static_cast<unsigned long long>(counts.depthUnwritten),
+                  static_cast<unsigned long long>(counts.memoryReplaced));
     return line;
 }
 
