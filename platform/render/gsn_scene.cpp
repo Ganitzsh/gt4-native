@@ -323,6 +323,12 @@ struct GsnScene::Impl {
     uint64_t nightSplitSkipped = 0;   // Lights not relit: their target holds more than one main view (split screen)
     uint64_t nightSideLights = 0;     // Lights relit from the side channels (GT4_NIGHT_SIDE=1, hybrid)
     uint64_t sidePlansSkipped = 0;    // lists that planned no side passes: nothing would read the channels
+    uint64_t sceneStandIns = 0;       // lists given a scene frame made from their views' packages (standInScene)
+    uint64_t sceneStandInLate = 0;    // lights of the last whole frame added to them
+    std::vector<gfx::scene::Light> lateLights;   // the last whole frame's main view's lights that aren't billboards
+    scene::Mat4 lateCamera;                      // that view's worldToView
+    uint64_t lateAge = 1u << 30;                 // lists since
+    void standInScene();
     // The main view's street lamps by their place in the world (lampsOf): lit while GT4 doesn't send them.
     struct KeptLamp {
         float world[3] = {};
@@ -775,6 +781,10 @@ struct GsnScene::Impl {
                         static_cast<unsigned long long>(sidePasses), static_cast<unsigned long long>(sideResets),
                         static_cast<unsigned long long>(sideItemsDrawn), static_cast<unsigned long long>(sideVeils),
                         static_cast<unsigned long long>(sideLayersDrawn), static_cast<unsigned long long>(sideLayersLeft));
+        if (sceneStandIns)
+            std::printf("Scene frames made from the views' packages: %llu lists cut before their FrameEnd, %llu lights of the "
+                        "frame before added\n",
+                        static_cast<unsigned long long>(sceneStandIns), static_cast<unsigned long long>(sceneStandInLate));
         if (lampsKeptLit)
             std::printf("Street lamps kept in place: %llu lit while GT4 didn't send them (%llu sent); %zu places known\n",
                         static_cast<unsigned long long>(lampsKeptLit), static_cast<unsigned long long>(lampsSentLit), keptLampCount);
@@ -4838,10 +4848,122 @@ void GsnScene::Impl::decideScale(VkExtent2D extent) {
     }
 }
 
+// A list cut before its frame's FrameEnd (a GS -> host read in the middle of the frame: the flare's and the luminance
+// probe's, every frame while a flare is in view, in live play only) carries no scene frame, which arrives with the
+// FrameEnd in a later list; but the Light of the frame's 3D scene is in this one. Without the frame the night relight
+// had no lamps, no flag and no skip, so that frame showed GT4's own picture, and the race changed look as flares came
+// and went (the owner's recordings, 2026-11-11). The list does carry its ended views' packages (a.8): the view, its
+// frame's flags, its projections, instances and the lights sent as far as its ViewEnd. A scene frame is made from
+// them, for this list only: what the relight, N3's plan, the side passes and the camera cuts read. Lights sent after
+// a view's ViewEnd are not in a package (a.5 rule 4: the cars' lamps, the game's own course lamps; the billboards
+// are): the kinds the main view's package lacks come from the last frame that arrived whole (its FrameEnd's list,
+// which follows the cut one every frame), moved from that frame's camera to this one's as places in the world, so a
+// car's lamps are where the car was a frame ago. GT4_SCENE_STANDIN=0: none, as before; =test: also in place of a
+// frame that did arrive (a replay's lists are whole: the frames then show what the stand-in lacks).
+void GsnScene::Impl::standInScene() {
+    static const int mode = [] {
+        const char* e = std::getenv("GT4_SCENE_STANDIN");
+        return !e ? 1 : *e == '0' ? 0 : std::string(e) == "test" ? 2 : 1;
+    }();
+    constexpr uint64_t kLateLists = 240;   // the last whole frame's lights are of this race for that many lists
+    ++lateAge;
+    if (mode && frame.scene) {   // a whole frame: its main view's lights that aren't billboards, with its camera
+        for (const scene::ViewData& v : frame.scene->views) {
+            if (v.role != gfx::scene::kViewMain || !(v.flags & gfx::scene::kViewCameraKnown)) continue;
+            lateLights.clear();
+            for (const gfx::scene::Light& l : frame.scene->lights)
+                if (l.view == v.id && l.source != gfx::scene::kSrcBillboard) lateLights.push_back(l);
+            lateCamera = v.worldToView;
+            lateAge = 0;
+            break;
+        }
+    }
+    if (!mode || (frame.scene && mode != 2)) return;
+    uint32_t packages = 0;
+    for (const gsn::FrameList::ViewOnList& v : frame.views) packages += v.package ? 1u : 0u;
+    if (!packages) return;
+    auto made = std::make_unique<scene::SceneFrame>();
+    scene::SceneFrame& f = *made;
+    constexpr uint16_t kIds = 256;   // (ids are small: a.5; one past this is not placed)
+    for (const gsn::FrameList::ViewOnList& v : frame.views) {
+        if (!v.package) continue;
+        const scene::SceneView& p = *v.package;
+        f.flags |= p.frameFlags;
+        scene::ViewData view = p.view;
+        view.target = v.target;   // (bound by the front end: the package's own are filled at FrameEnd)
+        view.depth = v.depth;
+        view.splitTargets = v.splitTargets;
+        view.firstInstance = uint32_t(f.instances.size());
+        view.instanceCount = uint32_t(p.instances.size());
+        view.firstLight = uint32_t(f.lights.size());
+        view.lightCount = uint32_t(p.lights.size());
+        if (view.id && view.id <= kIds) {
+            if (f.views.size() < view.id) f.views.resize(view.id);
+            f.views[view.id - 1u] = view;
+        }
+        for (const scene::ProjectionData& q : p.projections) {
+            if (!q.id || q.id > kIds) continue;
+            if (f.projections.size() < q.id) f.projections.resize(q.id);
+            f.projections[q.id - 1u] = q;
+        }
+        // the instances with their ids (B6: beside the package, by position) and the view's materials after the others'
+        const uint32_t materialsFrom = uint32_t(f.materials.size());
+        const bool ids = v.ids.size() == p.instances.size();
+        for (size_t k = 0; k < p.instances.size(); ++k) {
+            scene::InstanceData d = p.instances[k];
+            d.index = uint32_t(f.instances.size());
+            if (ids) {
+                d.mesh = v.ids[k].mesh;
+                d.firstMaterial = materialsFrom + v.ids[k].firstMaterial;
+                d.materialCount = v.ids[k].materialCount;
+            }
+            f.instances.push_back(d);
+        }
+        f.materials.insert(f.materials.end(), v.materials.begin(), v.materials.end());
+        f.lights.insert(f.lights.end(), p.lights.begin(), p.lights.end());
+    }
+    // the kinds of light the main view's package has none of, from the last whole frame
+    for (const scene::ViewData& v : f.views) {
+        if (v.role != gfx::scene::kViewMain || !(v.flags & gfx::scene::kViewCameraKnown) || lateAge > kLateLists) continue;
+        const float (&a)[4][4] = lateCamera.m;      // then: view = world x a
+        const float (&b)[4][4] = v.worldToView.m;   // now
+        uint32_t have = 0;   // bit per source the package holds for this view
+        for (const gfx::scene::Light& l : f.lights)
+            if (l.view == v.id && l.source < 32) have |= 1u << l.source;
+        for (const gfx::scene::Light& old : lateLights) {
+            if (old.source >= 32 || (have & (1u << old.source))) continue;
+            gfx::scene::Light l = old;
+            float world[3], axis[3];
+            for (int r = 0; r < 3; ++r) {
+                world[r] = (old.position[0] - a[3][0]) * a[r][0] + (old.position[1] - a[3][1]) * a[r][1] +
+                           (old.position[2] - a[3][2]) * a[r][2];
+                axis[r] = old.direction[0] * a[r][0] + old.direction[1] * a[r][1] + old.direction[2] * a[r][2];
+            }
+            for (int c = 0; c < 3; ++c) {
+                l.position[c] = world[0] * b[0][c] + world[1] * b[1][c] + world[2] * b[2][c] + b[3][c];
+                l.direction[c] = axis[0] * b[0][c] + axis[1] * b[1][c] + axis[2] * b[2][c];
+            }
+            l.view = v.id;
+            f.lights.push_back(l);
+            ++sceneStandInLate;
+        }
+        break;
+    }
+    f.complete = false;
+    if (frame.scene) {   // (the test: the frame's own numbers kept)
+        f.frame = frame.scene->frame;
+        f.vblank = frame.scene->vblank;
+        f.begins = frame.scene->begins;
+    }
+    frame.scene = std::move(made);
+    ++sceneStandIns;
+}
+
 // List `listIndex`: made current (`frame`), its targets made or cleared.
 void GsnScene::Impl::pendingTargets(VkCommandBuffer command, uint32_t slot) {
     std::swap(frame, pending[listIndex]);
     ++listSerial;
+    standInScene();
     // (a new list: from the previous frame's state, where the one before ended)
     modelTPrevious = 0.0f;
     modelT = interpolate && listIndex == pendingShown ? sinceArrival() : 1.0f;
