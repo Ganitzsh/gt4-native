@@ -329,9 +329,10 @@ struct GsnScene::Impl {
         gfx::scene::Light record{};
         uint64_t stamp = 0;
     };
-    std::unordered_map<uint64_t, KeptLamp> keptLamps;
+    std::unordered_map<uint64_t, std::vector<KeptLamp>> keptLamps;   // by the 1 m cell of their place
+    size_t keptLampCount = 0;
     uint64_t lampStamp = 0, lampsKeptLit = 0, lampsSentLit = 0;
-    std::chrono::steady_clock::time_point lampsSeenAt{};
+    uint64_t listsSinceLamps = 0;     // lists planned since a main view's lamps were last kept
     // gsn_light.comp's push constants from `night` on (offset 40): mirrored field for field.
     struct NightPush {
         // skipMasked: 1 when binding 9 holds the Light's skip mask (N3); 2 when it holds the scene without GT4's lit-road
@@ -775,8 +776,8 @@ struct GsnScene::Impl {
                         static_cast<unsigned long long>(sideItemsDrawn), static_cast<unsigned long long>(sideVeils),
                         static_cast<unsigned long long>(sideLayersDrawn), static_cast<unsigned long long>(sideLayersLeft));
         if (lampsKeptLit)
-            std::printf("Street lamps kept in place: %llu lit while GT4 didn't send them (%llu records sent); %zu places known\n",
-                        static_cast<unsigned long long>(lampsKeptLit), static_cast<unsigned long long>(lampsSentLit), keptLamps.size());
+            std::printf("Street lamps kept in place: %llu lit while GT4 didn't send them (%llu sent); %zu places known\n",
+                        static_cast<unsigned long long>(lampsKeptLit), static_cast<unsigned long long>(lampsSentLit), keptLampCount);
         if (hybrid && sidePlansSkipped)
             std::printf("Hybrid side channels: %llu lists planned none (nothing reads them: the lamps off, or the night's "
                         "lighting original)\n", static_cast<unsigned long long>(sidePlansSkipped));
@@ -1602,6 +1603,7 @@ bool GsnScene::Impl::drawSkipMask(const gsn::FrameList::Lighting& l, size_t ligh
 // its job's vertices in its draw (ViewOnList::items, as B7's spans), so a draw merging several items keeps the others.
 void GsnScene::Impl::planSkips() {
     skipSpans.clear();
+    ++listsSinceLamps;   // (every list comes through here: the kept lamps' age, lampsOf)
     preLayerLight = ~size_t(0);
     skipAt.assign(frame.draws.size() + 1, 0);
     if (!(night > 0.0f) || !frame.scene || !(frame.scene->flags & gfx::scene::kFrameLampsOn) || frame.views.empty()) return;
@@ -3999,18 +4001,20 @@ const std::vector<gfx::scene::Light>& GsnScene::Impl::lampsOf(const scene::Scene
                 // lighting the road still in view, which then showed GT4's baked light: stretches of road changed
                 // between the two looks as the car went (the owner, on the Odin, 2026-11-11). Each main view's lamps
                 // are kept by their place in the world (the view's camera is known here), and the ones this frame
-                // doesn't send, within kLampKeepMetres of the camera, light as they last did. Forgotten when no night
-                // view came for 2 s (another race, another course: other places). GT4_LAMP_PERSIST=0: only what the
-                // frame sends.
+                // doesn't send, within kLampKeepMetres of the camera, light as they last did (a blinking lamp as it
+                // was when it left). Two heads on one post stay two (course_lamp_pass.cpp): a lamp is the same one
+                // within kLampSame, the reconstruction's error and no more. Forgotten when kLampForgetLists lists went
+                // by without a night view (another race, another course: other places; counted in lists, so a replay
+                // forgets where a live run does). GT4_LAMP_PERSIST=0: only what the frame sends.
                 static const bool persist = [] { const char* e = std::getenv("GT4_LAMP_PERSIST"); return !(e && *e == '0'); }();
                 float rows = 0.0f;
                 for (int r = 0; r < 3; ++r) rows = std::max(rows, std::fabs(m[r][0] * m[r][0] + m[r][1] * m[r][1] + m[r][2] * m[r][2] - 1.0f));
                 if (persist && hybrid && lampsOn && vd->role == gfx::scene::kViewMain && rows < 1e-3f) {
-                    constexpr float kLampCell = 1.0f, kLampSame = 0.75f, kLampKeepMetres = 120.0f;
+                    constexpr float kLampCell = 1.0f, kLampSame = 0.1f, kLampKeepMetres = 120.0f, kLampWorld = 1e6f;
                     constexpr size_t kLampsKeptMax = 8192;
-                    const auto now = std::chrono::steady_clock::now();
-                    if (now - lampsSeenAt > std::chrono::seconds(2)) keptLamps.clear();
-                    lampsSeenAt = now;
+                    constexpr uint64_t kLampForgetLists = 120;
+                    if (listsSinceLamps > kLampForgetLists) keptLamps.clear(), keptLampCount = 0;
+                    listsSinceLamps = 0;
                     ++lampStamp;
                     const auto cellOf = [](const float* w, int dx, int dy, int dz) {
                         const auto c = [](float x, int d) { return uint64_t(int64_t(std::floor(x / kLampCell)) + d + (1 << 20)) & 0x1FFFFF; };
@@ -4024,39 +4028,50 @@ const std::vector<gfx::scene::Light>& GsnScene::Impl::lampsOf(const scene::Scene
                         for (int r = 0; r < 3; ++r)
                             world[r] = (lamp.position[0] - m[3][0]) * m[r][0] + (lamp.position[1] - m[3][1]) * m[r][1] +
                                        (lamp.position[2] - m[3][2]) * m[r][2];
-                        if (!std::isfinite(world[0] + world[1] + world[2])) continue;
+                        // (a place the cells can't hold, or not a number: lit while sent, not kept)
+                        if (!(std::fabs(world[0]) < kLampWorld && std::fabs(world[1]) < kLampWorld && std::fabs(world[2]) < kLampWorld))
+                            continue;
+                        ++lampsSentLit;
                         KeptLamp* found = nullptr;
                         for (int dx = -1; dx <= 1 && !found; ++dx)
                             for (int dy = -1; dy <= 1 && !found; ++dy)
                                 for (int dz = -1; dz <= 1 && !found; ++dz) {
                                     auto it = keptLamps.find(cellOf(world, dx, dy, dz));
                                     if (it == keptLamps.end()) continue;
-                                    const float* w = it->second.world;
-                                    const float ax = w[0] - world[0], ay = w[1] - world[1], az = w[2] - world[2];
-                                    if (ax * ax + ay * ay + az * az <= kLampSame * kLampSame) found = &it->second;
+                                    for (KeptLamp& kept : it->second) {
+                                        const float ax = kept.world[0] - world[0], ay = kept.world[1] - world[1], az = kept.world[2] - world[2];
+                                        // (one already taken by another of this frame's lamps is that other lamp's)
+                                        if (kept.stamp != lampStamp && ax * ax + ay * ay + az * az <= kLampSame * kLampSame) {
+                                            found = &kept;
+                                            break;
+                                        }
+                                    }
                                 }
                         if (!found) {
-                            if (keptLamps.size() >= kLampsKeptMax) continue;
-                            found = &keptLamps[cellOf(world, 0, 0, 0)];
+                            if (keptLampCount >= kLampsKeptMax) continue;
+                            std::vector<KeptLamp>& cell = keptLamps[cellOf(world, 0, 0, 0)];
+                            cell.emplace_back();
+                            found = &cell.back();
                             std::memcpy(found->world, world, sizeof world);
+                            ++keptLampCount;
                         }
                         found->record = lamp;   // (as it lights now: the profile and the scale applied)
                         found->stamp = lampStamp;
                     }
-                    for (const auto& [cell, kept] : keptLamps) {
-                        if (kept.stamp == lampStamp) continue;
-                        float p[3];
-                        for (int c = 0; c < 3; ++c)
-                            p[c] = kept.world[0] * m[0][c] + kept.world[1] * m[1][c] + kept.world[2] * m[2][c] + m[3][c];
-                        if (!(p[0] * p[0] + p[1] * p[1] + p[2] * p[2] <= kLampKeepMetres * kLampKeepMetres)) continue;
-                        gfx::scene::Light lamp = kept.record;
-                        std::memcpy(lamp.position, p, sizeof p);
-                        std::memcpy(lamp.direction, down, sizeof down);
-                        lamp.view = view;
-                        v.records.push_back(lamp);
-                        ++lampsKeptLit;
-                    }
-                    lampsSentLit += sent;
+                    for (const auto& [cell, lamps] : keptLamps)
+                        for (const KeptLamp& kept : lamps) {
+                            if (kept.stamp == lampStamp) continue;
+                            float p[3];
+                            for (int c = 0; c < 3; ++c)
+                                p[c] = kept.world[0] * m[0][c] + kept.world[1] * m[1][c] + kept.world[2] * m[2][c] + m[3][c];
+                            if (!(p[0] * p[0] + p[1] * p[1] + p[2] * p[2] <= kLampKeepMetres * kLampKeepMetres)) continue;
+                            gfx::scene::Light lamp = kept.record;
+                            std::memcpy(lamp.position, p, sizeof p);
+                            std::memcpy(lamp.direction, down, sizeof down);
+                            lamp.view = view;
+                            v.records.push_back(lamp);   // (after the frame's own: not counted as a game record's, c.3)
+                            ++lampsKeptLit;
+                        }
                 }
             }
         }
