@@ -1305,7 +1305,26 @@ struct GsnScene::Impl {
     enum Part : int { kPartWhole = -1, kPartFirst = 0, kPartMain = 1, kPartCopy = 2 };
     // Whether a list's scene records have views (`records` below): a vehicles-only frame (scene records mode 2, D14) has a
     // scene frame but no views, so nothing for the night relight to light. The same test at build and at run time.
-    static bool viewRecords(const gsn::FrameList& list) { return list.scene && !list.scene->views.empty(); }
+    // A list cut before its FrameEnd has no scene frame when the graph is built and one made from its views' packages
+    // when it runs (standInScene): it counts as having views exactly when that one will.
+    static constexpr uint16_t kStandInIds = 256;   // (ids are small, a.5: a view past this isn't placed)
+    static int standInMode() {   // GT4_SCENE_STANDIN: 0 off, 1 (the default) for lists without a frame, 2 'test'
+        static const int mode = [] {
+            const char* e = std::getenv("GT4_SCENE_STANDIN");
+            return !e ? 1 : *e == '0' ? 0 : std::string(e) == "test" ? 2 : 1;
+        }();
+        return mode;
+    }
+    static bool standInViews(const gsn::FrameList& list) {
+        for (const gsn::FrameList::ViewOnList& v : list.views)
+            if (v.package && v.package->view.id && v.package->view.id <= kStandInIds) return true;
+        return false;
+    }
+    static bool viewRecords(const gsn::FrameList& list) {
+        if (list.scene && standInMode() != 2) return !list.scene->views.empty();
+        if (standInMode() && standInViews(list)) return true;
+        return list.scene && !list.scene->views.empty();
+    }
     // Whether a step runs at Light `l` of a list, from the settings (known when the graph is built) and whether that list
     // has scene records with views (`records`: viewRecords of the list's own scene frame, the one being planned or run,
     // not `frame`'s). The temporal resolve and the motion blur also need the motion vectors drawn (ex.moving: the Light
@@ -1696,7 +1715,8 @@ void GsnScene::Impl::planParity() {
     for (size_t d = 1; d < parityAt.size(); ++d) parityAt[d] += parityAt[d - 1];
     // The side channels are drawn only for a reader: the night relight (lighting.night, on a frame GT4 lights its lamps
     // in) or a GT4_SIDE_VIEW. A list whose frame says the lamps are off plans none (no bounds, no SideItems, no passes:
-    // hybrid by day costs the parity draws only); a list without its frame's record (cut before FrameEnd) keeps them.
+    // hybrid by day costs the parity draws only); a list without its frame's record keeps them (one cut before its
+    // FrameEnd with no view ended in it: the others have a frame made from their packages, standInScene).
     // A lamp promoted on a lamps-off frame (a warning lamp or a glow billboard by day: the car lamps gather none there)
     // is then relit from the relight's estimates, as on the GS path, not from the channels.
     static const bool sideViewed = std::getenv("GT4_SIDE_VIEW") != nullptr;
@@ -2432,8 +2452,8 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
         History& h = histories[l.target];
         bool reset = !h.valid || displayedFrames > h.used + 1;
         // A3b: a camera cut in a view drawn into this target (kViewCut on its ViewBegin): the history is of another
-        // camera. In split screen either half's cut resets both. A Light in a list cut before FrameEnd has no scene
-        // frame to read the flag from: counted.
+        // camera. In split screen either half's cut resets both. A Light in a list cut before FrameEnd, with no view
+        // ended in it (else standInScene made it a frame), has no scene frame to read the flag from: counted.
         if (frame.scene) {
             for (const scene::ViewData& v : frame.scene->views)
                 if (v.target == l.target && (v.flags & gfx::scene::kViewCut) &&
@@ -4861,15 +4881,21 @@ void GsnScene::Impl::decideScale(VkExtent2D extent) {
 // car's lamps are where the car was a frame ago. GT4_SCENE_STANDIN=0: none, as before; =test: also in place of a
 // frame that did arrive (a replay's lists are whole: the frames then show what the stand-in lacks).
 void GsnScene::Impl::standInScene() {
-    static const int mode = [] {
-        const char* e = std::getenv("GT4_SCENE_STANDIN");
-        return !e ? 1 : *e == '0' ? 0 : std::string(e) == "test" ? 2 : 1;
-    }();
-    constexpr uint64_t kLateLists = 240;   // the last whole frame's lights are of this race for that many lists
+    const int mode = standInMode();
+    // The last whole frame's lights are of this race for that many lists: under a second, and under the kept lamps'
+    // own kLampForgetLists, so a lamp of the race before can't be kept in this one's places. A whole frame without a
+    // main view (a menu, a loading screen) ends them at once.
+    constexpr uint64_t kLateLists = 60;
+    const auto rigid = [](const float (&m)[4][4]) {   // (rows of length 1: the transposed rotation is its inverse)
+        float worst = 0.0f;
+        for (int r = 0; r < 3; ++r) worst = std::max(worst, std::fabs(m[r][0] * m[r][0] + m[r][1] * m[r][1] + m[r][2] * m[r][2] - 1.0f));
+        return worst < 1e-3f;   // (false for a NaN too)
+    };
     ++lateAge;
     if (mode && frame.scene) {   // a whole frame: its main view's lights that aren't billboards, with its camera
+        if (!frame.scene->views.empty()) lateAge = kLateLists + 1;
         for (const scene::ViewData& v : frame.scene->views) {
-            if (v.role != gfx::scene::kViewMain || !(v.flags & gfx::scene::kViewCameraKnown)) continue;
+            if (v.role != gfx::scene::kViewMain || !(v.flags & gfx::scene::kViewCameraKnown) || !rigid(v.worldToView.m)) continue;
             lateLights.clear();
             for (const gfx::scene::Light& l : frame.scene->lights)
                 if (l.view == v.id && l.source != gfx::scene::kSrcBillboard) lateLights.push_back(l);
@@ -4878,13 +4904,10 @@ void GsnScene::Impl::standInScene() {
             break;
         }
     }
-    if (!mode || (frame.scene && mode != 2)) return;
-    uint32_t packages = 0;
-    for (const gsn::FrameList::ViewOnList& v : frame.views) packages += v.package ? 1u : 0u;
-    if (!packages) return;
+    if (!mode || (frame.scene && mode != 2) || !standInViews(frame)) return;
     auto made = std::make_unique<scene::SceneFrame>();
     scene::SceneFrame& f = *made;
-    constexpr uint16_t kIds = 256;   // (ids are small: a.5; one past this is not placed)
+    constexpr uint16_t kIds = kStandInIds;
     for (const gsn::FrameList::ViewOnList& v : frame.views) {
         if (!v.package) continue;
         const scene::SceneView& p = *v.package;
@@ -4924,7 +4947,9 @@ void GsnScene::Impl::standInScene() {
     }
     // the kinds of light the main view's package has none of, from the last whole frame
     for (const scene::ViewData& v : f.views) {
-        if (v.role != gfx::scene::kViewMain || !(v.flags & gfx::scene::kViewCameraKnown) || lateAge > kLateLists) continue;
+        if (v.role != gfx::scene::kViewMain || !(v.flags & gfx::scene::kViewCameraKnown) || lateAge > kLateLists ||
+            !rigid(v.worldToView.m))
+            continue;
         const float (&a)[4][4] = lateCamera.m;      // then: view = world x a
         const float (&b)[4][4] = v.worldToView.m;   // now
         uint32_t have = 0;   // bit per source the package holds for this view
