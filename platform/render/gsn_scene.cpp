@@ -2088,6 +2088,7 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
                     lighting.directions, kAoStep};
                 vk::pushConstants(command, aoPass, k);
                 vk::dispatch2D(command, (e.width + kAoStep - 1) / kAoStep, (e.height + kAoStep - 1) / kAoStep);
+                if (ex.perPass) mark(command, "lighting: occlusion");
             }
         }
         if (part == kPartWhole || part == kPartMain) {
@@ -2110,6 +2111,7 @@ void GsnScene::Impl::executeBegin(VkCommandBuffer command, uint32_t slot) {
             NightBuffers nightBuffers;
             // (layered: the local luminance, the estimated albedo's, from the scene without the baked light too)
             const bool lamps = night > 0.0f && nightPrepare(l, si, layered ? preLayer.view : colour.view, depthOnly, nightPush, nightBuffers);
+            if (ex.perPass && lamps) mark(command, "lighting: lamps' clusters");   // (and the local luminance)
             nightPush.skipMasked = layered ? 2.0f : masked ? 1.0f : 0.0f;
             // The relight from the surface's own colour and normal (B10's channels, in hybrid), where this Light's
             // target has them from this list's side passes. GT4_NIGHT_SIDE=0: the estimates, as without hybrid.
@@ -3266,6 +3268,7 @@ void GsnScene::Impl::executeRange(VkCommandBuffer command, uint32_t slot, size_t
             replaySkips = false;
             preLayerLight = to;
             ++n3Replays;
+            if (ex.perPass) mark(command, "baked layer (N3)");   // (the copy and the layer's draws, apart)
         }
     }
     if (seamOn && seamPlan.found() && !seamDone && seamPlan.at + 1 == to && !ex.limited) runSeam(command);   // (B16c: ... the anchor last)
@@ -3750,6 +3753,7 @@ void GsnScene::Impl::runSide(const SideBound& bound) {
     ex.rendering = false;
     ex.boundPipeline = VK_NULL_HANDLE;
     ex.recorded = ExecuteState::Recorded{};
+    if (ex.perPass) mark(command, "side channels");   // (GT4_GPU_PROFILE=2: hybrid's side passes, apart)
 }
 
 // The scene stage at the list's Light command `at` (`frame.commands[at]`), as the commands' loop ran it.
