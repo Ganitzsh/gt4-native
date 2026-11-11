@@ -144,7 +144,23 @@ vec3 nightLight(ivec2 q, ivec2 last, vec3 linear, vec3 gs, out vec3 others) {
     const uint slice = clusterSlice(d, header.sliceScale, header.sliceBias);
     const ClusterCell cell = cells[clusterIndex(uvec3(tile, slice), header.clustersX, header.clustersY)];
     for (uint k = 0u; k < cell.count; ++k) {
-        const GpuLight light = lights[indices[cell.offset + k]];
+        const uint index = indices[cell.offset + k];
+        // A cell's lamps are the ones whose sphere of `range` meets it, about 35 of a street's 100 for a pixel of the
+        // road, of which a few reach the pixel: the others are past their range here or have the pixel outside their
+        // cone (a street lamp's points down). Those are left before the rest of the light is read and its falloff,
+        // cone, profile and diffuse term worked out: their light is exactly 0 (the falloff's window at and past the
+        // range; the cone at and under cosOuter, tested here with 0.02 to spare), so the sums are the same to the
+        // bit. (The Odin, 2026-11-11: the light pass 0.7 ms with no lamp in view, 4.1 ms with 87.)
+        const vec3 away = P - lights[index].position;   // from the light to the pixel
+        const float d2 = dot(away, away), range = lights[index].range;
+        if (lights[index].type != kDirectional && d2 > range * range * 1.0001) continue;
+        if (lights[index].type == kSpot) {
+            const float scale = lights[index].spotScale;
+            const float along = dot(away, lights[index].direction);
+            const float edge = -lights[index].spotOffset / scale - 0.02;   // cosOuter, less the margin
+            if (scale > 0.0 && edge > 0.0 && (along <= 0.0 || along * along < edge * edge * d2)) continue;
+        }
+        const GpuLight light = lights[index];
         vec3 L;
         const float a = lightAttenuation(light, P, L);
         const vec3 lit = light.colour * a * lightDiffuse(lightProfileOf(light), dot(n, L));
@@ -226,5 +242,16 @@ void main() {
     if (p.view == 1u) linear = vec3(texelFetch(occlusion, q / int(p.aoStep), 0).r);
     if (p.view == 2u) { const float d = distanceAt(q); linear = vec3(d < 5.0 ? 1.0 : 0.0, d < 20.0 ? 1.0 : 0.0, d < 80.0 ? 1.0 : 0.0); }
     if (p.view == 4u) linear = vec3(p.skipMasked == 1.0 ? texelFetch(skipMask, q, 0).r : 0.0);   // (N3: the skip mask)
+    if (p.view == 5u) {   // the lamps the pixel's cell holds (the light loop's length), 64 = white; 0 without geometry
+        const float d = nightDistance(q);
+        float n = 0.0;
+        if (p.night > 0.0 && d > 0.0 && d < p.maxDistance) {
+            const uvec2 tile = uvec2(clamp(vec2(q) / p.size * vec2(header.clustersX, header.clustersY), vec2(0.0),
+                                           vec2(header.clustersX, header.clustersY) - 1.0));
+            n = float(cells[clusterIndex(uvec3(tile, clusterSlice(d, header.sliceScale, header.sliceBias)), header.clustersX,
+                                         header.clustersY)].count);
+        }
+        linear = vec3(pow(n / 64.0, 2.2));
+    }
     imageStore(result, q, vec4(pow(linear, vec3(1.0 / 2.2)), c.a));
 }
