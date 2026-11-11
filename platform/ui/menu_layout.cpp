@@ -93,8 +93,8 @@ std::string valueLabel(const Menu& menu, const Row& row) {
 
 const char* applyLine(const Row& row) {
     switch (row.apply) {
-    case ApplyClass::Live: return "Applies at once.";
-    case ApplyClass::Confirm: return "Applies at once; you are asked to keep it.";
+    case ApplyClass::Live: return "Left/Right changes it: saved at once.";
+    case ApplyClass::Confirm: return "Left/Right changes it, then asks to keep it.";
     case ApplyClass::NextRace: return "Applies from the next race.";
     case ApplyClass::Restart: return "Applies when the game starts again.";
     }
@@ -337,7 +337,8 @@ DrawList layout(const Menu& menu, const LayoutOptions& options) {
     std::vector<std::pair<const char*, std::string>> entries;
     if (selectedRow && selectedRow->kind == RowKind::Link) entries.push_back({"confirm", "Open"});
     else if (selectedRow && selectedRow->kind == RowKind::Action) entries.push_back({"confirm", "Select"});
-    else if (selectedRow) entries.push_back({"confirm", menu.previewing() ? "Apply" : "Change"});
+    // (a value row that isn't previewed first is applied and saved as Left and Right change it: no Confirm prompt)
+    else if (selectedRow && menu.previewing()) entries.push_back({"confirm", "Apply"});
     entries.push_back({"back", menu.inSubPage() ? "Back" : "Close"});
     if (selectedRow && !selectedRow->presetValue.empty()) entries.push_back({"reset", "Reset"});
     if (menu.schema().tabs.size() > 1) entries.push_back({"tabs", "Tabs"});

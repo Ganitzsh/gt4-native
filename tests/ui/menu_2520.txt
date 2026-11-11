@@ -1,4 +1,4 @@
-canvas 2520.0 flags 1 items 58
+canvas 2520.0 flags 1 items 55
 quad 0.0 0.0 2520.0 1080.0 asset 00000000 color 000000ff op 38/256
 quad 0.0 0.0 2520.0 112.0 asset 00000000 color 000000e0 op 256/256
 text 80.0 22.0 0.0 80.0 asset 00000000 color f4f4f2ff op 256/256 title 64 italic w800 left "Settings"
@@ -42,7 +42,7 @@ unclip 0.0 0.0 0.0 0.0 asset 00000000 color 00000000 op 256/256
 nine 1820.0 320.0 620.0 510.0 asset 00000000 color 2a2c30eb op 256/256
 quad 1820.0 320.0 620.0 4.0 asset 00000000 color f29a1fff op 256/256
 text 1850.0 350.0 560.0 32.5 asset 00000000 color f4f4f2ff op 256/256 title 26 italic w700 left "RESOLUTION SCALE"
-text 1850.0 410.0 560.0 30.0 asset 00000000 color b9bcc2ff op 256/256 body 24 w400 left "Applies at once."
+text 1850.0 410.0 560.0 30.0 asset 00000000 color b9bcc2ff op 256/256 body 24 w400 left "Left/Right changes it: saved at once."
 quad 0.0 842.0 2520.0 238.0 asset 00000000 color 000000e0 op 256/256
 text 2376.0 1014.0 64.0 25.0 asset 00000000 color f4f4f2ff op 256/256 title 20 w600 left "Tabs"
 quad 2285.0 1008.0 83.0 36.0 asset 00000000 color 55585dff op 256/256
@@ -53,7 +53,4 @@ text 2123.0 1014.0 36.0 22.5 asset 00000000 color f4f4f2ff op 256/256 title 18 w
 text 2005.0 1014.0 78.0 25.0 asset 00000000 color f4f4f2ff op 256/256 title 20 w600 left "Close"
 quad 1961.0 1008.0 36.0 36.0 asset 00000000 color 55585dff op 256/256
 text 1961.0 1014.0 36.0 22.5 asset 00000000 color f4f4f2ff op 256/256 title 18 w600 center "B"
-text 1829.0 1014.0 92.0 25.0 asset 00000000 color f4f4f2ff op 256/256 title 20 w600 left "Change"
-quad 1785.0 1008.0 36.0 36.0 asset 00000000 color 55585dff op 256/256
-text 1785.0 1014.0 36.0 22.5 asset 00000000 color f4f4f2ff op 256/256 title 18 w600 center "A"
 text 80.0 850.0 2360.0 125.0 asset 00000000 color f4f4f2ff op 256/256 body 26 w400 left "Help for Resolution scale."

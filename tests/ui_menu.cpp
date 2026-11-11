@@ -493,11 +493,22 @@ int main(int argc, char** argv) {
             bool named = false, caps = false;
             for (const auto& item : list.items) {
                 named = named || item.asset != 0;
-                caps = caps || (item.kind == ItemKind::Text && item.text == buttonName(style, "confirm"));
+                caps = caps || (item.kind == ItemKind::Text && item.text == buttonName(style, "back"));
             }
             check(kUiAssetsPacked || !named, "no asset named before the art is packed");
-            check(kUiAssetsPacked || caps,
-                  (std::string("the confirm key cap reads ") + buttonName(style, "confirm")).c_str());
+            // (Back's: a value row that applies at once has no Confirm prompt)
+            check(kUiAssetsPacked || caps, (std::string("the back key cap reads ") + buttonName(style, "back")).c_str());
+        }
+        // Confirm on a value row that applies at once changes nothing: Left and Right did, and it was saved then.
+        {
+            menu.press(Input::Down);   // (past the Preset row, which is previewed first)
+            const Row* row = menu.page() && size_t(menu.row()) < menu.page()->rows.size() ? &menu.page()->rows[size_t(menu.row())] : nullptr;
+            const bool live = row && row->enabled && !row->previewFirst && (row->kind == RowKind::Choice || row->kind == RowKind::Step);
+            check(live, "the row under Preset is a value row that applies at once");
+            const std::string before = row ? row->value : std::string();
+            const Output out = menu.press(Input::Confirm);
+            check(out.requests.empty() && out.sound == Sound::Ok && row && row->value == before,
+                  "Confirm on it sends nothing, changes nothing and sounds Ok");
         }
         check(std::string(buttonName(PromptStyle::Xbox, "back")) == "B" &&
                   std::string(buttonName(PromptStyle::PlayStation, "back")) == "Circle" &&

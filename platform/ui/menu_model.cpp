@@ -303,7 +303,10 @@ Output Menu::press(Input input) {
             out.requests.push_back(Request{Request::Kind::Action, row->key, std::string()});
             out.sound = Sound::Ok;
         } else if (!row->previewFirst) {
-            merge(out, change(1, false));
+            // A value row that applies at once: Left and Right change it, and it is saved as it changes. Confirm changes
+            // nothing (it stepped the value once more, and at the end of the range refused with the 'can't' sound: the
+            // owner, 2026-11-11, read that as 'my change can't be saved'): the sound that says it is done.
+            out.sound = Sound::Ok;
         }
         break;
     }

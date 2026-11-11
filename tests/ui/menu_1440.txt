@@ -1,4 +1,4 @@
-canvas 1440.0 flags 1 items 54
+canvas 1440.0 flags 1 items 51
 quad 0.0 0.0 1440.0 1080.0 asset 00000000 color 000000ff op 38/256
 quad 0.0 0.0 1440.0 112.0 asset 00000000 color 000000e0 op 256/256
 text 80.0 22.0 0.0 80.0 asset 00000000 color f4f4f2ff op 256/256 title 64 italic w800 left "Settings"
@@ -49,7 +49,4 @@ text 1043.0 1014.0 36.0 22.5 asset 00000000 color f4f4f2ff op 256/256 title 18 w
 text 925.0 1014.0 78.0 25.0 asset 00000000 color f4f4f2ff op 256/256 title 20 w600 left "Close"
 quad 881.0 1008.0 36.0 36.0 asset 00000000 color 55585dff op 256/256
 text 881.0 1014.0 36.0 22.5 asset 00000000 color f4f4f2ff op 256/256 title 18 w600 center "B"
-text 749.0 1014.0 92.0 25.0 asset 00000000 color f4f4f2ff op 256/256 title 20 w600 left "Change"
-quad 705.0 1008.0 36.0 36.0 asset 00000000 color 55585dff op 256/256
-text 705.0 1014.0 36.0 22.5 asset 00000000 color f4f4f2ff op 256/256 title 18 w600 center "A"
 text 80.0 850.0 1280.0 125.0 asset 00000000 color f4f4f2ff op 256/256 body 26 w400 left "Help for Resolution scale."
