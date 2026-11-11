@@ -334,12 +334,20 @@ struct GsnScene::Impl {
         float world[3] = {};
         gfx::scene::Light record{};
         uint64_t stamp = 0;
+        uint64_t born = 0;   // the stamp its place was first known at (the fade in)
     };
     std::unordered_map<uint64_t, std::vector<KeptLamp>> keptLamps;   // by the 1 m cell of their place
     size_t keptLampCount = 0;
-    uint64_t lampStamp = 0, lampsKeptLit = 0, lampsSentLit = 0;
+    uint64_t lampStamp = 0, lampsKeptLit = 0, lampsSentLit = 0, lampsRed = 0;
     uint64_t listsSinceLamps = 0;     // lists planned since a main view's lamps were last kept
     // gsn_light.comp's push constants from `night` on (offset 40): mirrored field for field.
+    static float lampLimit(const char* name, float otherwise) {
+        const char* e = std::getenv(name);
+        if (!e) return otherwise;
+        char* end = nullptr;
+        const float v = std::strtof(e, &end);
+        return end != e && std::isfinite(v) ? v : otherwise;
+    }
     struct NightPush {
         // skipMasked: 1 when binding 9 holds the Light's skip mask (N3); 2 when it holds the scene without GT4's lit-road
         // layer, which the target then has (preLayer)
@@ -348,16 +356,20 @@ struct GsnScene::Impl {
         float distanceA = 0.0f, distanceB = 0.0f, maxDistance = 0.0f;
         float side = 0.0f;   // 1 when bindings 10 and 11 hold the Light's side channels (hybrid: B8 step 2, B10)
         float inset[4] = {1.0f, 1.0f, 0.0f, 0.0f};   // x1 < x0: no mirror
+        // The street lamps' two limits (gsn_light.comp): overlapping lamps' sum over the strongest one's light, and
+        // our lamps' light over GT4's baked light where it baked some. GT4_LAMP_OVERLAP, GT4_LAMP_OVER_BAKED: other
+        // values; 0 or 1: not held.
+        float lampOverlap = lampLimit("GT4_LAMP_OVERLAP", 1.75f), lampOverBaked = lampLimit("GT4_LAMP_OVER_BAKED", 1.5f);
     };
-    static_assert(sizeof(NightPush) == 56);
+    static_assert(sizeof(NightPush) == 64);
     // gsn_light.comp's push constants, whole.
     struct LightPush {
         float size[2], occlusion, zScale, grade, contrast, vibrance, warmth;
         uint32_t view, aoStep;
         NightPush night;
     };
-    static_assert(sizeof(LightPush) == 96 && offsetof(LightPush, night) == 40 && offsetof(LightPush, night.focal) == 48 &&
-                  offsetof(LightPush, night.inset) == 80);
+    static_assert(sizeof(LightPush) == 104 && offsetof(LightPush, night) == 40 && offsetof(LightPush, night.focal) == 48 &&
+                  offsetof(LightPush, night.inset) == 80 && offsetof(LightPush, night.lampOverlap) == 96);
     struct NightBuffers {
         vk::Buffer* header = nullptr;
         vk::Buffer* lights = nullptr;
@@ -786,8 +798,10 @@ struct GsnScene::Impl {
                         "frame before added\n",
                         static_cast<unsigned long long>(sceneStandIns), static_cast<unsigned long long>(sceneStandInLate));
         if (lampsKeptLit)
-            std::printf("Street lamps kept in place: %llu lit while GT4 didn't send them (%llu sent); %zu places known\n",
-                        static_cast<unsigned long long>(lampsKeptLit), static_cast<unsigned long long>(lampsSentLit), keptLampCount);
+            std::printf("Street lamps kept in place: %llu lit while GT4 didn't send them (%llu sent); %zu places known; %llu red "
+                        "lamps not lit\n",
+                        static_cast<unsigned long long>(lampsKeptLit), static_cast<unsigned long long>(lampsSentLit), keptLampCount,
+                        static_cast<unsigned long long>(lampsRed));
         if (hybrid && sidePlansSkipped)
             std::printf("Hybrid side channels: %llu lists planned none (nothing reads them: the lamps off, or the night's "
                         "lighting original)\n", static_cast<unsigned long long>(sidePlansSkipped));
@@ -4020,8 +4034,19 @@ const std::vector<gfx::scene::Light>& GsnScene::Impl::lampsOf(const scene::Scene
                     lamp.range = 0.0f;           // (the source's: light_sources.cpp)
                     lamp.intensity *= rearLamps;
                 }
+                // A red lamp marks something (a building's top, a barrier, a signal): it isn't a road luminaire. As a
+                // street lamp it laid a red pool on the road that GT4's picture doesn't have (the owner, S.S. Route 5,
+                // 2026-11-11): it lights nothing. Red: green and blue both under 0.45 of red (sodium's orange has its
+                // green at 0.6). GT4_RED_LAMPS=1: lit as the others.
+                static const bool redLamps = [] { const char* e = std::getenv("GT4_RED_LAMPS"); return e && *e == '1'; }();
                 for (gfx::scene::Light& lamp : v.records) {
                     if (lamp.source != gfx::scene::kSrcCourseGlow || lamp.view != view) continue;
+                    if (!redLamps && lamp.colour[0] > 0.0f && lamp.colour[1] < 0.45f * lamp.colour[0] &&
+                        lamp.colour[2] < 0.45f * lamp.colour[0]) {
+                        lamp.intensity = 0.0f;
+                        ++lampsRed;
+                        continue;
+                    }
                     lamp.kind = gfx::scene::kLightSpot;
                     std::memcpy(lamp.direction, down, sizeof down);
                     lamp.cosInner = lampProfile.cosInner;
@@ -4044,6 +4069,16 @@ const std::vector<gfx::scene::Light>& GsnScene::Impl::lampsOf(const scene::Scene
                 float rows = 0.0f;
                 for (int r = 0; r < 3; ++r) rows = std::max(rows, std::fabs(m[r][0] * m[r][0] + m[r][1] * m[r][1] + m[r][2] * m[r][2] - 1.0f));
                 if (persist && hybrid && lampsOn && vd->role == gfx::scene::kViewMain && rows < 1e-3f) {
+                    // A lamp lights in over kLampFadeFrames from the frame its place is first known: GT4 starts sending
+                    // a lamp's glow at some distance, and the road under it jumped to its full light on that frame (the
+                    // owner: 'each lamp turning on as you get closer', the tunnels' most). GT4_LAMP_FADE=0: at once.
+                    static const bool fade = [] { const char* e = std::getenv("GT4_LAMP_FADE"); return !(e && *e == '0'); }();
+                    constexpr uint64_t kLampFadeFrames = 45;
+                    const auto lit = [&](const KeptLamp& k) {
+                        if (!fade) return 1.0f;
+                        const float t = std::min(1.0f, float(lampStamp - k.born + 1) / float(kLampFadeFrames));
+                        return t * t * (3.0f - 2.0f * t);
+                    };
                     constexpr float kLampCell = 1.0f, kLampSame = 0.1f, kLampKeepMetres = 120.0f, kLampWorld = 1e6f;
                     constexpr size_t kLampsKeptMax = 8192;
                     constexpr uint64_t kLampForgetLists = 120;
@@ -4056,8 +4091,8 @@ const std::vector<gfx::scene::Light>& GsnScene::Impl::lampsOf(const scene::Scene
                     };
                     const size_t sent = v.records.size();
                     for (size_t i = 0; i < sent; ++i) {
-                        const gfx::scene::Light& lamp = v.records[i];
-                        if (lamp.source != gfx::scene::kSrcCourseGlow || lamp.view != view) continue;
+                        gfx::scene::Light& lamp = v.records[i];
+                        if (lamp.source != gfx::scene::kSrcCourseGlow || lamp.view != view || !(lamp.intensity > 0.0f)) continue;
                         float world[3];   // view = world x worldToView: world = (view - t) x R transposed
                         for (int r = 0; r < 3; ++r)
                             world[r] = (lamp.position[0] - m[3][0]) * m[r][0] + (lamp.position[1] - m[3][1]) * m[r][1] +
@@ -4087,10 +4122,12 @@ const std::vector<gfx::scene::Light>& GsnScene::Impl::lampsOf(const scene::Scene
                             cell.emplace_back();
                             found = &cell.back();
                             std::memcpy(found->world, world, sizeof world);
+                            found->born = lampStamp;
                             ++keptLampCount;
                         }
-                        found->record = lamp;   // (as it lights now: the profile and the scale applied)
+                        found->record = lamp;   // (as it lights at full: the profile and the scale applied)
                         found->stamp = lampStamp;
+                        lamp.intensity *= lit(*found);
                     }
                     for (const auto& [cell, lamps] : keptLamps)
                         for (const KeptLamp& kept : lamps) {
@@ -4100,6 +4137,7 @@ const std::vector<gfx::scene::Light>& GsnScene::Impl::lampsOf(const scene::Scene
                                 p[c] = kept.world[0] * m[0][c] + kept.world[1] * m[1][c] + kept.world[2] * m[2][c] + m[3][c];
                             if (!(p[0] * p[0] + p[1] * p[1] + p[2] * p[2] <= kLampKeepMetres * kLampKeepMetres)) continue;
                             gfx::scene::Light lamp = kept.record;
+                            lamp.intensity *= lit(kept);
                             std::memcpy(lamp.position, p, sizeof p);
                             std::memcpy(lamp.direction, down, sizeof down);
                             lamp.view = view;
