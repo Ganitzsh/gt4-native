@@ -323,6 +323,15 @@ struct GsnScene::Impl {
     uint64_t nightSplitSkipped = 0;   // Lights not relit: their target holds more than one main view (split screen)
     uint64_t nightSideLights = 0;     // Lights relit from the side channels (GT4_NIGHT_SIDE=1, hybrid)
     uint64_t sidePlansSkipped = 0;    // lists that planned no side passes: nothing would read the channels
+    // The main view's street lamps by their place in the world (lampsOf): lit while GT4 doesn't send them.
+    struct KeptLamp {
+        float world[3] = {};
+        gfx::scene::Light record{};
+        uint64_t stamp = 0;
+    };
+    std::unordered_map<uint64_t, KeptLamp> keptLamps;
+    uint64_t lampStamp = 0, lampsKeptLit = 0, lampsSentLit = 0;
+    std::chrono::steady_clock::time_point lampsSeenAt{};
     // gsn_light.comp's push constants from `night` on (offset 40): mirrored field for field.
     struct NightPush {
         // skipMasked: 1 when binding 9 holds the Light's skip mask (N3); 2 when it holds the scene without GT4's lit-road
@@ -765,6 +774,9 @@ struct GsnScene::Impl {
                         static_cast<unsigned long long>(sidePasses), static_cast<unsigned long long>(sideResets),
                         static_cast<unsigned long long>(sideItemsDrawn), static_cast<unsigned long long>(sideVeils),
                         static_cast<unsigned long long>(sideLayersDrawn), static_cast<unsigned long long>(sideLayersLeft));
+        if (lampsKeptLit)
+            std::printf("Street lamps kept in place: %llu lit while GT4 didn't send them (%llu records sent); %zu places known\n",
+                        static_cast<unsigned long long>(lampsKeptLit), static_cast<unsigned long long>(lampsSentLit), keptLamps.size());
         if (hybrid && sidePlansSkipped)
             std::printf("Hybrid side channels: %llu lists planned none (nothing reads them: the lamps off, or the night's "
                         "lighting original)\n", static_cast<unsigned long long>(sidePlansSkipped));
@@ -3981,6 +3993,70 @@ const std::vector<gfx::scene::Light>& GsnScene::Impl::lampsOf(const scene::Scene
                     lamp.range = lampProfile.range;
                     lamp.intensity *= lampProfile.scale;
                     lamp.reserved = render::kProfileStreetLamp;
+                }
+                // The street lamps stay where they stand. GT4 sends a lamp's glow only while the course section it
+                // belongs to is drawn, so a lamp just behind the camera or in a section dropped from the view stopped
+                // lighting the road still in view, which then showed GT4's baked light: stretches of road changed
+                // between the two looks as the car went (the owner, on the Odin, 2026-11-11). Each main view's lamps
+                // are kept by their place in the world (the view's camera is known here), and the ones this frame
+                // doesn't send, within kLampKeepMetres of the camera, light as they last did. Forgotten when no night
+                // view came for 2 s (another race, another course: other places). GT4_LAMP_PERSIST=0: only what the
+                // frame sends.
+                static const bool persist = [] { const char* e = std::getenv("GT4_LAMP_PERSIST"); return !(e && *e == '0'); }();
+                float rows = 0.0f;
+                for (int r = 0; r < 3; ++r) rows = std::max(rows, std::fabs(m[r][0] * m[r][0] + m[r][1] * m[r][1] + m[r][2] * m[r][2] - 1.0f));
+                if (persist && hybrid && lampsOn && vd->role == gfx::scene::kViewMain && rows < 1e-3f) {
+                    constexpr float kLampCell = 1.0f, kLampSame = 0.75f, kLampKeepMetres = 120.0f;
+                    constexpr size_t kLampsKeptMax = 8192;
+                    const auto now = std::chrono::steady_clock::now();
+                    if (now - lampsSeenAt > std::chrono::seconds(2)) keptLamps.clear();
+                    lampsSeenAt = now;
+                    ++lampStamp;
+                    const auto cellOf = [](const float* w, int dx, int dy, int dz) {
+                        const auto c = [](float x, int d) { return uint64_t(int64_t(std::floor(x / kLampCell)) + d + (1 << 20)) & 0x1FFFFF; };
+                        return c(w[0], dx) | c(w[1], dy) << 21 | c(w[2], dz) << 42;
+                    };
+                    const size_t sent = v.records.size();
+                    for (size_t i = 0; i < sent; ++i) {
+                        const gfx::scene::Light& lamp = v.records[i];
+                        if (lamp.source != gfx::scene::kSrcCourseGlow || lamp.view != view) continue;
+                        float world[3];   // view = world x worldToView: world = (view - t) x R transposed
+                        for (int r = 0; r < 3; ++r)
+                            world[r] = (lamp.position[0] - m[3][0]) * m[r][0] + (lamp.position[1] - m[3][1]) * m[r][1] +
+                                       (lamp.position[2] - m[3][2]) * m[r][2];
+                        if (!std::isfinite(world[0] + world[1] + world[2])) continue;
+                        KeptLamp* found = nullptr;
+                        for (int dx = -1; dx <= 1 && !found; ++dx)
+                            for (int dy = -1; dy <= 1 && !found; ++dy)
+                                for (int dz = -1; dz <= 1 && !found; ++dz) {
+                                    auto it = keptLamps.find(cellOf(world, dx, dy, dz));
+                                    if (it == keptLamps.end()) continue;
+                                    const float* w = it->second.world;
+                                    const float ax = w[0] - world[0], ay = w[1] - world[1], az = w[2] - world[2];
+                                    if (ax * ax + ay * ay + az * az <= kLampSame * kLampSame) found = &it->second;
+                                }
+                        if (!found) {
+                            if (keptLamps.size() >= kLampsKeptMax) continue;
+                            found = &keptLamps[cellOf(world, 0, 0, 0)];
+                            std::memcpy(found->world, world, sizeof world);
+                        }
+                        found->record = lamp;   // (as it lights now: the profile and the scale applied)
+                        found->stamp = lampStamp;
+                    }
+                    for (const auto& [cell, kept] : keptLamps) {
+                        if (kept.stamp == lampStamp) continue;
+                        float p[3];
+                        for (int c = 0; c < 3; ++c)
+                            p[c] = kept.world[0] * m[0][c] + kept.world[1] * m[1][c] + kept.world[2] * m[2][c] + m[3][c];
+                        if (!(p[0] * p[0] + p[1] * p[1] + p[2] * p[2] <= kLampKeepMetres * kLampKeepMetres)) continue;
+                        gfx::scene::Light lamp = kept.record;
+                        std::memcpy(lamp.position, p, sizeof p);
+                        std::memcpy(lamp.direction, down, sizeof down);
+                        lamp.view = view;
+                        v.records.push_back(lamp);
+                        ++lampsKeptLit;
+                    }
+                    lampsSentLit += sent;
                 }
             }
         }
