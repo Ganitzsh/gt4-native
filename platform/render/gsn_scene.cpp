@@ -338,15 +338,20 @@ struct GsnScene::Impl {
     };
     std::unordered_map<uint64_t, std::vector<KeptLamp>> keptLamps;   // by the 1 m cell of their place
     size_t keptLampCount = 0;
-    uint64_t lampStamp = 0, lampsKeptLit = 0, lampsSentLit = 0, lampsRed = 0;
+    uint64_t lampStamp = 0, lampsKeptLit = 0, lampsSentLit = 0, lampsRed = 0, lampColoursLogged = 0;
     uint64_t listsSinceLamps = 0;     // lists planned since a main view's lamps were last kept
     // gsn_light.comp's push constants from `night` on (offset 40): mirrored field for field.
-    static float lampLimit(const char* name, float otherwise) {
-        const char* e = std::getenv(name);
-        if (!e) return otherwise;
-        char* end = nullptr;
-        const float v = std::strtof(e, &end);
-        return end != e && std::isfinite(v) ? v : otherwise;
+    struct LampLimits { float overlap, overBaked; };
+    static const LampLimits& lampLimits() {   // (read once)
+        static const auto limit = [](const char* name, float otherwise) {
+            const char* e = std::getenv(name);
+            if (!e) return otherwise;
+            char* end = nullptr;
+            const float v = std::strtof(e, &end);
+            return end != e && std::isfinite(v) ? v : otherwise;
+        };
+        static const LampLimits limits{limit("GT4_LAMP_OVERLAP", 1.75f), limit("GT4_LAMP_OVER_BAKED", 1.5f)};
+        return limits;
     }
     struct NightPush {
         // skipMasked: 1 when binding 9 holds the Light's skip mask (N3); 2 when it holds the scene without GT4's lit-road
@@ -359,7 +364,7 @@ struct GsnScene::Impl {
         // The street lamps' two limits (gsn_light.comp): overlapping lamps' sum over the strongest one's light, and
         // our lamps' light over GT4's baked light where it baked some. GT4_LAMP_OVERLAP, GT4_LAMP_OVER_BAKED: other
         // values; 0 or 1: not held.
-        float lampOverlap = lampLimit("GT4_LAMP_OVERLAP", 1.75f), lampOverBaked = lampLimit("GT4_LAMP_OVER_BAKED", 1.5f);
+        float lampOverlap = lampLimits().overlap, lampOverBaked = lampLimits().overBaked;
     };
     static_assert(sizeof(NightPush) == 64);
     // gsn_light.comp's push constants, whole.
@@ -797,7 +802,7 @@ struct GsnScene::Impl {
             std::printf("Scene frames made from the views' packages: %llu lists cut before their FrameEnd, %llu lights of the "
                         "frame before added\n",
                         static_cast<unsigned long long>(sceneStandIns), static_cast<unsigned long long>(sceneStandInLate));
-        if (lampsKeptLit)
+        if (lampsKeptLit || lampsRed)
             std::printf("Street lamps kept in place: %llu lit while GT4 didn't send them (%llu sent); %zu places known; %llu red "
                         "lamps not lit\n",
                         static_cast<unsigned long long>(lampsKeptLit), static_cast<unsigned long long>(lampsSentLit), keptLampCount,
@@ -4041,6 +4046,12 @@ const std::vector<gfx::scene::Light>& GsnScene::Impl::lampsOf(const scene::Scene
                 static const bool redLamps = [] { const char* e = std::getenv("GT4_RED_LAMPS"); return e && *e == '1'; }();
                 for (gfx::scene::Light& lamp : v.records) {
                     if (lamp.source != gfx::scene::kSrcCourseGlow || lamp.view != view) continue;
+                    // GT4_LAMP_COLOURS=1 (setting the rule): the first 600 course lamps' colours as they come
+                    static const bool colours = [] { const char* e = std::getenv("GT4_LAMP_COLOURS"); return e && *e == '1'; }();
+                    if (colours && lampColoursLogged < 600 && lamp.intensity > 0.0f) {
+                        ++lampColoursLogged;
+                        std::printf("lamp colour: %.3f %.3f %.3f intensity %.3f\n", lamp.colour[0], lamp.colour[1], lamp.colour[2], lamp.intensity);
+                    }
                     if (!redLamps && lamp.colour[0] > 0.0f && lamp.colour[1] < 0.45f * lamp.colour[0] &&
                         lamp.colour[2] < 0.45f * lamp.colour[0]) {
                         lamp.intensity = 0.0f;
@@ -4092,7 +4103,8 @@ const std::vector<gfx::scene::Light>& GsnScene::Impl::lampsOf(const scene::Scene
                     const size_t sent = v.records.size();
                     for (size_t i = 0; i < sent; ++i) {
                         gfx::scene::Light& lamp = v.records[i];
-                        if (lamp.source != gfx::scene::kSrcCourseGlow || lamp.view != view || !(lamp.intensity > 0.0f)) continue;
+                        // (a lamp sent dark, a red one or one GT4 faded out, is kept dark: its place is this frame's)
+                        if (lamp.source != gfx::scene::kSrcCourseGlow || lamp.view != view) continue;
                         float world[3];   // view = world x worldToView: world = (view - t) x R transposed
                         for (int r = 0; r < 3; ++r)
                             world[r] = (lamp.position[0] - m[3][0]) * m[r][0] + (lamp.position[1] - m[3][1]) * m[r][1] +

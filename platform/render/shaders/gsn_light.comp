@@ -229,10 +229,13 @@ void main() {
         const float lb = dot(baked, kLuma);
         float lo = dot(ours, kLuma);
         // Where GT4 baked lamp light, ours stays near its level: over it, softly up to kLampOverBaked times it, so a
-        // stretch our lamps light doesn't stand out from the next one GT4's light still shows on.
+        // stretch our lamps light doesn't stand out from the next one GT4's light still shows on. Only inside a baked
+        // pool: towards its rim, where GT4's light runs out (under kBakedPool), ours comes back to its own level, as it
+        // is past the rim, so there is no step where the pool ends.
+        const float kBakedPool = 0.0015;   // (linear: about three levels of light on a dark road)
         if (p.lampOverBaked > 1.0 && lb > 1e-5 && lo > lb) {
             const float room = (p.lampOverBaked - 1.0) * lb;
-            const float held = lb + room * (1.0 - exp(-(lo - lb) / room));
+            const float held = mix(lo, lb + room * (1.0 - exp(-(lo - lb) / room)), smoothstep(0.0, kBakedPool, lb));
             ours *= held / lo;
             lo = held;
         }
