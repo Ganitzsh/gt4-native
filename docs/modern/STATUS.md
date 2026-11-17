@@ -1,22 +1,67 @@
 # GT4-Native modernisation status
 
-Status as of 2026-11-10. All eight agent lanes stopped and retired, their clones and worktrees removed. Main is the
-source of truth: PLAN.md and MENU_DESIGN.md in this folder hold each ticket's full text. This file is the short view.
+Status as of 2026-11-17, main 1e7be22. One session runs the work from the main checkout; the eight agent lanes were
+retired on 2026-11-10. Main is the source of truth: PLAN.md and MENU_DESIGN.md in this folder hold each ticket's
+full text, PS2_REMOVAL.md the PS2 audit. This file is the short view.
 
-## Finish line (the owner, 2026-11-10)
+## Direction (the owner, 2026-11-17): the PS2 out of the picture path, first
 
-The owner's direction: finish with a working build that has most of the modernisation in, and don't overdo it. One
-session now runs the work in the order below; the lanes' queues further down are history. PLAN's "Next" list was
-about three times this, so it is cut to what a player sees and what removes PS2 mechanisms. Everything cut stays in
-PLAN as written, for after the release.
+The owner's direction: everything PS2 is gone; the whole pipeline uses proper shaders and Vulkan and does nothing
+PS2-related; then the tracker says what is needed. The audit of that day (PS2_REMOVAL.md, at main 1e7be22) found:
 
-**Where we stand.** The foundations are done and on main, but the presets don't show them yet: `render.scene =
-hybrid` draws the same picture as the PS2 path and is in no preset, `lighting.night = enhanced` is in no preset,
-and the day lighting (B10 onwards) isn't started. So the remaining work is mostly making finished machinery
-visible, plus one large new piece (B10).
+- **It is not gone.** The pipeline is Vulkan and shaders throughout, but they compute the PS2: every pixel of every
+  game frame, in every preset, is drawn from GS state by the GS's rules (`gsn.vert`, `gsn.frag`), 3D through GT4's
+  VU1 programs as shaders. Measured at `high`: a day race is 738 draw batches a frame, a night race 641, the garage
+  528, a 2D menu 80, and 100 % of them go that way.
+- **Hybrid is not a modern renderer.** It draws about 92 % of a day race's 3D batches and 88 % of a night race's
+  from the mesh cache, with GT4's vertex program and the GS's fragment stage, into the GS's targets. By day its
+  picture is the PS2 path's. Menus, the garage and showroom, the HUD, the sky, particles and GT4's post effects
+  are not touched by it.
+- **`render.scene = modern` does not exist**, and the display pipeline's bloom, tone mappers, auto exposure, FSR 2
+  and FSR 3.1 never run on game frames. What is modern on a game frame is screen-space work on the PS2's picture:
+  the night relight, the occlusion, the temporal resolve, the height fog.
+- **The game still sends PS2 terms**: GS register fields, surfaces by their address in GS memory, GS texels and
+  palettes, 12.4 vertices, VU1 batch memory with a program entry, CRTC registers, all framed as a DMA chain.
 
-**In scope, in this order.** Each step lands on main behind its setting (rule 10) and enters the presets at its
-own gate.
+So the work below comes first, and it is the largest block in the plan (PLAN P7-P20, spike R19: fifteen tickets,
+three of them L, and P16 alone holds several older ones). It takes in tickets the finish line of 2026-11-10 had
+cut or put last: A8, B9, B10's step 2, B13, B14, B15, B18, B22, F3, F4, E6, E7, E9, P2b, P2c, P3b.
+
+| Phase | Tickets | Reaches |
+|---|---|---|
+| 0. Measure and clear | **P7** the PS2-path counters; **P8** dead code out; **R19** spike, one race view drawn natively | a number to drive to 0; the unknowns named |
+| 1. Every draw described | **P9** every view role substituted; **P10** untagged draws described; **P11** 2D as 2D records | no draw the host can't name |
+| 2. Native resources and state | **P12** textures as images; **P13** targets as named images; **P14** materials; **P15** meshes; P3a | no GS or VU term on the wire |
+| 3. The native renderer | **P16** `render.scene = modern`, role by role; **P17** the 2D layer; **P18** reads; **P19** display | every pixel by the renderer's own shaders |
+| 4. Delete | **P20** the GS path, `original`, the PS2-term records | the audit's inventory is empty |
+
+**Next, in order:** P7, P8, R19. Phases 0 to 2 are meant to leave the picture as it is; the few changes are
+named in their tickets (P8's two faults, P9's newly lit views, P10's particles, P11's menus in whole frames).
+
+**Three decisions the plan assumes, the owner's to overrule** (PS2_REMOVAL section 4):
+1. The `original` preset and the PS2 picture are deleted at the end (P20); until then they are the reference and
+   the fallback.
+2. Release 0.1.1 waits for this. The alternative: release from today's main, PS2 path inside, and this after.
+3. The scope is the picture path. Sound, input, saves, the kernel and the game's memory stay at the game's own
+   interfaces (PS2_REMOVAL section 6: the spikes R17 and R18 said no; not re-audited on 2026-11-17).
+
+**What this does to the rest of the order:**
+- No new lighting or effect is built on the GS target from here, so it isn't written twice: F10 (the night's
+  ambient), F6's shadows and B16c part 4 (FSR 3.1 on game frames through the seam) wait for P16, which gives them
+  native depth, colour and motion vectors. The night path that is in the presets keeps getting its fixes.
+- P4's freeze still goes when an Odin play log has no late delivery; P3a stays as it was.
+- Driving feel (the finish line's step 7) touches no renderer file and can run between renderer steps.
+- Open from the owner's Odin playtests of 2026-11-11 (the session's notes; not rechecked since): the night path's
+  GPU cost on the Odin (19 ms a frame at ultra before e864635's early-out, not measured after); a demo replay whose
+  AI drives into a wall (the Paris rain demo; PS2 against IEEE arithmetic suspected) and a sky fault in it; the
+  course menu slow on its first visit; one late delivery in gt4fn_00358608; the arm64 Steam shortcut.
+- CI: main's head failed in the two Linux host jobs at their package install (the runner couldn't resolve Ubuntu's
+  mirror, three pushes running since 08b2955); the other eleven jobs pass. The next push shows whether it holds.
+
+## The finish line of 2026-11-10 (its record; the order above replaces it)
+
+The owner's direction then: finish with a working build that has most of the modernisation in, and don't overdo it.
+PLAN's "Next" list was cut to what a player sees and what removes PS2 mechanisms. Its steps, with where each stands:
 
 1. **Main green.** Done (e61ce10): the Linux x86_64 CI job ran out of memory on about half the pushes, so it
    builds with two jobs.
@@ -51,7 +96,16 @@ own gate.
    - **in the presets since 2026-11-10:** medium, high and ultra (and the defaults) set `render.scene = hybrid`
      and `lighting.night = enhanced`; `original` keeps the PS2's picture and `low`, the handheld's, keeps the GS
      path until the Odin's cost is measured (desktop, 1080p high, a night lap: GPU 2.3 to 3.0 ms, render thread
-     1.1 to 1.9 ms, front end 1.5 to 1.8 ms a frame). Older settings files under those presets move once.
+     1.1 to 1.9 ms, front end 1.5 to 1.8 ms a frame). Older settings files under those presets move once;
+   - **after the owner's Odin playtests of 2026-11-11** (0fc6a8f to 1e7be22): street lamps keep lighting where
+     they stand while GT4 doesn't send them; a list cut by a game read gets a scene frame from its views'
+     packages, so the road no longer flips between the two looks as flares come and go; lamps light in over 45
+     frames; overlapping lamps and baked stretches are held level; red marker lamps light nothing; the light loop
+     leaves a lamp that can't reach the pixel (the Odin: 0.7 ms with no lamp in view, 4.1 ms with 87, before it);
+     `GT4_GPU_PROFILE=2` times the side passes, the baked layer, the occlusion and the clusters apart. Never-dark
+     holds on `lap_ssr5f_boot` and `lap_csr5r_boot`;
+   - **left:** the night path's GPU cost on the Odin (measured next from its log); F10 and F6's shadows, which
+     since 2026-11-17 wait for P16.
 4. **Day lighting: cut from this finish line** (2026-11-10; B10's step 2, B11 and B12 stay in PLAN for after it).
    Why: by day GT4's cars are already lit per object from the place they are in, and per-pixel lighting of the same
    model differs from GT4's by under 4 levels on 92-93 % of samples (B10's own measure), so the largest ticket left
@@ -59,29 +113,29 @@ own gate.
    camera sees; to be checked before B11 starts), and the horizon AO already runs. What was done instead: hybrid,
    in medium to ultra for the night, now draws no side channels by day (d459c3c's parent): on a day race at high its
    GPU time is the GS path's (1.04 against 1.05 ms) and its main thread 0.68 against 0.60 ms a frame (was 0.79).
-   The owner can put day lighting back: say so and it is the next step.
+   Since 2026-11-17 it is back on the path as part of P16: the native renderer lights per pixel (B10's step 2).
 5. **FSR 3.1 on game frames:** A3b step 1 (the camera-cut hook) is done: `kViewCut` is set and TAA's history
-   resets on it. Left: B16c part 4, with the night level's and the display state's resets.
-6. **PS2 mechanisms out:** P1 is done (53b7455: the dead GIF and VIF records; this list had it as open). P4 (the
-   preemptive delivery fallback): its diagnostic is in, 0 late deliveries in the garage, Photo Travel and a race; a
-   replay and a licence test since (0 in both); the freeze goes once a play session's log from the Odin has none. P5
-   is answered (R17: the race fills the PS2's heap by design, nothing would use more: no lift). Left of this step:
-   P3a (block links as offsets). Then P2b (native palettes) and P3b (draw state in renderer terms), last because
-   they are large and change no picture.
+   resets on it. B16c part 4 is not pursued on the GS path since 2026-11-17: P16 brings motion vectors of its own.
+6. **PS2 mechanisms out:** now the first block of work, widened (the Direction section). Of the old list: P1 is
+   done (53b7455: the dead GIF and VIF records). P4 (the preemptive delivery fallback): its diagnostic is in, 0
+   late deliveries in the garage, Photo Travel and a race; a replay and a licence test since (0 in both); the
+   freeze goes once a play session's log from the Odin has none. P5 is answered (R17: the race fills the PS2's
+   heap by design, nothing would use more: no lift). Left of this step: P3a (block links as offsets). P2b (native
+   palettes) and P3b (draw state in renderer terms) are now parts of P12 and P14.
 7. **Driving feel:** what is left of D8 (physics force feedback, behind a switch today), D12 (steering and pedal
    response) and D14 (gamepad haptics from the physics), checked against main first, since parts are in; D13 from
    `archive/d-laneD-review` if its gates pass.
-8. **Release 0.1.1** from main, after an Odin pass (C6b).
+8. **Release 0.1.1** from main, after an Odin pass (C6b): after P20, by decision 2 above.
 
-**Cut until after the release.** B9 (showroom and photo views stay on the PS2 path), B13 (SSR, probes), B14 (sky,
-froxel fog), B15 and F4 (modern mode, tone map, HDR, modern bloom and flares), B18-B23, F3, F5, F6's shadows
-beyond the player's headlights, F8 (volumetric light), N4, E4, E6-E9, E10, M10-M12 and Q1-Q8, D15, D16, B24's
-later steps, B26 (unless its picture bug is seen), C12 step 4, split-screen relight and TAA, C7.
+**Cut then, and where each is now.** In the PS2 work, as parts of P9-P17: B9, B13, B14, B15, B18, B22, F3, F4, E6,
+E7, E9, and split screen's lighting (P9). Dropped by it: B24's later steps, B26, C12 step 4 and E10 are about the GS
+path, which P20 deletes; they are done only if a fault of theirs is seen before then. Still cut until after the
+release: B19-B21, B23, F5, F6's shadows beyond the player's headlights, F8, N4, E4, M10-M12 and Q1-Q8, D15, D16,
+C7.
 
-**What "no PS2 patterns" means here.** PS2_REMOVAL.md has the full table. After step 6, what is left is the game's
-own logic and data, which a recompiled game can't shed: its 32-bit address space, the 60 Hz frame, the kernel and
-SDK calls it makes, PS2 float rounding, and the PS2 renderer path that `original` keeps and that still draws what
-hybrid doesn't replace (sky, GT4's post effects, HUD, menus).
+**What "no PS2" means.** PS2_REMOVAL.md section 4: the host knows no PS2 concept, and one importer in the game
+process reads the disc's formats. What a recompiled game can't shed stays: its 32-bit address space, the 60 Hz
+frame, the kernel and SDK calls it makes, PS2 float rounding (section 6 there).
 
 **Physics.** No ticket changes GT4's simulation, and none is added: it is the game's own code at 60 Hz in PS2
 arithmetic, and replays, ghosts, licence times and imported saves depend on it bit for bit. What modernises around
@@ -92,8 +146,9 @@ that gets the diff and the ticket's acceptance, not the author's conclusion, bef
 
 ## Latest Odin build
 
-- Last device build: main-874f32e, main's head at the wind-down (night bands fix, magenta fix, native menu by default,
-  CPU cuts, rumble test). Not yet tried on the Odin.
+- Last build: main-1e7be22 (2026-11-11 17:30, `build/release/main-1e7be22`: Windows x64 and Linux arm64), main's
+  head, with the fixes after the owner's two playtests of that day (builds 34c194a and bafcb9e, on the Odin).
+  Whether 1e7be22 itself reached the Odin isn't recorded.
 
 ## Done in the 2026-11-09 session (on main)
 
@@ -142,11 +197,17 @@ that gets the diff and the ticket's acceptance, not the author's conclusion, bef
 
 - **Done:** A0-A3, A5a, A5b, A7 (steps 1a, 1b, 2), A9, A10, A11a, A12; B1-B8 (B8 with its CPU condition), B6c;
   C1-C5, C9 (the POSIX link ships; device test pending), C10, C11; D1-D6, D7 (except the live check), D9;
-  E1-E3 (E3 parked); F0-F2, F2b; N0, N1; P2 (P2c, follow-up parked); P6 (answered).
-- **In progress:** A3b (camera cuts); A4, A6, A8, A11b (to confirm with lane A); B16c (part 4 waits for A3b);
-  B17 FSR 3.1 (game frames wait on B16c); B24 (step 1 behind a switch); C6/C6b (Odin runs); C12 (steps 1-2 in,
-  3 in review, 4 the PCSX2 player run); D8; runtime CPU cuts (hash memo next); M13; N3 step 1; NATIVE baselines.
-- **Next:** the Finish line section above, in its order.
+  E1-E3 (E3 parked); F0-F2, F2b; N0, N1; P2a (its three steps), P2c's first item (its follow-up parked); P6
+  (answered).
+  Since 2026-11-10: M13; the hash memo; N3 step 1 and the night's modern path in the presets (N3's coverage per
+  pixel, F7's profiles, F9's lights, B10's lit channel for the night); A3b step 1; P1; P5 (answered).
+- **In progress:** P4 (the freeze waits for an Odin log); A3b (step 1 done; Photo Mode's camera unmeasured); N3
+  (its owed list in PLAN); the runtime's CPU cuts; A4, A6, A8, A11b (as the lanes left them; A6 and A8 continue as
+  P9 and P10); B10 (the night reads its channel; step 2 is P16's); C6/C6b (Odin runs); D8; NATIVE
+  baselines. Stopped where they are, as GS-path work P20 deletes: B16c (parts 1 and 3 behind a switch), B17's game
+  frames, B24 (step 1 behind a switch), C12 (steps 1-3 in).
+- **Next:** the Direction section above: P7, P8, R19, then its phases.
+- **Not started, now on the path:** P7-P20, R19; B9, B13, B14, B15, B18, B22, F3, F4, E6, E7, E9 as their parts.
 - **Parked:** B25 (fix moved to B26), E10 (clean field mode), N2, F2b's view-level albedo and albedo floor.
 
 ## Where the work lives
@@ -159,7 +220,7 @@ that gets the diff and the ticket's acceptance, not the author's conclusion, bef
 
 ## Where each lane stopped (queues in order)
 
-History from the wind-down: the Finish line section decides what is picked up from these queues.
+History from the wind-down: the Direction section decides what is picked up from these queues.
 Nothing is left only on disk: unfinished work is on origin under wip/, parked/ or debug/ (rule 10).
 
 - **Architect:** nothing open of its own; writes N3's rule, NATIVE's tool names, A3b's last sessions, C12's
@@ -193,8 +254,11 @@ Nothing is left only on disk: unfinished work is on origin under wip/, parked/ o
 
 ## Waiting on the owner
 
-- Install the next build on the Odin; with the high preset (or the playtest file over low), a night race on S.S.
-  Route 5: the frame rate against low's, and the look of the lamps, the tunnels and the headlights.
+- The three decisions of the Direction section (the PS2 picture deleted at the end; the release after it; the
+  scope the picture path).
+- Install main-1e7be22 on the Odin; with the high preset (or the playtest file over low), a night race on S.S.
+  Route 5: the frame rate against low's, the lamps after the fixes of 2026-11-11, and the `host.log` (P4's freeze
+  goes when it has no "waited over 50 ms" line).
 - Night lighting: answered 2026-11-10 (as modern games do it, the ambient by place: the Finish line's step 3).
 - Rumble: run the 3-pulse test in a race and say which buzz; check the GT4 Native shortcut's Steam vibration toggle.
 - Try the native Linux build (gt4-native.sh shortcut) for speed: it takes the host out of FEX.

@@ -515,6 +515,33 @@ Otherwise the answer is no, and the register image stays.
 
 ---
 
+## R19: One race view drawn natively, end to end (PLAN R19; sizes P12-P16)
+
+**Why.** The audit of 2026-11-17 (PS2_REMOVAL.md) found that nothing draws a GT4 scene without the GS's rules: the
+hybrid path keeps GT4's vertex program, the GS's fragment stage, its depth and its targets, because untagged draws
+between a view's passes depend on them (R5). P12-P16 replace all of that at once per view. What breaks when a view
+leaves the GS's arithmetic is not known, and the records of P12-P15 shouldn't be designed before it is.
+
+**Question.** Drawn with matrices, a float reversed depth, images and ordinary blend states, in GT4's order:
+- which GS states have no mapping, and how often (the alpha test's fail modes, the destination alpha test at 11
+  to 36 draws a frame, PABE, FBA, the texture functions other than modulate, CLAMP's region modes);
+- what GT4's Z partitions, equal-Z layers and blended layers need once the depth is no longer GT4's integer Z
+  (R3's cases, on a whole frame);
+- what the draws no scene record describes are (P10's list), and what each needs;
+- how far the picture is from the GS path's, by class of difference (edges, texture filtering, vertex lighting
+  against per-pixel, fog), and whether any is visible in stills;
+- the GPU and CPU cost against the GS path, desktop and Odin.
+
+**Method.** A throwaway path on a `debug/` branch, the main view of `race_pe2_prog` (day) and `lap_ssr5r_prog`
+(night) only: the mesh cache's decode to float vertices, the instance's `objectToView` and the view's projection, the
+sets' textures decoded to RGBA once, a table from GS state to blend mode, alpha cutoff and depth mode with a
+counter per state that falls outside it. Everything else in the frame stays on the GS path and is composed after.
+Output: `spikes/R19.md` with the stills, the counts and the changes it asks of P12-P16.
+
+**Time box.** 2 weeks. Nothing of it goes to main.
+
+---
+
 ## Other risks, no spike needed now
 
 - **Motion vectors for earlier depth partitions.** The scene stage's motion-vector pass redraws the 3D with depth
