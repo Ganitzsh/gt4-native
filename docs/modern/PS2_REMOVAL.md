@@ -4,7 +4,8 @@ The owner's direction (2026-11-17): everything PS2 is gone; the whole pipeline u
 does nothing PS2-related. This page is the audit against that, at `main` 1e7be22, and the order of work that gets
 there. It replaces the note of 2026-11-08, whose goal was narrower (no PS2 concept beyond what the game logic needs,
 with the PS2 renderer kept as `original`). Tickets are in [PLAN.md](PLAN.md) (P1-P20, R19, and the lanes' tickets
-named here).
+named here). The PS2's renderer goes; its picture does not: the owner, the same day, asked that the native renderer
+reproduce the original (section 4, "The original look").
 
 How it was audited: three independent reads of the code (what the game process sends; the host's stream and front
 end; the Vulkan back end and every shader), each with `path:line` evidence, and replays of five scenes with the
@@ -82,9 +83,9 @@ matched or decompiled game code and its data, "port" the native runtime (`runtim
 | 2D and immediate draws as GS vertices: PRIM bits, 12.4 window coordinates with the XYOFFSET origin, 24- or 32-bit integer Z, fog byte, STQ, the ADC bit; full-screen draws cut into 32- or 64-pixel strips for the GS's texture cache | `DrawRecord`, `gfx.h:693-719`; 20 `game_src` files draw this way (46 call the `gt4_gfx_*` API) | values: game; the record: port | P11 |
 | 3D as writes into a 256-qword VU1 batch memory, with VIF UNPACK formats, an output GIF tag, a VU1 program entry and ITOP (`kBatchFrame`, `Write`, `Model`, `Run`); model files sent as their own VIF packets | `gfx.h:484-560`, `pgl.cpp:1319-1374`, `game_src/func_0049D328.cpp` | model packets: the disc; indices, formats, entry: game; the records: port | P15 |
 | The screen-grid effects still build a whole DMA / VIF / GIF packet, which the runtime then interprets (a port of VU1 programs 0x3D50 and 0x3EA0, a GIF tag parser) | `game_src/func_004A81A8.cpp`, `func_004A9470.cpp`, `pgl.cpp:192-309`, `1376-1453` | game builds it; port interprets it | P8 (the packet built and thrown away), P16 |
-| The colour grade's record names GS pages, a CLUT address and a raw SCISSOR value; its curve is still uploaded as a CSM1 palette | `EffectRecord`, `pgl.cpp:1455-1480` | arguments: game; the record: port | P16 (GT4's grade is not run) |
+| The colour grade's record names GS pages, a CLUT address and a raw SCISSOR value; its curve is still uploaded as a CSM1 palette | `EffectRecord`, `pgl.cpp:1455-1480` | arguments: game; the record: port | P16 (a pass of the original look; not run in the modern look) |
 | Reads of drawn pixels as GS-to-EE transfers in qwords of GS packing (`kRead`, `GT4_REC_GS_READ`, `GS_IMAGE`) | `pgl.cpp:1733-1801`, `link.cpp:502-515` | callers: game (the flare samples every frame with lights in view, the luminance probe, photo tiles, depth samples) | P18 |
-| The display as CRTC registers (PMODE, SMODE2, DISPFB, DISPLAY, two read circuits) and the field in the frame's end record | `gs.cpp:37-116`, `DisplayRecord` | values: game; decode: port | P19 for native views; P20 with `original` |
+| The display as CRTC registers (PMODE, SMODE2, DISPFB, DISPLAY, two read circuits) and the field in the frame's end record | `gs.cpp:37-116`, `DisplayRecord` | values: game; decode: port | P19 for native views; P20 with the GS path |
 | Movie and still pictures written in the IPU's output layout (16 x 16 macroblocks), then uploaded and drawn by game code | `movie.cpp:374-403`, `ipu_image.cpp` | the layout: game code that consumes it | P11 (movies as one texture) |
 | Raw GIF packets still written by two particle functions and left out by the walker (logged once) | `game_src/func_004961B8.cpp`, `func_00496638.cpp` | game | P10 |
 
@@ -116,7 +117,7 @@ matched or decompiled game code and its data, "port" the native runtime (`runtim
 | `gsn_stencil.frag`, the stencil export | the destination alpha test (alpha bit 7 mirrored in a stencil bit) | when a draw tests it | P14, P20 |
 | `gsn_reinterpret.comp`, `gsn_swizzle.glsl` | GS memory addressing, the swizzle, CLUT lookup on the GPU | when a draw needs it (0 in the five scenes) | P13 |
 | `gsn_grade.comp` | GT4's colour grade with the GS's integer steps | races | P16 |
-| `gsn_display.frag` | the display circuit's rectangle (DISPFB, DISPLAY), the blend of two interlaced fields | every frame | P19 for native views; P20 with `original` |
+| `gsn_display.frag` | the display circuit's rectangle (DISPFB, DISPLAY), the blend of two interlaced fields | every frame | P19 for native views (the field blend as a pass of the original look); P20 with the GS path |
 | Targets | one image per GS frame buffer and per GS Z buffer; colour stored as value / 255 and alpha / 128 (the GS's 0x80 = 1); depth is GS Z; 640 x 448 and 64-pixel-page constants throughout | every frame | P13, P16 |
 | `modern_side.frag`, `gsn_side_*`, `gsn_velocity.*`, `gsn_mask.frag`, `gsn_seam*.comp` | nothing of the PS2 in what they write (side channels, motion vectors, masks), but they redraw the items with GT4's vertex program and the depth test EQUAL against GS Z, once per GT4 Z partition | hybrid at night; motion vectors with TAA; the seam by a switch only | P16 (the native passes write these themselves), P20 |
 | The scene stage (occlusion, night relight, fog, temporal resolve, reflections, blur, focus) | modern, but its inputs are the GS target and GS Z, with GT4 constants (`Z = 1.6e6 / distance`, the half field of view's tangent 0.433, FOGCOL) | medium to ultra | P16 (same passes on native depth and colour) |
@@ -158,12 +159,12 @@ decoding by FFmpeg; the host mixer's output stages.
 - **Materials.** A blend mode, an alpha cutoff, a depth mode, a cull mode, a shading class (R8's classes: prelit,
   diffuse, car paint, glossy, projected) and its textures.
 - **Draws.** A mesh, a material and a transform from the scene records, in a view; 2D as quads in canvas units.
-- **Targets.** Named images the renderer owns (the scene in HDR with a float reversed depth, the mirror, the
-  environment faces); none found by an address.
-- **Shaders.** The renderer's own vertex stage (matrices) and material shaders, lit per pixel; its own sky,
-  particles, reflections and post chain (the display pipeline that exists, at last on game frames); a 2D layer at
-  the output's resolution.
-- **Display.** The renderer presents its own image. No read circuits, no fields.
+- **Targets.** Named images the renderer owns (the scene with a float reversed depth, in HDR for the modern look;
+  the mirror, the environment faces); none found by an address.
+- **Shaders.** The renderer's own vertex stage (matrices) and material shaders, in two looks (below): GT4's own
+  lighting and effects, or lit per pixel with its own sky, particles, reflections and post chain (the display
+  pipeline that exists, at last on game frames); a 2D layer, at the output's resolution in the modern look.
+- **Display.** The renderer presents its own image. No read circuits; fields only as the original look's blend.
 - **Reads.** Each of the game's reads of its picture answered from the renderer's images in the units the game
   expects.
 
@@ -172,14 +173,49 @@ VIF-packed vertex data, texture sets as GS texels with TEX0 records, the movies'
 place left that knows them. And the game's own code keeps calling its graphics library with GS-flavoured arguments:
 the runtime translates them into materials at that call, and nothing behind it sees them.
 
-Three decisions this page assumes, the owner's to overrule:
+### The original look
 
-1. **The `original` preset and the PS2 picture go at the end** (P20). Until then the GS path is the reference each
-   native step is compared with, and the fallback. Keeping it for good would mean keeping everything in 3.2 and 3.3.
+The owner, 2026-11-17, on whether `original` is deleted with the GS path: "original goes but not really: we must
+manage to reproduce it with the modern rendering". So the PS2 renderer goes and its picture stays. The native
+renderer has two looks, and the `original` preset selects the first:
+
+- **Original.** GT4's picture as the game made it, drawn from the same meshes, images and materials by the
+  renderer's own shaders: GT4's lighting (the colours baked in its vertices and its per-object lights, by GT4's own
+  formulas, in floats), its fog, its blend modes in GT4's meaning, its order of layers, its sky and particles, and
+  its post effects (the glare, the flares, the grade and the depth of field among them; P10 lists them all), each
+  a named pass with GT4's parameters. No light, shadow, occlusion or tone map GT4 didn't have. The PS2's
+  resolution (640 x 448, today's `render.gs = original`) and its fields (a race's 640 x 224 fields and the
+  interlaced screens, blended for display) are presentation options of this look: targets of those sizes and a
+  blend of two frames, with no GS and no CRTC behind them.
+- **Modern.** The same scene lit per pixel, with the renderer's own lights, shadows, sky, reflections and post
+  chain.
+
+What separates the original look from the PS2 path: GT4's look is the game's (its lighting model, its colours, its
+order, its effects) and is kept; the arithmetic is the console's (12.4 coordinates, integer Z, the 0x80 alpha
+scale, palettes, swizzled memory, VU1 programs, the CRTC) and goes. So the original look is not bit-identical to
+the GS path's picture. It is held to it by a measured tolerance: on the REF captures, at the GS path's own target
+size and before display (640 x 448 for a whole frame, 640 x 224 for a field), the share of pixels within a number
+of levels, and the rest listed by class (rounding, edge coverage, texture filtering, dither where GT4 sets it).
+R19 measures what a native path reaches and proposes the number; P16 fixes it before its first view role, with the
+owner's agreement, since that number is what "reproduce" means.
+
+The original look comes first for each view role, because it is the look with a reference to be measured against;
+the modern look is built on a role that has passed it. That replaces a loose gate (stills reviewed) by a measured
+one, and it adds work to P16: GT4's lighting as a shading model of the renderer, and its post effects as passes.
+
+### Three decisions, put to the owner on 2026-11-17
+
+1. **The GS path goes at the end (P20); the `original` preset stays, as the native renderer's original look.**
+   Answered by the owner (above; the first draft of this page deleted the preset too). Until P20 the GS path is
+   the reference the original look is measured against, and the fallback; keeping it for good would mean keeping
+   everything in 3.2 and 3.3. After P20 the reference is the GS path's last frames of the REF captures, rendered
+   before the deletion and kept local per device class, with PCSX2's stills beside them (P20).
 2. **Release 0.1.1 waits for this**, as it waited for the modernisation. The alternative is a release from today's
-   main with the PS2 path inside and this work after it.
+   main with the PS2 path inside and this work after it. Not addressed in the owner's answer: still assumed, the
+   owner's to overrule.
 3. **The scope is the picture path.** Sound, input, saves, the kernel and the game's memory are section 6: kept at
-   the game's API by the earlier spikes, not re-audited here.
+   the game's API by the earlier spikes, not re-audited here. Not addressed in the owner's answer: still assumed,
+   the owner's to overrule.
 
 ## 5. The order
 
@@ -192,8 +228,8 @@ picture as it is; the few places where a ticket changes one are named in the tic
 | 0. Measure and clear | **P7** (the PS2-path counters), **P8** (dead code out), **R19** (spike: one race view drawn natively end to end) | a number to drive to 0; the unknowns of phase 2 and 3 named before their records are designed |
 | 1. Every draw described | **P9** (every view role substituted: B9 widened), **P10** (untagged draws classified: sky, particles, clears, glows; A8), **P11** (2D as 2D records; menus progressive) | no draw the host can't name; still the PS2's picture |
 | 2. Native resources and state | **P12** (textures as images; P2b inside), **P13** (targets as named images; P2c inside), **P14** (materials, not GS state; P3b), **P15** (meshes, not VU1 batches), P3a | the wire carries no GS or VU term |
-| 3. The native renderer | **P16** (`render.scene = modern`: B15 with B10's lighting, B14 sky, B18 and B22 particles and ordered layers, B13 reflections, F3 and F4), **P17** (the 2D layer: E6, E7, E9), **P18** (reads answered natively: R9), **P19** (display without a CRTC) | every pixel by the renderer's own shaders; the presets move to `modern` role by role |
-| 4. Delete | **P20** (the GS path, `original`, `render.gs`, the PS2-term records, old captures, the GS dump tools) | section 3 is empty |
+| 3. The native renderer | **P16** (`render.scene = modern`, per view role: the original look first, measured against the GS path, then the modern look: B15 with B10's lighting, B14 sky, B18 and B22 particles and ordered layers, B13 reflections, F3 and F4), **P17** (the 2D layer: E6, E7, E9), **P18** (reads answered natively: R9), **P19** (display without a CRTC) | every pixel by the renderer's own shaders; the presets move to `modern` role by role, `original` as the original look |
+| 4. Delete | **P20** (the GS path, `render.scene`, `render.gs`, the PS2-term records, old captures, the GS dump tools; the `original` preset stays, on the native renderer) | section 3 is empty |
 
 By PLAN's own sizes this is the largest block in the plan: fifteen tickets, three of them L, three M-L and six M
 by their headings, and P16 and P17 each hold several of PLAN's older tickets (B10's step 2, itself L; B13, B14,

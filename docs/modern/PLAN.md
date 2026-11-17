@@ -2321,10 +2321,17 @@ for all of them:
   the reference a native step is compared with, and the fallback per view.
 - Phases 0 to 2 (P7-P15) are meant to leave the picture as it is: `ORIG` and `PRESETS` identical, except where a
   ticket names what it changes (P8's two faults, P9's views that gain a scene stage, P10's particles the walker
-  drops today, P11's menus in whole frames), and those frames are compared and listed, not waved through. From P16
-  on a step is judged against the GS path's picture on the REF captures, with the differences named by class and
-  the owner's review of stills; it is not required to be bit-identical, since the point is to stop computing the
-  PS2's arithmetic.
+  drops today, P11's menus in whole frames), and those frames are compared and listed, not waved through.
+- The PS2's renderer goes; its picture stays (the owner, 2026-11-17: "original goes but not really: we must manage
+  to reproduce it with the modern rendering"; PS2_REMOVAL section 4, "The original look"). In these tickets
+  `render.scene = original` and "the GS path" are what P20 deletes. The `original` preset is the player's choice
+  of GT4's picture: on the GS path until a view role's original look passes P16's gate, on the native renderer
+  after, and it outlives P20. From P16 on the original look is judged against the GS path's picture on the REF
+  captures by a measured tolerance, with the differences named by class; it is not required to be bit-identical,
+  since the point is to stop computing the PS2's arithmetic. The modern look is judged against the original look,
+  by class of difference and the owner's review of stills. From P16's first role `ORIG`, `PARITY` and the
+  reference side of that comparison name the GS path themselves (`render.scene = original` set over the
+  `original` preset), since the preset stops selecting it role by role.
 - A ticket that changes what the game sends (P10-P15) follows P3b's capture rule: an old capture proves only the
   host's side, so the REF captures are converted (the converter is the identity oracle) or recorded again, and the
   ticket says which before its code changes. Each takes the next `GT4_LINK_VERSION`.
@@ -2374,10 +2381,14 @@ scenarios' frames named as changed; `STREAM` no larger; `DIFFTEST` for the commi
 designed, the main view of `race_pe2_prog` and of `lap_ssr5r_prog` is drawn by a throwaway native path on a
 `debug/` branch: meshes decoded to float vertices, a vertex stage that is the instance's matrices and nothing else,
 a reversed float depth in its own target, the sets' textures as RGBA images, each draw's GS state mapped to a blend
-mode, an alpha cutoff and a depth mode. Output, in `spikes/R19.md`: the picture beside the GS path's with the
-differences by class; every GS state that had no mapping, with counts; what GT4's order needs (blended layers,
-equal-Z layers, the Z partitions, the 13 destination-alpha draws a frame); what the untagged draws were; the cost.
-It sizes P12-P16 and says which of their rules below are wrong. Nothing of it goes to main.
+mode, an alpha cutoff and a depth mode, lit by GT4's own formulas in floats (`gt4_lighting.glsl`'s bodies, B7's
+port of the VU1 lighting with the VU's number rules, are the start). That is the original look of P16, so the
+spike also says how close a native path gets to the GS path's picture. Output, in `spikes/R19.md`: the picture
+beside the GS path's at 640 x 448 (both captures are progressive), as the share of pixels within 1, 2, 4 and 8
+levels and the rest by class, with the tolerance it proposes for P16's gate; every GS state that had no mapping, with
+counts; what GT4's order needs (blended layers, equal-Z layers, the Z partitions, the 13 destination-alpha draws a
+frame); what the untagged draws were; the cost. It sizes P12-P16 and says which of their rules below are wrong.
+Nothing of it goes to main.
 
 **P9: Every view role substituted (M-L).** B9, widened to every role B7's filter keeps on the GS path
 (`parity_view.cpp:132-140`): the showroom, garage and dealer car and the event screen's cars (`kViewMenu`, with
@@ -2396,17 +2407,22 @@ REF captures but for meshes still loading.
 (`kInstSky` is defined and never set), particles and sparks (A8: no `Emitter` record is sent yet; 004961B8 and
 00496638 still write raw GIF packets the walker leaves out), glows and flares, GT4's clears and Z partitions, its
 full-screen draws, the mirror's frame. Each gets a scene record or an instance flag from the function that draws it,
-so the host knows what a draw is without reading its GS state. If the two particle functions' draws are missing
-from the picture today, sending them adds them: compared with PCSX2 on the frames where they run, under section 2's
-re-baseline rule. Depends: A5a, A8's hooks. Acceptance: `REL`; `ORIG` but for those frames; `DIFFTEST`;
-`hook_lint` 0; P7's count of undescribed draws into a scene target 0 on the race, night and showroom captures and
-on a wet-course capture to record (C10 plans one); the walker's "not records" warning silent over a session with
-rain and smoke.
+so the host knows what a draw is without reading its GS state. GT4's post draws are listed in full and described with
+their parameters (source, strength, colour, size), read from the functions that draw them: the glare (003BADF8; in no
+capture yet, so its pass is gated once a course with glare is captured), the flares (003B88C8; 003B8848 is their read,
+P18's), the grade (004A7D90 and 004A7FA8, through 004A81A8's grid), 004A9470's grid (never seen), the depth of field
+(0033E6E0), and 004A3620's blends (the crossfades, the jitter passes' average, and the motion blur if its lerp is
+found used as one). P16's original look redraws each as a pass of its own. If the two particle functions' draws are
+missing from the picture today, sending them adds them: compared with PCSX2 on the frames where they run, under
+section 2's re-baseline rule. Depends: A5a, A8's hooks. Acceptance: `REL`; `ORIG` but for those frames; `DIFFTEST`;
+`hook_lint` 0; P7's count of undescribed draws into a scene target 0 on the race, night and showroom captures and on a
+wet-course capture to record (C10 plans one); the walker's "not records" warning silent over a session with rain and
+smoke.
 
 **P11: 2D as 2D records (M; its first step a measurement).** The HUD, the menus, text and the movies go as quads in
 canvas units with a texture, a colour and a blend mode (the settings pages' `GT4_REC_UI` list is the model), in
 place of `DrawRecord`'s PRIM bits, 12.4 coordinates, integer Z and strips cut for the GS's texture cache; a movie
-frame is one image, not the IPU's macroblocks drawn as sprites. `original` keeps reading the same records through
+frame is one image, not the IPU's macroblocks drawn as sprites. The GS path keeps reading the same records through
 an encoder back to GS draws until P20. First: whether GT4's menus can run in whole frames, as races do with
 `display.race_frames = progressive` (00436640 covers the race; nothing is known for the menus). If they can, the
 menus send whole frames from here; if not, the 2D records carry the field and P19 removes it on the host's side.
@@ -2431,7 +2447,7 @@ explicit pass with a named source. P2a's three steps are on main: the host finds
 derived from the address, and page ownership remains. The 4 MB memory model and `gsn_reinterpret.comp` are then
 needed only by the readers P18 hasn't moved. Depends: R19; P2's text; R9's reader list. Acceptance: P2's (`ORIG`,
 `PRESETS`, `VAL`, its metric lower); P7's "targets found by address" and reinterpretations 0 on the REF captures,
-in every mode: `original` draws through the same handles.
+in every mode: the GS path draws through the same handles.
 
 **P14: Materials, not GS state (L; P3b is its record work).** The runtime turns pgl's state into a material at
 the flush: a blend mode, an alpha cutoff for the alpha test, a depth mode, culling, the shading class (R8's, from
@@ -2439,7 +2455,9 @@ the lighting body), fog as a flag, the images. The eight blend equations seen in
 all have ordinary blend-state equivalents, but one reads the target's alpha (Cs x Ad + Cd), so a native target must
 keep that alpha in GT4's meaning or the draw be named for what it does; R19 counts the equations over whole
 captures. The GS-only states P3b lists (the alpha test's fail modes, the destination alpha test, PABE, FBA,
-COLCLAMP, DTHE, AA1, CLAMP's region modes) each get a named material feature or a counted "kept raw". Depends: R19
+COLCLAMP, DTHE, AA1, CLAMP's region modes) each get a named material feature or a counted "kept raw". A material
+carries what both looks of P16 need: for the original look GT4's texture function and the lighting body's
+parameters in floats, so the renderer can shade as GT4 does; for the modern look the shading class. Depends: R19
 (which states occur, and where the destination alpha test is used), P12, P13, A10. Acceptance: P3b's; and "kept
 raw" 0 on the REF captures before P16 takes a role.
 
@@ -2447,28 +2465,52 @@ raw" 0 on the REF captures before P16 takes a role.
 coordinates, colours; indices; by content hash) and then draws of it (mesh, material, instance), in place of
 `kBatchFrame` / `Write` / `Model` / `Run` with a VU1 entry and ITOP. One importer, in the runtime, holds what is
 spread over five places today (`vif1.cpp`'s UNPACK decode, `renderers3d.cpp`'s chain plan, `mesh_cache.cpp`'s
-`decodeBatch`, `gsn_models.comp`, `modern_parity.vert`): the model files' packets, the decompression routines,
-strips and their ADC rule. Meshes built every frame (skinned bodies, billboards, sparks, the round meter) go as
-per-frame meshes. Until P20, `original` and hybrid draw from the same meshes through GT4's vertex stage, fed by an
-encoder on the host. Depends: R19, P9, P14. Acceptance: `REL`; `DIFFTEST` (the importer against the original's
-batch for every model kind); `ORIG`; `PARITY`; `STREAM` no larger; no `kBatch*` record sent in any mode.
+`decodeBatch`, `gsn_models.comp`, `modern_parity.vert`): the model files' packets, the decompression routines, strips
+and their ADC rule. Meshes built every frame (skinned bodies, billboards, sparks, the round meter) go as per-frame
+meshes. A mesh keeps GT4's baked colours beside its normals, and what GT4's lighting bodies read of the batch's vertex
+order (one also reads the next vertex's normal: `gt4_lighting.glsl`): the original look of P16 needs them. Until P20,
+`render.scene = original` and hybrid draw from the same meshes through GT4's vertex stage, fed by an encoder on the
+host. Depends: R19, P9, P14. Acceptance: `REL`; `DIFFTEST` (the importer against the original's batch for every model
+kind); `ORIG`; `PARITY`; `STREAM` no larger; no `kBatch*` record sent in any mode.
 
-**P16: The native renderer, `render.scene = modern` (L, the largest: it holds B15, B10's step 2 (itself L), B14
-(M-L), B13, B18 and B22 (M each), F3 and F4).** A view drawn wholly by the renderer's own stages: matrices in the
-vertex stage, material shaders lit per pixel (B10's classes and lights, F3's clustered lights), an HDR colour
-target and a reversed float depth of its own, GT4's order kept for blended layers (B22). Its scene stage is
-today's passes on native depth and colour (no `Z = 1.6e6 / distance`, no GS alpha scale). GT4's own post draws
-(glare, flare, motion blur copies, the grade) are not run: the display pipeline's bloom, exposure and tone map run
-on game frames at last (F4), with FSR 2 and 3.1 on real motion vectors (B16c's seam is no longer needed). The sky
-is B14's, particles B18's, reflections and the cars' environment B13's. It takes one view role at a time (main,
-mirror, environment faces, showroom and menus, photo, split screen), each entering the presets at its own gate,
-`low` included once the Odin's cost is measured. Depends: P9, P10, P12-P15, R19. Acceptance per role: `VAL`; a NaN
-and Inf count; P7's GS-path share 0 for the role; the picture against the GS path's on its REF captures with the
-differences by class, and the owner's review of stills; `PERF` desktop and Odin (C6b).
+**P16: The native renderer, `render.scene = modern`, in two looks (L, the largest: it holds B15, B10's step 2
+(itself L), B14 (M-L), B13, B18 and B22 (M each), F3 and F4, and GT4's own lighting and post effects as native
+stages).** A view drawn wholly by the renderer's own stages: matrices in the vertex stage, a colour target and a
+reversed float depth of its own, GT4's order kept for blended layers (B22), no `Z = 1.6e6 / distance`, no GS alpha
+scale. A new setting, `render.look`, picks what it shades with:
+- `original` (the `original` preset; PS2_REMOVAL section 4): GT4's picture. Lighting by GT4's own formulas in
+  floats (the vertices' baked colours, the per-object lights, the environment map's coordinates), its fog, its
+  sky, particles and glows as P10 describes them, and its post draws (P10's list: the glare, the flares, the
+  grade and the depth of field among them), each a named pass with GT4's parameters. In the display's range: no
+  exposure, no tone map. With today's `render.gs = original` its targets are the PS2's: 640 x 448, and 640 x 224
+  for a race drawn in fields.
+- `modern` (the other presets): material shaders lit per pixel in HDR (B10's classes and lights, F3's clustered
+  lights). Its scene stage is today's passes on native depth and colour. GT4's post draws are not run: the display
+  pipeline's bloom, exposure and tone map run on game frames at last (F4), with FSR 2 and 3.1 on real motion
+  vectors (B16c's seam is no longer needed). The sky is B14's, particles B18's, reflections and the cars'
+  environment B13's.
+
+It takes one view role at a time (main, mirror, environment faces, showroom and menus, photo, split screen), the
+original look first: the `original` preset leaves the GS path for a role when the role's original look passes, and the
+role's modern look is built after it, entering the other presets at its own gate, `low` included once the Odin's cost
+is measured. Depends: P9, P10, P12-P15, R19. Acceptance per role, original look: on the role's REF captures, both
+paths at `render.gs = original` and compared before display at the GS path's own target size (640 x 448 for a whole
+frame, 640 x 224 for a field, which needs a capture of the target before display: `NATIVE` in section 2 names that as
+new work), the share of pixels within the tolerance against the GS path's picture, the rest listed by class. R19
+proposes the tolerance; this ticket fixes it before its first role, with the owner's agreement, and may fix one per
+kind of content (3D views, 2D, fields) where one number doesn't fit. Then the owner's review of stills at that size
+and at the output's resolution, and P7's GS-path share 0 for the role, but for the reads P18 hasn't moved: until then
+a frame holding such a read also draws the view on the GS path for the read alone (B8's step 4), counted apart (the
+flares' strength comes from one). Modern look: the picture against the original look's with the differences by class,
+and the owner's review of stills. Both: `VAL`; a NaN and Inf count; `PERF` desktop and Odin (C6b).
 
 **P17: The 2D layer (M-L; E6, E7 and E9, three M tickets).** P11's quads drawn at the output's resolution after
-the tone map, text through SDF glyphs, with the HUD's scale and safe area. E7 and E9 have no acceptance in PLAN
-yet: P17 writes it when it starts. Depends: P11, P16's first role. Acceptance: E6's.
+the tone map, text through SDF glyphs, with the HUD's scale and safe area. With `render.look = original` the 2D
+is GT4's own: its quads with its textures and its font, in the look's target (640 x 448 when that is set), and
+held to the GS path's picture by P16's tolerance on the races' HUD and on `menus_boot`. E7 and E9 have no
+acceptance in PLAN yet: P17 writes it when it starts. Depends: P11, P16's first role; P19 for `menus_boot`, whose
+screens are interlaced: that part of the gate closes with P19's field pass. Acceptance: E6's; the original look's
+as above.
 
 **P18: The game's reads answered natively (M; R9 decided reader by reader).** The flare samples (every frame with
 lights in view), the luminance probe, the photo tiles, the car icons and the focus probe's depth each get their
@@ -2479,25 +2521,40 @@ focus) the game decides as it does on the GS path, within a stated tolerance; wh
 photo, the car icons) it is the native picture, reviewed; 0 reads from GS memory.
 
 **P19: Display without a CRTC (S-M).** For views the native renderer draws, it presents its own image; the display
-record shrinks to what is shown and where, and nothing interlaced is displayed (P11's menus in whole frames, or
-their fields joined on the host). The field options (`display.race_frames = fields`, `display.field_mode`), the
-previous field's blend and `kFrameField` stay usable with `original` only, and go with it in P20. Depends: P11,
-P16. Acceptance: no interlaced frame displayed at `modern` over `menus_boot`'s route and a race; `PRESETS`
-re-baselined once, with the frames that change named.
+record shrinks to what is shown and where, and nothing interlaced is displayed (P11's menus in whole frames, or their
+fields joined on the host). The original look keeps the PS2's field picture as an option
+(`display.race_frames = fields`, `display.field_mode`, both in the `original` preset today): a pass of the renderer
+that blends two of its own frames as fields, with no DISPFB, DISPLAY or read circuit. Which field a frame is stays
+in the frame record as a fact
+of the game's frame (today's `kFrameField` and `kFrameOddField` for a race's 224-line fields; the same flag for the
+menus: with `render.look = original` they keep their fields even where P11 finds they can run in whole frames, so the
+look shows what the PS2 showed). The display circuits stay with the GS path, and go with it in P20. Depends: P11, P16.
+Acceptance: no interlaced frame displayed with `render.look = modern` over `menus_boot`'s route and a race; with
+`render.look = original` the displayed field blend within P16's tolerance of the GS path's on `menus_boot` and on a
+field race capture (`race_pe2_r`; `race7` has no scene records); `PRESETS` re-baselined once, with the frames that
+change named.
 
-**P20: The GS path deleted (M).** When P7's counters are 0 on every REF capture and over a play session, and the
-owner has accepted the native picture: `platform/gsnative/`, `platform/gs/`'s VIF, VU1, GS-dump and
+**P20: The GS path deleted (M).** On every REF capture with scene records (`race7` has none and its route is
+unknown: it is retired with the path, `race_pe2_r` standing for the field race): when P7's counters are 0 on them
+and over a play session, the original look is within P16's tolerance of the GS path's picture for every view role,
+and the owner has accepted both looks: `platform/gsnative/`, `platform/gs/`'s VIF, VU1, GS-dump and
 privileged-register files, `gsn.vert`, `gsn.frag`, `gsn_models.comp`, `gsn_reinterpret.comp`, `gsn_swizzle.glsl`,
-`gsn_stencil.frag`, `gsn_grade.comp`, `gsn_display.frag`, `gt4_lighting.glsl`, `gt4_transform.glsl`,
-`modern_parity.vert`, the side, velocity, mask and seam passes that redraw GS vertices (`modern_side.frag`,
-`gsn_side_*`, `gsn_velocity.*`, `gsn_mask.frag`, `gsn_seam*.comp`), the encoders P11 and P15 kept for `original`,
-the PS2-term record kinds (the next `GT4_LINK_VERSION`), the field options, `render.scene`, `render.gs` and the
-`original` preset (an older settings file moves once), C12's dump tools and B24. The captures are re-recorded in
-the new records; `ORIG`, `PARITY` and the PCSX2 comparison end, and section 2 gets a native reference in their
-place (golden frames per device class, kept local). Depends: all of the above, P17 to P19 included; the owner's
-word (PS2_REMOVAL section 4, decision 1). Acceptance: `CTEST`; `REL`; `VAL`; a grep of `platform/` and `include/`
-for the GS's and VU's terms finds nothing, and of `runtime/` only the importer and pgl's translation; a play
-session on the desktop and on the Odin.
+`gsn_stencil.frag`, `gsn_grade.comp`, `gsn_display.frag`, `gt4_lighting.glsl` and `gt4_transform.glsl` as ports of the
+VU1 programs (the original look's lighting is P16's own stage), `modern_parity.vert`, the side, velocity, mask and
+seam passes that redraw GS vertices (`modern_side.frag`, `gsn_side_*`, `gsn_velocity.*`, `gsn_mask.frag`,
+`gsn_seam*.comp`), the encoders P11 and P15 kept for the GS path, the PS2-term record kinds (the next
+`GT4_LINK_VERSION`), the display circuits (the frame's field flag stays, P19), `render.scene` and `render.gs`, C12's
+dump tools and B24. The `original` preset stays: it sets `render.look = original`, with a setting of its own for the
+PS2's target sizes in `render.gs`'s place (an older settings file moves once). In this order, so the reference
+outlives the path: the REF captures are converted or recorded again in the final records; the GS path renders every
+frame of them through the encoders P11 and P15 kept, on each device class (`ORIG` is bit-identical within one class
+only), and those frames are kept local as the captures are; then the path is deleted. From then on they are the
+original look's reference, with PCSX2's stills beside them (PCSX2 can't replay a capture), and a new capture has none:
+section 2 gets native golden frames per look and device class, kept local. `ORIG` and `PARITY` end with the path they
+test. Depends: all of the above, P17 to P19 included. The owner's word on the GS path is given (PS2_REMOVAL section 4,
+decision 1). Acceptance: `CTEST`; `REL`; `VAL`; the original look's gate above; a grep of `platform/` and `include/`
+for the GS's and VU's terms finds nothing, and of `runtime/` only the importer and pgl's translation; a play session
+on the desktop and on the Odin, in both looks.
 
 ## 5. Day one, per lane
 

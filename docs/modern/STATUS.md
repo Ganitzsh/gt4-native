@@ -32,18 +32,30 @@ cut or put last: A8, B9, B10's step 2, B13, B14, B15, B18, B22, F3, F4, E6, E7, 
 | 0. Measure and clear | **P7** the PS2-path counters; **P8** dead code out; **R19** spike, one race view drawn natively | a number to drive to 0; the unknowns named |
 | 1. Every draw described | **P9** every view role substituted; **P10** untagged draws described; **P11** 2D as 2D records | no draw the host can't name |
 | 2. Native resources and state | **P12** textures as images; **P13** targets as named images; **P14** materials; **P15** meshes; P3a | no GS or VU term on the wire |
-| 3. The native renderer | **P16** `render.scene = modern`, role by role; **P17** the 2D layer; **P18** reads; **P19** display | every pixel by the renderer's own shaders |
-| 4. Delete | **P20** the GS path, `original`, the PS2-term records | the audit's inventory is empty |
+| 3. The native renderer | **P16** `render.scene = modern`, role by role, the original look first; **P17** the 2D layer; **P18** reads; **P19** display | every pixel by the renderer's own shaders |
+| 4. Delete | **P20** the GS path, the PS2-term records; the `original` preset stays, on the native renderer | the audit's inventory is empty |
 
 **Next, in order:** P7, P8, R19. Phases 0 to 2 are meant to leave the picture as it is; the few changes are
 named in their tickets (P8's two faults, P9's newly lit views, P10's particles, P11's menus in whole frames).
 
-**Three decisions the plan assumes, the owner's to overrule** (PS2_REMOVAL section 4):
-1. The `original` preset and the PS2 picture are deleted at the end (P20); until then they are the reference and
-   the fallback.
-2. Release 0.1.1 waits for this. The alternative: release from today's main, PS2 path inside, and this after.
+**The original look stays** (the owner, 2026-11-17: "original goes but not really: we must manage to reproduce it
+with the modern rendering"). The PS2 renderer is deleted; GT4's picture is not. The native renderer gets two
+looks (PS2_REMOVAL section 4, PLAN P16): `original`, GT4's own lighting, fog, order and post effects drawn by the
+renderer's shaders from native meshes, images and materials, and `modern`, lit per pixel. The `original` preset
+selects the first. It is not bit-identical to the PS2 path (the console's rounding is not computed): it is held to
+it by a measured tolerance on the REF captures at the PS2's own target sizes, which R19 proposes and P16 fixes
+with the owner's agreement. For each view role the original look comes first, since it is the one with a
+reference, and the modern look after it. Before P20 deletes the GS path, its frames of the REF captures are
+rendered and kept local as the look's reference from then on.
+
+**The three decisions put to the owner** (PS2_REMOVAL section 4):
+1. Answered, as above: the GS path is deleted at the end (P20), and until then it is the reference and the
+   fallback; the `original` preset stays as the native renderer's original look.
+2. Release 0.1.1 waits for this. The alternative: release from today's main, PS2 path inside, and this after. Not
+   addressed in the owner's answer: still assumed, the owner's to overrule.
 3. The scope is the picture path. Sound, input, saves, the kernel and the game's memory stay at the game's own
-   interfaces (PS2_REMOVAL section 6: the spikes R17 and R18 said no; not re-audited on 2026-11-17).
+   interfaces (PS2_REMOVAL section 6: the spikes R17 and R18 said no; not re-audited on 2026-11-17). Not addressed
+   in the owner's answer: still assumed, the owner's to overrule.
 
 **What this does to the rest of the order:**
 - No new lighting or effect is built on the GS target from here, so it isn't written twice: F10 (the night's
@@ -261,8 +273,10 @@ Nothing is left only on disk: unfinished work is on origin under wip/, parked/ o
 
 ## Waiting on the owner
 
-- The three decisions of the Direction section (the PS2 picture deleted at the end; the release after it; the
-  scope the picture path).
+- The Direction section's decisions: the first is answered (2026-11-17: the GS path goes, the original look
+  stays, reproduced by the native renderer); the release after this work and the scope (the picture path) were
+  not addressed in that answer and are still assumed, the owner's to overrule. Later, at P16: the owner's
+  agreement to the original look's tolerance.
 - Install main-1e7be22 on the Odin; with the high preset (or the playtest file over low), a night race on S.S.
   Route 5: the frame rate against low's, the lamps after the fixes of 2026-11-11, and the `host.log` (P4's freeze
   goes when it has no "waited over 50 ms" line).

@@ -7,9 +7,10 @@ code. Companion documents: [CONTRACTS.md](CONTRACTS.md) (the scene records, the 
 
 **Read with [PS2_REMOVAL.md](PS2_REMOVAL.md) since 2026-11-17.** This design keeps the GS path for good
 (principle 1, section 3.2) and puts the modern renderer beside it. The owner's direction of 2026-11-17 removes the
-GS path at the end (PLAN P7-P20): until P20 this document holds as written, as the way each native step lands
-beside a working reference; section 4.1's `modern` column is P16, which isn't built yet. Two things are out of
-date against the code: the presets (`low` is `original`, section 4.1) and section 7's settings that were never added
+GS path at the end (PLAN P7-P20) and keeps its picture as the native renderer's original look (`render.look`,
+PLAN P16): until P20 this document holds as written, as the way each native step lands beside a working
+reference; section 4.1's `modern` column is P16, which isn't built yet. Two things are out of date against the
+code: the presets (`low` is `original`, section 4.1) and section 7's settings that were never added
 (`render.scale_mode`, `lighting.materials`, `effects.decals`, `effects.wet`, `effects.ray_tracing`).
 
 Conventions: `path:line` is at a80cfca. GT4 addresses are NTSC-U v1.01. **New** = code that does not exist,

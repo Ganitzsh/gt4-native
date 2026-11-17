@@ -528,17 +528,22 @@ leaves the GS's arithmetic is not known, and the records of P12-P15 shouldn't be
 - what GT4's Z partitions, equal-Z layers and blended layers need once the depth is no longer GT4's integer Z
   (R3's cases, on a whole frame);
 - what the draws no scene record describes are (P10's list), and what each needs;
-- how far the picture is from the GS path's, by class of difference (edges, texture filtering, vertex lighting
-  against per-pixel, fog), and whether any is visible in stills;
+- how far the picture is from the GS path's when the view is lit as GT4 lights it (P16's original look, which the
+  owner wants kept: PS2_REMOVAL section 4): at 640 x 448, the share of pixels within 1, 2, 4 and 8 levels, the
+  rest by class of difference (edges, texture filtering, rounding, fog), whether any is visible in stills, and the
+  tolerance that follows for P16's gate;
 - the GPU and CPU cost against the GS path, desktop and Odin.
 
 **Method.** A throwaway path on a `debug/` branch, the main view of `race_pe2_prog` (day) and `lap_ssr5r_prog`
 (night) only: the mesh cache's decode to float vertices, the instance's `objectToView` and the view's projection, the
-sets' textures decoded to RGBA once, a table from GS state to blend mode, alpha cutoff and depth mode with a
-counter per state that falls outside it. Everything else in the frame stays on the GS path and is composed after.
+sets' textures decoded to RGBA once, GT4's lighting by its own formulas in floats (`gt4_lighting.glsl`'s bodies,
+B7's port of the VU1 lighting, are the start), a table from GS state to blend mode, alpha cutoff and depth mode
+with a counter per state that falls outside it.
+Everything else in the frame stays on the GS path and is composed after.
 Output: `spikes/R19.md` with the stills, the counts and the changes it asks of P12-P16.
 
-**Time box.** 2 weeks. Nothing of it goes to main.
+**Time box.** 3 weeks (2 before the original look's lighting and its measure were added). Nothing of it goes to
+main.
 
 ---
 
