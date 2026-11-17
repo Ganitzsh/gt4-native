@@ -55,8 +55,11 @@ named in their tickets (P8's two faults, P9's newly lit views, P10's particles, 
   GPU cost on the Odin (19 ms a frame at ultra before e864635's early-out, not measured after); a demo replay whose
   AI drives into a wall (the Paris rain demo; PS2 against IEEE arithmetic suspected) and a sky fault in it; the
   course menu slow on its first visit; one late delivery in gt4fn_00358608; the arm64 Steam shortcut.
-- CI: main's head failed in the two Linux host jobs at their package install (the runner couldn't resolve Ubuntu's
-  mirror, three pushes running since 08b2955); the other eleven jobs pass. The next push shows whether it holds.
+- CI: three pushes from 08b2955 stopped in the two Linux host jobs at their package install (the runners couldn't
+  resolve Ubuntu's mirror). That is over, and it had hidden a real failure since bafcb9e: `ui_page_goldens` on
+  Linux x86_64, the hub's three golden images not regenerated when that commit changed the panel's line and
+  dropped the Change prompt. Regenerated (40b4007). The test's cap is loose: the desktop passed with the changed
+  text (0.24 % of pixels over, the cap 0.30 %); see the open notes.
 
 ## The finish line of 2026-11-10 (its record; the order above replaces it)
 
@@ -251,6 +254,10 @@ Nothing is left only on disk: unfinished work is on origin under wip/, parked/ o
 
 - gsn_scene's buffer() may invalidate references when its ring vector grows (not looked at;
   nothing depends on it today). For the renderer lane.
+- `tests/ui_page_goldens.py` lets a changed line of text through on the GPU the goldens were made on (0.20 to
+  0.24 % of pixels over 24 levels, under its 0.30 % cap; 40b4007's message). Its cap should come from what two
+  GPUs differ by on the same picture (lavapipe against the desktop on fresh goldens), or the goldens be compared
+  per panel.
 
 ## Waiting on the owner
 
